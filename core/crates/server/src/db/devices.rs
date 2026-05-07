@@ -93,6 +93,18 @@ pub async fn find_by_did(
     Ok(row.map(Device::from_row))
 }
 
+/// Look up a device by its internal PK.
+pub async fn find_by_pk(conn: &mut PgConnection, device_pk: i64) -> Result<Option<Device>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT id, account_id, device_id, identity_key, registration_id
+         FROM devices WHERE id = $1",
+    )
+    .bind(device_pk)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(Device::from_row))
+}
+
 /// List all devices for an account (by DID).
 pub async fn list_by_did(conn: &mut PgConnection, did: &str) -> Result<Vec<Device>, sqlx::Error> {
     let rows = sqlx::query(

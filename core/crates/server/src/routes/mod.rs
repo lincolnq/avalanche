@@ -16,6 +16,7 @@ mod auth;
 mod did;
 mod messages;
 mod prekeys;
+mod projects;
 mod registration;
 mod websocket;
 
@@ -27,4 +28,5 @@ pub fn router() -> Router<AppState> {
         .merge(messages::routes())
         .merge(websocket::routes())
         .merge(did::routes())
+        .merge(projects::routes())
 }

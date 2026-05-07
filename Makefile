@@ -1,6 +1,6 @@
 TEST_DATABASE_URL ?= postgres://actnet:actnet-dev@localhost/actnet
 
-.PHONY: test test-server test-core test-e2e check clippy db-up db-down bindings ios
+.PHONY: test test-server test-core test-e2e check clippy db-up db-down bindings ios dev testbot
 
 test: test-core test-server
 
@@ -19,8 +19,14 @@ check:
 clippy:
 	cd core && cargo clippy
 
+dev:
+	cd core && RUST_LOG=tower_http=debug,server=debug cargo run -p server
+
 db-up:
 	docker compose -f infra/docker-compose.yml up -d
+
+testbot:
+	cd core && RUST_LOG=actnet_testbot=debug,app_core=debug,tower_http=debug cargo run -p testbot
 
 db-down:
 	docker compose -f infra/docker-compose.yml down

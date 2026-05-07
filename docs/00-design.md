@@ -2,6 +2,17 @@
 
 Goal: Make organizing at scale more practical, more effective and more fun!
 
+## Documentation map
+
+Docs are numbered by category. First digit = area, second digit = sequence within that area.
+
+| Prefix | Area | Docs |
+|--------|------|------|
+| `0x` | Core design | `00` this doc, `01` technical implementation |
+| `1x` | Server | `10` server implementation, `11` core API sketch |
+| `2x` | Projects | `20` project security, `21` chatbot project |
+| `3x` | Mobile apps | `30` mobile UX |
+
 ## Premise
 
 A social network whose primary acquisition vector is participation in collective action. People install the app because a Project (a canvass, a strike, a rally, a phonebank) requires it; they stay because the network captures the social connections they form through that participation.

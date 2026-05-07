@@ -10,6 +10,7 @@ members = [
     "crates/federation",
     "crates/project-sdk",
     "crates/test-utils",
+    "crates/testbot",
 ]
 resolver = "2"
 
@@ -55,6 +56,10 @@ uniffi = "0.29"
 
 # Error handling
 thiserror = "1"
+
+# WebSocket client
+tokio-tungstenite = "0.25"
+futures-util = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

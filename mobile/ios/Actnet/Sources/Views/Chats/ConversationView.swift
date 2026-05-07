@@ -4,9 +4,12 @@ struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     let conversation: Conversation
 
-    @State private var messages: [Message] = []
     @State private var messageText = ""
     @State private var errorMessage: String?
+
+    private var messages: [Message] {
+        appState.messagesByConversation[conversation.id] ?? []
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,7 +60,7 @@ struct ConversationView: View {
         messageText = ""
         errorMessage = nil
 
-        // Optimistically add to local UI
+        // Optimistically add to UI
         let message = Message(
             id: UUID().uuidString,
             conversationId: conversation.id,
@@ -65,15 +68,18 @@ struct ConversationView: View {
             body: text,
             sentAt: Date()
         )
-        messages.append(message)
+        appState.messagesByConversation[conversation.id, default: []].append(message)
 
         Task {
             do {
-                // TODO: Resolve recipient DID from conversation metadata
+                guard let recipientDid = conversation.recipientDid else {
+                    errorMessage = "Cannot send: no recipient"
+                    return
+                }
                 try await appState.sendMessage(
                     conversationId: conversation.id,
                     text: text,
-                    recipientDid: "recipient-did-placeholder",
+                    recipientDid: recipientDid,
                     senderAccountId: conversation.accountId
                 )
             } catch {

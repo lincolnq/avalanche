@@ -167,6 +167,23 @@ impl RawFetchResponse {
     }
 }
 
+// ── Projects ────────────────────────────────────────────────────────────────
+
+/// A Project installed on the homeserver.
+#[derive(Debug, Deserialize)]
+pub struct ProjectInfo {
+    pub name: String,
+    pub url: String,
+    pub description: String,
+}
+
+/// Response from requesting a Project token.
+#[derive(Debug, Deserialize)]
+pub struct ProjectTokenResponse {
+    pub token: String,
+    pub expires_at: String,
+}
+
 fn decode_b64(s: &str) -> Result<Vec<u8>, NetError> {
     BASE64_STANDARD.decode(s).map_err(|e| NetError::Base64(e.to_string()))
 }

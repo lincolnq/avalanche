@@ -8,6 +8,9 @@ struct ActnetApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
+                .task {
+                    await appState.restoreAccounts()
+                }
         }
     }
 }

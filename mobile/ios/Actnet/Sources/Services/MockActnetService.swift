@@ -27,6 +27,14 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         }
     }
 
+    func fetchProjects() throws -> [ProjectInfoFfi] {
+        [ProjectInfoFfi(name: "Testbot", url: "http://localhost:3001", description: "Chat with an AI bot")]
+    }
+
+    func requestProjectToken(projectUrl: String) throws -> String {
+        "mock-project-token-\(UUID().uuidString.prefix(8))"
+    }
+
     func receiveMessages() throws -> [DecryptedMessage] {
         Thread.sleep(forTimeInterval: 0.1)
         lock.lock()
@@ -34,6 +42,22 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         pendingMessages.removeAll()
         lock.unlock()
         return msgs
+    }
+
+    func receiveMessagesWs() throws -> [DecryptedMessage] {
+        // Simulate WebSocket blocking: sleep until messages arrive.
+        for _ in 0..<20 {
+            Thread.sleep(forTimeInterval: 0.1)
+            lock.lock()
+            if !pendingMessages.isEmpty {
+                let msgs = pendingMessages
+                pendingMessages.removeAll()
+                lock.unlock()
+                return msgs
+            }
+            lock.unlock()
+        }
+        return []
     }
 
     func enqueueMessage(from senderDid: String, text: String) {

@@ -41,10 +41,10 @@ Total interaction for the minimal case: scan, type name, tap continue, approve p
 When the app receives an invite and the user already has accounts:
 
 1. The app shows a choice of identities:
-   - **Join as [Alice]** (on server A, server C)
-   - **Join as [Bob]** (on server B)
-   - **Create a new account**
-   Each option shows the display name and which servers that identity is already on. Most recently used identity is the default.
+   - **Join as [Alice]**
+   - **Create a fresh identity**
+   - **More options...**
+   The Alice prefill is your most recently used identity. More options presents a list of all your signed-in accounts alongside which servers they are bound to.
 2. If joining as an existing identity: the app registers that DID with the new server (signs a challenge to prove ownership, uploads fresh prekeys). One confirmation tap.
 3. If creating a new account: full new-user flow — new DID, new name, new identity.
 4. Either way, auto-enrollment and onboarding proceed as above.

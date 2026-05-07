@@ -396,21 +396,16 @@ impl signal::KyberPreKeyStore for Store {
 
     async fn mark_kyber_pre_key_used(
         &mut self,
-        id: signal::KyberPreKeyId,
+        _id: signal::KyberPreKeyId,
         _ec_prekey_id: signal::SignedPreKeyId,
         _base_key: &signal::PublicKey,
     ) -> Result<(), signal::SignalProtocolError> {
-        // One-time Kyber prekeys are deleted on use. Last-resort prekeys would
-        // need replay detection here; that can be added when last-resort prekeys
-        // are introduced.
-        let id_u32 = u32::from(id);
-        self.conn
-            .call(move |conn| {
-                conn.execute("DELETE FROM kyber_prekeys WHERE id = ?1", [id_u32])?;
-                Ok(())
-            })
-            .await
-            .map_err(|e| StoreError::Db(e).into())
+        // Currently we only upload a single Kyber prekey per device, which
+        // acts as a last-resort key — kept after use. Once we support a pool
+        // of one-time Kyber prekeys with server-side atomic consumption,
+        // one-time keys should be deleted here while the last-resort key
+        // is kept.
+        Ok(())
     }
 }
 

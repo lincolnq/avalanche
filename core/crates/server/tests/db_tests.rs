@@ -313,3 +313,50 @@ async fn message_without_sender() {
     let queued = server::db::messages::fetch_for_device(&mut *tx, device_pk).await.unwrap();
     assert_eq!(queued.len(), 1);
 }
+
+// ── Project token tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn create_and_verify_project_token() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let did = "did:plc:projtoken000000001";
+    let account_id = server::db::accounts::create(&mut *tx, did).await.unwrap();
+
+    let token = "project-token-abc123";
+    let _expires = server::db::project_tokens::create(
+        &mut *tx, token, account_id, "http://localhost:3001", 3600,
+    ).await.unwrap();
+
+    let result = server::db::project_tokens::verify(&mut *tx, token).await.unwrap();
+    assert!(result.is_some());
+    let (verified_did, project_url) = result.unwrap();
+    assert_eq!(verified_did, did);
+    assert_eq!(project_url, "http://localhost:3001");
+}
+
+#[tokio::test]
+async fn verify_invalid_project_token_returns_none() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let result = server::db::project_tokens::verify(&mut *tx, "nonexistent-project-token").await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn expired_project_token_returns_none() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let account_id = server::db::accounts::create(&mut *tx, "did:plc:expiredproj00000001").await.unwrap();
+
+    let token = "expired-project-token-xyz";
+    server::db::project_tokens::create(
+        &mut *tx, token, account_id, "http://localhost:3001", 0,
+    ).await.unwrap();
+
+    let result = server::db::project_tokens::verify(&mut *tx, token).await.unwrap();
+    assert!(result.is_none());
+}

@@ -10,4 +10,7 @@ pub enum NetError {
 
     #[error("invalid base64: {0}")]
     Base64(String),
+
+    #[error("WebSocket error: {0}")]
+    WebSocket(String),
 }

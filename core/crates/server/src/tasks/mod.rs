@@ -45,6 +45,20 @@ pub fn spawn_all(pool: PgPool) {
             Ok(())
         },
     ));
+
+    tokio::spawn(run_periodic(
+        "project_token_expiry",
+        Duration::from_secs(300),
+        pool.clone(),
+        |pool| async move {
+            let mut conn = pool.acquire().await?;
+            let n = db::project_tokens::delete_expired(&mut conn).await?;
+            if n > 0 {
+                tracing::info!(count = n, "expired project tokens deleted");
+            }
+            Ok(())
+        },
+    ));
 }
 
 async fn run_periodic<F, Fut>(

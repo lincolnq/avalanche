@@ -38,11 +38,11 @@ struct InviteLinkEntryView: View {
 
     private func validateLink() {
         // TODO: Parse actnet://invite/<server>/<token> URL
-        // For now, accept anything as a mock token
+        // For now, accept anything as a mock token pointing at the dev server
         guard !linkText.isEmpty else { return }
         inviteToken = InviteToken(
-            serverUrl: URL(string: "https://example.org")!,
-            serverName: "Example Org",
+            serverUrl: URL(string: DevServerActnetService.defaultServerUrl)!,
+            serverName: "Dev Server",
             token: "mock-token"
         )
     }

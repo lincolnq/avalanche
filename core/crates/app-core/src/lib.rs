@@ -37,6 +37,14 @@ fn ffi_runtime() -> &'static tokio::runtime::Runtime {
     RT.get_or_init(|| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"))
 }
 
+/// A Project available on the homeserver.
+#[derive(uniffi::Record)]
+pub struct ProjectInfoFfi {
+    pub name: String,
+    pub url: String,
+    pub description: String,
+}
+
 /// A decrypted inbound message.
 #[derive(uniffi::Record)]
 pub struct DecryptedMessage {
@@ -55,6 +63,9 @@ pub struct DecryptedMessage {
 #[derive(uniffi::Object)]
 pub struct AppCore {
     inner: Mutex<AppCoreInner>,
+    /// WebSocket connection for real-time message delivery. Separate from
+    /// `inner` so that `send_dm` can proceed while waiting for WS messages.
+    ws: Mutex<Option<net::ws::WsConnection>>,
 }
 
 struct AppCoreInner {
@@ -86,7 +97,7 @@ impl AppCore {
         let inner = rt.block_on(Self::create_inner(&server_url, store))
             .map_err(AppErrorFfi::from)?;
 
-        Ok(Arc::new(Self { inner: Mutex::new(inner) }))
+        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None) }))
     }
 
     /// Load an existing account from the local store and authenticate.
@@ -107,7 +118,7 @@ impl AppCore {
         let inner = rt.block_on(Self::login_inner(store))
             .map_err(AppErrorFfi::from)?;
 
-        Ok(Arc::new(Self { inner: Mutex::new(inner) }))
+        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None) }))
     }
 
     pub fn did(&self) -> String {
@@ -141,6 +152,42 @@ impl AppCore {
             let mut inner = self.inner.lock().await;
             inner.receive_messages().await
         }).map_err(AppErrorFfi::from)
+    }
+
+    /// Fetch the list of Projects installed on the homeserver.
+    pub fn fetch_projects(&self) -> Result<Vec<ProjectInfoFfi>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let projects = inner.client.fetch_projects().await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(projects.into_iter().map(|p| ProjectInfoFfi {
+                name: p.name,
+                url: p.url,
+                description: p.description,
+            }).collect())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Request a Project token for opening a Project webview.
+    pub fn request_project_token(&self, project_url: String) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let resp = inner.client.request_project_token(&project_url).await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(resp.token)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Wait for the next message(s) via WebSocket, decrypt, and return.
+    ///
+    /// Lazily connects on first call. Blocks until at least one message
+    /// arrives. Returns an empty vec if the connection is closed (caller
+    /// should retry to reconnect).
+    ///
+    /// Call from a background thread — this blocks until messages arrive.
+    pub fn receive_messages_ws(&self) -> Result<Vec<DecryptedMessage>, AppErrorFfi> {
+        ffi_runtime().block_on(self.receive_messages_ws_async())
+            .map_err(AppErrorFfi::from)
     }
 }
 
@@ -234,13 +281,13 @@ impl AppCore {
         store: store::Store,
     ) -> Result<Self, AppError> {
         let inner = Self::create_inner(server_url, store).await?;
-        Ok(Self { inner: Mutex::new(inner) })
+        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None) })
     }
 
     /// Login with a pre-opened store (for tests).
     pub async fn login_with_store(store: store::Store) -> Result<Self, AppError> {
         let inner = Self::login_inner(store).await?;
-        Ok(Self { inner: Mutex::new(inner) })
+        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None) })
     }
 
     /// Async send_dm for use in tests running inside a tokio runtime.
@@ -268,6 +315,73 @@ impl AppCore {
     /// Get device_id (async-friendly, for tests).
     pub async fn device_id_async(&self) -> u32 {
         self.inner.lock().await.device_id
+    }
+
+    /// Async version of receive_messages_ws for use in tests and the testbot.
+    pub async fn receive_messages_ws_async(&self) -> Result<Vec<DecryptedMessage>, AppError> {
+        // 1. Ensure WS is connected.
+        {
+            let mut ws_guard = self.ws.lock().await;
+            if ws_guard.is_none() {
+                let inner = self.inner.lock().await;
+                let token = inner.client.token()
+                    .ok_or_else(|| AppError::Protocol("no session token for WS".into()))?
+                    .to_string();
+                let url = inner.client.server_url().to_string();
+                drop(inner);
+                *ws_guard = Some(net::ws::WsConnection::connect(&url, &token).await?);
+            }
+        }
+
+        // 2. Wait for next message (ws lock only, inner is free for send_dm).
+        let raw_msg = {
+            let mut ws_guard = self.ws.lock().await;
+            let ws_conn = ws_guard.as_mut().unwrap();
+            match ws_conn.next_message().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => {
+                    // Connection closed — clear so next call reconnects.
+                    *ws_guard = None;
+                    return Ok(vec![]);
+                }
+                Err(e) => {
+                    *ws_guard = None;
+                    return Err(e.into());
+                }
+            }
+        };
+
+        // 3. Decrypt (inner lock). If decryption fails, ack the message
+        //    anyway so it doesn't block the queue forever, then skip it.
+        let decrypted = {
+            let mut inner = self.inner.lock().await;
+            match inner.decrypt_inbound(&raw_msg).await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    eprintln!(
+                        "[ws] failed to decrypt message {} from {:?}: {}, acking to skip",
+                        raw_msg.id, raw_msg.sender_did, e
+                    );
+                    // Ack the undecryptable message so it doesn't block the queue.
+                    let mut ws_guard = self.ws.lock().await;
+                    if let Some(ws_conn) = ws_guard.as_mut() {
+                        let _ = ws_conn.ack(&[raw_msg.id]).await;
+                    }
+                    // Return empty — caller will loop and get the next message.
+                    return Ok(vec![]);
+                }
+            }
+        };
+
+        // 4. Ack via WS.
+        {
+            let mut ws_guard = self.ws.lock().await;
+            if let Some(ws_conn) = ws_guard.as_mut() {
+                let _ = ws_conn.ack(&[raw_msg.id]).await;
+            }
+        }
+
+        Ok(vec![decrypted])
     }
 }
 
@@ -352,34 +466,7 @@ impl AppCoreInner {
         let mut decrypted = Vec::with_capacity(inbound.len());
 
         for msg in &inbound {
-            let sender_did = msg.sender_did.as_deref()
-                .ok_or_else(|| AppError::Protocol("message missing sender_did".into()))?;
-            let sender_device_id = msg.sender_device_id
-                .ok_or_else(|| AppError::Protocol("message missing sender_device_id".into()))? as u32;
-
-            let sender_addr = DeviceAddress::new(
-                AccountId::new(sender_did),
-                DeviceId::new(sender_device_id),
-            );
-
-            let encrypted = EncryptedMessage {
-                ciphertext: msg.ciphertext.clone(),
-                kind: if msg.message_kind == 0 { MessageKind::PreKey } else { MessageKind::Whisper },
-            };
-
-            let plaintext = session::decrypt(
-                &mut self.store,
-                &self.local_address,
-                &sender_addr,
-                &encrypted,
-            ).await?;
-
-            decrypted.push(DecryptedMessage {
-                server_id: msg.id,
-                sender_did: sender_did.to_string(),
-                sender_device_id,
-                plaintext,
-            });
+            decrypted.push(self.decrypt_inbound(msg).await?);
         }
 
         if !inbound.is_empty() {
@@ -388,5 +475,39 @@ impl AppCoreInner {
         }
 
         Ok(decrypted)
+    }
+
+    async fn decrypt_inbound(
+        &mut self,
+        msg: &net::types::InboundMessage,
+    ) -> Result<DecryptedMessage, AppError> {
+        let sender_did = msg.sender_did.as_deref()
+            .ok_or_else(|| AppError::Protocol("message missing sender_did".into()))?;
+        let sender_device_id = msg.sender_device_id
+            .ok_or_else(|| AppError::Protocol("message missing sender_device_id".into()))? as u32;
+
+        let sender_addr = DeviceAddress::new(
+            AccountId::new(sender_did),
+            DeviceId::new(sender_device_id),
+        );
+
+        let encrypted = EncryptedMessage {
+            ciphertext: msg.ciphertext.clone(),
+            kind: if msg.message_kind == 0 { MessageKind::PreKey } else { MessageKind::Whisper },
+        };
+
+        let plaintext = session::decrypt(
+            &mut self.store,
+            &self.local_address,
+            &sender_addr,
+            &encrypted,
+        ).await?;
+
+        Ok(DecryptedMessage {
+            server_id: msg.id,
+            sender_did: sender_did.to_string(),
+            sender_device_id,
+            plaintext,
+        })
     }
 }

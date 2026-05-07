@@ -19,6 +19,10 @@ pub struct Config {
     pub message_expiry_secs: i64,
     /// Prekey pool low-water mark (default: 10).
     pub prekey_low_threshold: i64,
+    /// Project token lifetime in seconds (default: 1 hour).
+    pub project_token_lifetime_secs: i64,
+    /// Installed Projects as JSON array: [{"name":"...","url":"...","description":"..."}].
+    pub projects_json: String,
 }
 
 impl Config {
@@ -42,6 +46,12 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10),
+            project_token_lifetime_secs: std::env::var("PROJECT_TOKEN_LIFETIME_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
+            projects_json: std::env::var("PROJECTS")
+                .unwrap_or_else(|_| "[]".to_string()),
         }
     }
 }

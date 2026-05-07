@@ -1,16 +1,16 @@
-//! HTTP client for the actnet homeserver API.
+//! HTTP and WebSocket client for the actnet homeserver API.
 //!
 //! This crate provides a typed client for every homeserver endpoint. It handles
 //! JSON serialization, base64 encoding of key material and ciphertext, and
 //! bearer token authentication. `app-core` uses this to talk to the server;
 //! the crypto and store crates remain I/O-free.
 //!
-//! WebSocket support (for real-time message delivery) is deferred — the HTTP
-//! polling endpoints (`GET /v1/messages`) are sufficient for the initial
-//! integration.
+//! The `ws` module provides a WebSocket client for real-time message delivery
+//! via `GET /v1/ws?token=<session_token>`.
 
 pub mod error;
 pub mod types;
+pub mod ws;
 
 use base64::prelude::*;
 use error::NetError;
@@ -49,6 +49,11 @@ impl Client {
 
     pub fn server_url(&self) -> &str {
         &self.server_url
+    }
+
+    /// Get the current session token, if set.
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
     }
 
     // ── Account ──────────────────────────────────────────────────────────
@@ -238,6 +243,41 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    // ── Projects ─────────────────────────────────────────────────────────
+
+    /// Fetch the list of Projects installed on the homeserver.
+    pub async fn fetch_projects(&self) -> Result<Vec<ProjectInfo>, NetError> {
+        let resp = self.http
+            .get(format!("{}/v1/projects", self.server_url))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(resp.json().await?)
+    }
+
+    /// Request a Project token for opening a Project webview.
+    pub async fn request_project_token(
+        &self,
+        project_url: &str,
+    ) -> Result<ProjectTokenResponse, NetError> {
+        let resp = self.authed_request(reqwest::Method::POST, "/v1/project-token")
+            .json(&serde_json::json!({"project_url": project_url}))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(resp.json().await?)
     }
 
     // ── DID ──────────────────────────────────────────────────────────────
