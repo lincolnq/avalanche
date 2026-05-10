@@ -6,6 +6,9 @@ struct ConversationView: View {
 
     @State private var messageText = ""
     @State private var errorMessage: String?
+    @State private var scrollTarget: String?
+    @State private var scrollToken = UUID()
+    @State private var initialLoadDone = false
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
@@ -13,16 +16,26 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(messages) { message in
-                        MessageBubble(
-                            message: message,
-                            isMe: message.senderAccountId == conversation.accountId
-                        )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(messages) { message in
+                            MessageBubble(
+                                message: message,
+                                isMe: message.senderAccountId == conversation.accountId
+                            )
+                            .id(message.id)
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding()
+                }
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: scrollToken) {
+                    if let scrollTarget {
+                        proxy.scrollTo(scrollTarget, anchor: .bottom)
                     }
                 }
-                .padding()
             }
 
             if let error = errorMessage {
@@ -49,17 +62,44 @@ struct ConversationView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+            .onChange(of: messageText) {
+                if !messages.isEmpty {
+                    scrollTo("bottom")
+                }
+            }
         }
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
+            DispatchQueue.main.async {
+                initialScroll()
+            }
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
         }
         .onChange(of: messages.count) {
-            // Mark new messages as read while the conversation is visible.
+            guard initialLoadDone else { return }
+            // Scroll to and mark new messages as read while the conversation is visible.
+            if !messages.isEmpty {
+                scrollTo("bottom")
+            }
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
         }
+    }
+
+    private func initialScroll() {
+        let msgs = messages
+        if let firstUnread = msgs.first(where: { $0.readAt == nil && $0.senderAccountId != conversation.accountId }) {
+            scrollTo(firstUnread.id)
+        } else if !msgs.isEmpty {
+            scrollTo("bottom")
+        }
+        initialLoadDone = true
+    }
+
+    private func scrollTo(_ id: String) {
+        scrollTarget = id
+        scrollToken = UUID()
     }
 
     private func sendMessage() {
@@ -80,6 +120,7 @@ struct ConversationView: View {
             readAt: now  // outgoing = immediately read
         )
         appState.messagesByConversation[conversation.id, default: []].append(message)
+        scrollTo("bottom")
 
         // Update conversation metadata for sorting.
         if let idx = appState.conversations.firstIndex(where: { $0.id == conversation.id }) {

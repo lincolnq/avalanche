@@ -3358,6 +3358,7 @@ dependencies = [
  "app-core",
  "axum",
  "base64 0.22.1",
+ "dotenvy",
  "net",
  "reqwest",
  "serde",

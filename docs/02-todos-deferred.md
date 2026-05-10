@@ -4,14 +4,13 @@
 - Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
 
 ## Chatbot Project (finishing touches)
-- Anthropic API key: figure out how to pass it to testbot (env var, config file, or server-side secret)
-- Claude API integration: replace echo with actual Claude Haiku responses
 - Bot display name: conversations currently show raw DID instead of a friendly name
 - Bot account marking: flag someplace to distinguish bot accounts in member lists
 
 ## Mobile app
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
 - Read receipts & scroll-position-based read marking (see docs/31-read-tracking.md, Stages B-D)
+- Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
 ## Crypto / protocol
 - Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.

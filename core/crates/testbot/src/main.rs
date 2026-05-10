@@ -456,6 +456,11 @@ fn echo_response(conversation: &[ConversationMessage]) -> String {
 
 #[tokio::main]
 async fn main() {
+    // Load .env file — try current dir first, then parent (repo root when run from core/)
+    if dotenvy::dotenv().is_err() {
+        let _ = dotenvy::from_filename("../.env");
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();

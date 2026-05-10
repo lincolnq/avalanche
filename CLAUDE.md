@@ -33,6 +33,16 @@ make ios             # bindings + xcframework + xcodegen
 
 Requires: `protobuf` (`brew install protobuf` on macOS).
 
+## Key Docs
+
+Read these first — they cover the overall design, technical approach, and backlog:
+
+- `docs/00-design.md` — goals, architecture, threat model, first-party Project designs
+- `docs/01-technical-implementation.md` — tech stack, crypto approach, repo structure, staged build plan
+- `docs/02-todos-deferred.md` — deferred TODOs / backlog
+
+Additional docs exist in `docs/` covering specific subsystems (server, projects, mobile, etc.) — numbering scheme: first digit = category (1=server, 2=projects, 3=mobile apps).
+
 ## Architecture
 
 Monorepo with Rust core (`core/`), Swift/Kotlin mobile UIs (`mobile/`), and docs.
