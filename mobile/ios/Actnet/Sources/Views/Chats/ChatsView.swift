@@ -3,6 +3,14 @@ import SwiftUI
 struct ChatsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showDevSettings = false
+    @State private var showCompose = false
+
+    /// Conversations sorted by most recent message first.
+    private var sortedConversations: [Conversation] {
+        appState.conversations.sorted { a, b in
+            (a.lastMessageDate ?? .distantPast) > (b.lastMessageDate ?? .distantPast)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -29,7 +37,7 @@ struct ChatsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        // TODO: New message compose
+                        showCompose = true
                     } label: {
                         Image(systemName: "square.and.pencil")
                     }
@@ -43,11 +51,14 @@ struct ChatsView: View {
             .sheet(isPresented: $showDevSettings) {
                 DevSettingsView()
             }
+            .sheet(isPresented: $showCompose) {
+                ComposeMessageView()
+            }
         }
     }
 
     private var conversationList: some View {
-        List(appState.conversations) { conversation in
+        List(sortedConversations) { conversation in
             NavigationLink {
                 ConversationView(conversation: conversation)
             } label: {

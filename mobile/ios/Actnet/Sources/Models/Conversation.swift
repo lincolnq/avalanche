@@ -8,12 +8,12 @@ struct Conversation: Identifiable, Codable {
     var recipientDid: String?  // for DMs: the other party's DID
     var lastMessage: String?
     var lastMessageDate: Date?
-    var unreadCount: Int = 0
     var isGroup: Bool = false
 
-    // Don't persist message content or ephemeral state to avoid
-    // storing plaintext in unencrypted UserDefaults.
+    // Exclude lastMessage (plaintext) from UserDefaults persistence.
+    // Timestamps are non-sensitive metadata, safe to persist.
     private enum CodingKeys: String, CodingKey {
         case id, title, accountId, serverUrl, recipientDid, isGroup
+        case lastMessageDate
     }
 }

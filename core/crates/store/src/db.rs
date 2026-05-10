@@ -95,6 +95,19 @@ impl Store {
         self.conn
             .call(|conn| {
                 conn.execute_batch(crate::schema::MIGRATIONS)?;
+
+                // Apply ALTER TABLE migrations. These are not idempotent in
+                // SQL (no IF NOT EXISTS for ADD COLUMN), so we ignore
+                // "duplicate column name" errors.
+                for sql in crate::schema::ALTER_MIGRATIONS {
+                    match conn.execute(sql, []) {
+                        Ok(_) => {}
+                        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                            if msg.contains("duplicate column name") => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+
                 Ok(())
             })
             .await

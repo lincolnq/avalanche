@@ -73,4 +73,24 @@ CREATE TABLE IF NOT EXISTS message_queue (
     message_kind        INTEGER NOT NULL,               -- 0 = PreKey, 1 = Whisper
     enqueued_at         INTEGER NOT NULL                -- unix millis
 );
+
+-- Decrypted message history for chat persistence across app restarts.
+-- Plaintext is stored encrypted-at-rest via SQLCipher.
+CREATE TABLE IF NOT EXISTS message_history (
+    id                TEXT    NOT NULL PRIMARY KEY,     -- UUID
+    conversation_id   TEXT    NOT NULL,
+    sender_did        TEXT    NOT NULL,
+    body              TEXT    NOT NULL,
+    sent_at           INTEGER NOT NULL,                -- unix millis
+    edited_at         INTEGER                          -- unix millis, nullable
+);
+CREATE INDEX IF NOT EXISTS idx_message_history_conv
+    ON message_history (conversation_id, sent_at);
 ";
+
+/// Migrations that use ALTER TABLE and cannot be expressed idempotently
+/// in pure SQL. Applied after [`MIGRATIONS`] on every open.
+pub const ALTER_MIGRATIONS: &[&str] = &[
+    // Add read_at column for per-message read tracking.
+    "ALTER TABLE message_history ADD COLUMN read_at INTEGER",
+];

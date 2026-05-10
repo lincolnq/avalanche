@@ -52,6 +52,14 @@ struct ConversationView: View {
         }
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
+            appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
+        }
+        .onChange(of: messages.count) {
+            // Mark new messages as read while the conversation is visible.
+            appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
+        }
     }
 
     private func sendMessage() {
@@ -61,14 +69,23 @@ struct ConversationView: View {
         errorMessage = nil
 
         // Optimistically add to UI
+        let messageId = UUID().uuidString
+        let now = Date()
         let message = Message(
-            id: UUID().uuidString,
+            id: messageId,
             conversationId: conversation.id,
             senderAccountId: conversation.accountId,
             body: text,
-            sentAt: Date()
+            sentAt: now,
+            readAt: now  // outgoing = immediately read
         )
         appState.messagesByConversation[conversation.id, default: []].append(message)
+
+        // Update conversation metadata for sorting.
+        if let idx = appState.conversations.firstIndex(where: { $0.id == conversation.id }) {
+            appState.conversations[idx].lastMessage = text
+            appState.conversations[idx].lastMessageDate = now
+        }
 
         Task {
             do {
@@ -80,7 +97,8 @@ struct ConversationView: View {
                     conversationId: conversation.id,
                     text: text,
                     recipientDid: recipientDid,
-                    senderAccountId: conversation.accountId
+                    senderAccountId: conversation.accountId,
+                    messageId: messageId
                 )
             } catch {
                 errorMessage = "Failed to send: \(error.localizedDescription)"

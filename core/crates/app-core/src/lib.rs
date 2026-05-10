@@ -54,6 +54,19 @@ pub struct DecryptedMessage {
     pub plaintext: Vec<u8>,
 }
 
+/// A message from local history (persisted in SQLCipher).
+#[derive(uniffi::Record)]
+pub struct StoredMessageFfi {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender_did: String,
+    pub body: String,
+    pub sent_at_ms: i64,
+    pub edited_at_ms: Option<i64>,
+    /// NULL = unread, Some = unix millis when marked read.
+    pub read_at_ms: Option<i64>,
+}
+
 /// The main client handle. Holds local state and a server connection.
 ///
 /// Thread-safe: all mutable state is behind an async Mutex, and the object
@@ -175,6 +188,62 @@ impl AppCore {
             let resp = inner.client.request_project_token(&project_url).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(resp.token)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Save a message to local history (SQLCipher).
+    pub fn save_message(&self, msg: StoredMessageFfi) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.store.save_message(&store::messages::HistoryMessage {
+                id: msg.id,
+                conversation_id: msg.conversation_id,
+                sender_did: msg.sender_did,
+                body: msg.body,
+                sent_at: Timestamp(msg.sent_at_ms),
+                edited_at: msg.edited_at_ms.map(Timestamp),
+                read_at: msg.read_at_ms.map(Timestamp),
+            }).await.map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Load messages for a conversation from local history.
+    pub fn load_messages(&self, conversation_id: String) -> Result<Vec<StoredMessageFfi>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let msgs = inner.store.load_messages(&conversation_id).await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(msgs.into_iter().map(|m| StoredMessageFfi {
+                id: m.id,
+                conversation_id: m.conversation_id,
+                sender_did: m.sender_did,
+                body: m.body,
+                sent_at_ms: m.sent_at.as_millis(),
+                edited_at_ms: m.edited_at.map(|t| t.as_millis()),
+                read_at_ms: m.read_at.map(|t| t.as_millis()),
+            }).collect())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Mark messages as read up to a given sent_at timestamp.
+    /// Returns the number of messages newly marked.
+    pub fn mark_messages_read(&self, conversation_id: String, up_to_sent_at_ms: i64) -> Result<u64, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.store.mark_messages_read(
+                &conversation_id,
+                Timestamp(up_to_sent_at_ms),
+                Timestamp::now(),
+            ).await.map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Count unread messages in a conversation.
+    pub fn unread_count(&self, conversation_id: String) -> Result<u64, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.store.unread_count(&conversation_id, &inner.did).await
+                .map_err(AppError::from)
         }).map_err(AppErrorFfi::from)
     }
 

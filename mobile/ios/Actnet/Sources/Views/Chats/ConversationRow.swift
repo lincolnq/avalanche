@@ -4,6 +4,12 @@ struct ConversationRow: View {
     let conversation: Conversation
     let account: Account?
 
+    @EnvironmentObject private var appState: AppState
+
+    private var unreadCount: Int {
+        appState.unreadCount(for: conversation)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // Group/DM avatar placeholder
@@ -50,8 +56,8 @@ struct ConversationRow: View {
                             .background(Color.accentColor, in: Circle())
                     }
 
-                    if conversation.unreadCount > 0 {
-                        Text("\(conversation.unreadCount)")
+                    if unreadCount > 0 {
+                        Text("\(unreadCount)")
                             .font(.caption2)
                             .fontWeight(.bold)
                             .foregroundStyle(.white)
@@ -65,8 +71,6 @@ struct ConversationRow: View {
         .padding(.vertical, 2)
     }
 
-    /// Only show the account indicator when there are multiple accounts.
-    @EnvironmentObject private var appState: AppState
     private var showAccountIndicator: Bool {
         appState.accounts.count > 1
     }

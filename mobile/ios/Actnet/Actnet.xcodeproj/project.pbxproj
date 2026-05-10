@@ -34,6 +34,7 @@
 		DCB3ED6719400E9479A29C98 /* ChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B3DC7CBE016789D232757D /* ChatsView.swift */; };
 		DD42A62234B9DF687F2AE7BB /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94C65A994903B9410FFAC5B3 /* AppState.swift */; };
 		E02AC30E6A86F685A5B358AB /* DevSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E20E93DC790F03B59AAD25 /* DevSettingsView.swift */; };
+		E74703FA755ACEF9C2B0DAA5 /* ComposeMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */; };
 		ED6FC7D997F37C6A0A85E0B9 /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B337C1C0A8BF5C7BDA6E41 /* Message.swift */; };
 		F583E622D4499CAC0D0472FF /* MockActnetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649CF0CE439034C4B30F81F5 /* MockActnetService.swift */; };
 		FA8DF8441A2584B4F6FFFDFE /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32115C1BD46227602D3C5A71 /* RootView.swift */; };
@@ -72,6 +73,7 @@
 		65A7BC7A36A4F6D36947106A /* ActnetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActnetApp.swift; sourceTree = "<group>"; };
 		661A952A0D325A00D0F054E9 /* DevServerActnetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevServerActnetService.swift; sourceTree = "<group>"; };
 		6B7C0912B10EFE68A1C776BB /* AppCoreFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = AppCoreFFI.xcframework; path = ../AppCoreFFI.xcframework; sourceTree = "<group>"; };
+		77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeMessageView.swift; sourceTree = "<group>"; };
 		8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryKeyBanner.swift; sourceTree = "<group>"; };
 		94C65A994903B9410FFAC5B3 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		96F2798F298AC0843F399CE5 /* Actnet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Actnet.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -157,6 +159,7 @@
 			isa = PBXGroup;
 			children = (
 				60B3DC7CBE016789D232757D /* ChatsView.swift */,
+				77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */,
 				C0BC2191A5A534D46806501B /* ConversationRow.swift */,
 				2C83A54ACCB386940D8E4689 /* ConversationView.swift */,
 				1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */,
@@ -305,6 +308,7 @@
 				DD42A62234B9DF687F2AE7BB /* AppState.swift in Sources */,
 				4CB5F41795DCD29D8786B22B /* CallsView.swift in Sources */,
 				DCB3ED6719400E9479A29C98 /* ChatsView.swift in Sources */,
+				E74703FA755ACEF9C2B0DAA5 /* ComposeMessageView.swift in Sources */,
 				947A00551C7A5A62A0638A14 /* Conversation.swift in Sources */,
 				C8BE5993A5A4E8838F9D0C29 /* ConversationRow.swift in Sources */,
 				FE24D043CB770E44A2F5F3EE /* ConversationView.swift in Sources */,

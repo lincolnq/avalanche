@@ -1,14 +1,12 @@
-//! Outbound message queue.
+//! Outbound message queue and message history.
 //!
-//! When `app-core` encrypts a message it hands the ciphertext to this queue
-//! before attempting delivery. If the homeserver is unreachable, the message
-//! stays here until the next successful connection, at which point `app-core`
-//! calls [`Store::drain`] and retries all pending messages in order. Once the
-//! server acknowledges delivery, [`Store::mark_delivered`] removes the message.
+//! Two responsibilities:
 //!
-//! The queue holds ciphertext only — plaintext never touches the database.
-//! Message ordering is preserved: [`Store::drain`] returns rows sorted by
-//! `enqueued_at` ascending.
+//! 1. **Outbound queue** — encrypted messages pending delivery. Plaintext never
+//!    touches the queue; it holds ciphertext only.
+//!
+//! 2. **Message history** — decrypted messages persisted for chat continuity
+//!    across app restarts. Stored encrypted-at-rest by SQLCipher.
 
 use types::{MessageId, Timestamp};
 
@@ -103,4 +101,123 @@ impl Store {
             .await
             .map_err(StoreError::Db)
     }
+
+    // ── Message history ─────────────────────────────────────────────────
+
+    /// Save a decrypted message to the local history.
+    pub async fn save_message(&self, msg: &HistoryMessage) -> Result<(), StoreError> {
+        let id = msg.id.clone();
+        let conversation_id = msg.conversation_id.clone();
+        let sender_did = msg.sender_did.clone();
+        let body = msg.body.clone();
+        let sent_at = msg.sent_at.as_millis();
+        let edited_at = msg.edited_at.map(|t| t.as_millis());
+        let read_at = msg.read_at.map(|t| t.as_millis());
+
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO message_history
+                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load messages for a conversation, ordered by sent_at ascending.
+    pub async fn load_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<HistoryMessage>, StoreError> {
+        let conv_id = conversation_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at
+                     FROM message_history
+                     WHERE conversation_id = ?1
+                     ORDER BY sent_at ASC",
+                )?;
+                let rows = stmt.query_map([&conv_id], |row| {
+                    Ok(HistoryMessage {
+                        id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        sender_did: row.get(2)?,
+                        body: row.get(3)?,
+                        sent_at: Timestamp(row.get(4)?),
+                        edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
+                        read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Mark all unread messages in a conversation as read up to a given timestamp.
+    /// Sets `read_at` to `now` for matching messages. Returns the number of messages marked.
+    pub async fn mark_messages_read(
+        &self,
+        conversation_id: &str,
+        up_to_sent_at: Timestamp,
+        now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        let conv_id = conversation_id.to_string();
+        let up_to = up_to_sent_at.as_millis();
+        let read_at = now.as_millis();
+
+        self.conn
+            .call(move |conn| {
+                let count = conn.execute(
+                    "UPDATE message_history
+                     SET read_at = ?1
+                     WHERE conversation_id = ?2 AND sent_at <= ?3 AND read_at IS NULL",
+                    rusqlite::params![read_at, conv_id, up_to],
+                )?;
+                Ok(count as u64)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Count unread messages in a conversation (messages not sent by own_did with read_at IS NULL).
+    pub async fn unread_count(
+        &self,
+        conversation_id: &str,
+        own_did: &str,
+    ) -> Result<u64, StoreError> {
+        let conv_id = conversation_id.to_string();
+        let did = own_did.to_string();
+
+        self.conn
+            .call(move |conn| {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM message_history
+                     WHERE conversation_id = ?1 AND read_at IS NULL AND sender_did != ?2",
+                    rusqlite::params![conv_id, did],
+                    |row| row.get(0),
+                )?;
+                Ok(count as u64)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+}
+
+/// A decrypted message stored in the local history.
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender_did: String,
+    pub body: String,
+    pub sent_at: Timestamp,
+    pub edited_at: Option<Timestamp>,
+    /// NULL = unread, Some = unix millis when marked read.
+    pub read_at: Option<Timestamp>,
 }

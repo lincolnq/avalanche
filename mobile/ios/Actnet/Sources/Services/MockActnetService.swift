@@ -8,6 +8,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
     private var pendingMessages: [DecryptedMessage] = []
     private var nextMessageId: Int64 = 1
     private let lock = NSLock()
+    private var storedMessages: [String: [StoredMessageFfi]] = [:]  // keyed by conversation_id
 
     init(did: String? = nil) {
         self.mockDid = did ?? "did:plc:mock\(UUID().uuidString.prefix(8).lowercased())"
@@ -33,6 +34,48 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
 
     func requestProjectToken(projectUrl: String) throws -> String {
         "mock-project-token-\(UUID().uuidString.prefix(8))"
+    }
+
+    func saveMessage(msg: StoredMessageFfi) throws {
+        lock.lock()
+        storedMessages[msg.conversationId, default: []].append(msg)
+        lock.unlock()
+    }
+
+    func loadMessages(conversationId: String) throws -> [StoredMessageFfi] {
+        lock.lock()
+        let msgs = storedMessages[conversationId] ?? []
+        lock.unlock()
+        return msgs.sorted { $0.sentAtMs < $1.sentAtMs }
+    }
+
+    func markMessagesRead(conversationId: String, upToSentAtMs: Int64) throws -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        var count: UInt64 = 0
+        guard var msgs = storedMessages[conversationId] else { return 0 }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        for i in msgs.indices where msgs[i].sentAtMs <= upToSentAtMs && msgs[i].readAtMs == nil && msgs[i].senderDid != mockDid {
+            msgs[i] = StoredMessageFfi(
+                id: msgs[i].id,
+                conversationId: msgs[i].conversationId,
+                senderDid: msgs[i].senderDid,
+                body: msgs[i].body,
+                sentAtMs: msgs[i].sentAtMs,
+                editedAtMs: msgs[i].editedAtMs,
+                readAtMs: now
+            )
+            count += 1
+        }
+        storedMessages[conversationId] = msgs
+        return count
+    }
+
+    func unreadCount(conversationId: String) throws -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        let msgs = storedMessages[conversationId] ?? []
+        return UInt64(msgs.filter { $0.readAtMs == nil && $0.senderDid != mockDid }.count)
     }
 
     func receiveMessages() throws -> [DecryptedMessage] {
@@ -98,7 +141,6 @@ enum MockData {
                 serverUrl: serverUrl,
                 lastMessage: "Welcome to the server!",
                 lastMessageDate: now.addingTimeInterval(-60),
-                unreadCount: 1,
                 isGroup: true
             ),
             Conversation(
@@ -108,7 +150,6 @@ enum MockData {
                 serverUrl: serverUrl,
                 lastMessage: "Rally this Saturday at 10am",
                 lastMessageDate: now.addingTimeInterval(-3600),
-                unreadCount: 0,
                 isGroup: true
             ),
             Conversation(
@@ -118,7 +159,6 @@ enum MockData {
                 serverUrl: serverUrl,
                 lastMessage: "Hey, welcome aboard!",
                 lastMessageDate: now.addingTimeInterval(-120),
-                unreadCount: 1,
                 isGroup: false
             ),
         ]

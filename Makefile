@@ -51,4 +51,4 @@ ios-xcframework:
 bindings:
 	cd core && cargo build -p app-core
 	cd core && cargo run -p app-core --bin uniffi-bindgen generate --library target/debug/libapp_core.dylib --language swift --out-dir ../mobile/ios/Generated
-	cd core && cargo run -p app-core --bin uniffi-bindgen generate --library target/debug/libapp_core.dylib --language kotlin --out-dir ../mobile/android/Generated
+	cd core && cargo run -p app-core --bin uniffi-bindgen generate --library target/debug/libapp_core.dylib --language kotlin --no-format --out-dir ../mobile/android/Generated

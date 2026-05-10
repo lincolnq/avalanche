@@ -1,18 +1,17 @@
 # Deferred TODOs
 
+## Dev Infra
+- Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
+
 ## Chatbot Project (finishing touches)
 - Anthropic API key: figure out how to pass it to testbot (env var, config file, or server-side secret)
 - Claude API integration: replace echo with actual Claude Haiku responses
 - Bot display name: conversations currently show raw DID instead of a friendly name
-- Bot account marking: flag in DB to distinguish bot accounts in member lists
+- Bot account marking: flag someplace to distinguish bot accounts in member lists
 
 ## Mobile app
-- Local message store: persist messages in SQLCipher so chat history survives app restart
-- Sort Chats pane by recency (lastMessageDate)
-- Mark conversations as read on open (unreadCount resets)
-- New message compose button (currently no-op)
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
-- Stale WS loops: old account DIDs cause noisy "no core for..." log spam after account recreation
+- Read receipts & scroll-position-based read marking (see docs/31-read-tracking.md, Stages B-D)
 
 ## Crypto / protocol
 - Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.

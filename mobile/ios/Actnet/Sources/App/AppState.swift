@@ -34,6 +34,8 @@ final class AppState: ObservableObject {
 
     /// Active AppCore instances, keyed by DID.
     private var cores: [String: any AppCoreProtocol] = [:]
+    /// Running WebSocket loop tasks, keyed by DID. Cancelled when account is removed.
+    private var wsLoopTasks: [String: Task<Void, Never>] = [:]
     private var _service: any ActnetService
 
     var service: any ActnetService { _service }
@@ -57,13 +59,17 @@ final class AppState: ObservableObject {
         self.isOnboarding = true
     }
 
+    // MARK: - Unread count (derived from in-memory messages)
+
+    /// Compute unread count for a conversation from in-memory messages.
+    func unreadCount(for conversation: Conversation) -> Int {
+        let messages = messagesByConversation[conversation.id] ?? []
+        return messages.filter { $0.readAt == nil && $0.senderAccountId != conversation.accountId }.count
+    }
+
+    // MARK: - Account lifecycle
+
     /// Attempt to restore persisted accounts on launch.
-    ///
-    /// The persisted list is the source of truth for "which accounts exist".
-    /// We always show persisted accounts in the UI. If the server round-trip
-    /// in `login()` fails (network down, server unreachable), the account
-    /// appears but without an active core — network operations will fail
-    /// gracefully until the user retries or the app is relaunched.
     func restoreAccounts() async {
         let persisted = Self.loadPersistedAccounts()
         guard !persisted.isEmpty else { return }
@@ -75,15 +81,12 @@ final class AppState: ObservableObject {
         for p in persisted {
             let dbPath = dir.appendingPathComponent(p.dbFilename).path
 
-            // Check the DB file actually exists — if not, the account is
-            // truly gone (e.g. app was reinstalled). Remove it from persistence.
             guard FileManager.default.fileExists(atPath: dbPath) else {
                 print("DB file missing for \(p.did), removing from persisted accounts")
                 Self.removePersistedAccount(did: p.did)
                 continue
             }
 
-            // Always add the account to the UI so it's visible.
             let account = Account(
                 id: p.did,
                 displayName: p.displayName,
@@ -94,8 +97,6 @@ final class AppState: ObservableObject {
             )
             accounts.append(account)
 
-            // Try to login (opens DB + authenticates with server).
-            // If it fails, the account is still shown — just without a live core.
             do {
                 let core = try await Task.detached {
                     try svc.login(dbPath: dbPath, dbKey: dbKey)
@@ -128,6 +129,9 @@ final class AppState: ObservableObject {
         serviceMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Self.serviceModeKey)
         _service = Self.makeService(mode: mode)
+        // Cancel all WS loops before clearing state
+        for (_, task) in wsLoopTasks { task.cancel() }
+        wsLoopTasks.removeAll()
         // Reset state on mode switch
         accounts.removeAll()
         conversations.removeAll()
@@ -204,12 +208,102 @@ final class AppState: ObservableObject {
         isOnboarding = false
     }
 
-    func sendMessage(conversationId: String, text: String, recipientDid: String, senderAccountId: String) async throws {
+    // MARK: - Messaging
+
+    func sendMessage(conversationId: String, text: String, recipientDid: String, senderAccountId: String, messageId: String) async throws {
         guard let core = cores[senderAccountId] else { return }
         let plaintext = Data(text.utf8)
+
+        // Persist outbound message to SQLCipher (outgoing messages are immediately "read").
+        let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let stored = StoredMessageFfi(
+            id: messageId,
+            conversationId: conversationId,
+            senderDid: senderAccountId,
+            body: text,
+            sentAtMs: nowMs,
+            editedAtMs: nil,
+            readAtMs: nowMs  // outgoing = immediately read
+        )
+        try await Task.detached { try core.saveMessage(msg: stored) }.value
+
         try await Task.detached {
             try core.sendDm(recipientDid: recipientDid, recipientDeviceId: 1, plaintext: plaintext)
         }.value
+    }
+
+    /// Mark all messages in a conversation as read (sets read_at on unread messages).
+    func markAllMessagesRead(conversationId: String, accountId: String) {
+        guard var messages = messagesByConversation[conversationId] else { return }
+        let now = Date()
+        var changed = false
+        for i in messages.indices {
+            if messages[i].readAt == nil && messages[i].senderAccountId != accountId {
+                messages[i].readAt = now
+                changed = true
+            }
+        }
+        guard changed else { return }
+        messagesByConversation[conversationId] = messages
+
+        // Persist to SQLCipher in the background.
+        if let core = cores[accountId] {
+            let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+            let convId = conversationId
+            Task.detached {
+                try? core.markMessagesRead(conversationId: convId, upToSentAtMs: nowMs)
+            }
+        }
+    }
+
+    /// Load persisted messages from SQLCipher for a conversation.
+    func loadMessagesFromStore(conversationId: String, accountId: String) {
+        guard let core = cores[accountId] else { return }
+        // Only load if we haven't already loaded for this conversation.
+        guard messagesByConversation[conversationId] == nil else { return }
+        let convId = conversationId
+        Task.detached { [weak self] in
+            guard let msgs = try? core.loadMessages(conversationId: convId) else { return }
+            let messages = msgs.map { m in
+                Message(
+                    id: m.id,
+                    conversationId: m.conversationId,
+                    senderAccountId: m.senderDid,
+                    body: m.body,
+                    sentAt: Date(timeIntervalSince1970: Double(m.sentAtMs) / 1000.0),
+                    editedAt: m.editedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) },
+                    readAt: m.readAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
+                )
+            }
+            await MainActor.run {
+                if self?.messagesByConversation[convId] == nil {
+                    self?.messagesByConversation[convId] = messages
+                }
+            }
+        }
+    }
+
+    /// Find or create a DM conversation with a recipient DID.
+    func findOrCreateDMConversation(recipientDid: String, accountId: String) -> Conversation {
+        if let existing = conversations.first(where: {
+            $0.accountId == accountId && $0.recipientDid == recipientDid
+        }) {
+            return existing
+        }
+        let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
+        let convId = "dm-\(accountId)-\(recipientDid)"
+        let conv = Conversation(
+            id: convId,
+            title: recipientDid,
+            accountId: accountId,
+            serverUrl: serverUrl,
+            recipientDid: recipientDid,
+            isGroup: false
+        )
+        conversations.append(conv)
+        persistConversations()
+        return conv
     }
 
     func pollMessages(for accountId: String) async throws -> [DecryptedMessage] {
@@ -221,7 +315,6 @@ final class AppState: ObservableObject {
 
     /// Fetch the list of Projects from a server.
     func fetchProjects(serverUrl: String) async -> [ProjectInfo] {
-        // Find an account on this server to use for the API call.
         guard let account = accounts.first(where: {
             $0.servers.contains(where: { $0.id == serverUrl })
         }), let core = cores[account.id] else {
@@ -239,7 +332,6 @@ final class AppState: ObservableObject {
     }
 
     /// Request a Project token from the homeserver.
-    /// Returns the token string.
     func requestProjectToken(accountId: String, projectUrl: String) async throws -> String {
         guard let core = cores[accountId] else {
             throw NSError(domain: "AppState", code: 1, userInfo: [NSLocalizedDescriptionKey: "No account"])
@@ -251,29 +343,33 @@ final class AppState: ObservableObject {
 
     // MARK: - Message receiving (WebSocket)
 
-    /// Start a background WebSocket listener for each account.
+    /// Start a background WebSocket listener for each account that has a live core.
     func startMessagePolling() {
         for account in accounts {
             let accountId = account.id
-            Task {
+            // Skip if there's no core (account is offline) or loop already running.
+            guard cores[accountId] != nil, wsLoopTasks[accountId] == nil else { continue }
+            wsLoopTasks[accountId] = Task {
                 await messageWsLoop(accountId: accountId)
             }
         }
     }
 
     /// Connects via WebSocket and waits for messages. Reconnects on error.
+    /// Exits cleanly when the task is cancelled or the core is removed.
     private func messageWsLoop(accountId: String) async {
         print("[ws] starting message loop for \(accountId)")
         while !Task.isCancelled {
             guard let core = cores[accountId] else {
-                print("[ws] no core for \(accountId), waiting...")
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                continue
+                // Core was removed (account deleted/recreated). Stop the loop.
+                print("[ws] no core for \(accountId), stopping loop")
+                break
             }
             do {
                 let messages = try await Task.detached {
                     try core.receiveMessagesWs()
                 }.value
+                guard !Task.isCancelled else { break }
                 print("[ws] received \(messages.count) message(s) for \(accountId)")
                 for msg in messages {
                     handleIncomingMessage(msg, accountId: accountId)
@@ -283,10 +379,14 @@ final class AppState: ObservableObject {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             } catch {
+                guard !Task.isCancelled else { break }
                 print("[ws] error for \(accountId): \(error), reconnecting in 2s")
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
+        // Clean up task reference on exit.
+        wsLoopTasks.removeValue(forKey: accountId)
+        print("[ws] loop ended for \(accountId)")
     }
 
     private func handleIncomingMessage(_ msg: DecryptedMessage, accountId: String) {
@@ -302,7 +402,6 @@ final class AppState: ObservableObject {
             convId = conversations[idx].id
             conversations[idx].lastMessage = text
             conversations[idx].lastMessageDate = Date()
-            conversations[idx].unreadCount += 1
         } else {
             // Auto-create a new conversation for this DID.
             let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
@@ -315,21 +414,38 @@ final class AppState: ObservableObject {
                 recipientDid: senderDid,
                 lastMessage: text,
                 lastMessageDate: Date(),
-                unreadCount: 1,
                 isGroup: false
             )
             conversations.append(conv)
         }
 
+        let now = Date()
+        let messageId = UUID().uuidString
+        // Incoming messages are unread (readAt = nil).
         let message = Message(
-            id: UUID().uuidString,
+            id: messageId,
             conversationId: convId,
             senderAccountId: senderDid,
             body: text,
-            sentAt: Date()
+            sentAt: now,
+            readAt: nil
         )
         messagesByConversation[convId, default: []].append(message)
         persistConversations()
+
+        // Persist to SQLCipher in the background.
+        if let core = cores[accountId] {
+            let stored = StoredMessageFfi(
+                id: messageId,
+                conversationId: convId,
+                senderDid: senderDid,
+                body: text,
+                sentAtMs: Int64(now.timeIntervalSince1970 * 1000),
+                editedAtMs: nil,
+                readAtMs: nil  // unread
+            )
+            Task.detached { try? core.saveMessage(msg: stored) }
+        }
     }
 
     // MARK: - Persistence helpers
