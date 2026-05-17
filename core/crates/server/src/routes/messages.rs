@@ -109,6 +109,9 @@ async fn send(
     }
 
     // Push over WebSocket after all messages are persisted.
+    // Collect offline device PKs for push relay wakeup.
+    let mut offline_device_pks = Vec::new();
+
     for (device_id, msg_id, ciphertext, message_kind) in ws_pushes {
         let ws_conns = state.ws_connections.read().await;
         if let Some(tx) = ws_conns.get(&device_id) {
@@ -121,6 +124,19 @@ async fn send(
                 "sender_device_id": sender_device_id,
             });
             let _ = tx.send(WsMessage(ws_msg.to_string()));
+        } else {
+            offline_device_pks.push(device_id);
+        }
+    }
+
+    // Send push wakeups for offline devices (best-effort, don't block response).
+    if !offline_device_pks.is_empty() {
+        if let Some(relay_url) = &state.config.relay_url {
+            let relay_url = relay_url.clone();
+            let db = state.db.clone();
+            tokio::spawn(async move {
+                send_push_wakeups(&relay_url, &db, &offline_device_pks).await;
+            });
         }
     }
 
@@ -181,4 +197,57 @@ async fn acknowledge(
     let mut conn = state.db.acquire().await?;
     db::messages::acknowledge(&mut conn, auth.device_pk, &req.message_ids).await?;
     Ok(())
+}
+
+// ── Push relay wakeup ───────────────────────────────────────────────────────
+
+/// Look up push pseudonyms for offline devices and send wakeup pings to the
+/// push relay. Best-effort: failures are logged but don't affect message delivery.
+async fn send_push_wakeups(relay_url: &str, db: &sqlx::PgPool, device_pks: &[i64]) {
+    let mut pseudonyms = Vec::new();
+
+    for &device_pk in device_pks {
+        let mut conn = match db.acquire().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("push: failed to acquire db connection: {}", e);
+                return;
+            }
+        };
+        match db::push::pseudonym_for_device(&mut conn, device_pk).await {
+            Ok(Some(p)) => pseudonyms.push(p),
+            Ok(None) => {
+                tracing::debug!(device_pk, "push: no pseudonym registered, skipping");
+            }
+            Err(e) => {
+                tracing::warn!(device_pk, "push: failed to look up pseudonym: {}", e);
+            }
+        }
+    }
+
+    if pseudonyms.is_empty() {
+        return;
+    }
+
+    tracing::info!(count = pseudonyms.len(), "push: sending wakeup to relay");
+
+    let body = serde_json::json!({ "pseudonyms": pseudonyms });
+    match reqwest::Client::new()
+        .post(format!("{}/v1/wakeup", relay_url))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::debug!("push: relay wakeup succeeded");
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            tracing::warn!("push: relay returned {}: {}", status, text);
+        }
+        Err(e) => {
+            tracing::warn!("push: failed to reach relay: {}", e);
+        }
+    }
 }

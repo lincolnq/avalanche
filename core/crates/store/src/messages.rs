@@ -113,14 +113,15 @@ impl Store {
         let sent_at = msg.sent_at.as_millis();
         let edited_at = msg.edited_at.map(|t| t.as_millis());
         let read_at = msg.read_at.map(|t| t.as_millis());
+        let delivery_status = msg.delivery_status as i64;
 
         self.conn
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO message_history
-                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at],
+                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status],
                 )?;
                 Ok(())
             })
@@ -137,7 +138,7 @@ impl Store {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status
                      FROM message_history
                      WHERE conversation_id = ?1
                      ORDER BY sent_at ASC",
@@ -151,6 +152,7 @@ impl Store {
                         sent_at: Timestamp(row.get(4)?),
                         edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
                         read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
+                        delivery_status: row.get::<_, i64>(7)? as u8,
                     })
                 })?;
                 rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -180,6 +182,36 @@ impl Store {
                     rusqlite::params![read_at, conv_id, up_to],
                 )?;
                 Ok(count as u64)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Update delivery_status for outgoing messages matching the given sent_at timestamps.
+    /// Returns the number of messages updated.
+    pub async fn update_delivery_status(
+        &self,
+        conversation_id: &str,
+        timestamps: &[i64],
+        new_status: u8,
+    ) -> Result<u64, StoreError> {
+        let conv_id = conversation_id.to_string();
+        let ts = timestamps.to_vec();
+        let status = new_status as i64;
+
+        self.conn
+            .call(move |conn| {
+                let mut total = 0u64;
+                for sent_at in &ts {
+                    let count = conn.execute(
+                        "UPDATE message_history
+                         SET delivery_status = ?1
+                         WHERE conversation_id = ?2 AND sent_at = ?3 AND delivery_status < ?1",
+                        rusqlite::params![status, conv_id, sent_at],
+                    )?;
+                    total += count as u64;
+                }
+                Ok(total)
             })
             .await
             .map_err(StoreError::Db)
@@ -220,4 +252,6 @@ pub struct HistoryMessage {
     pub edited_at: Option<Timestamp>,
     /// NULL = unread, Some = unix millis when marked read.
     pub read_at: Option<Timestamp>,
+    /// 0 = sending, 1 = sent, 2 = delivered, 3 = read.
+    pub delivery_status: u8,
 }

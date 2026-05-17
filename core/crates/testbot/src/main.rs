@@ -217,7 +217,11 @@ async fn text_me(
 
             let opening = "Hey! I'm a testbot. Ask me anything.";
             tracing::info!("[bot {}] created, sending opening DM to {}: {:?}", bot_did, user_did_clone, opening);
-            bot.send_dm_async(&user_did_clone, 1, opening.as_bytes())
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            bot.send_dm_async(&user_did_clone, 1, opening.as_bytes(), now_ms)
                 .await
                 .map_err(|e| {
                     tracing::error!("[bot {}] failed to send opening message: {}", bot_did, e);
@@ -347,6 +351,20 @@ async fn bot_message_loop(
 
             tracing::info!("[bot {}] <<< from {}: {:?}", bot_did, msg.sender_did, plaintext);
 
+            // Pause briefly before sending read receipt, like a human reading.
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+            // Send a read receipt back to the sender using their sent_at timestamp.
+            if let Some(sender_ts) = msg.sent_at_ms {
+                let runner = bot.lock().await;
+                if let Err(e) = runner.app_core.send_read_receipt_async(
+                    &msg.sender_did, msg.sender_device_id, vec![sender_ts],
+                ).await {
+                    tracing::warn!("[bot {}] failed to send read receipt: {}", bot_did, e);
+                }
+            }
+
+            // Generate reply after the read receipt.
             let mut runner = bot.lock().await;
 
             runner.conversation.push(ConversationMessage {
@@ -364,9 +382,13 @@ async fn bot_message_loop(
                 content: response.clone(),
             });
 
+            let reply_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
             if let Err(e) = runner
                 .app_core
-                .send_dm_async(&msg.sender_did, msg.sender_device_id, response.as_bytes())
+                .send_dm_async(&msg.sender_did, msg.sender_device_id, response.as_bytes(), reply_ts)
                 .await
             {
                 tracing::error!("[bot {}] failed to send to {}: {}", bot_did, msg.sender_did, e);

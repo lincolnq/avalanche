@@ -20,6 +20,7 @@ async fn main() {
 
     let pool = PgPoolOptions::new()
         .max_connections(20)
+        .acquire_timeout(std::time::Duration::from_secs(5))
         .connect(&config.database_url)
         .await
         .expect("failed to connect to database");

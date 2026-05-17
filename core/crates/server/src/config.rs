@@ -23,6 +23,8 @@ pub struct Config {
     pub project_token_lifetime_secs: i64,
     /// Installed Projects as JSON array: [{"name":"...","url":"...","description":"..."}].
     pub projects_json: String,
+    /// Push relay URL (e.g. "http://localhost:3002"). If unset, push is disabled.
+    pub relay_url: Option<String>,
 }
 
 impl Config {
@@ -52,6 +54,7 @@ impl Config {
                 .unwrap_or(3600),
             projects_json: std::env::var("PROJECTS")
                 .unwrap_or_else(|_| "[]".to_string()),
+            relay_url: std::env::var("RELAY_URL").ok(),
         }
     }
 }

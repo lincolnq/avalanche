@@ -89,7 +89,7 @@ struct ConversationView: View {
 
     private func initialScroll() {
         let msgs = messages
-        if let firstUnread = msgs.first(where: { $0.readAt == nil && $0.senderAccountId != conversation.accountId }) {
+        if let firstUnread = msgs.first(where: { $0.readAtMs == nil && $0.senderAccountId != conversation.accountId }) {
             scrollTo(firstUnread.id)
         } else if !msgs.isEmpty {
             scrollTo("bottom")
@@ -108,16 +108,17 @@ struct ConversationView: View {
         messageText = ""
         errorMessage = nil
 
-        // Optimistically add to UI
+        // Optimistically add to UI.
         let messageId = UUID().uuidString
-        let now = Date()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let message = Message(
             id: messageId,
             conversationId: conversation.id,
             senderAccountId: conversation.accountId,
             body: text,
-            sentAt: now,
-            readAt: now  // outgoing = immediately read
+            sentAtMs: nowMs,
+            readAtMs: nowMs,  // outgoing = immediately read
+            deliveryStatus: .sent
         )
         appState.messagesByConversation[conversation.id, default: []].append(message)
         scrollTo("bottom")
@@ -125,7 +126,7 @@ struct ConversationView: View {
         // Update conversation metadata for sorting.
         if let idx = appState.conversations.firstIndex(where: { $0.id == conversation.id }) {
             appState.conversations[idx].lastMessage = text
-            appState.conversations[idx].lastMessageDate = now
+            appState.conversations[idx].lastMessageDate = message.sentAt
         }
 
         Task {
@@ -139,7 +140,8 @@ struct ConversationView: View {
                     text: text,
                     recipientDid: recipientDid,
                     senderAccountId: conversation.accountId,
-                    messageId: messageId
+                    messageId: messageId,
+                    sentAtMs: nowMs
                 )
             } catch {
                 errorMessage = "Failed to send: \(error.localizedDescription)"

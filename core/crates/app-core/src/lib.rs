@@ -25,9 +25,59 @@ use std::sync::Arc;
 use crypto::session::{self, DeviceAddress, EncryptedMessage, MessageKind};
 use error::{AppError, AppErrorFfi};
 use net::types::{OutboundMessage, RegisterRequest};
+use serde::{Deserialize, Serialize};
 use store::account::RegistrationInfo;
 use tokio::sync::Mutex;
 use types::{AccountId, DeviceId, Timestamp};
+
+// ── Message envelope ────────────────────────────────────────────────────────
+//
+// All E2E-encrypted plaintext is wrapped in a JSON envelope so we can
+// distinguish content messages from read receipts (and future message types).
+//
+// Content:  {"t":"m","b":"hello","ts":[1234567890123]}
+// Delivery: {"t":"d","ts":[1234567890123]}
+// Read:     {"t":"r","ts":[1234567890123]}
+
+#[derive(Serialize, Deserialize)]
+struct Envelope {
+    /// "m" = content message, "d" = delivery receipt, "r" = read receipt
+    t: String,
+    /// Message body (content messages only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    b: Option<String>,
+    /// Sent-at timestamps of acknowledged messages (receipts only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts: Option<Vec<i64>>,
+}
+
+impl Envelope {
+    fn content(body: &str, sent_at_ms: i64) -> Self {
+        Self { t: "m".into(), b: Some(body.into()), ts: Some(vec![sent_at_ms]) }
+    }
+
+    fn delivery_receipt(timestamps: Vec<i64>) -> Self {
+        Self { t: "d".into(), b: None, ts: Some(timestamps) }
+    }
+
+    fn read_receipt(timestamps: Vec<i64>) -> Self {
+        Self { t: "r".into(), b: None, ts: Some(timestamps) }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("envelope serialization cannot fail")
+    }
+
+    /// Parse bytes as an envelope. Returns None if not valid envelope JSON.
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let env: Self = serde_json::from_slice(bytes).ok()?;
+        if env.t == "m" || env.t == "d" || env.t == "r" {
+            Some(env)
+        } else {
+            None
+        }
+    }
+}
 
 uniffi::setup_scaffolding!();
 
@@ -52,6 +102,8 @@ pub struct DecryptedMessage {
     pub sender_did: String,
     pub sender_device_id: u32,
     pub plaintext: Vec<u8>,
+    /// Sender's sent_at timestamp (from envelope). None for legacy messages.
+    pub sent_at_ms: Option<i64>,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -65,6 +117,16 @@ pub struct StoredMessageFfi {
     pub edited_at_ms: Option<i64>,
     /// NULL = unread, Some = unix millis when marked read.
     pub read_at_ms: Option<i64>,
+    /// 0 = sending, 1 = sent, 2 = delivered, 3 = read.
+    pub delivery_status: u8,
+}
+
+/// A delivery status update for an outgoing message (e.g. read receipt received).
+#[derive(uniffi::Record, Clone)]
+pub struct DeliveryStatusUpdate {
+    pub conversation_id: String,
+    pub sent_at_ms: i64,
+    pub delivery_status: u8,
 }
 
 /// The main client handle. Holds local state and a server connection.
@@ -79,6 +141,9 @@ pub struct AppCore {
     /// WebSocket connection for real-time message delivery. Separate from
     /// `inner` so that `send_dm` can proceed while waiting for WS messages.
     ws: Mutex<Option<net::ws::WsConnection>>,
+    /// Buffered delivery status updates from incoming read receipts.
+    /// Drained by `drain_receipt_updates()` after each WS receive.
+    receipt_updates: Mutex<Vec<DeliveryStatusUpdate>>,
 }
 
 struct AppCoreInner {
@@ -110,7 +175,7 @@ impl AppCore {
         let inner = rt.block_on(Self::create_inner(&server_url, store))
             .map_err(AppErrorFfi::from)?;
 
-        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None) }))
+        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) }))
     }
 
     /// Load an existing account from the local store and authenticate.
@@ -131,7 +196,7 @@ impl AppCore {
         let inner = rt.block_on(Self::login_inner(store))
             .map_err(AppErrorFfi::from)?;
 
-        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None) }))
+        Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) }))
     }
 
     pub fn did(&self) -> String {
@@ -142,7 +207,8 @@ impl AppCore {
         self.inner.blocking_lock().device_id
     }
 
-    /// Send an encrypted DM to a recipient.
+    /// Send an encrypted DM to a recipient. Plaintext is wrapped in a
+    /// content envelope (with the sender's timestamp) before encryption.
     ///
     /// Call from a background thread — this blocks until complete.
     pub fn send_dm(
@@ -150,10 +216,13 @@ impl AppCore {
         recipient_did: String,
         recipient_device_id: u32,
         plaintext: Vec<u8>,
+        sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
-            inner.send_dm(&recipient_did, recipient_device_id, &plaintext).await
+            let body = String::from_utf8_lossy(&plaintext);
+            let envelope = Envelope::content(&body, sent_at_ms);
+            inner.send_dm(&recipient_did, recipient_device_id, &envelope.to_bytes()).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -191,6 +260,29 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    /// Send a read receipt to a recipient for the given message timestamps.
+    pub fn send_read_receipt(
+        &self,
+        recipient_did: String,
+        recipient_device_id: u32,
+        timestamps: Vec<i64>,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let mut inner = self.inner.lock().await;
+            let envelope = Envelope::read_receipt(timestamps);
+            inner.send_dm(&recipient_did, recipient_device_id, &envelope.to_bytes()).await
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Drain buffered delivery status updates (from incoming read receipts).
+    /// Call after each `receive_messages_ws` to get real-time status updates.
+    pub fn drain_receipt_updates(&self) -> Vec<DeliveryStatusUpdate> {
+        ffi_runtime().block_on(async {
+            let mut updates = self.receipt_updates.lock().await;
+            std::mem::take(&mut *updates)
+        })
+    }
+
     /// Save a message to local history (SQLCipher).
     pub fn save_message(&self, msg: StoredMessageFfi) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
@@ -203,6 +295,7 @@ impl AppCore {
                 sent_at: Timestamp(msg.sent_at_ms),
                 edited_at: msg.edited_at_ms.map(Timestamp),
                 read_at: msg.read_at_ms.map(Timestamp),
+                delivery_status: msg.delivery_status,
             }).await.map_err(AppError::from)
         }).map_err(AppErrorFfi::from)
     }
@@ -221,6 +314,7 @@ impl AppCore {
                 sent_at_ms: m.sent_at.as_millis(),
                 edited_at_ms: m.edited_at.map(|t| t.as_millis()),
                 read_at_ms: m.read_at.map(|t| t.as_millis()),
+                delivery_status: m.delivery_status,
             }).collect())
         }).map_err(AppErrorFfi::from)
     }
@@ -350,24 +444,40 @@ impl AppCore {
         store: store::Store,
     ) -> Result<Self, AppError> {
         let inner = Self::create_inner(server_url, store).await?;
-        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None) })
+        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) })
     }
 
     /// Login with a pre-opened store (for tests).
     pub async fn login_with_store(store: store::Store) -> Result<Self, AppError> {
         let inner = Self::login_inner(store).await?;
-        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None) })
+        Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) })
+    }
+
+    /// Async send_read_receipt for use in tests and the testbot.
+    pub async fn send_read_receipt_async(
+        &self,
+        recipient_did: &str,
+        recipient_device_id: u32,
+        timestamps: Vec<i64>,
+    ) -> Result<(), AppError> {
+        let mut inner = self.inner.lock().await;
+        let envelope = Envelope::read_receipt(timestamps);
+        inner.send_dm(recipient_did, recipient_device_id, &envelope.to_bytes()).await
     }
 
     /// Async send_dm for use in tests running inside a tokio runtime.
+    /// Wraps plaintext in a content envelope before encryption.
     pub async fn send_dm_async(
         &self,
         recipient_did: &str,
         recipient_device_id: u32,
         plaintext: &[u8],
+        sent_at_ms: i64,
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
-        inner.send_dm(recipient_did, recipient_device_id, plaintext).await
+        let body = String::from_utf8_lossy(plaintext);
+        let envelope = Envelope::content(&body, sent_at_ms);
+        inner.send_dm(recipient_did, recipient_device_id, &envelope.to_bytes()).await
     }
 
     /// Async receive_messages for use in tests running inside a tokio runtime.
@@ -450,11 +560,65 @@ impl AppCore {
             }
         }
 
-        Ok(vec![decrypted])
+        // 5. Parse envelope. Handle receipts internally; return content messages.
+        match Envelope::parse(&decrypted.plaintext) {
+            Some(env) if env.t == "r" || env.t == "d" => {
+                // Receipt — update delivery status in store and buffer for Swift.
+                // "d" = delivered (2), "r" = read (3).
+                let status: u8 = if env.t == "r" { 3 } else { 2 };
+                if let Some(timestamps) = env.ts {
+                    let inner = self.inner.lock().await;
+                    let conv_id = format!(
+                        "dm-{}-{}",
+                        inner.did, decrypted.sender_did
+                    );
+                    let _ = inner
+                        .store
+                        .update_delivery_status(&conv_id, &timestamps, status)
+                        .await;
+                    let mut updates = self.receipt_updates.lock().await;
+                    for ts in &timestamps {
+                        updates.push(DeliveryStatusUpdate {
+                            conversation_id: conv_id.clone(),
+                            sent_at_ms: *ts,
+                            delivery_status: status,
+                        });
+                    }
+                }
+                Ok(vec![])
+            }
+            Some(env) if env.t == "m" => {
+                // Content message — unwrap body and sender timestamp from envelope.
+                let body = env.b.unwrap_or_default();
+                let sent_at = env.ts.and_then(|v| v.first().copied());
+
+                // Auto-send delivery receipt back to the sender.
+                if let Some(ts) = sent_at {
+                    let mut inner = self.inner.lock().await;
+                    let delivery = Envelope::delivery_receipt(vec![ts]);
+                    let _ = inner.send_dm(
+                        &decrypted.sender_did,
+                        decrypted.sender_device_id,
+                        &delivery.to_bytes(),
+                    ).await;
+                }
+
+                Ok(vec![DecryptedMessage {
+                    plaintext: body.into_bytes(),
+                    sent_at_ms: sent_at,
+                    ..decrypted
+                }])
+            }
+            _ => {
+                // Not a valid envelope — treat raw bytes as plain text (backward compat).
+                Ok(vec![decrypted])
+            }
+        }
     }
 }
 
 impl AppCoreInner {
+    /// Send raw bytes (already enveloped) as an encrypted DM.
     async fn send_dm(
         &mut self,
         recipient_did: &str,
@@ -535,7 +699,35 @@ impl AppCoreInner {
         let mut decrypted = Vec::with_capacity(inbound.len());
 
         for msg in &inbound {
-            decrypted.push(self.decrypt_inbound(msg).await?);
+            let raw = self.decrypt_inbound(msg).await?;
+            // Parse envelope: unwrap content, skip receipts (handled internally).
+            match Envelope::parse(&raw.plaintext) {
+                Some(env) if env.t == "r" || env.t == "d" => {
+                    let status: u8 = if env.t == "r" { 3 } else { 2 };
+                    if let Some(timestamps) = env.ts {
+                        let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                        let _ = self.store.update_delivery_status(&conv_id, &timestamps, status).await;
+                    }
+                }
+                Some(env) if env.t == "m" => {
+                    let body = env.b.unwrap_or_default();
+                    let sent_at = env.ts.and_then(|v| v.first().copied());
+                    // Auto-send delivery receipt.
+                    if let Some(ts) = sent_at {
+                        let delivery = Envelope::delivery_receipt(vec![ts]);
+                        let _ = self.send_dm(
+                            &raw.sender_did,
+                            raw.sender_device_id,
+                            &delivery.to_bytes(),
+                        ).await;
+                    }
+                    decrypted.push(DecryptedMessage { plaintext: body.into_bytes(), sent_at_ms: sent_at, ..raw });
+                }
+                _ => {
+                    // Backward compat: raw plaintext.
+                    decrypted.push(raw);
+                }
+            }
         }
 
         if !inbound.is_empty() {
@@ -577,6 +769,7 @@ impl AppCoreInner {
             sender_did: sender_did.to_string(),
             sender_device_id,
             plaintext,
+            sent_at_ms: None,
         })
     }
 }

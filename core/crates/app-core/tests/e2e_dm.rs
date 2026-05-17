@@ -13,6 +13,13 @@ fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
 /// Create an in-memory store for testing (no disk I/O).
 async fn test_store() -> store::Store {
     let store = store::Store::open_in_memory().await.unwrap();
@@ -31,7 +38,7 @@ async fn alice_sends_dm_to_bob() {
     let bob_device = bob.device_id_async().await;
 
     let plaintext = b"Hello Bob, this is a secret message!";
-    alice.send_dm_async(&bob_did, bob_device, plaintext).await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, plaintext, now_ms()).await.unwrap();
 
     let messages = bob.receive_messages_async().await.unwrap();
     assert_eq!(messages.len(), 1);
@@ -56,25 +63,25 @@ async fn bidirectional_conversation() {
     let bob_device = bob.device_id_async().await;
 
     // Alice → Bob (PreKey message, establishes session).
-    alice.send_dm_async(&bob_did, bob_device, b"Hey Bob").await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, b"Hey Bob", now_ms()).await.unwrap();
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Bob");
 
     // Bob → Alice (Bob's first message back, also a PreKey message).
-    bob.send_dm_async(&alice_did, alice_device, b"Hey Alice").await.unwrap();
+    bob.send_dm_async(&alice_did, alice_device, b"Hey Alice", now_ms()).await.unwrap();
     let msgs = alice.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Alice");
 
     // Alice → Bob (Whisper message, session established).
-    alice.send_dm_async(&bob_did, bob_device, b"How are you?").await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, b"How are you?", now_ms()).await.unwrap();
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"How are you?");
 
     // Bob → Alice (Whisper message).
-    bob.send_dm_async(&alice_did, alice_device, b"Doing great!").await.unwrap();
+    bob.send_dm_async(&alice_did, alice_device, b"Doing great!", now_ms()).await.unwrap();
     let msgs = alice.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Doing great!");
@@ -91,9 +98,9 @@ async fn multiple_messages_in_one_fetch() {
     let bob_device = bob.device_id_async().await;
 
     // Alice sends 3 messages before Bob fetches.
-    alice.send_dm_async(&bob_did, bob_device, b"msg1").await.unwrap();
-    alice.send_dm_async(&bob_did, bob_device, b"msg2").await.unwrap();
-    alice.send_dm_async(&bob_did, bob_device, b"msg3").await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, b"msg1", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, b"msg2", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, bob_device, b"msg3", now_ms()).await.unwrap();
 
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 3);

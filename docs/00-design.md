@@ -206,6 +206,14 @@ Projects open as full-screen views with their own internal navigation (tabs, map
 
 These are the first Projects we build ourselves. They serve as the primary acquisition vector — people install the app because a specific action requires it — and as the proof-of-concept for the Project framework.
 
+### Project: Server Setup Tool
+
+A fast and easy way to set up your server. When the server is initialized and has no initial users, it displays a qr code someplace the init happened (eg the ssh terminal window or whatever). That code can be scanned one time by the first user as an invite code that gives you admin access.
+
+### Project: Invite Codes Tool
+
+Invites a user to connect with you on this homeserver. Configurable parameters for invite QR codes --- groups to autojoin, roles if applicable, and so on.
+
 ### Project: Channel Directory
 
 A server's channel directory is itself a Project — a browsable listing of the action-bound groups on that server that are open or semi-open to new members. Groups can be listed as open (join instantly), application-required (request membership, an admin approves), or unlisted (not shown; join only by invite). The directory is the natural landing experience when someone first joins a server: it explains what's happening, what groups exist, and how to get started. Because it's a Project rather than substrate, each server controls the presentation entirely — a campaign server might show a curated onboarding checklist alongside the directory; a community server might show a simple searchable list. This recovers essentially all of Slack's channel-browser functionality while keeping the substrate free of any opinion about how servers organize themselves.

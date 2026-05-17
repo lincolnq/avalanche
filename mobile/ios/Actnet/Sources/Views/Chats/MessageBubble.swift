@@ -21,12 +21,43 @@ struct MessageBubble: View {
                     if message.isEdited {
                         Text("· Edited")
                     }
+                    if isMe {
+                        deliveryIndicator
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
 
             if !isMe { Spacer(minLength: 60) }
+        }
+    }
+
+    @ViewBuilder
+    private var deliveryIndicator: some View {
+        switch message.deliveryStatus {
+        case .sending:
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        case .sent:
+            Image(systemName: "checkmark")
+                .foregroundStyle(.secondary)
+        case .delivered:
+            Image(systemName: "checkmark")
+                .foregroundStyle(.secondary)
+                .overlay(
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.secondary)
+                        .offset(x: 4)
+                )
+        case .read:
+            Image(systemName: "checkmark")
+                .foregroundStyle(.blue)
+                .overlay(
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.blue)
+                        .offset(x: 4)
+                )
         }
     }
 }

@@ -280,6 +280,36 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    // ── Push ─────────────────────────────────────────────────────────────
+
+    /// Register a push pseudonym with the homeserver.
+    pub async fn register_push_pseudonym(&self, pseudonym: &str) -> Result<(), NetError> {
+        let resp = self.authed_request(reqwest::Method::POST, "/v1/push/register")
+            .json(&serde_json::json!({"pseudonym": pseudonym}))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(())
+    }
+
+    /// Unregister a push pseudonym (e.g. on rotation or logout).
+    pub async fn unregister_push_pseudonym(&self, pseudonym: &str) -> Result<(), NetError> {
+        let resp = self.authed_request(reqwest::Method::POST, "/v1/push/unregister")
+            .json(&serde_json::json!({"pseudonym": pseudonym}))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(())
+    }
+
     // ── DID ──────────────────────────────────────────────────────────────
 
     /// Resolve a DID document (public, no auth needed).

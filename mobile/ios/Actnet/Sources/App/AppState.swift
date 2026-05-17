@@ -64,7 +64,7 @@ final class AppState: ObservableObject {
     /// Compute unread count for a conversation from in-memory messages.
     func unreadCount(for conversation: Conversation) -> Int {
         let messages = messagesByConversation[conversation.id] ?? []
-        return messages.filter { $0.readAt == nil && $0.senderAccountId != conversation.accountId }.count
+        return messages.filter { $0.readAtMs == nil && $0.senderAccountId != conversation.accountId }.count
     }
 
     // MARK: - Account lifecycle
@@ -210,13 +210,12 @@ final class AppState: ObservableObject {
 
     // MARK: - Messaging
 
-    func sendMessage(conversationId: String, text: String, recipientDid: String, senderAccountId: String, messageId: String) async throws {
+    func sendMessage(conversationId: String, text: String, recipientDid: String, senderAccountId: String, messageId: String, sentAtMs: Int64) async throws {
         guard let core = cores[senderAccountId] else { return }
         let plaintext = Data(text.utf8)
 
         // Persist outbound message to SQLCipher (outgoing messages are immediately "read").
-        let now = Date()
-        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let nowMs = sentAtMs
         let stored = StoredMessageFfi(
             id: messageId,
             conversationId: conversationId,
@@ -224,35 +223,48 @@ final class AppState: ObservableObject {
             body: text,
             sentAtMs: nowMs,
             editedAtMs: nil,
-            readAtMs: nowMs  // outgoing = immediately read
+            readAtMs: nowMs,  // outgoing = immediately read
+            deliveryStatus: 1  // sent
         )
         try await Task.detached { try core.saveMessage(msg: stored) }.value
 
         try await Task.detached {
-            try core.sendDm(recipientDid: recipientDid, recipientDeviceId: 1, plaintext: plaintext)
+            try core.sendDm(recipientDid: recipientDid, recipientDeviceId: 1, plaintext: plaintext, sentAtMs: nowMs)
         }.value
     }
 
     /// Mark all messages in a conversation as read (sets read_at on unread messages).
+    /// Sends read receipts to the sender.
     func markAllMessagesRead(conversationId: String, accountId: String) {
         guard var messages = messagesByConversation[conversationId] else { return }
-        let now = Date()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         var changed = false
+        // Collect timestamps of newly-read messages, grouped by sender DID.
+        var readTimestampsBySender: [String: [Int64]] = [:]
         for i in messages.indices {
-            if messages[i].readAt == nil && messages[i].senderAccountId != accountId {
-                messages[i].readAt = now
+            if messages[i].readAtMs == nil && messages[i].senderAccountId != accountId {
+                messages[i].readAtMs = nowMs
                 changed = true
+                readTimestampsBySender[messages[i].senderAccountId, default: []].append(messages[i].sentAtMs)
             }
         }
         guard changed else { return }
         messagesByConversation[conversationId] = messages
 
-        // Persist to SQLCipher in the background.
+        // Persist to SQLCipher and send read receipts in the background.
         if let core = cores[accountId] {
-            let nowMs = Int64(now.timeIntervalSince1970 * 1000)
             let convId = conversationId
+            let timestampsBySender = readTimestampsBySender
             Task.detached {
                 try? core.markMessagesRead(conversationId: convId, upToSentAtMs: nowMs)
+                // Send read receipts to each sender.
+                for (senderDid, timestamps) in timestampsBySender {
+                    try? core.sendReadReceipt(
+                        recipientDid: senderDid,
+                        recipientDeviceId: 1,
+                        timestamps: timestamps
+                    )
+                }
             }
         }
     }
@@ -271,9 +283,10 @@ final class AppState: ObservableObject {
                     conversationId: m.conversationId,
                     senderAccountId: m.senderDid,
                     body: m.body,
-                    sentAt: Date(timeIntervalSince1970: Double(m.sentAtMs) / 1000.0),
-                    editedAt: m.editedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) },
-                    readAt: m.readAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
+                    sentAtMs: m.sentAtMs,
+                    editedAtMs: m.editedAtMs,
+                    readAtMs: m.readAtMs,
+                    deliveryStatus: DeliveryStatus(rawValue: Int(m.deliveryStatus)) ?? .sent
                 )
             }
             await MainActor.run {
@@ -374,7 +387,12 @@ final class AppState: ObservableObject {
                 for msg in messages {
                     handleIncomingMessage(msg, accountId: accountId)
                 }
-                if messages.isEmpty {
+                // Apply any delivery status updates from incoming read receipts.
+                let updates = core.drainReceiptUpdates()
+                if !updates.isEmpty {
+                    applyDeliveryStatusUpdates(updates)
+                }
+                if messages.isEmpty && updates.isEmpty {
                     // Connection closed — brief delay before reconnect.
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
@@ -419,16 +437,18 @@ final class AppState: ObservableObject {
             conversations.append(conv)
         }
 
-        let now = Date()
+        // Use sender's timestamp if available, otherwise fall back to local time.
+        let sentAtMs: Int64 = msg.sentAtMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         let messageId = UUID().uuidString
-        // Incoming messages are unread (readAt = nil).
+        // Incoming messages are unread (readAtMs = nil).
         let message = Message(
             id: messageId,
             conversationId: convId,
             senderAccountId: senderDid,
             body: text,
-            sentAt: now,
-            readAt: nil
+            sentAtMs: sentAtMs,
+            readAtMs: nil,
+            deliveryStatus: .sent
         )
         messagesByConversation[convId, default: []].append(message)
         persistConversations()
@@ -440,11 +460,33 @@ final class AppState: ObservableObject {
                 conversationId: convId,
                 senderDid: senderDid,
                 body: text,
-                sentAtMs: Int64(now.timeIntervalSince1970 * 1000),
+                sentAtMs: sentAtMs,
                 editedAtMs: nil,
-                readAtMs: nil  // unread
+                readAtMs: nil,  // unread
+                deliveryStatus: 1  // sent
             )
             Task.detached { try? core.saveMessage(msg: stored) }
+        }
+    }
+
+    // MARK: - Delivery status updates
+
+    /// Apply delivery status updates (from read receipts) to in-memory messages.
+    private func applyDeliveryStatusUpdates(_ updates: [DeliveryStatusUpdate]) {
+        for update in updates {
+            guard var messages = messagesByConversation[update.conversationId] else { continue }
+            var changed = false
+            for i in messages.indices {
+                if messages[i].sentAtMs == update.sentAtMs,
+                   let newStatus = DeliveryStatus(rawValue: Int(update.deliveryStatus)),
+                   newStatus.rawValue > messages[i].deliveryStatus.rawValue {
+                    messages[i].deliveryStatus = newStatus
+                    changed = true
+                }
+            }
+            if changed {
+                messagesByConversation[update.conversationId] = messages
+            }
         }
     }
 

@@ -17,7 +17,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
     func did() -> String { mockDid }
     func deviceId() -> UInt32 { mockDeviceId }
 
-    func sendDm(recipientDid: String, recipientDeviceId: UInt32, plaintext: Data) throws {
+    func sendDm(recipientDid: String, recipientDeviceId: UInt32, plaintext: Data, sentAtMs: Int64) throws {
         // Simulate a slight network delay
         Thread.sleep(forTimeInterval: 0.1)
 
@@ -63,12 +63,22 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 body: msgs[i].body,
                 sentAtMs: msgs[i].sentAtMs,
                 editedAtMs: msgs[i].editedAtMs,
-                readAtMs: now
+                readAtMs: now,
+                deliveryStatus: msgs[i].deliveryStatus
             )
             count += 1
         }
         storedMessages[conversationId] = msgs
         return count
+    }
+
+    func sendReadReceipt(recipientDid: String, recipientDeviceId: UInt32, timestamps: [Int64]) throws {
+        // Mock: no-op
+    }
+
+    func drainReceiptUpdates() -> [DeliveryStatusUpdate] {
+        // Mock: no receipt updates
+        []
     }
 
     func unreadCount(conversationId: String) throws -> UInt64 {
@@ -105,11 +115,13 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
 
     func enqueueMessage(from senderDid: String, text: String) {
         lock.lock()
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
         let msg = DecryptedMessage(
             serverId: nextMessageId,
             senderDid: senderDid,
             senderDeviceId: 1,
-            plaintext: Data(text.utf8)
+            plaintext: Data(text.utf8),
+            sentAtMs: now
         )
         nextMessageId += 1
         pendingMessages.append(msg)

@@ -86,6 +86,8 @@ dependencies = [
  "libsignal-protocol",
  "net",
  "rand 0.9.4",
+ "serde",
+ "serde_json",
  "store",
  "thiserror 1.0.69",
  "tokio",
@@ -2457,6 +2459,16 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "relay"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "reqwest"
@@ -2814,6 +2826,7 @@ dependencies = [
  "base32",
  "base64 0.22.1",
  "rand 0.9.4",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
