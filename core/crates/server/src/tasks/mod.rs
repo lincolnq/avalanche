@@ -7,17 +7,23 @@
 //!   `expires_at` timestamp.
 //! - **Session token expiry** (every 5m): deletes tokens past their
 //!   `expires_at` timestamp.
+//! - **Prekey vacuum** (every 60s): checks the prekey pool counts for each
+//!   connected device and sends a `prekey_low` WebSocket notification to any
+//!   device whose count has fallen below `config.prekey_low_threshold`.
 //!
 //! Failures are logged but do not crash the server — the task retries on the
 //! next interval.
 
 use sqlx::PgPool;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 
-use crate::db;
+use crate::{db, state::{AppState, WsMessage}};
 
 /// Spawn all background tasks.
-pub fn spawn_all(pool: PgPool) {
+pub fn spawn_all(state: AppState) {
+    let pool = state.db.clone();
+
     tokio::spawn(run_periodic(
         "message_expiry",
         Duration::from_secs(60),
@@ -59,6 +65,69 @@ pub fn spawn_all(pool: PgPool) {
             Ok(())
         },
     ));
+
+    let state_pv = state.clone();
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(Duration::from_secs(60));
+        let threshold = state_pv.config.prekey_low_threshold;
+        loop {
+            timer.tick().await;
+
+            // Snapshot connected device PKs — don't hold the lock across DB calls.
+            let device_pks: Vec<i64> =
+                state_pv.ws_connections.read().await.keys().cloned().collect();
+            if device_pks.is_empty() {
+                continue;
+            }
+
+            let Ok(mut conn) = state_pv.db.acquire().await else {
+                tracing::error!(task = "prekey_vacuum", "failed to acquire db connection");
+                continue;
+            };
+
+            for device_pk in device_pks {
+                // Clone the sender out of the lock guard before awaiting —
+                // RwLockReadGuard is not Send and cannot be held across awaits.
+                let sender = {
+                    let conns = state_pv.ws_connections.read().await;
+                    conns.get(&device_pk).cloned()
+                };
+                if let Some(sender) = sender {
+                    if let Err(e) =
+                        notify_if_prekeys_low(&mut conn, device_pk, threshold, &sender).await
+                    {
+                        tracing::error!(
+                            task = "prekey_vacuum",
+                            device_pk,
+                            error = %e,
+                            "failed to check prekey counts"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Check prekey pool counts for a device and send a `prekey_low` WebSocket
+/// notification if either count is below `threshold`.
+pub async fn notify_if_prekeys_low(
+    conn: &mut sqlx::PgConnection,
+    device_pk: i64,
+    threshold: i64,
+    sender: &UnboundedSender<WsMessage>,
+) -> Result<(), sqlx::Error> {
+    let one_time = db::prekeys::one_time_count(conn, device_pk).await?;
+    let kyber = db::prekeys::kyber_count(conn, device_pk).await?;
+    if one_time < threshold || kyber < threshold {
+        let msg = serde_json::json!({
+            "type": "prekey_low",
+            "one_time_remaining": one_time,
+            "kyber_remaining": kyber,
+        });
+        let _ = sender.send(WsMessage(msg.to_string()));
+    }
+    Ok(())
 }
 
 async fn run_periodic<F, Fut>(

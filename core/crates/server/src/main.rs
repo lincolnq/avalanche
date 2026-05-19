@@ -27,9 +27,8 @@ async fn main() {
 
     tracing::info!(bind = %config.bind_addr, "starting server");
 
-    tasks::spawn_all(pool.clone());
-
     let state = AppState::new(pool, config.clone());
+    tasks::spawn_all(state.clone());
     let app = routes::router()
         .with_state(state)
         .layer(TraceLayer::new_for_http());

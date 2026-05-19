@@ -314,6 +314,90 @@ async fn message_without_sender() {
     assert_eq!(queued.len(), 1);
 }
 
+// ── Prekey vacuum tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn prekey_vacuum_sends_notification_when_below_threshold() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:vacuumlow000000001").await;
+
+    // Upload 2 one-time prekeys and 1 Kyber — both below threshold of 10.
+    let otpks = vec![(1, vec![20u8; 32]), (2, vec![21u8; 32])];
+    server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
+    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 1, &[30u8; 32], &[31u8; 64]).await.unwrap();
+
+    let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
+    server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
+
+    let msg = rx_ws.try_recv().expect("expected a prekey_low notification");
+    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
+    assert_eq!(parsed["type"], "prekey_low");
+    assert_eq!(parsed["one_time_remaining"], 2);
+    assert_eq!(parsed["kyber_remaining"], 1);
+}
+
+#[tokio::test]
+async fn prekey_vacuum_no_notification_when_both_above_threshold() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:vacuumhigh00000001").await;
+
+    // Upload 20 one-time prekeys and 15 Kyber — both above threshold of 10.
+    let otpks: Vec<(i32, Vec<u8>)> = (1..=20).map(|i| (i, vec![i as u8; 32])).collect();
+    server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
+    for i in 1..=15i32 {
+        server::db::prekeys::upsert_kyber(&mut *tx, device_pk, i, &[i as u8; 32], &[31u8; 64]).await.unwrap();
+    }
+
+    let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
+    server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
+
+    assert!(rx_ws.try_recv().is_err(), "both counts above threshold, expected no notification");
+}
+
+#[tokio::test]
+async fn prekey_vacuum_notifies_when_only_ec_low() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:vacuumeclow0000001").await;
+
+    // 2 EC prekeys (below 10), 15 Kyber (above 10).
+    let otpks = vec![(1, vec![20u8; 32]), (2, vec![21u8; 32])];
+    server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
+    for i in 1..=15i32 {
+        server::db::prekeys::upsert_kyber(&mut *tx, device_pk, i, &[i as u8; 32], &[31u8; 64]).await.unwrap();
+    }
+
+    let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
+    server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
+
+    let msg = rx_ws.try_recv().expect("EC count below threshold should trigger notification");
+    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
+    assert_eq!(parsed["type"], "prekey_low");
+    assert_eq!(parsed["one_time_remaining"], 2);
+}
+
+#[tokio::test]
+async fn prekey_vacuum_notifies_when_only_kyber_low() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:vacuumkyblow000001").await;
+
+    // 20 EC prekeys (above 10), 1 Kyber (below 10).
+    let otpks: Vec<(i32, Vec<u8>)> = (1..=20).map(|i| (i, vec![i as u8; 32])).collect();
+    server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
+    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 1, &[30u8; 32], &[31u8; 64]).await.unwrap();
+
+    let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
+    server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
+
+    let msg = rx_ws.try_recv().expect("Kyber count below threshold should trigger notification");
+    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
+    assert_eq!(parsed["type"], "prekey_low");
+    assert_eq!(parsed["kyber_remaining"], 1);
+}
+
 // ── Project token tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
