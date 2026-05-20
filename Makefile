@@ -1,6 +1,6 @@
 TEST_DATABASE_URL ?= postgres://actnet:actnet-dev@localhost/actnet
 
-.PHONY: test test-server test-core test-e2e check clippy db-up db-down bindings ios dev testbot relay
+.PHONY: test test-server test-core test-e2e check clippy fmt ci mobile-rebuild db-up db-down bindings ios dev testbot relay
 
 test: test-core test-server
 
@@ -18,6 +18,15 @@ check:
 
 clippy:
 	cd core && cargo clippy
+
+fmt:
+	cd core && cargo fmt
+
+ci: check clippy test-server
+	@echo "All checks passed."
+
+mobile-rebuild:
+	make bindings && make ios
 
 dev:
 	cd core && RUST_LOG=tower_http=debug,server=debug cargo run -p server

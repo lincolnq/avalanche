@@ -81,3 +81,50 @@ types ← crypto ← store ← net ← app-core
 ### libsignal
 
 Pinned to commit `4c460615` (not branch main). This is a git dependency in Cargo.toml.
+
+## Multi-terminal / Branch Workflow
+
+- Always use `git worktree add <path> <branch>` when implementing a feature branch while the main worktree might be on a different branch — prevents uncommitted changes mixing across parallel sessions.
+- Remove after pushing: `git worktree remove <path>`
+- Worktrees share the same `target/` directory issues on Windows (Application Control policy); if `cargo check` fails in a worktree, fall back to checking in the main working tree.
+
+## Adding a New Server Endpoint
+
+1. `/new-migration <name>` — create migration file first
+2. `/new-db-module <entity>` — scaffold DB layer
+3. `/new-route <name>` — scaffold route + register in `routes/mod.rs`
+4. Add rate limiting if the endpoint is writable or fetchable (see `middleware/rate_limit.rs`)
+5. `make ci` before opening PR
+
+Common pitfalls:
+- Forgetting `.merge()` in `routes/mod.rs`
+- Using `_auth` instead of `auth` if you later need `device_pk`
+- `state.db.acquire().await?` not `state.db.acquire().await.unwrap()`
+
+## UniFFI / Mobile Workflow
+
+The full cycle for adding a new feature that involves Rust + iOS:
+
+1. Add Rust FFI method to `core/crates/app-core/src/lib.rs` (sync, `#[uniffi::export]`)
+2. `make bindings` — regenerates `mobile/ios/Generated/app_core.swift`
+3. `make ios` — rebuilds XCFramework + regenerates Xcode project
+4. Add to `AppCoreProtocol` in `ActnetService.swift`
+5. Stub in `MockActnetService.swift`
+6. Call from `AppState.swift` via `Task.detached { try core.methodName() }.value`
+
+Use `/new-ffi-method <name>` to scaffold steps 1, 4, 5, 6 as a single command.
+
+FFI constraints (do not violate):
+- FFI exports must be **synchronous** — they block on a global tokio runtime (`OnceLock<Runtime>`)
+- All FFI types must be UniFFI-compatible: `String`, `i64`, `bool`, `Vec<T>`, `Option<T>`, custom Record/Enum
+- Never hold an async lock across an FFI boundary
+
+## Error Handling Conventions (Server)
+
+- `ServerError::Db` — propagate via `?` from `sqlx::Error` (auto via `From` impl)
+- `ServerError::NotFound` — when `fetch_optional` returns `None`
+- `ServerError::Unauthorized` — missing/invalid auth token; never reveal why
+- `ServerError::BadRequest(msg)` — invalid input (bad base64, missing field, etc.)
+- `ServerError::RateLimited` — rate limit exceeded (HTTP 429)
+- `ServerError::Internal(msg)` — unexpected server-side failure; log with `tracing::error!`
+- Never expose DB details or internal state to the client; only log server-side
