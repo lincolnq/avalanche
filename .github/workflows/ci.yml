@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Check & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: cargo check
+        run: cd core && cargo check --workspace
+
+      - name: cargo clippy
+        run: cd core && cargo clippy --workspace -- -D warnings
+
+  # ── Core tests (no database) ────────────────────────────────────────────────
+  test-core:
+    name: Core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Run core tests
+        run: cd core && cargo test -p crypto -p store -p types
+
+  # ── Server tests (requires PostgreSQL) ──────────────────────────────────────
+  test-server:
+    name: Server tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: actnet
+          POSTGRES_USER: actnet
+          POSTGRES_PASSWORD: actnet-dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgres://actnet:actnet-dev@localhost/actnet
+      PGPASSWORD: actnet-dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Apply migrations
+        run: |
+          for f in $(ls infra/migrations/*.sql | sort); do
+            echo "Applying $f"
+            psql -h localhost -U actnet -d actnet -f "$f"
+          done
+
+      - name: Run server tests
+        run: cd core && cargo test -p server
