@@ -25,7 +25,6 @@
 ## Server
 - WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.
 - Message expiry: background task to delete expired messages, configurable per-group/DM
-- Rate limiting middleware (DB schema exists but no endpoint enforcement)
 - DID document resolution endpoint (GET /.well-known/did/:did)
 
 ## Big milestones (not yet started)
