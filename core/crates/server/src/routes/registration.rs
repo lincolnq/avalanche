@@ -81,7 +81,7 @@ async fn register(
     let mut conn = state.db.acquire().await?;
 
     // Create account.
-    let account_id = db::accounts::create(&mut conn, &did).await?;
+    let account_id = db::accounts::create(&mut conn, &did, None, false).await?;
 
     // Create device.
     let device_pk = db::devices::create(
