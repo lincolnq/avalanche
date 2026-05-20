@@ -81,6 +81,18 @@ async fn send(
     let sender_did: String = row.get("sender_did");
     let sender_device_id: i32 = row.get("sender_device_id");
 
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        sender_account_id,
+        crate::middleware::rate_limit::ACTION_SEND_MESSAGE,
+        crate::middleware::rate_limit::LIMIT_SEND_MESSAGE,
+        crate::middleware::rate_limit::WINDOW_SEND_MESSAGE,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
     let mut sent = Vec::with_capacity(req.messages.len());
     let mut ws_pushes = Vec::new();
 
