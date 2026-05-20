@@ -61,8 +61,7 @@ impl signal::SessionStore for Store {
 
         match result {
             Some(Ok(bytes)) => Ok(Some(
-                signal::SessionRecord::deserialize(&bytes)
-                    .map_err(signal::SignalProtocolError::from)?,
+                signal::SessionRecord::deserialize(&bytes)?,
             )),
             Some(Err(e)) => Err(StoreError::Corrupt(e.to_string()).into()),
             None => Ok(None),
@@ -75,7 +74,7 @@ impl signal::SessionStore for Store {
         record: &signal::SessionRecord,
     ) -> Result<(), signal::SignalProtocolError> {
         let key = addr_key(address);
-        let bytes = record.serialize().map_err(signal::SignalProtocolError::from)?;
+        let bytes = record.serialize()?;
         self.conn
             .call(move |conn| {
                 conn.execute(
@@ -111,8 +110,7 @@ impl signal::IdentityKeyStore for Store {
             .map_err(StoreError::Db)?;
 
         match result {
-            Some(Ok(bytes)) => signal::IdentityKeyPair::try_from(bytes.as_slice())
-                .map_err(signal::SignalProtocolError::from),
+            Some(Ok(bytes)) => signal::IdentityKeyPair::try_from(bytes.as_slice()),
             Some(Err(e)) => Err(StoreError::Corrupt(e.to_string()).into()),
             None => Err(StoreError::NoIdentity.into()),
         }
@@ -198,7 +196,7 @@ impl signal::IdentityKeyStore for Store {
 
         // Trust on first use: if no key stored yet, trust it.
         // If a key is stored, trust only if it matches.
-        Ok(stored.map_or(true, |s| s == incoming_bytes))
+        Ok(stored.is_none_or(|s| s == incoming_bytes))
     }
 
     async fn get_identity(
@@ -223,8 +221,7 @@ impl signal::IdentityKeyStore for Store {
 
         match result {
             Some(bytes) => Ok(Some(
-                signal::IdentityKey::decode(&bytes)
-                    .map_err(signal::SignalProtocolError::from)?,
+                signal::IdentityKey::decode(&bytes)?,
             )),
             None => Ok(None),
         }
@@ -255,8 +252,7 @@ impl signal::PreKeyStore for Store {
             .map_err(StoreError::Db)?;
 
         match result {
-            Some(bytes) => signal::PreKeyRecord::deserialize(&bytes)
-                .map_err(signal::SignalProtocolError::from),
+            Some(bytes) => signal::PreKeyRecord::deserialize(&bytes),
             None => Err(StoreError::PreKeyNotFound(id).into()),
         }
     }
@@ -267,7 +263,7 @@ impl signal::PreKeyStore for Store {
         record: &signal::PreKeyRecord,
     ) -> Result<(), signal::SignalProtocolError> {
         let id = u32::from(prekey_id);
-        let bytes = record.serialize().map_err(signal::SignalProtocolError::from)?;
+        let bytes = record.serialize()?;
         self.conn
             .call(move |conn| {
                 conn.execute(
@@ -319,8 +315,7 @@ impl signal::SignedPreKeyStore for Store {
             .map_err(StoreError::Db)?;
 
         match result {
-            Some(bytes) => signal::SignedPreKeyRecord::deserialize(&bytes)
-                .map_err(signal::SignalProtocolError::from),
+            Some(bytes) => signal::SignedPreKeyRecord::deserialize(&bytes),
             None => Err(StoreError::SignedPreKeyNotFound(id_u32).into()),
         }
     }
@@ -331,7 +326,7 @@ impl signal::SignedPreKeyStore for Store {
         record: &signal::SignedPreKeyRecord,
     ) -> Result<(), signal::SignalProtocolError> {
         let id_u32 = u32::from(id);
-        let bytes = record.serialize().map_err(signal::SignalProtocolError::from)?;
+        let bytes = record.serialize()?;
         self.conn
             .call(move |conn| {
                 conn.execute(
@@ -369,8 +364,7 @@ impl signal::KyberPreKeyStore for Store {
             .map_err(StoreError::Db)?;
 
         match result {
-            Some(bytes) => signal::KyberPreKeyRecord::deserialize(&bytes)
-                .map_err(signal::SignalProtocolError::from),
+            Some(bytes) => signal::KyberPreKeyRecord::deserialize(&bytes),
             None => Err(StoreError::PreKeyNotFound(id_u32).into()),
         }
     }
@@ -381,7 +375,7 @@ impl signal::KyberPreKeyStore for Store {
         record: &signal::KyberPreKeyRecord,
     ) -> Result<(), signal::SignalProtocolError> {
         let id_u32 = u32::from(id);
-        let bytes = record.serialize().map_err(signal::SignalProtocolError::from)?;
+        let bytes = record.serialize()?;
         self.conn
             .call(move |conn| {
                 conn.execute(
