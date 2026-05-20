@@ -4,8 +4,8 @@
 - Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
 
 ## Chatbot Project (finishing touches)
-- Bot display name: conversations currently show raw DID instead of a friendly name
-- Bot account marking: flag someplace to distinguish bot accounts in member lists
+- ~~Bot display name: conversations currently show raw DID instead of a friendly name~~ — implemented
+- ~~Bot account marking: flag someplace to distinguish bot accounts in member lists~~ — implemented
 
 ## Mobile app
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
