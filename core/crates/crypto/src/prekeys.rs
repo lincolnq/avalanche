@@ -216,7 +216,7 @@ impl RecipientKeyBundle {
         };
 
         let kyber_public = signal::kem::PublicKey::deserialize(&self.kyber_prekey.public_key)
-            .map_err(|e| CryptoError::Signal(e.into()))?;
+            .map_err(CryptoError::Signal)?;
 
         signal::PreKeyBundle::new(
             self.registration_id,
