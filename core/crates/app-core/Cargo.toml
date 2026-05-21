@@ -19,6 +19,11 @@ uniffi             = { workspace = true, features = ["cli"] }
 tokio              = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+prost              = "0.13"
+
+[build-dependencies]
+prost-build           = "0.13"
+protoc-bin-vendored   = "3"
 
 [dev-dependencies]
 tokio = { workspace = true }

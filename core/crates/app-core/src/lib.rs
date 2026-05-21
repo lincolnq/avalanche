@@ -19,65 +19,21 @@
 
 pub mod error;
 
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/actnet.rs"));
+}
+
 use std::path::Path;
 use std::sync::Arc;
 
 use crypto::session::{self, DeviceAddress, EncryptedMessage, MessageKind};
 use error::{AppError, AppErrorFfi};
 use net::types::{OutboundMessage, RegisterRequest};
-use serde::{Deserialize, Serialize};
+use proto::{content_message::Body, receipt_message, ContentMessage, ReceiptMessage, TextMessage};
+use prost::Message as _;
 use store::account::RegistrationInfo;
 use tokio::sync::Mutex;
 use types::{AccountId, DeviceId, Timestamp};
-
-// ── Message envelope ────────────────────────────────────────────────────────
-//
-// All E2E-encrypted plaintext is wrapped in a JSON envelope so we can
-// distinguish content messages from read receipts (and future message types).
-//
-// Content:  {"t":"m","b":"hello","ts":[1234567890123]}
-// Delivery: {"t":"d","ts":[1234567890123]}
-// Read:     {"t":"r","ts":[1234567890123]}
-
-#[derive(Serialize, Deserialize)]
-struct Envelope {
-    /// "m" = content message, "d" = delivery receipt, "r" = read receipt
-    t: String,
-    /// Message body (content messages only).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    b: Option<String>,
-    /// Sent-at timestamps of acknowledged messages (receipts only).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ts: Option<Vec<i64>>,
-}
-
-impl Envelope {
-    fn content(body: &str, sent_at_ms: i64) -> Self {
-        Self { t: "m".into(), b: Some(body.into()), ts: Some(vec![sent_at_ms]) }
-    }
-
-    fn delivery_receipt(timestamps: Vec<i64>) -> Self {
-        Self { t: "d".into(), b: None, ts: Some(timestamps) }
-    }
-
-    fn read_receipt(timestamps: Vec<i64>) -> Self {
-        Self { t: "r".into(), b: None, ts: Some(timestamps) }
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("envelope serialization cannot fail")
-    }
-
-    /// Parse bytes as an envelope. Returns None if not valid envelope JSON.
-    fn parse(bytes: &[u8]) -> Option<Self> {
-        let env: Self = serde_json::from_slice(bytes).ok()?;
-        if env.t == "m" || env.t == "d" || env.t == "r" {
-            Some(env)
-        } else {
-            None
-        }
-    }
-}
 
 uniffi::setup_scaffolding!();
 
@@ -228,9 +184,12 @@ impl AppCore {
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
-            let body = String::from_utf8_lossy(&plaintext);
-            let envelope = Envelope::content(&body, sent_at_ms);
-            inner.send_dm(&recipient_did, recipient_device_id, &envelope.to_bytes()).await
+            let body = String::from_utf8_lossy(&plaintext).into_owned();
+            let msg = ContentMessage {
+                body: Some(Body::Text(TextMessage { body })),
+                timestamp_ms: sent_at_ms as u64,
+            };
+            inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec()).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -277,8 +236,14 @@ impl AppCore {
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
-            let envelope = Envelope::read_receipt(timestamps);
-            inner.send_dm(&recipient_did, recipient_device_id, &envelope.to_bytes()).await
+            let msg = ContentMessage {
+                body: Some(Body::Receipt(ReceiptMessage {
+                    r#type: receipt_message::Type::Read as i32,
+                    timestamps: timestamps.into_iter().map(|t| t as u64).collect(),
+                })),
+                timestamp_ms: 0,
+            };
+            inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec()).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -491,8 +456,14 @@ impl AppCore {
         timestamps: Vec<i64>,
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
-        let envelope = Envelope::read_receipt(timestamps);
-        inner.send_dm(recipient_did, recipient_device_id, &envelope.to_bytes()).await
+        let msg = ContentMessage {
+            body: Some(Body::Receipt(ReceiptMessage {
+                r#type: receipt_message::Type::Read as i32,
+                timestamps: timestamps.into_iter().map(|t| t as u64).collect(),
+            })),
+            timestamp_ms: 0,
+        };
+        inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec()).await
     }
 
     /// Async send_dm for use in tests running inside a tokio runtime.
@@ -505,9 +476,12 @@ impl AppCore {
         sent_at_ms: i64,
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
-        let body = String::from_utf8_lossy(plaintext);
-        let envelope = Envelope::content(&body, sent_at_ms);
-        inner.send_dm(recipient_did, recipient_device_id, &envelope.to_bytes()).await
+        let body = String::from_utf8_lossy(plaintext).into_owned();
+        let msg = ContentMessage {
+            body: Some(Body::Text(TextMessage { body })),
+            timestamp_ms: sent_at_ms as u64,
+        };
+        inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec()).await
     }
 
     /// Async receive_messages for use in tests running inside a tokio runtime.
@@ -591,56 +565,69 @@ impl AppCore {
         }
 
         // 5. Parse envelope. Handle receipts internally; return content messages.
-        match Envelope::parse(&decrypted.plaintext) {
-            Some(env) if env.t == "r" || env.t == "d" => {
-                // Receipt — update delivery status in store and buffer for Swift.
-                // "d" = delivered (2), "r" = read (3).
-                let status: u8 = if env.t == "r" { 3 } else { 2 };
-                if let Some(timestamps) = env.ts {
-                    let inner = self.inner.lock().await;
-                    let conv_id = format!(
-                        "dm-{}-{}",
-                        inner.did, decrypted.sender_did
-                    );
-                    let _ = inner
-                        .store
-                        .update_delivery_status(&conv_id, &timestamps, status)
-                        .await;
-                    let mut updates = self.receipt_updates.lock().await;
-                    for ts in &timestamps {
-                        updates.push(DeliveryStatusUpdate {
-                            conversation_id: conv_id.clone(),
-                            sent_at_ms: *ts,
-                            delivery_status: status,
-                        });
+        match ContentMessage::decode(decrypted.plaintext.as_slice()) {
+            Ok(msg) => match msg.body {
+                Some(Body::Receipt(receipt)) => {
+                    // Receipt — update delivery status in store and buffer for Swift.
+                    // DELIVERY (0) = status 2, READ (1) = status 3.
+                    let status: u8 = if receipt.r#type == receipt_message::Type::Read as i32 { 3 } else { 2 };
+                    let timestamps: Vec<i64> = receipt.timestamps.into_iter().map(|t| t as i64).collect();
+                    if !timestamps.is_empty() {
+                        let inner = self.inner.lock().await;
+                        let conv_id = format!(
+                            "dm-{}-{}",
+                            inner.did, decrypted.sender_did
+                        );
+                        let _ = inner
+                            .store
+                            .update_delivery_status(&conv_id, &timestamps, status)
+                            .await;
+                        let mut updates = self.receipt_updates.lock().await;
+                        for ts in &timestamps {
+                            updates.push(DeliveryStatusUpdate {
+                                conversation_id: conv_id.clone(),
+                                sent_at_ms: *ts,
+                                delivery_status: status,
+                            });
+                        }
                     }
+                    Ok(vec![])
                 }
-                Ok(vec![])
-            }
-            Some(env) if env.t == "m" => {
-                // Content message — unwrap body and sender timestamp from envelope.
-                let body = env.b.unwrap_or_default();
-                let sent_at = env.ts.and_then(|v| v.first().copied());
+                Some(Body::Text(text)) => {
+                    // Content message — unwrap body and sender timestamp from envelope.
+                    let body = text.body;
+                    let sent_at = if msg.timestamp_ms > 0 { Some(msg.timestamp_ms as i64) } else { None };
 
-                // Auto-send delivery receipt back to the sender.
-                if let Some(ts) = sent_at {
-                    let mut inner = self.inner.lock().await;
-                    let delivery = Envelope::delivery_receipt(vec![ts]);
-                    let _ = inner.send_dm(
-                        &decrypted.sender_did,
-                        decrypted.sender_device_id,
-                        &delivery.to_bytes(),
-                    ).await;
+                    // Auto-send delivery receipt back to the sender.
+                    if let Some(ts) = sent_at {
+                        let mut inner = self.inner.lock().await;
+                        let delivery = ContentMessage {
+                            body: Some(Body::Receipt(ReceiptMessage {
+                                r#type: receipt_message::Type::Delivery as i32,
+                                timestamps: vec![ts as u64],
+                            })),
+                            timestamp_ms: 0,
+                        };
+                        let _ = inner.send_dm(
+                            &decrypted.sender_did,
+                            decrypted.sender_device_id,
+                            &delivery.encode_to_vec(),
+                        ).await;
+                    }
+
+                    Ok(vec![DecryptedMessage {
+                        plaintext: body.into_bytes(),
+                        sent_at_ms: sent_at,
+                        ..decrypted
+                    }])
                 }
-
-                Ok(vec![DecryptedMessage {
-                    plaintext: body.into_bytes(),
-                    sent_at_ms: sent_at,
-                    ..decrypted
-                }])
-            }
-            _ => {
-                // Not a valid envelope — treat raw bytes as plain text (backward compat).
+                None => {
+                    // ContentMessage with no body — treat raw bytes as plain text (backward compat).
+                    Ok(vec![decrypted])
+                }
+            },
+            Err(_) => {
+                // Not a valid protobuf — treat raw bytes as plain text (backward compat).
                 Ok(vec![decrypted])
             }
         }
@@ -731,30 +718,43 @@ impl AppCoreInner {
         for msg in &inbound {
             let raw = self.decrypt_inbound(msg).await?;
             // Parse envelope: unwrap content, skip receipts (handled internally).
-            match Envelope::parse(&raw.plaintext) {
-                Some(env) if env.t == "r" || env.t == "d" => {
-                    let status: u8 = if env.t == "r" { 3 } else { 2 };
-                    if let Some(timestamps) = env.ts {
-                        let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
-                        let _ = self.store.update_delivery_status(&conv_id, &timestamps, status).await;
+            match ContentMessage::decode(raw.plaintext.as_slice()) {
+                Ok(content) => match content.body {
+                    Some(Body::Receipt(receipt)) => {
+                        let status: u8 = if receipt.r#type == receipt_message::Type::Read as i32 { 3 } else { 2 };
+                        let timestamps: Vec<i64> = receipt.timestamps.into_iter().map(|t| t as i64).collect();
+                        if !timestamps.is_empty() {
+                            let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                            let _ = self.store.update_delivery_status(&conv_id, &timestamps, status).await;
+                        }
                     }
-                }
-                Some(env) if env.t == "m" => {
-                    let body = env.b.unwrap_or_default();
-                    let sent_at = env.ts.and_then(|v| v.first().copied());
-                    // Auto-send delivery receipt.
-                    if let Some(ts) = sent_at {
-                        let delivery = Envelope::delivery_receipt(vec![ts]);
-                        let _ = self.send_dm(
-                            &raw.sender_did,
-                            raw.sender_device_id,
-                            &delivery.to_bytes(),
-                        ).await;
+                    Some(Body::Text(text)) => {
+                        let body = text.body;
+                        let sent_at = if content.timestamp_ms > 0 { Some(content.timestamp_ms as i64) } else { None };
+                        // Auto-send delivery receipt.
+                        if let Some(ts) = sent_at {
+                            let delivery = ContentMessage {
+                                body: Some(Body::Receipt(ReceiptMessage {
+                                    r#type: receipt_message::Type::Delivery as i32,
+                                    timestamps: vec![ts as u64],
+                                })),
+                                timestamp_ms: 0,
+                            };
+                            let _ = self.send_dm(
+                                &raw.sender_did,
+                                raw.sender_device_id,
+                                &delivery.encode_to_vec(),
+                            ).await;
+                        }
+                        decrypted.push(DecryptedMessage { plaintext: body.into_bytes(), sent_at_ms: sent_at, ..raw });
                     }
-                    decrypted.push(DecryptedMessage { plaintext: body.into_bytes(), sent_at_ms: sent_at, ..raw });
-                }
-                _ => {
-                    // Backward compat: raw plaintext.
+                    None => {
+                        // ContentMessage with no body — backward compat.
+                        decrypted.push(raw);
+                    }
+                },
+                Err(_) => {
+                    // Not valid protobuf — backward compat: raw plaintext.
                     decrypted.push(raw);
                 }
             }
