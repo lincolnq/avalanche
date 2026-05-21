@@ -66,6 +66,35 @@ pub fn spawn_all(state: AppState) {
         },
     ));
 
+    tokio::spawn(run_periodic(
+        "rate_limit_cleanup",
+        Duration::from_secs(3600),
+        pool.clone(),
+        |pool| async move {
+            let mut conn = pool.acquire().await?;
+            let n = db::rate_limits::delete_stale(&mut conn).await?;
+            if n > 0 {
+                tracing::info!(count = n, "stale rate limit counters deleted");
+            }
+            Ok(())
+        },
+    ));
+
+    tokio::spawn(run_periodic(
+        "challenge_expiry",
+        Duration::from_secs(60),
+        pool.clone(),
+        |pool| async move {
+            let mut conn = pool.acquire().await?;
+            let n = db::challenges::delete_expired(&mut conn).await?;
+            if n > 0 {
+                tracing::info!(count = n, "expired auth challenges deleted");
+            }
+            Ok(())
+        },
+    ));
+
+
     let state_pv = state.clone();
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_secs(60));

@@ -15,7 +15,7 @@
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
 ## Auth
-- Identity key signature verification on `POST /v1/auth/token`: client should sign a nonce with its identity key, server verifies against stored public key. Currently anyone who knows a DID + device_id can obtain a token. Must be implemented before any real deployment.
+- ~~Identity key signature verification on `POST /v1/auth/token`~~ — implemented: two-step challenge-response flow via `POST /v1/auth/challenge` + `POST /v1/auth/token` with Ed25519 nonce signature.
 
 ## Crypto / protocol
 - Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
@@ -25,7 +25,6 @@
 ## Server
 - WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.
 - Message expiry: background task to delete expired messages, configurable per-group/DM
-- Rate limiting middleware (DB schema exists but no endpoint enforcement)
 - DID document resolution endpoint (GET /.well-known/did/:did)
 
 ## Big milestones (not yet started)

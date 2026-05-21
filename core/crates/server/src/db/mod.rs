@@ -15,10 +15,12 @@
 //! metadata (who messaged whom, when, message sizes) but no plaintext.
 
 pub mod accounts;
+pub mod challenges;
 pub mod devices;
 pub mod did;
 pub mod messages;
 pub mod prekeys;
 pub mod project_tokens;
 pub mod push;
+pub mod rate_limits;
 pub mod sessions;

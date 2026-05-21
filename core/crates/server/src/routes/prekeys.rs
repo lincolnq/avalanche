@@ -72,6 +72,22 @@ async fn upload(
 ) -> Result<(), ServerError> {
     let mut conn = state.db.acquire().await?;
 
+    let device = db::devices::find_by_pk(&mut conn, auth.device_pk)
+        .await?
+        .ok_or(ServerError::Unauthorized)?;
+
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        device.account_id,
+        crate::middleware::rate_limit::ACTION_UPLOAD_PREKEYS,
+        crate::middleware::rate_limit::LIMIT_UPLOAD_PREKEYS,
+        crate::middleware::rate_limit::WINDOW_UPLOAD_PREKEYS,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
     if let Some(spk) = &req.signed_prekey {
         db::prekeys::upsert_signed(
             &mut conn,
@@ -160,10 +176,26 @@ struct KyberPreKeyWire {
 
 async fn fetch(
     State(state): State<AppState>,
-    _auth: AuthDevice,
+    auth: AuthDevice,
     Path((did, device_id)): Path<(String, i32)>,
 ) -> Result<Json<BundleResponse>, ServerError> {
     let mut conn = state.db.acquire().await?;
+
+    let requester = db::devices::find_by_pk(&mut conn, auth.device_pk)
+        .await?
+        .ok_or(ServerError::Unauthorized)?;
+
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        requester.account_id,
+        crate::middleware::rate_limit::ACTION_FETCH_BUNDLE,
+        crate::middleware::rate_limit::LIMIT_FETCH_BUNDLE,
+        crate::middleware::rate_limit::WINDOW_FETCH_BUNDLE,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
 
     let device = db::devices::find_by_did(&mut conn, &did, device_id)
         .await?

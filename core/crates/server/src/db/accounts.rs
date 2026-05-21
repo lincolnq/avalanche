@@ -33,12 +33,10 @@ pub async fn create(
 
 /// Look up an account by DID.
 pub async fn find_by_did(conn: &mut PgConnection, did: &str) -> Result<Option<Account>, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT id, did, display_name, is_bot FROM accounts WHERE did = $1",
-    )
-    .bind(did)
-    .fetch_optional(&mut *conn)
-    .await?;
+    let row = sqlx::query("SELECT id, did, display_name, is_bot FROM accounts WHERE did = $1")
+        .bind(did)
+        .fetch_optional(&mut *conn)
+        .await?;
     Ok(row.map(|r| Account {
         id: r.get("id"),
         did: r.get("did"),

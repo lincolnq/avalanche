@@ -125,11 +125,16 @@ Creates account, generates `did:plc` locally, stores DID document, creates devic
 
 ### Device Authentication
 ```
+POST /v1/auth/challenge
+Body: { did, device_id }
+Response: 200 { nonce }   # 32-byte random, base64url, 5-minute TTL, single-use
+```
+```
 POST /v1/auth/token
-Body: { did, device_id, identity_key_signature }
+Body: { did, device_id, nonce, signature }   # signature = Ed25519(nonce_bytes, identity_key)
 Response: 200 { session_token, expires_at }
 ```
-Client signs a nonce with its identity key. Server verifies against stored key.
+Two-step challenge-response. Client decodes the nonce to bytes, signs with its Ed25519 identity key, and sends the base64url signature. Server consumes the nonce atomically and verifies the signature against the stored public key before issuing a token.
 
 ### Prekey Upload
 ```
