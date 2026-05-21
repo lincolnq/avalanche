@@ -15,7 +15,7 @@
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
 ## Auth
-- Identity key signature verification on `POST /v1/auth/token`: client should sign a nonce with its identity key, server verifies against stored public key. Currently anyone who knows a DID + device_id can obtain a token. Must be implemented before any real deployment.
+- ~~Identity key signature verification on `POST /v1/auth/token`~~ — implemented: two-step challenge-response flow via `POST /v1/auth/challenge` + `POST /v1/auth/token` with Ed25519 nonce signature.
 
 ## Crypto / protocol
 - Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.

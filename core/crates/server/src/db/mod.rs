@@ -15,6 +15,7 @@
 //! metadata (who messaged whom, when, message sizes) but no plaintext.
 
 pub mod accounts;
+pub mod challenges;
 pub mod devices;
 pub mod did;
 pub mod messages;
