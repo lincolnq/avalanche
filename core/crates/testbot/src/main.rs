@@ -163,7 +163,8 @@ async fn index() -> impl IntoResponse {
                     return;
                 }
                 const data = await resp.json();
-                status.textContent = 'Bot created! Check your chats for a message from ' + data.bot.did;
+                status.textContent = 'Bot created! Opening conversation...';
+                window.location.href = 'actnet://conversation/' + data.bot.did;
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
                 btn.disabled = false;

@@ -18,6 +18,9 @@
 - Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
 - DID document resolution endpoint (GET /.well-known/did/:did)
 
+## Project-wide
+- Settle on a better name: rename repo, update bundle IDs, update `actnet://` URL scheme to match, update all references in code and docs
+
 ## Big milestones (not yet started)
 - Groups: action-bound (zkgroup) and cross-server casual (Sender Keys)
 - Invite links & onboarding: QR codes, deep links, auto-enrollment into groups/Projects

@@ -31,6 +31,12 @@ final class AppState: ObservableObject {
     @Published var conversations: [Conversation] = []
     @Published var messagesByConversation: [String: [Message]] = [:]
     @Published var serviceMode: ServiceMode
+    @Published var selectedTab: Tab = .chats
+    @Published var navigateToConversation: Conversation?
+
+    enum Tab {
+        case calls, chats, network
+    }
 
     /// Active AppCore instances, keyed by DID.
     private var cores: [String: any AppCoreProtocol] = [:]
@@ -57,6 +63,28 @@ final class AppState: ObservableObject {
         self.serviceMode = resolved
         self._service = Self.makeService(mode: resolved)
         self.isOnboarding = true
+    }
+
+    // MARK: - Deep linking
+
+    /// Handle an `actnet://` deep link URL.
+    /// Supported: `actnet://conversation/<recipient_did>`
+    func handleDeepLink(_ url: URL) {
+        print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
+        guard url.scheme == "actnet" else { return }
+        guard url.host == "conversation" else { return }
+
+        // Path is "/<recipient_did>"
+        let did = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !did.isEmpty, let accountId = accounts.first?.id else {
+            print("[DeepLink] failed: did='\(did)', accounts=\(accounts.count)")
+            return
+        }
+
+        print("[DeepLink] navigating to conversation with \(did)")
+        let conv = findOrCreateDMConversation(recipientDid: did, accountId: accountId)
+        selectedTab = .chats
+        navigateToConversation = conv
     }
 
     // MARK: - Unread count (derived from in-memory messages)

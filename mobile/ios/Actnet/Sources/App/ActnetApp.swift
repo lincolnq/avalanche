@@ -11,6 +11,9 @@ struct ActnetApp: App {
                 .task {
                     await appState.restoreAccounts()
                 }
+                .onOpenURL { url in
+                    appState.handleDeepLink(url)
+                }
         }
     }
 }

@@ -6,6 +6,9 @@
 # Xcode user state
 xcuserdata/
 
+# Python
+__pycache__/
+
 # Environment files
 .env
 

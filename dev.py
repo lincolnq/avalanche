@@ -21,7 +21,10 @@ PROJECTS = [
 ]
 
 CORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
-INFRA_COMPOSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "infra", "docker-compose.yml")
+INFRA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "infra")
+INFRA_COMPOSE = os.path.join(INFRA_DIR, "docker-compose.yml")
+MIGRATIONS_DIR = os.path.join(INFRA_DIR, "migrations")
+DB_URL = "postgresql://actnet:actnet-dev@localhost:5432/actnet"
 
 
 def start_postgres():
@@ -41,6 +44,83 @@ def wait_for_postgres():
         time.sleep(1)
 
 
+def run_migrations():
+    """Apply any pending migrations from infra/migrations/."""
+    print("Checking migrations...")
+
+    def psql(sql, capture=False):
+        cmd = ["psql", DB_URL, "-tAX", "-c", sql]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"psql failed: {r.stderr.strip()}")
+        return r.stdout.strip()
+
+    # Ensure tracking table exists.
+    psql("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+
+    # Check if tracking table was just created on an existing DB.
+    # If so, seed it with migrations that were already applied via initdb.
+    applied = set(psql("SELECT filename FROM schema_migrations").splitlines())
+    migration_files = sorted(
+        f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql")
+    )
+
+    if not applied:
+        # Tracking table is empty — check if the DB already has tables from initdb.
+        has_tables = psql("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'accounts')")
+        if has_tables == "t":
+            # DB was initialized by docker-entrypoint-initdb.d. Seed the
+            # tracking table with all migration files and try applying each
+            # one — skip those that fail (already applied).
+            print("  Existing database detected, syncing migration tracking...")
+            for filename in migration_files:
+                path = os.path.join(MIGRATIONS_DIR, filename)
+                with open(path) as f:
+                    sql = f.read()
+                wrapped = f"""
+                    BEGIN;
+                    {sql}
+                    INSERT INTO schema_migrations (filename) VALUES ('{filename}');
+                    COMMIT;
+                """
+                cmd = ["psql", DB_URL, "-tAX", "-c", wrapped]
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                if r.returncode == 0:
+                    print(f"  Applied {filename}.")
+                else:
+                    # Already applied — just record it.
+                    psql(f"INSERT INTO schema_migrations (filename) VALUES ('{filename}') ON CONFLICT DO NOTHING")
+            print("  Migration tracking synced.")
+            return
+
+    pending = [f for f in migration_files if f not in applied]
+    if not pending:
+        print("  All migrations already applied.")
+        return
+
+    for filename in pending:
+        path = os.path.join(MIGRATIONS_DIR, filename)
+        print(f"  Applying {filename}...")
+        with open(path) as f:
+            sql = f.read()
+        # Apply migration + record it in a single transaction.
+        wrapped = f"""
+            BEGIN;
+            {sql}
+            INSERT INTO schema_migrations (filename) VALUES ('{filename}');
+            COMMIT;
+        """
+        psql(wrapped)
+        print(f"  Applied {filename}.")
+
+    print(f"  {len(pending)} migration(s) applied.")
+
+
 def main():
     start_postgres()
 
@@ -51,6 +131,7 @@ def main():
                    cwd=CORE_DIR, check=True)
 
     wait_for_postgres()
+    run_migrations()
 
     # Assign ports and build PROJECTS JSON for the server
     next_port = 3001

@@ -1,31 +1,27 @@
 import SwiftUI
 
 struct MainTabView: View {
-    @State private var selectedTab: Tab = .chats
-
-    enum Tab {
-        case calls, chats, network
-    }
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $appState.selectedTab) {
             CallsView()
                 .tabItem {
                     Label("Calls", systemImage: "phone")
                 }
-                .tag(Tab.calls)
+                .tag(AppState.Tab.calls)
 
             ChatsView()
                 .tabItem {
                     Label("Chats", systemImage: "message")
                 }
-                .tag(Tab.chats)
+                .tag(AppState.Tab.chats)
 
             NetworkView()
                 .tabItem {
                     Label("Network", systemImage: "server.rack")
                 }
-                .tag(Tab.network)
+                .tag(AppState.Tab.network)
         }
     }
 }

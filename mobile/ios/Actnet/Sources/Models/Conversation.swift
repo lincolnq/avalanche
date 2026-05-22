@@ -1,6 +1,6 @@
 import Foundation
 
-struct Conversation: Identifiable, Codable {
+struct Conversation: Identifiable, Codable, Hashable {
     let id: String
     let title: String
     let accountId: String  // which DID this conversation belongs to

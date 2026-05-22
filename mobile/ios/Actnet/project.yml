@@ -27,3 +27,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: actnet
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+    info:
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - actnet
