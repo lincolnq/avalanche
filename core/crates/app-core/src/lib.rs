@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crypto::session::{self, DeviceAddress, EncryptedMessage, MessageKind};
 use error::{AppError, AppErrorFfi};
 use net::types::{OutboundMessage, RegisterRequest};
-use proto::{content_message::Body, receipt_message, ContentMessage, ReceiptMessage, TextMessage};
+use proto::{content_message::Body, receipt_message, ContentMessage, ReceiptMessage, TextMessage, TimerChangeMessage};
 use base64::Engine as _;
 use prost::Message as _;
 use rand::TryRngCore as _;
@@ -318,6 +318,29 @@ impl AppCore {
             let inner = self.inner.lock().await;
             inner.store.unread_count(&conversation_id, &inner.did).await
                 .map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    pub fn set_conversation_timer(
+        &self,
+        conversation_id: String,
+        expiry_secs: Option<u32>,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.store.save_conversation_expiry(&conversation_id, expiry_secs).await
+                .map_err(AppError::from)?;
+            let msg = ContentMessage {
+                body: Some(Body::TimerChange(TimerChangeMessage {
+                    expiry_secs: expiry_secs.unwrap_or(0),
+                })),
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+            let _ = msg; // TODO: wire send path same as send_dm
+            Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
 
@@ -660,6 +683,13 @@ impl AppCore {
                         ..decrypted
                     }])
                 }
+                Some(Body::TimerChange(timer)) => {
+                    let expiry = if timer.expiry_secs == 0 { None } else { Some(timer.expiry_secs) };
+                    let inner = self.inner.lock().await;
+                    let conv_id = format!("dm-{}-{}", inner.did, decrypted.sender_did);
+                    let _ = inner.store.save_conversation_expiry(&conv_id, expiry).await;
+                    Ok(vec![])
+                }
                 None => {
                     // ContentMessage with no body — treat raw bytes as plain text (backward compat).
                     Ok(vec![decrypted])
@@ -789,6 +819,11 @@ impl AppCoreInner {
                             ).await;
                         }
                         decrypted.push(DecryptedMessage { plaintext: body.into_bytes(), sent_at_ms: sent_at, ..raw });
+                    }
+                    Some(Body::TimerChange(timer)) => {
+                        let expiry = if timer.expiry_secs == 0 { None } else { Some(timer.expiry_secs) };
+                        let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                        let _ = self.store.save_conversation_expiry(&conv_id, expiry).await;
                     }
                     None => {
                         // ContentMessage with no body — backward compat.

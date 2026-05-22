@@ -36,6 +36,7 @@
 //! Android Keystore so the file is useless without the device's hardware.
 
 pub mod account;
+pub mod conversations;
 pub mod db;
 pub mod error;
 pub mod groups;

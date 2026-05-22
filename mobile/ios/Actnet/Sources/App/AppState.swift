@@ -309,6 +309,25 @@ final class AppState: ObservableObject {
 
     /// Mark all messages in a conversation as read (sets read_at on unread messages).
     /// Sends read receipts to the sender.
+    func setConversationTimer(conversationId: String, accountId: String, expirySecs: Int32?) {
+        guard let core = cores[accountId] else { return }
+        Task {
+            do {
+                try await Task.detached {
+                    try core.setConversationTimer(
+                        conversationId: conversationId,
+                        expirySecs: expirySecs.map { UInt32($0) }
+                    )
+                }.value
+                await MainActor.run {
+                    if let idx = self.conversations.firstIndex(where: { $0.id == conversationId }) {
+                        self.conversations[idx].expirySecs = expirySecs
+                    }
+                }
+            } catch {}
+        }
+    }
+
     func markAllMessagesRead(conversationId: String, accountId: String) {
         guard var messages = messagesByConversation[conversationId] else { return }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)

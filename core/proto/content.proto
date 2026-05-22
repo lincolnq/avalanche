@@ -1,10 +1,15 @@
 syntax = "proto3";
 package actnet;
 
+message TimerChangeMessage {
+  uint32 expiry_secs = 1; // 0 = disable expiry
+}
+
 message ContentMessage {
   oneof body {
-    TextMessage    text    = 1;
-    ReceiptMessage receipt = 2;
+    TextMessage        text         = 1;
+    ReceiptMessage     receipt      = 2;
+    TimerChangeMessage timer_change = 3;
   }
   uint64 timestamp_ms = 15;
 }

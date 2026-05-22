@@ -70,6 +70,22 @@ struct ConversationView: View {
         }
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button("No expiry") {
+                        appState.setConversationTimer(conversationId: conversation.id,
+                                                      accountId: conversation.accountId,
+                                                      expirySecs: nil)
+                    }
+                    Button("1 hour")  { appState.setConversationTimer(conversationId: conversation.id, accountId: conversation.accountId, expirySecs: 3600) }
+                    Button("1 day")   { appState.setConversationTimer(conversationId: conversation.id, accountId: conversation.accountId, expirySecs: 86400) }
+                    Button("1 week")  { appState.setConversationTimer(conversationId: conversation.id, accountId: conversation.accountId, expirySecs: 604800) }
+                } label: {
+                    Image(systemName: "timer")
+                }
+            }
+        }
         .onAppear {
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
             DispatchQueue.main.async {

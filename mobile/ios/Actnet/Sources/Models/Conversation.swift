@@ -9,6 +9,7 @@ struct Conversation: Identifiable, Codable, Hashable {
     var lastMessage: String?
     var lastMessageDate: Date?
     var isGroup: Bool = false
+    var expirySecs: Int32?
 
     // Exclude lastMessage (plaintext) from UserDefaults persistence.
     // Timestamps are non-sensitive metadata, safe to persist.
