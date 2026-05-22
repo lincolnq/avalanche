@@ -95,8 +95,8 @@ impl Client {
         Ok(resp.json().await?)
     }
 
-    /// Request an auth challenge nonce for a device.
-    pub async fn request_challenge(&self, did: &str, device_id: i32) -> Result<ChallengeResponse, NetError> {
+    /// Step 1 of authentication: request a challenge nonce from the server.
+    pub async fn challenge(&self, did: &str, device_id: i32) -> Result<String, NetError> {
         let resp = self.http
             .post(format!("{}/v1/auth/challenge", self.server_url))
             .json(&serde_json::json!({"did": did, "device_id": device_id}))
@@ -108,24 +108,21 @@ impl Client {
             return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
         }
 
-        Ok(resp.json().await?)
+        let body: ChallengeResponse = resp.json().await?;
+        Ok(body.nonce)
     }
 
-    /// Submit a signed challenge to obtain a session token.
-    pub async fn authenticate(
-        &self,
-        did: &str,
-        device_id: i32,
-        nonce: &str,
-        signature: &str,
-    ) -> Result<AuthResponse, NetError> {
+    /// Step 2 of authentication: exchange a signed nonce for a session token.
+    /// `nonce` is the base64url string returned by `challenge()`.
+    /// `signature` is the raw Ed25519 signature bytes over the decoded nonce bytes.
+    pub async fn authenticate(&self, did: &str, device_id: i32, nonce: &str, signature: &[u8]) -> Result<AuthResponse, NetError> {
         let resp = self.http
             .post(format!("{}/v1/auth/token", self.server_url))
             .json(&serde_json::json!({
                 "did": did,
                 "device_id": device_id,
                 "nonce": nonce,
-                "signature": signature,
+                "signature": BASE64_URL_SAFE_NO_PAD.encode(signature),
             }))
             .send()
             .await?;

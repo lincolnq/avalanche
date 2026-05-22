@@ -27,11 +27,11 @@ pub mod proto {
 use std::path::Path;
 use std::sync::Arc;
 
+use base64::prelude::*;
 use crypto::session::{self, DeviceAddress, EncryptedMessage, MessageKind};
 use error::{AppError, AppErrorFfi};
 use net::types::{OutboundMessage, RegisterRequest};
 use proto::{content_message::Body, receipt_message, ContentMessage, ReceiptMessage, TextMessage};
-use base64::Engine as _;
 use prost::Message as _;
 use rand::TryRngCore as _;
 use store::account::RegistrationInfo;
@@ -438,17 +438,17 @@ impl AppCore {
 
         let client = net::Client::new(&reg.server_url);
 
-        // Challenge-response authentication: request nonce, sign it, submit.
-        let challenge = client.request_challenge(&reg.account_id, 1).await?;
-        let nonce_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD
-            .decode(&challenge.nonce)
-            .map_err(|e| AppError::Protocol(format!("bad nonce encoding: {e}")))?;
-        let signature = identity.private_key()
+        // Challenge-response: fetch nonce, sign it with our Ed25519 identity key.
+        let nonce = client.challenge(&reg.account_id, 1).await?;
+        let nonce_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(&nonce)
+            .map_err(|_| AppError::Protocol("server returned invalid nonce encoding".into()))?;
+        let signature = identity
+            .private_key()
             .calculate_signature(&nonce_bytes, &mut rand::rngs::OsRng.unwrap_err())
-            .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e.into())))?;
-        let sig_b64 = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(&signature);
-        let auth = client.authenticate(&reg.account_id, 1, &challenge.nonce, &sig_b64).await?;
+            .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e)))?;
 
+        let auth = client.authenticate(&reg.account_id, 1, &nonce, &signature).await?;
         let client = net::Client::with_token(&reg.server_url, auth.session_token);
 
         let local_address = DeviceAddress::new(
