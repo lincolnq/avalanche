@@ -52,14 +52,19 @@ pub struct AuthResponse {
 
 // ── Prekeys ──────────────────────────────────────────────────────────────────
 
+/// `(id, public_key, signature)` triple for a Kyber prekey upload.
+pub type KyberPreKeyTriple = (i32, Vec<u8>, Vec<u8>);
+
 /// Upload prekeys. All fields optional — upload only what you need to refresh.
 pub struct UploadPrekeysRequest {
     /// (id, public_key, signature)
     pub signed_prekey: Option<(i32, Vec<u8>, Vec<u8>)>,
     /// Vec of (id, public_key)
     pub one_time_prekeys: Option<Vec<(i32, Vec<u8>)>>,
-    /// (id, public_key, signature)
+    /// (id, public_key, signature) — last-resort Kyber prekey
     pub kyber_prekey: Option<(i32, Vec<u8>, Vec<u8>)>,
+    /// Vec of (id, public_key, signature) — one-time Kyber prekeys
+    pub one_time_kyber_prekeys: Option<Vec<KyberPreKeyTriple>>,
 }
 
 /// Decoded prekey bundle — bytes, not base64.

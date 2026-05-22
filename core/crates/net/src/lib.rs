@@ -141,6 +141,18 @@ impl Client {
             }));
         }
 
+        if let Some(otkpks) = &req.one_time_kyber_prekeys {
+            body.insert("one_time_kyber_prekeys".into(), serde_json::json!(
+                otkpks.iter().map(|(id, pk, sig)| {
+                    serde_json::json!({
+                        "id": id,
+                        "public_key": BASE64_STANDARD.encode(pk),
+                        "signature": BASE64_STANDARD.encode(sig),
+                    })
+                }).collect::<Vec<_>>()
+            ));
+        }
+
         let resp = self.authed_request(reqwest::Method::PUT, "/v1/prekeys")
             .json(&body)
             .send()

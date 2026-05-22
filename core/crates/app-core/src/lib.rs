@@ -360,6 +360,9 @@ impl AppCore {
         let signed = crypto::prekeys::generate_signed_prekey(&identity, 1)?;
         let one_time = crypto::prekeys::generate_one_time_prekeys(1, 20)?;
         let kyber = crypto::prekeys::generate_kyber_prekey(&identity, 1)?;
+        let one_time_kyber: Vec<crypto::prekeys::GeneratedKyberPreKey> = (1u32..=20)
+            .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
+            .collect::<Result<_, _>>()?;
 
         let client = net::Client::new(server_url);
         let reg_resp = client.register(&RegisterRequest {
@@ -391,8 +394,22 @@ impl AppCore {
         store.save_kyber_prekeys(
             &[(kyber.wire.id, kyber.record.clone())],
         ).await?;
+        // Also store the one-time Kyber prekeys locally (same store as last-resort).
+        store.save_kyber_prekeys(
+            &one_time_kyber.iter().map(|k| (k.wire.id, k.record.clone())).collect::<Vec<_>>(),
+        ).await?;
 
         let client = net::Client::with_token(server_url, reg_resp.session_token);
+
+        // Upload one-time Kyber public halves to the server after registration.
+        client.upload_prekeys(&net::types::UploadPrekeysRequest {
+            signed_prekey: None,
+            one_time_prekeys: None,
+            kyber_prekey: None,
+            one_time_kyber_prekeys: Some(
+                one_time_kyber.iter().map(|k| (k.wire.id as i32, k.wire.public_key.clone(), k.wire.signature.clone())).collect(),
+            ),
+        }).await?;
         let local_address = DeviceAddress::new(
             AccountId::new(&reg_resp.did),
             DeviceId::new(device_id),

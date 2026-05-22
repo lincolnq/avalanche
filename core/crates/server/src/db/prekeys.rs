@@ -93,6 +93,28 @@ pub async fn insert_one_time_batch(
     Ok(())
 }
 
+/// Upload a batch of one-time Kyber prekeys.
+pub async fn insert_one_time_kyber_batch(
+    conn: &mut PgConnection,
+    device_pk: i64,
+    keys: &[(i32, Vec<u8>, Vec<u8>)],
+) -> Result<(), sqlx::Error> {
+    for (id, public_key, signature) in keys {
+        sqlx::query(
+            "INSERT INTO one_time_kyber_prekeys (id, device_pk, public_key, signature)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (device_pk, id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(device_pk)
+        .bind(public_key.as_slice())
+        .bind(signature.as_slice())
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Upload a Kyber prekey (replaces any existing for this device).
 pub async fn upsert_kyber(
     conn: &mut PgConnection,
@@ -165,21 +187,43 @@ pub async fn fetch_bundle(
         public_key: r.get("public_key"),
     });
 
+    // Atomically consume one one-time Kyber prekey; fall back to last-resort if pool is empty.
     let kyber = sqlx::query(
-        "SELECT id, public_key, signature FROM kyber_prekeys
-         WHERE device_pk = $1 ORDER BY id DESC LIMIT 1",
+        "DELETE FROM one_time_kyber_prekeys
+         WHERE device_pk = $1
+           AND id = (SELECT id FROM one_time_kyber_prekeys WHERE device_pk = $1 ORDER BY id LIMIT 1)
+         RETURNING id, public_key, signature",
     )
     .bind(device_pk)
     .fetch_optional(&mut *conn)
-    .await?;
+    .await?
+    .map(|r| KyberPreKey {
+        id: r.get("id"),
+        public_key: r.get("public_key"),
+        signature: r.get("signature"),
+    });
 
     let kyber = match kyber {
-        Some(r) => KyberPreKey {
-            id: r.get("id"),
-            public_key: r.get("public_key"),
-            signature: r.get("signature"),
-        },
-        None => return Ok(None),
+        Some(k) => k,
+        None => {
+            // Pool empty — fall back to last-resort Kyber prekey.
+            let row = sqlx::query(
+                "SELECT id, public_key, signature FROM kyber_prekeys
+                 WHERE device_pk = $1 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(device_pk)
+            .fetch_optional(&mut *conn)
+            .await?;
+
+            match row {
+                Some(r) => KyberPreKey {
+                    id: r.get("id"),
+                    public_key: r.get("public_key"),
+                    signature: r.get("signature"),
+                },
+                None => return Ok(None),
+            }
+        }
     };
 
     Ok(Some(PreKeyBundle {
@@ -197,6 +241,20 @@ pub async fn one_time_count(conn: &mut PgConnection, device_pk: i64) -> Result<i
         .bind(device_pk)
         .fetch_one(&mut *conn)
         .await?;
+    Ok(row.get::<i64, _>("count"))
+}
+
+/// Count remaining one-time Kyber prekeys for a device.
+pub async fn one_time_kyber_count(
+    conn: &mut PgConnection,
+    device_pk: i64,
+) -> Result<i64, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) as count FROM one_time_kyber_prekeys WHERE device_pk = $1",
+    )
+    .bind(device_pk)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(row.get::<i64, _>("count"))
 }
 
