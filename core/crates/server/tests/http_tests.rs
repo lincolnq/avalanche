@@ -30,6 +30,8 @@ async fn test_state() -> AppState {
         server_url: "http://localhost:3000".into(),
         token_lifetime_secs: 86400,
         message_expiry_secs: 30 * 86400,
+        message_expiry_min_secs: 300,
+        message_expiry_max_secs: 30 * 86400,
         prekey_low_threshold: 10,
         project_token_lifetime_secs: 3600,
         projects_json: "[]".into(),
