@@ -154,6 +154,7 @@ async fn wakeup(
                 rusqlite::params![ps],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             ).optional()
+            .map_err(Into::into)
         }).await;
 
         match result {
