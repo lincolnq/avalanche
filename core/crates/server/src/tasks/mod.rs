@@ -147,7 +147,7 @@ pub async fn notify_if_prekeys_low(
     sender: &UnboundedSender<WsMessage>,
 ) -> Result<(), sqlx::Error> {
     let one_time = db::prekeys::one_time_count(conn, device_pk).await?;
-    let kyber = db::prekeys::kyber_count(conn, device_pk).await?;
+    let kyber = db::prekeys::one_time_kyber_count(conn, device_pk).await?;
     if one_time < threshold || kyber < threshold {
         let msg = serde_json::json!({
             "type": "prekey_low",

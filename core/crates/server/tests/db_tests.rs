@@ -252,6 +252,105 @@ async fn fetch_bundle_consumes_one_time_prekey() {
     assert!(bundle3.one_time_prekey.is_none());
 }
 
+// ── One-time Kyber prekey tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn one_time_kyber_batch_insert_and_count() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:otkybercounttest0001").await;
+
+    let keys = vec![
+        (1i32, vec![40u8; 32], vec![41u8; 64]),
+        (2i32, vec![42u8; 32], vec![43u8; 64]),
+        (3i32, vec![44u8; 32], vec![45u8; 64]),
+    ];
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &keys)
+        .await
+        .unwrap();
+
+    let count = server::db::prekeys::one_time_kyber_count(&mut *tx, device_pk)
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[tokio::test]
+async fn fetch_bundle_consumes_one_time_kyber() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:otkyberbundletest001").await;
+
+    server::db::prekeys::upsert_signed(&mut *tx, device_pk, 1, &[10u8; 32], &[11u8; 64])
+        .await
+        .unwrap();
+    // Last-resort Kyber prekey (required for fallback).
+    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 1, &[30u8; 32], &[31u8; 64])
+        .await
+        .unwrap();
+    // One-time Kyber pool with 2 keys.
+    let otkpks = vec![
+        (1i32, vec![40u8; 32], vec![41u8; 64]),
+        (2i32, vec![42u8; 32], vec![43u8; 64]),
+    ];
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &otkpks)
+        .await
+        .unwrap();
+
+    // First fetch should consume one one-time Kyber key.
+    let bundle = server::db::prekeys::fetch_bundle(&mut *tx, device_pk)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bundle.kyber_prekey.id, 1);
+
+    let remaining = server::db::prekeys::one_time_kyber_count(&mut *tx, device_pk)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 1);
+
+    // Second fetch consumes the last one-time Kyber key.
+    let bundle2 = server::db::prekeys::fetch_bundle(&mut *tx, device_pk)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bundle2.kyber_prekey.id, 2);
+
+    let remaining = server::db::prekeys::one_time_kyber_count(&mut *tx, device_pk)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[tokio::test]
+async fn fetch_bundle_falls_back_to_last_resort_kyber() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+    let device_pk = setup_device(&mut tx, "did:plc:kyberfalbacktest001").await;
+
+    server::db::prekeys::upsert_signed(&mut *tx, device_pk, 1, &[10u8; 32], &[11u8; 64])
+        .await
+        .unwrap();
+    // Only last-resort Kyber — no one-time Kyber pool.
+    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 99, &[30u8; 32], &[31u8; 64])
+        .await
+        .unwrap();
+
+    let bundle = server::db::prekeys::fetch_bundle(&mut *tx, device_pk)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Bundle should still contain the last-resort Kyber key.
+    assert_eq!(bundle.kyber_prekey.id, 99);
+
+    // One-time Kyber pool remains empty.
+    let count = server::db::prekeys::one_time_kyber_count(&mut *tx, device_pk)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
 // ── Message queue tests ──────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -338,10 +437,11 @@ async fn prekey_vacuum_sends_notification_when_below_threshold() {
     let mut tx = begin_tx(&pool).await;
     let device_pk = setup_device(&mut tx, "did:plc:vacuumlow000000001").await;
 
-    // Upload 2 one-time prekeys and 1 Kyber — both below threshold of 10.
+    // Upload 2 one-time EC prekeys and 1 one-time Kyber prekey — both below threshold of 10.
     let otpks = vec![(1, vec![20u8; 32]), (2, vec![21u8; 32])];
     server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
-    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 1, &[30u8; 32], &[31u8; 64]).await.unwrap();
+    let otkpks = vec![(1i32, vec![30u8; 32], vec![31u8; 64])];
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &otkpks).await.unwrap();
 
     let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
@@ -359,12 +459,13 @@ async fn prekey_vacuum_no_notification_when_both_above_threshold() {
     let mut tx = begin_tx(&pool).await;
     let device_pk = setup_device(&mut tx, "did:plc:vacuumhigh00000001").await;
 
-    // Upload 20 one-time prekeys and 15 Kyber — both above threshold of 10.
+    // Upload 20 one-time EC prekeys and 15 one-time Kyber prekeys — both above threshold of 10.
     let otpks: Vec<(i32, Vec<u8>)> = (1..=20).map(|i| (i, vec![i as u8; 32])).collect();
     server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
-    for i in 1..=15i32 {
-        server::db::prekeys::upsert_kyber(&mut *tx, device_pk, i, &[i as u8; 32], &[31u8; 64]).await.unwrap();
-    }
+    let otkpks: Vec<(i32, Vec<u8>, Vec<u8>)> = (1..=15i32)
+        .map(|i| (i, vec![i as u8; 32], vec![31u8; 64]))
+        .collect();
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &otkpks).await.unwrap();
 
     let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
@@ -378,12 +479,13 @@ async fn prekey_vacuum_notifies_when_only_ec_low() {
     let mut tx = begin_tx(&pool).await;
     let device_pk = setup_device(&mut tx, "did:plc:vacuumeclow0000001").await;
 
-    // 2 EC prekeys (below 10), 15 Kyber (above 10).
+    // 2 EC prekeys (below 10), 15 one-time Kyber prekeys (above 10).
     let otpks = vec![(1, vec![20u8; 32]), (2, vec![21u8; 32])];
     server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
-    for i in 1..=15i32 {
-        server::db::prekeys::upsert_kyber(&mut *tx, device_pk, i, &[i as u8; 32], &[31u8; 64]).await.unwrap();
-    }
+    let otkpks: Vec<(i32, Vec<u8>, Vec<u8>)> = (1..=15i32)
+        .map(|i| (i, vec![i as u8; 32], vec![31u8; 64]))
+        .collect();
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &otkpks).await.unwrap();
 
     let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
@@ -400,10 +502,11 @@ async fn prekey_vacuum_notifies_when_only_kyber_low() {
     let mut tx = begin_tx(&pool).await;
     let device_pk = setup_device(&mut tx, "did:plc:vacuumkyblow000001").await;
 
-    // 20 EC prekeys (above 10), 1 Kyber (below 10).
+    // 20 EC prekeys (above 10), 1 one-time Kyber prekey (below 10).
     let otpks: Vec<(i32, Vec<u8>)> = (1..=20).map(|i| (i, vec![i as u8; 32])).collect();
     server::db::prekeys::insert_one_time_batch(&mut *tx, device_pk, &otpks).await.unwrap();
-    server::db::prekeys::upsert_kyber(&mut *tx, device_pk, 1, &[30u8; 32], &[31u8; 64]).await.unwrap();
+    let otkpks = vec![(1i32, vec![30u8; 32], vec![31u8; 64])];
+    server::db::prekeys::insert_one_time_kyber_batch(&mut *tx, device_pk, &otkpks).await.unwrap();
 
     let (tx_ws, mut rx_ws) = tokio::sync::mpsc::unbounded_channel();
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();

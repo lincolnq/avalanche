@@ -43,6 +43,7 @@ struct UploadRequest {
     signed_prekey: Option<SignedPreKeyUpload>,
     one_time_prekeys: Option<Vec<OneTimePreKeyUpload>>,
     kyber_prekey: Option<KyberPreKeyUpload>,
+    one_time_kyber_prekeys: Option<Vec<KyberPreKeyUpload>>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +119,20 @@ async fn upload(
         .await?;
     }
 
+    if let Some(otkpks) = &req.one_time_kyber_prekeys {
+        let keys: Vec<(i32, Vec<u8>, Vec<u8>)> = otkpks
+            .iter()
+            .map(|k| {
+                Ok((
+                    k.id,
+                    decode_b64(&k.public_key)?,
+                    decode_b64(&k.signature)?,
+                ))
+            })
+            .collect::<Result<_, ServerError>>()?;
+        db::prekeys::insert_one_time_kyber_batch(&mut conn, auth.device_pk, &keys).await?;
+    }
+
     Ok(())
 }
 
@@ -135,7 +150,7 @@ async fn status(
 ) -> Result<Json<StatusResponse>, ServerError> {
     let mut conn = state.db.acquire().await?;
     let one_time = db::prekeys::one_time_count(&mut conn, auth.device_pk).await?;
-    let kyber = db::prekeys::kyber_count(&mut conn, auth.device_pk).await?;
+    let kyber = db::prekeys::one_time_kyber_count(&mut conn, auth.device_pk).await?;
 
     Ok(Json(StatusResponse {
         one_time_remaining: one_time,
