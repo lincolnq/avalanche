@@ -2,6 +2,8 @@
 
 The online+offline social network. We help people organize.
 
+(`actnet` is a temporary name. We're accepting suggestions for a new one!)
+
 Anyone can build a social network these days, but who will use it? Our answer is that we'll build great tools for organizing, and people will install the app because a specific action they're participating in (a rescue, a canvass, etc) requires it. They'll stick around because the network captures and represents the real social connections they formed.
 
 The design centers on Signal-quality encrypted messaging — a unified inbox of all your conversations across all your activism — with a platform for rapidly-built, well-integrated organizing tools: team assignment, action-day maps, Q&A bots, collaborative documents, and more.
@@ -16,7 +18,9 @@ The design centers on Signal-quality encrypted messaging — a unified inbox of 
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) (for Postgres) — on macOS, [OrbStack](https://orbstack.dev/) is a faster alternative
+We currently do development on MacOS, with Rust, Docker and Xcode:
+
+- [OrbStack](https://orbstack.dev/) (our recommended Docker server, but plain old Docker is ok too)
 - [Rust](https://rustup.rs/) (stable)
 - [Xcode](https://developer.apple.com/xcode/) 16+ (for the iOS app)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
