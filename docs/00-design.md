@@ -206,6 +206,12 @@ Projects open as full-screen views with their own internal navigation (tabs, map
 
 These are the first Projects we build ourselves. They serve as the primary acquisition vector — people install the app because a specific action requires it — and as the proof-of-concept for the Project framework.
 
+**Implemented:**
+
+- **Testbot** — AI chatbot via encrypted DMs. See [docs/21-chatbot-project.md](21-chatbot-project.md). Crate: `core/crates/testbot/`.
+
+**Designs (not yet built):**
+
 ### Project: Server Setup Tool
 
 A fast and easy way to set up your server. When the server is initialized and has no initial users, it displays a qr code someplace the init happened (eg the ssh terminal window or whatever). That code can be scanned one time by the first user as an invite code that gives you admin access.

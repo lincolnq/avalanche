@@ -1,6 +1,6 @@
 TEST_DATABASE_URL ?= postgres://actnet:actnet-dev@localhost/actnet
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci mobile-rebuild db-up db-down bindings ios dev testbot relay
+.PHONY: test test-server test-core test-e2e check clippy fmt ci mobile-rebuild db-up db-down bindings ios dev testbot relay dev-all
 
 test: test-core test-server
 
@@ -42,6 +42,9 @@ relay:
 
 db-down:
 	docker compose -f infra/docker-compose.yml down
+
+dev-all:
+	python3 dev.py
 
 ios: bindings ios-xcframework
 	cd mobile/ios/Actnet && xcodegen generate
