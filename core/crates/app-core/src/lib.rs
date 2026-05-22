@@ -446,7 +446,7 @@ impl AppCore {
         let signature = identity
             .private_key()
             .calculate_signature(&nonce_bytes, &mut rand::rngs::OsRng.unwrap_err())
-            .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e)))?;
+            .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e.into())))?;
 
         let auth = client.authenticate(&reg.account_id, 1, &nonce, &signature).await?;
         let client = net::Client::with_token(&reg.server_url, auth.session_token);
