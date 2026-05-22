@@ -45,6 +45,11 @@ pub struct AccountInfoResponse {
 // ── Authentication ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+pub struct ChallengeResponse {
+    pub nonce: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AuthResponse {
     pub session_token: String,
     pub expires_at: String,

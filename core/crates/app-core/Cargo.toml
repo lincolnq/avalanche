@@ -13,6 +13,7 @@ crypto             = { workspace = true }
 store              = { workspace = true }
 net                = { path = "../net" }
 libsignal-protocol = { workspace = true }
+base64             = { workspace = true }
 rand               = { workspace = true }
 thiserror          = { workspace = true }
 uniffi             = { workspace = true, features = ["cli"] }
