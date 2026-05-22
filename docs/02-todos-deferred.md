@@ -3,20 +3,15 @@
 ## Mobile app
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
 - Scroll-position-based read marking (see docs/31-read-tracking.md, Stage B)
-- Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
 ## Crypto / protocol
-- Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
-- Protobuf message envelope: plaintext is raw bytes, design calls for ContentMessage protobuf (proto/content.proto)
 - DB encryption key from Secure Enclave instead of hardcoded "dev-placeholder-key"
 
 ## Server
 - WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.
-- Message expiry: background task to delete expired messages, configurable per-group/DM
 - Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
-- DID document resolution endpoint (GET /.well-known/did/:did)
 
 ## Project-wide
 - Settle on a better name: rename repo, update bundle IDs, update `actnet://` URL scheme to match, update all references in code and docs
