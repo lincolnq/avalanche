@@ -2,7 +2,7 @@ import Foundation
 
 struct Conversation: Identifiable, Codable, Hashable {
     let id: String
-    let title: String
+    var title: String
     let accountId: String  // which DID this conversation belongs to
     let serverUrl: String
     var recipientDid: String?  // for DMs: the other party's DID

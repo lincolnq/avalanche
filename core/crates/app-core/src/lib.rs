@@ -89,6 +89,10 @@ pub struct DeliveryStatusUpdate {
 }
 
 /// Public metadata for an account: display name and bot flag.
+///
+/// `display_name` is only populated for bot accounts. Human display names are
+/// exchanged via encrypted profile bundles (client-to-client), never stored on
+/// the server.
 #[derive(uniffi::Record)]
 pub struct AccountInfoFfi {
     pub did: String,
@@ -463,6 +467,9 @@ impl AppCore {
 
     /// Create account with a pre-opened store (for tests and bots that run inside
     /// an existing tokio runtime).
+    ///
+    /// `display_name` should only be set for bot accounts. Human display names
+    /// are exchanged via encrypted profile bundles, not stored on the server.
     pub async fn create_account_with_store(
         server_url: &str,
         store: store::Store,

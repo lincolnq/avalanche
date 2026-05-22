@@ -38,6 +38,9 @@ struct RegisterRequest {
     signed_prekey: SignedPreKeyUpload,
     one_time_prekeys: Vec<OneTimePreKeyUpload>,
     kyber_prekey: KyberPreKeyUpload,
+    /// Plaintext display name. **Bot accounts only.** Human accounts should
+    /// leave this `None` — human display names are exchanged via encrypted
+    /// profile bundles (client-to-client), never stored on the server.
     display_name: Option<String>,
     #[serde(default)]
     is_bot: bool,

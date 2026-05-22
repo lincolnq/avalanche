@@ -22,6 +22,7 @@ pub struct RegisterRequest {
     pub kyber_prekey_id: i32,
     pub kyber_prekey_public: Vec<u8>,
     pub kyber_prekey_signature: Vec<u8>,
+    /// Plaintext display name — bot accounts only. Human accounts should pass `None`.
     pub display_name: Option<String>,
     pub is_bot: bool,
 }

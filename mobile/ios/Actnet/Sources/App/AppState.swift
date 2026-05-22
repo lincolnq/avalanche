@@ -42,6 +42,10 @@ final class AppState: ObservableObject {
     private var cores: [String: any AppCoreProtocol] = [:]
     /// Running WebSocket loop tasks, keyed by DID. Cancelled when account is removed.
     private var wsLoopTasks: [String: Task<Void, Never>] = [:]
+    /// Cached display names for remote DIDs, keyed by DID.
+    private var displayNameCache: [String: String] = [:]
+    /// DIDs currently being fetched (to avoid duplicate requests).
+    private var displayNameInFlight: Set<String> = []
     private var _service: any ActnetService
 
     var service: any ActnetService { _service }
@@ -147,6 +151,12 @@ final class AppState: ObservableObject {
                 }
             } else {
                 conversations = Self.loadPersistedConversations()
+                // Resolve display names for conversations that still show raw DIDs.
+                for conv in conversations {
+                    if let did = conv.recipientDid, conv.title == did {
+                        _ = displayName(for: did, accountId: conv.accountId)
+                    }
+                }
             }
 
             startMessagePolling()
@@ -165,6 +175,8 @@ final class AppState: ObservableObject {
         conversations.removeAll()
         messagesByConversation.removeAll()
         cores.removeAll()
+        displayNameCache.removeAll()
+        displayNameInFlight.removeAll()
         Self.clearPersistedAccounts()
         Self.clearPersistedConversations()
         isOnboarding = true
@@ -234,6 +246,40 @@ final class AppState: ObservableObject {
             )
         }
         isOnboarding = false
+    }
+
+    // MARK: - Display name resolution
+
+    /// Returns the cached display name for a DID, or the DID itself if unknown.
+    /// Kicks off a background fetch if not cached yet.
+    func displayName(for did: String, accountId: String) -> String {
+        if let name = displayNameCache[did] { return name }
+        resolveDisplayName(did: did, accountId: accountId)
+        return did
+    }
+
+    /// Fetch display name from the server and update conversation titles.
+    private func resolveDisplayName(did: String, accountId: String) {
+        guard !displayNameInFlight.contains(did) else { return }
+        guard let core = cores[accountId] else { return }
+        displayNameInFlight.insert(did)
+        let targetDid = did
+        Task.detached { [weak self] in
+            let info = try? core.getAccountInfo(did: targetDid)
+            await MainActor.run {
+                guard let self else { return }
+                self.displayNameInFlight.remove(targetDid)
+                guard let name = info?.displayName, !name.isEmpty else { return }
+                self.displayNameCache[targetDid] = name
+                // Update titles of any conversations with this DID.
+                for i in self.conversations.indices {
+                    if self.conversations[i].recipientDid == targetDid && self.conversations[i].title == targetDid {
+                        self.conversations[i].title = name
+                    }
+                }
+                self.persistConversations()
+            }
+        }
     }
 
     // MARK: - Messaging
@@ -334,9 +380,10 @@ final class AppState: ObservableObject {
         }
         let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
         let convId = "dm-\(accountId)-\(recipientDid)"
+        let title = displayName(for: recipientDid, accountId: accountId)
         let conv = Conversation(
             id: convId,
-            title: recipientDid,
+            title: title,
             accountId: accountId,
             serverUrl: serverUrl,
             recipientDid: recipientDid,
@@ -452,9 +499,10 @@ final class AppState: ObservableObject {
             // Auto-create a new conversation for this DID.
             let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
             convId = "dm-\(accountId)-\(senderDid)"
+            let title = displayName(for: senderDid, accountId: accountId)
             let conv = Conversation(
                 id: convId,
-                title: senderDid,
+                title: title,
                 accountId: accountId,
                 serverUrl: serverUrl,
                 recipientDid: senderDid,
