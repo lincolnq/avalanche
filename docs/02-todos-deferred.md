@@ -3,19 +3,12 @@
 ## Dev Infra
 - Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
 
-## Chatbot Project (finishing touches)
-- ~~Bot display name: conversations currently show raw DID instead of a friendly name~~ — implemented
-- ~~Bot account marking: flag someplace to distinguish bot accounts in member lists~~ — implemented
-
 ## Mobile app
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
 - Scroll-position-based read marking (see docs/31-read-tracking.md, Stage B)
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
-
-## Auth
-- ~~Identity key signature verification on `POST /v1/auth/token`~~ — implemented: two-step challenge-response flow via `POST /v1/auth/challenge` + `POST /v1/auth/token` with Ed25519 nonce signature.
 
 ## Crypto / protocol
 - Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
