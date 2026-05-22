@@ -31,8 +31,6 @@ make bindings        # generate bindings
 make ios             # bindings + xcframework + xcodegen
 ```
 
-Requires: `protobuf` (`brew install protobuf` on macOS).
-
 ## Key Docs
 
 Read these first — they cover the overall design, technical approach, and backlog:
