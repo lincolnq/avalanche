@@ -6,6 +6,12 @@ Anyone can build a social network these days, but who will use it? Our answer is
 
 The design centers on Signal-quality encrypted messaging — a unified inbox of all your conversations across all your activism — with a platform for rapidly-built, well-integrated organizing tools: team assignment, action-day maps, Q&A bots, collaborative documents, and more.
 
+<p align="center">
+  <img src="docs/screenshot.png" width="200" alt="Chat list">
+  <img src="docs/screenshot2.png" width="200" alt="Network tab">
+  <img src="docs/screenshot3.png" width="200" alt="Testbot">
+</p>
+
 ## Getting started
 
 ### Prerequisites
