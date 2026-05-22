@@ -92,6 +92,9 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         return UInt64(msgs.filter { $0.readAtMs == nil && $0.senderDid != mockDid }.count)
     }
 
+    func getSendReadReceipts() throws -> Bool { true }
+    func setSendReadReceipts(enabled: Bool) throws {}
+
     func receiveMessages() throws -> [DecryptedMessage] {
         Thread.sleep(forTimeInterval: 0.1)
         lock.lock()

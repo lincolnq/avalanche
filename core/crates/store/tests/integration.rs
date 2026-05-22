@@ -131,6 +131,7 @@ async fn registration_round_trip() {
         account_id: "did:plc:abc123".to_string(),
         server_url: "https://home.example.com".to_string(),
         registered_at: Timestamp::now(),
+        send_read_receipts: true,
     };
     store.save_registration(&info).await.unwrap();
 

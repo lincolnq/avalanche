@@ -56,6 +56,13 @@ struct DevSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section("Account Preferences") {
+                    Toggle("Send read receipts", isOn: Binding(
+                        get: { appState.sendReadReceipts },
+                        set: { appState.setSendReadReceiptsPref($0) }
+                    ))
+                }
             }
             .navigationTitle("Dev Settings")
             .navigationBarTitleDisplayMode(.inline)

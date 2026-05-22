@@ -33,6 +33,7 @@ final class AppState: ObservableObject {
     @Published var serviceMode: ServiceMode
     @Published var selectedTab: Tab = .chats
     @Published var navigateToConversation: Conversation?
+    @Published var sendReadReceipts = true
 
     enum Tab {
         case calls, chats, network
@@ -160,6 +161,27 @@ final class AppState: ObservableObject {
             }
 
             startMessagePolling()
+            loadSendReadReceiptsPref()
+        }
+    }
+
+    func loadSendReadReceiptsPref() {
+        guard let core = cores.first?.value else { return }
+        Task {
+            do {
+                let val = try await Task.detached { try core.getSendReadReceipts() }.value
+                await MainActor.run { self.sendReadReceipts = val }
+            } catch {}
+        }
+    }
+
+    func setSendReadReceiptsPref(_ enabled: Bool) {
+        guard let core = cores.first?.value else { return }
+        Task {
+            do {
+                try await Task.detached { try core.setSendReadReceipts(enabled: enabled) }.value
+                await MainActor.run { self.sendReadReceipts = enabled }
+            } catch {}
         }
     }
 

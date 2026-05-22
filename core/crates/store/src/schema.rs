@@ -96,4 +96,6 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
     // Add delivery_status column for outgoing message status tracking.
     // 0 = sending, 1 = sent, 2 = delivered, 3 = read
     "ALTER TABLE message_history ADD COLUMN delivery_status INTEGER NOT NULL DEFAULT 1",
+    // User preference for sending read receipts.
+    "ALTER TABLE account ADD COLUMN send_read_receipts INTEGER NOT NULL DEFAULT 1",
 ];

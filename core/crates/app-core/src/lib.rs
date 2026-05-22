@@ -243,6 +243,12 @@ impl AppCore {
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
+            let reg = inner.store.load_registration().await
+                .map_err(AppError::from)?
+                .ok_or(AppError::NoAccount)?;
+            if !reg.send_read_receipts {
+                return Ok(());
+            }
             let msg = ContentMessage {
                 body: Some(Body::Receipt(ReceiptMessage {
                     r#type: receipt_message::Type::Read as i32,
@@ -321,6 +327,24 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    pub fn get_send_read_receipts(&self) -> Result<bool, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let reg = inner.store.load_registration().await
+                .map_err(AppError::from)?
+                .ok_or(AppError::NoAccount)?;
+            Ok::<_, AppError>(reg.send_read_receipts)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    pub fn set_send_read_receipts(&self, enabled: bool) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.store.save_send_read_receipts(enabled).await
+                .map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
     /// Wait for the next message(s) via WebSocket, decrypt, and return.
     ///
     /// Lazily connects on first call. Blocks until at least one message
@@ -391,6 +415,7 @@ impl AppCore {
             account_id: reg_resp.did.clone(),
             server_url: server_url.to_string(),
             registered_at: Timestamp::now(),
+            send_read_receipts: true,
         }).await?;
 
         store.save_signed_prekey(signed.wire.id, &signed.record).await?;

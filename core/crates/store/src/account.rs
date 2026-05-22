@@ -26,6 +26,7 @@ pub struct RegistrationInfo {
     pub account_id: String,
     pub server_url: String,
     pub registered_at: Timestamp,
+    pub send_read_receipts: bool,
 }
 
 impl Store {
@@ -100,13 +101,14 @@ impl Store {
             .conn
             .call(|conn| {
                 conn.query_row(
-                    "SELECT account_id, server_url, registered_at FROM account WHERE id = 1",
+                    "SELECT account_id, server_url, registered_at, send_read_receipts FROM account WHERE id = 1",
                     [],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
                         ))
                     },
                 )
@@ -116,10 +118,25 @@ impl Store {
             .await
             .map_err(StoreError::Db)?;
 
-        Ok(result.map(|(account_id, server_url, registered_at)| RegistrationInfo {
+        Ok(result.map(|(account_id, server_url, registered_at, send_read_receipts)| RegistrationInfo {
             account_id,
             server_url,
             registered_at: Timestamp(registered_at),
+            send_read_receipts: send_read_receipts != 0,
         }))
+    }
+
+    pub async fn save_send_read_receipts(&self, enabled: bool) -> Result<(), StoreError> {
+        let val: i64 = if enabled { 1 } else { 0 };
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "UPDATE account SET send_read_receipts = ?1",
+                    rusqlite::params![val],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
     }
 }
