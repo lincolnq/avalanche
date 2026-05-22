@@ -136,3 +136,5 @@ When implementing a TODO item from `docs/02-todos-deferred.md`:
 1. Implement the feature on a dedicated branch (never directly on `main`).
 2. When asked to create a PR from the feature branch to the upstream remote, **delete** the corresponding line from `docs/02-todos-deferred.md` entirely — do not use strikethrough (~~text~~), do not check it off (`- [x]`), just remove the line. Always confirm with the user which item to remove before doing so.
 3. Commit the removal as part of the same PR or as a follow-up on the same branch, as the user prefers.
+
+When merging a server-side PR that requires a corresponding client-side update (new API, changed endpoint, etc.), always add a TODO in `docs/02-todos-deferred.md` for the client work if it's not included in the same PR.
