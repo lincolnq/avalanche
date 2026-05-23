@@ -6,7 +6,8 @@
 - Read receipt user preference toggle (send_read_receipts setting)
 
 ## Crypto / protocol
-- DB encryption key from Secure Enclave instead of hardcoded "dev-placeholder-key"
+- Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
+- Protobuf message envelope: plaintext is raw bytes, design calls for ContentMessage protobuf (proto/content.proto)
 
 ## Server
 - WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.

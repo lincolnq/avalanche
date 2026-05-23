@@ -53,8 +53,7 @@ final class AppState: ObservableObject {
     private static let serviceModeKey = "serviceMode"
     private static let accountsKey = "persistedAccounts"
     private static let conversationsKey = "persistedConversations"
-    // TODO: Derive key from iOS Secure Enclave instead of hardcoded passphrase
-    private static let dbKey = "dev-placeholder-key"
+
 
     init(mode: ServiceMode? = nil) {
         let resolved = mode ?? {
@@ -107,8 +106,12 @@ final class AppState: ObservableObject {
         guard !persisted.isEmpty else { return }
 
         let svc = _service
-        let dbKey = Self.dbKey
         let dir = dbDir
+
+        guard let dbKey = try? SecureEnclaveKeyManager.dbPassphrase() else {
+            print("Failed to retrieve DB encryption key, cannot restore accounts")
+            return
+        }
 
         for p in persisted {
             let dbPath = dir.appendingPathComponent(p.dbFilename).path
@@ -203,7 +206,7 @@ final class AppState: ObservableObject {
 
         let dbFilename = "account-\(UUID().uuidString.prefix(8)).db"
         let dbPath = dir.appendingPathComponent(dbFilename).path
-        let dbKey = Self.dbKey
+        let dbKey = try SecureEnclaveKeyManager.dbPassphrase()
 
         let svc = _service
         let core = try await Task.detached {

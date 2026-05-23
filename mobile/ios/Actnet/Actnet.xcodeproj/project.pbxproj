@@ -17,6 +17,7 @@
 		26EE636C4263EE4CDEFD7A2D /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */; };
 		32CE74DAA7C93CB87BEDAD15 /* ProjectInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B42EE451B555DFBE024236DB /* ProjectInfo.swift */; };
 		38FF5DFE7DB6B24A1E288616 /* JoiningServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02F784B4794651EB68CB3128 /* JoiningServerView.swift */; };
+		3C45CC65E3C39FE080399694 /* SecureEnclaveKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E414B6BFBC7FD68C41B63E /* SecureEnclaveKeyManager.swift */; };
 		3E096A5CEAF5136996B05DB3 /* app_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = DADF188CB0F720072C71A2DF /* app_core.swift */; };
 		4CB5F41795DCD29D8786B22B /* CallsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E488C4D9264B250098E100E /* CallsView.swift */; };
 		5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */; };
@@ -86,6 +87,7 @@
 		B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectWebView.swift; sourceTree = "<group>"; };
 		C0BC2191A5A534D46806501B /* ConversationRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRow.swift; sourceTree = "<group>"; };
 		D0B344D75428AFD0B731E724 /* AccountAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountAvatar.swift; sourceTree = "<group>"; };
+		D3E414B6BFBC7FD68C41B63E /* SecureEnclaveKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureEnclaveKeyManager.swift; sourceTree = "<group>"; };
 		D8CA6139805AD099FD6E40C8 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		DADF188CB0F720072C71A2DF /* app_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = app_core.swift; path = ../Generated/app_core.swift; sourceTree = "<group>"; };
 		F1E20E93DC790F03B59AAD25 /* DevSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevSettingsView.swift; sourceTree = "<group>"; };
@@ -152,6 +154,7 @@
 				F9C887C93BA0FCFBAA14EFF3 /* App */,
 				0509592562EDC2F8DB453AC7 /* Models */,
 				06237037C4984D9D21953949 /* Services */,
+				DB6512669E0FDCE6D4686F00 /* Utils */,
 				2FEC46E298F92D2DF1B84795 /* Views */,
 			);
 			path = Sources;
@@ -203,6 +206,14 @@
 				B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */,
 			);
 			path = Network;
+			sourceTree = "<group>";
+		};
+		DB6512669E0FDCE6D4686F00 /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				D3E414B6BFBC7FD68C41B63E /* SecureEnclaveKeyManager.swift */,
+			);
+			path = Utils;
 			sourceTree = "<group>";
 		};
 		E2FA8F831739D2569615AA21 /* Onboarding */ = {
@@ -333,6 +344,7 @@
 				13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */,
 				5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */,
 				FA8DF8441A2584B4F6FFFDFE /* RootView.swift in Sources */,
+				3C45CC65E3C39FE080399694 /* SecureEnclaveKeyManager.swift in Sources */,
 				D207CDF5562018B203A934E6 /* SplashView.swift in Sources */,
 				3E096A5CEAF5136996B05DB3 /* app_core.swift in Sources */,
 			);
