@@ -4,7 +4,7 @@
 - Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
 
 ## Mobile app
-- Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
+- Passkey recovery: implement WebAuthn passkey creation during signup, PRF-based recovery blob encryption, and recovery flow on new device (see docs/33-identity-auth-recovery.md). Remove the old RecoveryKeyBanner.
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
