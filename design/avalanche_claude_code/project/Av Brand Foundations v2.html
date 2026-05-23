@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Av · Brand Foundations v2 (Plum)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* ── PLUM (primary, full 10-step scale) ───────────── */
+    --plum-50:  #F1EBED;
+    --plum-100: #DCC8CE;
+    --plum-200: #C8B4BD;
+    --plum-300: #B1959F;
+    --plum-400: #9C7682;
+    --plum-500: #6B3E50;   /* primary · brand · icon · wordmark */
+    --plum-600: #5C3445;
+    --plum-700: #4D2939;
+    --plum-800: #3C1F2D;
+    --plum-900: #2A1620;
+
+    /* ── SAND (warm neutral, paper + text) ───────────── */
+    --sand-50:  #FFF8F1;
+    --sand-100: #FFF1E9;   /* paper · counter · cream */
+    --sand-200: #F4E7D9;
+    --sand-300: #E5D4C0;
+    --sand-400: #C7B6A0;
+    --sand-500: #9A8A78;
+    --sand-600: #6E6258;
+    --sand-700: #4A4239;
+    --sand-800: #2F2924;
+    --sand-900: #1F1815;   /* ink */
+
+    /* ── HEAT (reserved · alerts only) ───────────────── */
+    --rose-400: #D17579;
+    --rose-500: #C76870;
+    --rose-700: #993E47;   /* error · destructive */
+
+    /* ── EARTH (status, sparingly) ───────────────────── */
+    --moss:  #6B7F4D;
+    --amber: #D4A04A;
+
+    /* Page tokens */
+    --paper:  var(--sand-100);
+    --ink:    var(--sand-900);
+    --rule:   rgba(31,24,21,0.10);
+    --muted:  rgba(31,24,21,0.55);
+    --plum-rule: rgba(107,62,80,0.18);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Inter", "Helvetica Neue", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 48px 96px; }
+
+  /* Plum top band */
+  .topband {
+    background: var(--plum-500);
+    color: var(--sand-100);
+    margin: 0 -48px 0;
+    padding: 18px 48px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .topband .l, .topband .r { opacity: 0.85; }
+  .topband .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--sand-100); margin-right: 8px; vertical-align: middle; }
+
+  /* Page header */
+  .pagehdr {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding: 56px 0 28px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 56px;
+  }
+  .pagehdr h1 {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 56px; margin: 6px 0 0; letter-spacing: -0.03em; font-weight: 600; line-height: 1;
+  }
+  .meta { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+  .pagehdr .meta-plum { color: var(--plum-500); }
+
+  .sec { margin-bottom: 80px; }
+  .sec-hdr { display: flex; align-items: baseline; gap: 20px; margin-bottom: 28px; }
+  .sec-num { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.18em; color: var(--plum-500); font-weight: 500; }
+  .sec-title {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 26px; font-weight: 600; letter-spacing: -0.015em; margin: 0;
+  }
+  .sec-sub { font-size: 14px; color: var(--muted); max-width: 540px; line-height: 1.55; margin-left: auto; text-wrap: pretty; }
+
+  /* ── 01 SOURCE ─────────────────────────────────────── */
+  .source {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+  }
+  .src-card {
+    background: var(--sand-200);
+    border-radius: 4px;
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 16px;
+    position: relative;
+  }
+  .src-card .src-stamp {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.18em; color: var(--muted);
+  }
+  .src-card .src-stage {
+    background: var(--sand-100);
+    border-radius: 4px;
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    min-height: 200px;
+  }
+  .src-card .src-stage img { max-width: 100%; max-height: 100%; height: auto; }
+  .src-card.icon-card .src-stage img { width: 160px; height: 160px; border-radius: 36px; box-shadow: 0 12px 28px -10px rgba(31,24,21,0.3); }
+  .src-card .src-name { font-family: "Space Grotesk", sans-serif; font-size: 14px; font-weight: 600; }
+  .src-card .src-desc { font-size: 12px; color: var(--muted); line-height: 1.5; margin: -8px 0 0; }
+
+  /* Palette swatches inside source cards */
+  .src-palette { display: flex; gap: 6px; flex-wrap: wrap; }
+  .src-palette .sw {
+    display: flex; align-items: center; gap: 6px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.02em;
+  }
+  .src-palette .sw .chip { width: 16px; height: 16px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
+
+  /* Evolution note */
+  .evo {
+    margin-top: 18px;
+    background: var(--plum-500);
+    color: var(--sand-100);
+    border-radius: 4px;
+    padding: 22px 28px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 28px;
+    align-items: center;
+  }
+  .evo .col { font-size: 13px; line-height: 1.5; }
+  .evo .col strong { color: var(--sand-100); font-weight: 600; display: block; margin-bottom: 4px; font-family: "Space Grotesk", sans-serif; font-size: 14px; letter-spacing: -0.005em; }
+  .evo .col p { margin: 0; color: rgba(255,241,233,0.78); text-wrap: pretty; }
+  .evo .arrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.18em;
+    color: rgba(255,241,233,0.55);
+    text-align: center;
+  }
+
+  /* ── 02 COLOR ──────────────────────────────────────── */
+  .scale-block { margin-bottom: 32px; }
+  .scale-label {
+    display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px;
+  }
+  .scale-label .name {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 16px; font-weight: 600;
+  }
+  .scale-label .tier {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.18em;
+    padding: 3px 8px; border-radius: 3px;
+    background: var(--plum-500); color: var(--sand-100);
+  }
+  .scale-label .tier.secondary { background: var(--sand-300); color: var(--sand-900); }
+  .scale-label .tier.reserved  { background: var(--rose-700); color: var(--sand-100); }
+  .scale-label .role-txt { font-size: 12.5px; color: var(--muted); }
+  .scale-strip {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 4px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .scale-strip.eight { grid-template-columns: repeat(8, 1fr); }
+  .step {
+    aspect-ratio: 3 / 4;
+    padding: 14px 12px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+  .step .num { opacity: 0.65; margin-bottom: 4px; }
+  .step .hx  { font-weight: 500; }
+  .step.is-key { box-shadow: inset 0 0 0 3px var(--sand-100); }
+  .step.is-key::after {
+    content: "PRIMARY";
+    font-size: 8.5px;
+    letter-spacing: 0.16em;
+    margin-top: 4px;
+    opacity: 0.7;
+  }
+
+  /* Accent strip */
+  .accent-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .accent-tile {
+    background: var(--sand-200);
+    border-radius: 4px;
+    padding: 18px 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .accent-tile .sw {
+    width: 100%; aspect-ratio: 3 / 2;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+  }
+  .accent-tile .lbl {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 13px; font-weight: 600;
+  }
+  .accent-tile .hex {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; color: var(--ink);
+  }
+  .accent-tile .role {
+    font-size: 11.5px; color: var(--muted); line-height: 1.45;
+  }
+
+  /* Roles table */
+  .roles {
+    margin-top: 16px;
+    background: var(--sand-200);
+    border-radius: 4px;
+    padding: 30px 32px;
+  }
+  .roles-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 32px;
+  }
+  .roles h3 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 14px; font-weight: 600; margin: 0 0 4px;
+  }
+  .roles-h2 {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.18em; color: var(--plum-500);
+    margin: 0 0 18px;
+  }
+  .role-row {
+    display: grid;
+    grid-template-columns: 32px 1fr 130px;
+    align-items: center; gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--plum-rule);
+    font-size: 13px;
+  }
+  .role-row:last-child { border-bottom: none; }
+  .role-row .dot {
+    width: 22px; height: 22px; border-radius: 4px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+  }
+  .role-row .lbl { color: var(--ink); }
+  .role-row .lbl strong { font-weight: 600; }
+  .role-row .lbl small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .role-row .tok {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--muted); text-align: right;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── 03 IN USE — chat fragment ─────────────────────── */
+  .inuse {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 20px;
+  }
+  .chat {
+    background: var(--sand-100);
+    border-radius: 14px;
+    padding: 18px 20px 20px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 12px 28px -12px rgba(31,24,21,0.18);
+    border: 1px solid var(--rule);
+    display: flex; flex-direction: column; gap: 12px;
+    min-height: 480px;
+  }
+  .chat-hdr {
+    display: flex; align-items: center; gap: 12px; padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .chat-hdr .ava {
+    width: 38px; height: 38px; border-radius: 11px;
+    background: var(--plum-500);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--sand-100); font-weight: 600; font-size: 13px;
+    font-family: "Space Grotesk", sans-serif;
+  }
+  .chat-hdr .name { font-weight: 600; font-size: 14px; line-height: 1.1; }
+  .chat-hdr .sub  { font-size: 11px; color: var(--muted); }
+  .chat-hdr .right {
+    margin-left: auto; display: flex; gap: 6px; align-items: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em; color: var(--moss);
+  }
+  .chat-hdr .right .lock { width: 8px; height: 8px; border-radius: 50%; background: var(--moss); }
+  .msgs { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .msg {
+    max-width: 78%;
+    padding: 9px 13px;
+    border-radius: 16px;
+    font-size: 13.5px;
+    line-height: 1.42;
+  }
+  .msg.them { background: var(--sand-200); color: var(--ink); align-self: flex-start; border-bottom-left-radius: 6px; }
+  .msg.me   { background: var(--plum-500); color: var(--sand-100); align-self: flex-end; border-bottom-right-radius: 6px; }
+  .msg.action {
+    align-self: flex-start;
+    background: var(--plum-700); color: var(--sand-100);
+    font-family: "Space Grotesk", sans-serif;
+    font-weight: 600; font-size: 13px;
+    padding: 10px 16px;
+  }
+  .stamp-row {
+    display: flex; align-items: center; gap: 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9.5px; letter-spacing: 0.10em;
+    color: var(--muted);
+    align-self: center;
+    margin: 6px 0;
+  }
+  .stamp-row::before, .stamp-row::after {
+    content: ""; flex: 1; height: 1px; background: var(--rule); width: 40px;
+  }
+  .composer {
+    display: flex; gap: 10px; align-items: center;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule);
+  }
+  .composer .input {
+    flex: 1; background: var(--sand-200); border-radius: 20px;
+    padding: 10px 16px; font-size: 13px; color: var(--muted);
+  }
+  .composer .send {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: var(--plum-500);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--sand-100); font-weight: 700;
+  }
+  /* notification dot — the rare rose moment */
+  .notif {
+    position: relative;
+  }
+  .notif::after {
+    content: "";
+    position: absolute; top: -2px; right: -2px;
+    width: 10px; height: 10px;
+    border-radius: 50%; background: var(--rose-500);
+    box-shadow: 0 0 0 2px var(--sand-100);
+  }
+
+  /* Sidecar */
+  .sidecar { display: flex; flex-direction: column; gap: 14px; }
+  .panel {
+    background: var(--sand-200);
+    border-radius: 4px;
+    padding: 18px 20px;
+  }
+  .panel.dark { background: var(--plum-900); color: var(--sand-100); }
+  .panel.brand { background: var(--plum-500); color: var(--sand-100); }
+  .panel h5 {
+    margin: 0 0 10px;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 13px; font-weight: 600;
+  }
+  .panel.dark h5, .panel.brand h5 { color: var(--sand-100); }
+  .panel .row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--rule);
+    font-size: 12.5px;
+  }
+  .panel.dark .row, .panel.brand .row { border-color: rgba(255,241,233,0.10); }
+  .panel .row:last-child { border-bottom: none; }
+  .pill {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em;
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--plum-500); color: var(--sand-100);
+  }
+  .pill.moss   { background: var(--moss); }
+  .pill.amber  { background: var(--amber); color: var(--sand-900); }
+  .pill.rose   { background: var(--rose-700); color: var(--sand-100); }
+  .pill.outline { background: transparent; box-shadow: inset 0 0 0 1px var(--sand-100); color: var(--sand-100); }
+  .btn {
+    display: inline-block;
+    background: var(--plum-500); color: var(--sand-100);
+    padding: 10px 18px; border-radius: 6px;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-weight: 600; font-size: 13px;
+  }
+  .btn.outline { background: transparent; border: 1.5px solid var(--plum-500); color: var(--plum-500); }
+  .btn.danger { background: var(--rose-700); }
+
+  /* What changed callout */
+  .changed {
+    margin-top: 30px;
+    background: var(--sand-200);
+    border-radius: 4px;
+    padding: 22px 28px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+  .changed h4 {
+    margin: 0 0 6px;
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 14px; font-weight: 600;
+  }
+  .changed p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); text-wrap: pretty; }
+  .changed strong { color: var(--ink); font-weight: 600; }
+
+</style>
+</head>
+<body>
+
+<!-- Plum top band -->
+<div class="topband">
+  <span class="l"><span class="dot"></span>AVALANCHE · BRAND · v0.8</span>
+  <span class="r">PLUM PRIMARY · ROSE RESERVED</span>
+</div>
+
+<div class="wrap">
+
+  <!-- Header -->
+  <header class="pagehdr">
+    <div>
+      <div class="meta meta-plum">v2 · foundations · plum</div>
+      <h1>Foundations</h1>
+      <div class="meta" style="margin-top:10px;">a brand built on two colors</div>
+    </div>
+    <div class="meta">v0.8 · 2026·05·23</div>
+  </header>
+
+  <!-- ── 01 · SOURCE ────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">01 / SOURCE</span>
+      <h2 class="sec-title">Two colors do everything</h2>
+      <p class="sec-sub">The icon and both wordmarks share one color story now: <strong style="color:var(--plum-500)">plum</strong> and <strong style="color:var(--ink)">cream</strong>. No gradients. No rose anchor. The entire identity lives in those two values.</p>
+    </div>
+
+    <div class="source">
+      <div class="src-card icon-card">
+        <div class="src-stamp">APP ICON</div>
+        <div class="src-stage"><img src="av-icon-v2.svg" alt=""/></div>
+        <div>
+          <div class="src-name">Plum field, cream lineart</div>
+          <p class="src-desc">A cream outline of a bubble holding a cream 'a', on plum. The most minimal version yet.</p>
+        </div>
+        <div class="src-palette">
+          <span class="sw"><span class="chip" style="background:#6B3E50"></span>#6B3E50</span>
+          <span class="sw"><span class="chip" style="background:#FFF1E9; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10);"></span>#FFF1E9</span>
+        </div>
+      </div>
+
+      <div class="src-card">
+        <div class="src-stamp">WORDMARK · BUBBLE A</div>
+        <div class="src-stage"><img src="av-wordmark-bubble-a-v2.svg" alt=""/></div>
+        <div>
+          <div class="src-name">Plum first 'a', cream counter</div>
+          <p class="src-desc">The system mark. Plays beside the icon at any scale. Two colors.</p>
+        </div>
+        <div class="src-palette">
+          <span class="sw"><span class="chip" style="background:#6B3E50"></span>#6B3E50</span>
+          <span class="sw"><span class="chip" style="background:#FFF1E9; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10);"></span>#FFF1E9</span>
+        </div>
+      </div>
+
+      <div class="src-card">
+        <div class="src-stamp">WORDMARK · FULL BUBBLE</div>
+        <div class="src-stage"><img src="av-wordmark-full-bubble.svg" alt=""/></div>
+        <div>
+          <div class="src-name">Cream wordmark inside plum bubble</div>
+          <p class="src-desc">The badge. Stickers, merch, announcements. Same two colors.</p>
+        </div>
+        <div class="src-palette">
+          <span class="sw"><span class="chip" style="background:#6B3E50"></span>#6B3E50</span>
+          <span class="sw"><span class="chip" style="background:#FFF1E9; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10);"></span>#FFF1E9</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="evo">
+      <div class="col">
+        <strong>v0.4 — rose primary</strong>
+        <p>Rose gradient → plum bubble → cream counter. Three colors, all anchored in the icon. Warmth-forward.</p>
+      </div>
+      <div class="arrow">→  EVOLUTION  →</div>
+      <div class="col">
+        <strong>v0.8 — plum primary</strong>
+        <p>Plum surface → cream lineart. Two colors. Quieter, more confident. Sophisticated over warm.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 02 · COLOR SYSTEM ──────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">02 / COLOR</span>
+      <h2 class="sec-title">Color system</h2>
+      <p class="sec-sub">One primary scale (plum, full 10 steps because it does everything), one neutral scale (sand, 8 steps), three reserved accents (rose, moss, amber).</p>
+    </div>
+
+    <!-- PLUM -->
+    <div class="scale-block">
+      <div class="scale-label">
+        <span class="name">PLUM</span>
+        <span class="tier">PRIMARY</span>
+        <span class="role-txt">Brand identity, surfaces, type, dark mode, buttons, outgoing messages. Plum is the brand color and also the action color.</span>
+      </div>
+      <div class="scale-strip">
+        <div class="step" style="background:#F1EBED; color:#4D2939;"><span class="num">50</span><span class="hx">F1EBED</span></div>
+        <div class="step" style="background:#DCC8CE; color:#4D2939;"><span class="num">100</span><span class="hx">DCC8CE</span></div>
+        <div class="step" style="background:#C8B4BD; color:#4D2939;"><span class="num">200</span><span class="hx">C8B4BD</span></div>
+        <div class="step" style="background:#B1959F; color:#3C1F2D;"><span class="num">300</span><span class="hx">B1959F</span></div>
+        <div class="step" style="background:#9C7682; color:#FFF1E9;"><span class="num">400</span><span class="hx">9C7682</span></div>
+        <div class="step is-key" style="background:#6B3E50; color:#FFF1E9;"><span class="num">500</span><span class="hx">6B3E50</span></div>
+        <div class="step" style="background:#5C3445; color:#FFF1E9;"><span class="num">600</span><span class="hx">5C3445</span></div>
+        <div class="step" style="background:#4D2939; color:#FFF1E9;"><span class="num">700</span><span class="hx">4D2939</span></div>
+        <div class="step" style="background:#3C1F2D; color:#FFF1E9;"><span class="num">800</span><span class="hx">3C1F2D</span></div>
+        <div class="step" style="background:#2A1620; color:#FFF1E9;"><span class="num">900</span><span class="hx">2A1620</span></div>
+      </div>
+    </div>
+
+    <!-- SAND -->
+    <div class="scale-block">
+      <div class="scale-label">
+        <span class="name">SAND</span>
+        <span class="tier secondary">NEUTRAL</span>
+        <span class="role-txt">Warm neutral. Paper, text, surfaces, dividers. Replaces gray entirely — there is no gray in this brand.</span>
+      </div>
+      <div class="scale-strip eight">
+        <div class="step" style="background:#FFF8F1; color:#4A4239;"><span class="num">50</span><span class="hx">FFF8F1</span></div>
+        <div class="step is-key" style="background:#FFF1E9; color:#4A4239;"><span class="num">100</span><span class="hx">FFF1E9</span></div>
+        <div class="step" style="background:#F4E7D9; color:#4A4239;"><span class="num">200</span><span class="hx">F4E7D9</span></div>
+        <div class="step" style="background:#E5D4C0; color:#4A4239;"><span class="num">300</span><span class="hx">E5D4C0</span></div>
+        <div class="step" style="background:#C7B6A0; color:#2F2924;"><span class="num">400</span><span class="hx">C7B6A0</span></div>
+        <div class="step" style="background:#9A8A78; color:#FFF1E9;"><span class="num">500</span><span class="hx">9A8A78</span></div>
+        <div class="step" style="background:#6E6258; color:#FFF1E9;"><span class="num">600</span><span class="hx">6E6258</span></div>
+        <div class="step" style="background:#1F1815; color:#FFF1E9;"><span class="num">900</span><span class="hx">1F1815</span></div>
+      </div>
+    </div>
+
+    <!-- ACCENTS -->
+    <div class="scale-block">
+      <div class="scale-label">
+        <span class="name">ACCENTS</span>
+        <span class="tier reserved">RESERVED</span>
+        <span class="role-txt">Rare, intentional, status-only. None of these appear on a default screen. Rose specifically is reserved — it's the heat that signals "pay attention."</span>
+      </div>
+      <div class="accent-strip">
+        <div class="accent-tile">
+          <div class="sw" style="background: linear-gradient(to right, #D17579, #C76870, #993E47);"></div>
+          <div class="lbl">Rose</div>
+          <div class="hex">#C76870 · #993E47</div>
+          <div class="role">Error, destructive actions, notification dots, "new mention" indicators. Never a CTA. Never a default.</div>
+        </div>
+        <div class="accent-tile">
+          <div class="sw" style="background:#6B7F4D;"></div>
+          <div class="lbl">Moss</div>
+          <div class="hex">#6B7F4D</div>
+          <div class="role">Encryption verified, delivered receipts, success toasts, "you're safe" indicators.</div>
+        </div>
+        <div class="accent-tile">
+          <div class="sw" style="background:#D4A04A;"></div>
+          <div class="lbl">Amber</div>
+          <div class="hex">#D4A04A</div>
+          <div class="role">Caution, important non-urgent prompts, organizer-action flags, "review this" badges.</div>
+        </div>
+        <div class="accent-tile">
+          <div class="sw" style="background: var(--sand-100); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);"></div>
+          <div class="lbl">Cream</div>
+          <div class="hex">#FFF1E9</div>
+          <div class="role">Counterweight to plum. The brand cream that appears in the icon, the wordmark counter, and as the page paper everywhere.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WHAT CHANGED -->
+    <div class="changed">
+      <div>
+        <h4>What changed from v0.4</h4>
+        <p><strong>Rose is no longer primary.</strong> It's been reduced from a full 8-step scale to two reserved values, used only for alerts and the occasional heat moment. It no longer appears on default screens.</p>
+        <p style="margin-top: 8px;"><strong>Plum doubled in size.</strong> It went from 6 steps to a full 10-step scale because it now does everything: brand, surface, dark mode, action, type, outgoing messages. The full scale gives you the range.</p>
+      </div>
+      <div>
+        <h4>What stayed</h4>
+        <p><strong>Sand is unchanged.</strong> It was already the warm neutral; it still is. Cream (sand-100) and ink (sand-900) anchor every screen.</p>
+        <p style="margin-top: 8px;"><strong>Moss and amber are unchanged.</strong> Earth-tone status accents. They were sparing then; still are.</p>
+        <p style="margin-top: 8px;"><strong>Typography is unchanged.</strong> Pressura for display, Inter for UI, Pressura Mono / JBM for data. See Foundations v1 for the full type system.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 03 · ROLES ─────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">03 / ROLES</span>
+      <h2 class="sec-title">Semantic mapping</h2>
+      <p class="sec-sub">What each token actually does. If you only remember one thing: <strong style="color:var(--ink)">plum-500 is the brand AND the action color</strong> — it does double duty.</p>
+    </div>
+
+    <div class="roles">
+      <p class="roles-h2">IDENTITY</p>
+      <div class="roles-grid">
+        <div class="role-row">
+          <span class="dot" style="background:#6B3E50;"></span>
+          <span class="lbl"><strong>Brand · primary</strong><small>Icon, wordmark, brand surfaces</small></span>
+          <span class="tok">--plum-500</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#FFF1E9; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10);"></span>
+          <span class="lbl"><strong>Paper · default canvas</strong><small>Page background, light-mode surface</small></span>
+          <span class="tok">--sand-100</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#2A1620;"></span>
+          <span class="lbl"><strong>Dark mode surface</strong><small>Dark-mode background, deep cards</small></span>
+          <span class="tok">--plum-900</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#4D2939;"></span>
+          <span class="lbl"><strong>Elevated surface</strong><small>Cards, modals, sidebars in dark mode</small></span>
+          <span class="tok">--plum-700</span>
+        </div>
+      </div>
+
+      <p class="roles-h2" style="margin-top: 28px;">CHAT &amp; ACTION</p>
+      <div class="roles-grid">
+        <div class="role-row">
+          <span class="dot" style="background:#6B3E50;"></span>
+          <span class="lbl"><strong>Outgoing messages</strong><small>Your own message bubbles</small></span>
+          <span class="tok">--plum-500</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#F4E7D9; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);"></span>
+          <span class="lbl"><strong>Incoming messages</strong><small>Other people's bubbles, list items</small></span>
+          <span class="tok">--sand-200</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#6B3E50;"></span>
+          <span class="lbl"><strong>Primary action</strong><small>Send, Submit, Join, Download</small></span>
+          <span class="tok">--plum-500</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#6B3E50; box-shadow: inset 0 0 0 2px #6B3E50, inset 0 0 0 4px #FFF1E9;"></span>
+          <span class="lbl"><strong>Outlined action</strong><small>Secondary buttons, links</small></span>
+          <span class="tok">--plum-500</span>
+        </div>
+      </div>
+
+      <p class="roles-h2" style="margin-top: 28px;">TYPE</p>
+      <div class="roles-grid">
+        <div class="role-row">
+          <span class="dot" style="background:#1F1815;"></span>
+          <span class="lbl"><strong>Body text</strong><small>Default text on paper. Maximum read contrast.</small></span>
+          <span class="tok">--sand-900</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#6E6258;"></span>
+          <span class="lbl"><strong>Muted text</strong><small>Captions, timestamps, secondary metadata</small></span>
+          <span class="tok">--sand-600</span>
+        </div>
+      </div>
+
+      <p class="roles-h2" style="margin-top: 28px;">STATUS · USED SPARINGLY</p>
+      <div class="roles-grid">
+        <div class="role-row">
+          <span class="dot" style="background:#6B7F4D;"></span>
+          <span class="lbl"><strong>Success · verified</strong><small>Encryption verified, delivered, "you're safe"</small></span>
+          <span class="tok">--moss</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#D4A04A;"></span>
+          <span class="lbl"><strong>Warning · attention</strong><small>Non-urgent prompts, organizer flags</small></span>
+          <span class="tok">--amber</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#993E47;"></span>
+          <span class="lbl"><strong>Error · destructive</strong><small>Delete, leave, security alerts</small></span>
+          <span class="tok">--rose-700</span>
+        </div>
+        <div class="role-row">
+          <span class="dot" style="background:#C76870;"></span>
+          <span class="lbl"><strong>Notification · heat</strong><small>New-mention dots, unread badges, "now" indicators</small></span>
+          <span class="tok">--rose-500</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 04 · IN USE ────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">04 / IN USE</span>
+      <h2 class="sec-title">The system, working</h2>
+      <p class="sec-sub">Same chat fragment as before, now plum-dominant. Note that the only rose on the screen is a single notification dot.</p>
+    </div>
+    <div class="inuse">
+      <!-- Chat -->
+      <div class="chat">
+        <div class="chat-hdr">
+          <div class="ava notif">SE</div>
+          <div>
+            <div class="name">Strike Coordinators</div>
+            <div class="sub">12 members · active now</div>
+          </div>
+          <div class="right">
+            <span class="lock"></span>
+            <span>END-TO-END</span>
+          </div>
+        </div>
+        <div class="msgs">
+          <div class="stamp-row">TUESDAY · 11:24</div>
+          <div class="msg them"><strong style="font-weight:600;">Maya</strong>  got the permit. confirming locations now.</div>
+          <div class="msg them">drop pins for marshal posts?</div>
+          <div class="msg me">on it. 4 corners + center stage.</div>
+          <div class="msg action">⟶ Open Marshals Roster</div>
+          <div class="msg them">love. RSVPs are at 247 as of this morning.</div>
+          <div class="msg me">push the safety thread to top of channel?</div>
+        </div>
+        <div class="composer">
+          <div class="input">Message #strike-coordinators</div>
+          <div class="send">↑</div>
+        </div>
+      </div>
+
+      <!-- Sidecar -->
+      <div class="sidecar">
+        <div class="panel brand">
+          <h5>Brand surface</h5>
+          <div class="row"><span>Identity</span><span class="pill outline">PLUM-500</span></div>
+          <div class="row"><span>Wordmark</span><span style="font-family:'Space Grotesk',sans-serif; font-weight:600;">avalanche</span></div>
+          <div class="row"><span>Theme</span><span style="font-family:'JetBrains Mono',monospace; font-size:11px; opacity: 0.7;">PLUM PRIMARY</span></div>
+        </div>
+        <div class="panel">
+          <h5>Status pills</h5>
+          <div class="row"><span>Encryption verified</span><span class="pill moss">VERIFIED</span></div>
+          <div class="row"><span>Pending review</span><span class="pill amber">REVIEW</span></div>
+          <div class="row"><span>Account locked</span><span class="pill rose">ALERT</span></div>
+          <div class="row"><span>Members</span><span class="pill">12</span></div>
+        </div>
+        <div class="panel dark">
+          <h5>Dark mode</h5>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <div style="background: var(--plum-700); padding: 8px 12px; border-radius: 14px; font-size: 13px; align-self: flex-start; max-width: 80%;">Plum-700 incoming bubble</div>
+            <div style="background: var(--plum-500); padding: 8px 12px; border-radius: 14px; font-size: 13px; align-self: flex-end; max-width: 80%; box-shadow: inset 0 0 0 1px rgba(255,241,233,0.10);">Plum-500 outgoing bubble</div>
+          </div>
+          <div style="margin-top: 12px; font-size: 11.5px; color: rgba(255,241,233,0.7); line-height: 1.5;">
+            Plum-900 surface, plum-700 incoming, plum-500 outgoing. One brand color top to bottom.
+          </div>
+        </div>
+        <div class="panel">
+          <h5>Buttons</h5>
+          <div style="display:flex; gap:10px; flex-wrap: wrap; align-items: center;">
+            <span class="btn">Join channel</span>
+            <span class="btn outline">View members</span>
+            <span class="btn danger">Leave</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <div style="margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; font-size: 11px; letter-spacing: 0.18em; color: var(--muted); font-family: 'JetBrains Mono', monospace;">
+    <span>AVALANCHE · FOUNDATIONS · v0.8 · PLUM</span>
+    <span>NEXT: TYPOGRAPHY UPDATE · COMPONENTS · MARKETING</span>
+  </div>
+
+</div>
+</body>
+</html>

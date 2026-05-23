@@ -15,7 +15,7 @@ struct InviteLinkEntryView: View {
 
             if let error = errorMessage {
                 Text(error)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.avError)
                     .font(.callout)
             }
 
@@ -29,6 +29,8 @@ struct InviteLinkEntryView: View {
             Spacer()
         }
         .padding(.top, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.avPaper)
         .navigationTitle("Enter Invite Link")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $inviteToken) { token in

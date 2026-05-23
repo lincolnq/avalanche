@@ -12,8 +12,8 @@ struct MessageBubble: View {
                 Text(message.body)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(isMe ? Color.accentColor : Color(.systemGray5))
-                    .foregroundStyle(isMe ? .white : .primary)
+                    .background(isMe ? Color.avOutgoingBubble : Color.avIncomingBubble)
+                    .foregroundStyle(isMe ? Color.sand100 : .primary)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
 
                 HStack(spacing: 4) {
@@ -52,10 +52,10 @@ struct MessageBubble: View {
                 )
         case .read:
             Image(systemName: "checkmark")
-                .foregroundStyle(.blue)
+                .foregroundStyle(Color.avBrand)
                 .overlay(
                     Image(systemName: "checkmark")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(Color.avBrand)
                         .offset(x: 4)
                 )
         }

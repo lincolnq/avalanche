@@ -23,7 +23,7 @@ struct RecoveryKeyBanner: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
-            .background(.yellow.opacity(0.15))
+            .background(Color.avWarning.opacity(0.15))
         }
     }
 }

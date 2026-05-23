@@ -8,6 +8,8 @@ struct CallsView: View {
                 systemImage: "phone",
                 description: Text("Voice and video calls will appear here.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.avPaper)
             .navigationTitle("Calls")
         }
     }

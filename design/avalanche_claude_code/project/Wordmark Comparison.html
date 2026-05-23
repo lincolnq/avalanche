@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Av · Wordmark Decision (round 2)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --cream: #FFF1E9;
+    --paper: #F4E7D9;
+    --paper-2: #ECE0CC;
+    --ink:   #1F1815;
+    --plum:  #6B3E50;
+    --plum-700: #4D2939;
+    --plum-900: #2A1620;
+    --rose:  #C76870;
+    --rose-200: #E09AA1;
+    --moss:  #6B7F4D;
+    --rule:  rgba(31,24,21,0.10);
+    --muted: rgba(31,24,21,0.55);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: "Inter", "Helvetica Neue", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 56px 48px 96px; }
+
+  /* Page header */
+  .pagehdr {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding-bottom: 28px; border-bottom: 1px solid var(--rule); margin-bottom: 56px;
+  }
+  .pagehdr h1 {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 48px; margin: 6px 0 0; letter-spacing: -0.03em; font-weight: 600; line-height: 1;
+  }
+  .meta { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+
+  .sec { margin-bottom: 72px; }
+  .sec-hdr { display: flex; align-items: baseline; gap: 20px; margin-bottom: 28px; }
+  .sec-num { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.18em; color: var(--muted); }
+  .sec-title {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 24px; font-weight: 600; letter-spacing: -0.015em; margin: 0;
+  }
+  .sec-sub { font-size: 14px; color: var(--muted); max-width: 480px; line-height: 1.55; margin-left: auto; text-wrap: pretty; }
+
+  /* Two-up cards */
+  .twoup {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .opt {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 22px 26px 26px;
+  }
+  .opt-hdr {
+    display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px;
+  }
+  .opt-tag {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.18em; color: var(--plum);
+    padding: 3px 8px; background: rgba(107,62,80,0.10); border-radius: 999px;
+  }
+  .opt h3 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 18px; font-weight: 600; letter-spacing: -0.005em; margin: 0;
+  }
+  .opt .one-liner {
+    font-size: 12.5px; color: var(--muted); margin: 6px 0 16px;
+    text-wrap: pretty; line-height: 1.5;
+  }
+  .stage {
+    background: var(--cream); border-radius: 4px;
+    padding: 20px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 220px;
+  }
+  .stage img { max-width: 100%; height: auto; display: block; }
+
+  /* Scale test */
+  .scalecard {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 20px 28px 28px;
+    margin-bottom: 14px;
+  }
+  .scalecard h4 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 13px; font-weight: 600; margin: 0 0 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .scalecard .opt-tag { font-size: 9.5px; }
+  .scalerow {
+    background: var(--cream);
+    border-radius: 4px;
+    padding: 20px;
+    display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+  }
+  .scalebox { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .scalebox img { display: block; }
+  .scalebox .lbl { font-family: "JetBrains Mono", monospace; font-size: 9.5px; letter-spacing: 0.10em; color: var(--muted); }
+  .scalebox .lbl .px { color: var(--ink); }
+
+  /* Lockup with icon */
+  .lockup-row {
+    background: var(--cream);
+    border-radius: 4px;
+    padding: 26px 30px;
+    display: flex; align-items: center; gap: 22px;
+  }
+  .lockup-row img.ico { width: 96px; height: 96px; border-radius: 22px; flex-shrink: 0; box-shadow: 0 6px 18px -6px rgba(31,24,21,0.25); }
+  .lockup-row img.wm { flex: 1; min-width: 0; max-width: 100%; max-height: 110px; object-fit: contain; object-position: left center; }
+
+  /* Browser */
+  .browser {
+    background: var(--cream);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px -10px rgba(31,24,21,0.2);
+  }
+  .browser-bar {
+    background: var(--paper-2);
+    padding: 10px 12px 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .browser-bar .url {
+    margin: 0 0 0 18px;
+    background: var(--cream);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", monospace;
+    flex: 1; max-width: 360px;
+  }
+  .browser-nav {
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--rule);
+    display: flex; align-items: center; gap: 28px;
+  }
+  .browser-nav img.brand { width: auto; }
+  .browser-nav .links {
+    display: flex; gap: 22px; font-size: 13px; font-weight: 500; color: var(--ink);
+  }
+  .browser-nav .cta {
+    margin-left: auto;
+    background: var(--rose); color: var(--cream);
+    padding: 8px 16px; border-radius: 6px;
+    font-size: 13px; font-weight: 600;
+    font-family: "Space Grotesk", sans-serif;
+  }
+  .browser-body {
+    padding: 56px 28px 36px;
+  }
+  .browser-body h1 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 36px; font-weight: 600; letter-spacing: -0.025em;
+    margin: 0; line-height: 1.05; max-width: 580px;
+  }
+  .browser-body p {
+    margin: 8px 0 0;
+    font-size: 14px; line-height: 1.55; color: var(--muted);
+    max-width: 460px;
+  }
+
+  /* Stickers / merch */
+  .sticker-row {
+    background: linear-gradient(180deg, #B8A78F 0%, #8A7A66 100%);
+    border-radius: 4px;
+    padding: 36px;
+    display: flex; gap: 28px; align-items: center; justify-content: center;
+  }
+  .sticker {
+    background: var(--cream);
+    border-radius: 14px;
+    padding: 24px 28px;
+    box-shadow: 0 12px 28px -10px rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    transform: rotate(-2deg);
+  }
+  .sticker.r2 { transform: rotate(3deg); }
+  .sticker img { max-height: 56px; width: auto; display: block; }
+
+  /* Social avatar — squarish crop */
+  .avatar-stage {
+    background: linear-gradient(160deg, #5B4D40, #2E251E);
+    border-radius: 4px;
+    padding: 32px;
+    display: flex; justify-content: center; align-items: center; gap: 22px; flex-wrap: wrap;
+  }
+  .avatar {
+    width: 200px; height: 200px;
+    border-radius: 50%;
+    background: var(--cream);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+    flex-shrink: 0;
+    box-shadow: 0 12px 24px -10px rgba(0,0,0,0.3);
+  }
+  .avatar img { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  .avatar-label {
+    color: var(--cream);
+    text-align: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    margin-top: 10px;
+    opacity: 0.75;
+  }
+  .avatar-block { display: flex; flex-direction: column; align-items: center; }
+
+  /* Dark surface */
+  .dark-stage {
+    background: var(--plum-900);
+    border-radius: 4px;
+    padding: 36px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 240px;
+  }
+  .dark-stage img { max-width: 86%; height: auto; }
+
+  /* Pros / cons */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .cc {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 24px 26px;
+  }
+  .cc-hdr { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .cc h3 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 17px; font-weight: 600; letter-spacing: -0.005em; margin: 0;
+  }
+  .cc .opt-tag { font-size: 9.5px; padding: 2px 7px; }
+  .cc ul { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+  .cc li {
+    font-size: 13px; line-height: 1.5; color: var(--ink);
+    display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 6px;
+  }
+  .cc li.plus::before  { content: "+"; color: var(--moss); font-weight: 700; }
+  .cc li.minus::before { content: "−"; color: var(--rose); font-weight: 700; }
+  .cc li.neutral::before { content: "○"; color: var(--muted); font-weight: 700; }
+
+  /* Recommendation */
+  .rec {
+    background: var(--plum);
+    color: var(--cream);
+    border-radius: 4px;
+    padding: 32px 36px;
+  }
+  .rec .meta { color: rgba(255,241,233,0.6); }
+  .rec h3 {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 26px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 4px 0 22px;
+  }
+  .rec .winner-stage { background: var(--cream); border-radius: 4px; padding: 22px 28px; margin-bottom: 22px; }
+  .rec .winner-stage img { width: 100%; height: auto; display: block; }
+  .rec p { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: rgba(255,241,233,0.85); text-wrap: pretty; max-width: 760px; }
+  .rec p:last-child { margin: 0; }
+  .rec strong { color: var(--cream); font-weight: 600; }
+  .rec em { color: var(--rose-200); font-style: normal; }
+  .rec .takeaway {
+    margin-top: 22px; padding-top: 22px;
+    border-top: 1px solid rgba(255,241,233,0.20);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.14em;
+    color: rgba(255,241,233,0.7);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="pagehdr">
+    <div>
+      <div class="meta">Avalanche · brand studio</div>
+      <h1>Bubble A vs Bubble Word</h1>
+      <div class="meta" style="margin-top:8px;">round 2 — a real decision</div>
+    </div>
+    <div class="meta">v0.7 · 2026·05·23</div>
+  </header>
+
+  <!-- ── 01 · SIDE BY SIDE ──────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">01 / SIDE BY SIDE</span>
+      <h2 class="sec-title">Two different objects</h2>
+      <p class="sec-sub">These aren't variations of the same logo. They're different logos doing different things.</p>
+    </div>
+    <div class="twoup">
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">A · BUBBLE A</span>
+          <h3>Bubble A</h3>
+        </div>
+        <p class="one-liner">"The first letter of avalanche is the icon." Typographic; the wordmark sits flat with a small bubble around its first letter.</p>
+        <div class="stage"><img src="av-wordmark-bubble-a.svg" alt="Bubble A wordmark"/></div>
+      </div>
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">B · BUBBLE WORD</span>
+          <h3>Bubble Word</h3>
+        </div>
+        <p class="one-liner">"Every wordmark is a chat message." The whole word lives inside a single big bubble — the logo IS a message.</p>
+        <div class="stage"><img src="av-wordmark-bubble-word.svg" alt="Bubble Word wordmark"/></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 02 · SCALE ─────────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">02 / SCALE</span>
+      <h2 class="sec-title">How they shrink</h2>
+      <p class="sec-sub">Both at the sizes you'll actually use them. Watch the cream interior of Bubble Word and the cream-a counter of Bubble A.</p>
+    </div>
+
+    <div class="scalecard">
+      <h4><span class="opt-tag">A · BUBBLE A</span> Bubble A</h4>
+      <div class="scalerow">
+        <div class="scalebox"><img src="av-wordmark-bubble-a.svg" width="480"/><span class="lbl"><span class="px">480 px</span> HERO</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-a.svg" width="280"/><span class="lbl"><span class="px">280 px</span> NAV</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-a.svg" width="160"/><span class="lbl"><span class="px">160 px</span> MOBILE</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-a.svg" width="80"/><span class="lbl"><span class="px">80 px</span> FOOTER</span></div>
+      </div>
+    </div>
+
+    <div class="scalecard">
+      <h4><span class="opt-tag">B · BUBBLE WORD</span> Bubble Word</h4>
+      <div class="scalerow">
+        <div class="scalebox"><img src="av-wordmark-bubble-word.svg" width="480"/><span class="lbl"><span class="px">480 px</span> HERO</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-word.svg" width="280"/><span class="lbl"><span class="px">280 px</span> NAV</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-word.svg" width="160"/><span class="lbl"><span class="px">160 px</span> MOBILE</span></div>
+        <div class="scalebox"><img src="av-wordmark-bubble-word.svg" width="80"/><span class="lbl"><span class="px">80 px</span> FOOTER</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 03 · WITH ICON ─────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">03 / WITH ICON</span>
+      <h2 class="sec-title">Each one next to the app icon</h2>
+      <p class="sec-sub">The big test: does the wordmark complement the icon, or fight it?</p>
+    </div>
+    <div class="twoup">
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">A · BUBBLE A</span>
+          <h3>Bubble A + icon</h3>
+        </div>
+        <p class="one-liner">Echo: the bubble shape appears in both, at different scales. Reads as one system.</p>
+        <div class="stage" style="padding: 0;">
+          <div class="lockup-row">
+            <img class="ico" src="av-icon.svg" alt=""/>
+            <img class="wm" src="av-wordmark-bubble-a.svg" alt=""/>
+          </div>
+        </div>
+      </div>
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">B · BUBBLE WORD</span>
+          <h3>Bubble Word + icon</h3>
+        </div>
+        <p class="one-liner">Redundant: now there are two bubbles next to each other. The icon repeats what the wordmark is already saying.</p>
+        <div class="stage" style="padding: 0;">
+          <div class="lockup-row">
+            <img class="ico" src="av-icon.svg" alt=""/>
+            <img class="wm" src="av-wordmark-bubble-word.svg" alt=""/>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 04 · BROWSER NAV ───────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">04 / IN USE · WEB</span>
+      <h2 class="sec-title">As the brand mark in a site nav</h2>
+      <p class="sec-sub">The hardest test for any wordmark: does it hold its weight against other UI?</p>
+    </div>
+
+    <div style="margin-bottom: 14px;">
+      <div class="opt-hdr">
+        <span class="opt-tag">A · BUBBLE A</span>
+        <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; margin: 0;">Bubble A as nav mark</h3>
+      </div>
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="dot" style="background:#FF5F57"></span>
+          <span class="dot" style="background:#FEBC2E"></span>
+          <span class="dot" style="background:#28C840"></span>
+          <span class="url">avalanche.app</span>
+        </div>
+        <div class="browser-nav">
+          <img class="brand" src="av-wordmark-bubble-a.svg" style="height: 32px;" alt="Avalanche"/>
+          <div class="links" style="margin-left: 24px;"><span>Product</span><span>Organizers</span><span>Security</span><span>Pricing</span></div>
+          <span class="cta">Download</span>
+        </div>
+        <div class="browser-body">
+          <h1>Encrypted messaging. Built for movements.</h1>
+          <p>Stay loud, stay safe. Avalanche is the secure organizing app for the work that has to happen now.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="opt-hdr">
+        <span class="opt-tag">B · BUBBLE WORD</span>
+        <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; margin: 0;">Bubble Word as nav mark</h3>
+      </div>
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="dot" style="background:#FF5F57"></span>
+          <span class="dot" style="background:#FEBC2E"></span>
+          <span class="dot" style="background:#28C840"></span>
+          <span class="url">avalanche.app</span>
+        </div>
+        <div class="browser-nav">
+          <img class="brand" src="av-wordmark-bubble-word.svg" style="height: 40px;" alt="Avalanche"/>
+          <div class="links" style="margin-left: 20px;"><span>Product</span><span>Organizers</span><span>Security</span><span>Pricing</span></div>
+          <span class="cta">Download</span>
+        </div>
+        <div class="browser-body">
+          <h1>Encrypted messaging. Built for movements.</h1>
+          <p>Stay loud, stay safe. Avalanche is the secure organizing app for the work that has to happen now.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 05 · STICKERS / MERCH ──────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">05 / IN USE · MERCH</span>
+      <h2 class="sec-title">As a sticker / button / patch</h2>
+      <p class="sec-sub">Organizers print things. A wordmark that looks great on a laptop sticker, hoodie, or door-knock zine matters.</p>
+    </div>
+    <div class="sticker-row">
+      <div class="sticker"><img src="av-wordmark-bubble-a.svg" alt=""/></div>
+      <div class="sticker r2"><img src="av-wordmark-bubble-word.svg" alt=""/></div>
+    </div>
+    <p style="font-size: 12.5px; color: var(--muted); margin: 12px 0 0; text-align: center;">
+      Honest read: Bubble Word looks like a real campaign button. Bubble A looks like a logotype someone has put on a sticker.
+    </p>
+  </section>
+
+  <!-- ── 06 · AVATAR / SQUARE CROP ──────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">06 / IN USE · AVATAR</span>
+      <h2 class="sec-title">As a social profile picture</h2>
+      <p class="sec-sub">Twitter, Mastodon, Bluesky — round 1:1 crops. Wordmarks tend to fail here; both deserve the test.</p>
+    </div>
+    <div class="avatar-stage">
+      <div class="avatar-block">
+        <div class="avatar"><img src="av-wordmark-bubble-a.svg" alt=""/></div>
+        <div class="avatar-label">BUBBLE A</div>
+      </div>
+      <div class="avatar-block">
+        <div class="avatar"><img src="av-icon.svg" alt=""/></div>
+        <div class="avatar-label">APP ICON</div>
+      </div>
+      <div class="avatar-block">
+        <div class="avatar"><img src="av-wordmark-bubble-word.svg" alt=""/></div>
+        <div class="avatar-label">BUBBLE WORD</div>
+      </div>
+    </div>
+    <p style="font-size: 12.5px; color: var(--muted); margin: 12px 0 0; text-align: center;">
+      Neither wordmark wins at avatar size. This is the icon's job, period.
+    </p>
+  </section>
+
+  <!-- ── 07 · DARK BACKGROUND ───────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">07 / DARK MODE</span>
+      <h2 class="sec-title">On a dark surface</h2>
+      <p class="sec-sub">As shipped, both are plum-on-cream. Each needs a dark-mode answer.</p>
+    </div>
+    <div class="twoup">
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">A · BUBBLE A</span>
+          <h3>Bubble A on plum-900</h3>
+        </div>
+        <p class="one-liner">The cream-bg of the SVG fights the dark surface. A real dark-mode export inverts the plum/cream — easy fix.</p>
+        <div class="dark-stage"><img src="av-wordmark-bubble-a.svg" alt=""/></div>
+      </div>
+      <div class="opt">
+        <div class="opt-hdr">
+          <span class="opt-tag">B · BUBBLE WORD</span>
+          <h3>Bubble Word on plum-900</h3>
+        </div>
+        <p class="one-liner">Worse problem: the bubble itself is plum, so it disappears into a plum bg. Dark mode needs a cream bubble or an outlined version.</p>
+        <div class="dark-stage"><img src="av-wordmark-bubble-word.svg" alt=""/></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 08 · TRADEOFFS ─────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">08 / TRADEOFFS</span>
+      <h2 class="sec-title">What each costs</h2>
+      <p class="sec-sub">Stronger concepts cost more flexibility. Both are real choices.</p>
+    </div>
+    <div class="compare">
+      <div class="cc">
+        <div class="cc-hdr"><span class="opt-tag">A · BUBBLE A</span><h3>Bubble A</h3></div>
+        <ul>
+          <li class="plus">Plays beautifully next to the app icon — one system, two scales.</li>
+          <li class="plus">Reads as a sophisticated logotype. The kind brand-design publications cover.</li>
+          <li class="plus">Survives small sizes (down to ~120px before the counter fills in).</li>
+          <li class="plus">Easy to re-master for dark mode (invert two fills).</li>
+          <li class="plus">Doesn't shout. Will age well.</li>
+          <li class="minus">Quieter — needs to be earned, not noticed.</li>
+          <li class="minus">Doesn't read as "chat app" instantly to a cold audience.</li>
+          <li class="minus">Less merch-friendly. Looks like a logotype on a sticker, not a button.</li>
+        </ul>
+      </div>
+      <div class="cc">
+        <div class="cc-hdr"><span class="opt-tag">B · BUBBLE WORD</span><h3>Bubble Word</h3></div>
+        <ul>
+          <li class="plus">Confident, maximalist concept: the wordmark IS a chat message.</li>
+          <li class="plus">Reads as "chat app" instantly, even without context.</li>
+          <li class="plus">Made for merch. Looks like a real campaign button or patch.</li>
+          <li class="plus">Higher recognition value as a silhouette — pill-with-tail is a distinct shape.</li>
+          <li class="plus">Energetic, organizer-coded — matches the brand's stated personality.</li>
+          <li class="minus">Redundant next to the app icon — two bubbles fighting each other.</li>
+          <li class="minus">Pill shape, not bubble shape. The tail is small enough that it reads more as a hangnail than a chat tail.</li>
+          <li class="minus">Massive vertical footprint. At 80px wide it's only 25px tall — the word is unreadable.</li>
+          <li class="minus">Dark-mode and dark-bg use needs a separate cream-bubble version.</li>
+          <li class="neutral">Will polarize. Some will love it, some will think it looks like a button.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 09 · RECOMMENDATION ────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-hdr">
+      <span class="sec-num">09 / PICK</span>
+      <h2 class="sec-title">My pick</h2>
+    </div>
+    <div class="rec">
+      <div class="meta">RECOMMENDED · BUBBLE A · WITH A CAVEAT</div>
+      <h3>Bubble A is the logo. Bubble Word is a campaign asset.</h3>
+
+      <div class="winner-stage">
+        <img src="av-wordmark-bubble-a.svg" alt="Bubble A wordmark"/>
+      </div>
+
+      <p><strong>The real question isn't which one's better.</strong> They're both good. The question is which one your brand <em>system</em> needs as the primary mark — the one stamped on every screen, every doc, every press mention.</p>
+
+      <p><strong>Bubble A is built for the system.</strong> It pairs with the icon (echoes the bubble; doesn't repeat it). It survives at 120px. It works in body copy, in nav bars, in legal footers, in the App Store. It doesn't shout. The brand reveals itself on second glance, which is how good logos work.</p>
+
+      <p><strong>Bubble Word is a moment, not a system.</strong> It's <em>great</em>. It feels like a movement. But it's a campaign asset, a hero, a Twitter cover photo, a t-shirt — the place you go when you want to <em>announce</em>. Right next to the app icon it becomes redundant; at small sizes it stops working; on a dark wallpaper it disappears. Those are real costs.</p>
+
+      <p style="padding-left: 18px; border-left: 2px solid rgba(255,241,233,0.25); margin-left: 0;">
+        <strong>What I'd actually do:</strong><br/>
+        — Ship <em>Bubble A</em> as the primary wordmark. Use it everywhere by default.<br/>
+        — Promote <em>Bubble Word</em> to a named brand asset: <em>"The Avalanche Badge."</em> Use it on stickers, organizer materials, hero banners, t-shirts, social cover photos, launch announcements. Anywhere you want to announce.<br/>
+        — Fix Bubble Word's execution before shipping it anywhere: enlarge the chat tail (3× current size), pull the corner radius down from 60 to ~40 so it reads as bubble not pill, and ship a cream-bubble dark-mode version.
+      </p>
+
+      <p><strong>This is how the best chat brands work.</strong> Signal has its glyph and its wordmark; Discord has its mascot and its wordmark — they don't try to do everything with one mark. You're not picking; you're casting two roles.</p>
+
+      <div class="takeaway">BUBBLE A = LOGO · BUBBLE WORD = BADGE · BOTH SHIP</div>
+    </div>
+  </section>
+
+  <div style="margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; font-size: 11px; letter-spacing: 0.18em; color: var(--muted); font-family: 'JetBrains Mono', monospace;">
+    <span>AVALANCHE · WORDMARK DECISION · R2</span>
+    <span>NEXT: REFINE BUBBLE WORD'S TAIL + CORNERS, DELIVER FINAL EXPORTS</span>
+  </div>
+
+</div>
+</body>
+</html>

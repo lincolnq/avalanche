@@ -46,7 +46,7 @@ struct ConversationView: View {
             if let error = errorMessage {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.avError)
                     .padding(.horizontal)
             }
 
@@ -73,6 +73,7 @@ struct ConversationView: View {
                 }
             }
         }
+        .background(Color.avPaper)
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

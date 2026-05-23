@@ -23,7 +23,7 @@ struct DevSettingsView: View {
                                 Spacer()
                                 if appState.serviceMode == mode {
                                     Image(systemName: "checkmark")
-                                        .foregroundColor(.accentColor)
+                                        .foregroundColor(.avBrand)
                                 }
                             }
                         }
@@ -57,6 +57,8 @@ struct DevSettingsView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.avPaper)
             .navigationTitle("Dev Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

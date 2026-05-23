@@ -78,6 +78,9 @@ struct ChatsView: View {
             }
         }
         .listStyle(.plain)
+        .listRowBackground(Color.avPaper)
+        .scrollContentBackground(.hidden)
+        .background(Color.avPaper)
     }
 
     private var hasRecoveryKey: Bool {

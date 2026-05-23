@@ -7,49 +7,55 @@ struct SplashView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 32) {
-                Spacer()
+            ZStack(alignment: .top) {
+                VStack(spacing: 12) {
+                    Image("Wordmark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 280)
 
-                Text("actnet")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-
-                Text("Encrypted organizing")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                VStack(spacing: 16) {
-                    Button {
-                        showScanner = true
-                    } label: {
-                        Label("Scan Invite QR Code", systemImage: "qrcode.viewfinder")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-
-                    Button {
-                        showLinkEntry = true
-                    } label: {
-                        Label("Enter Invite Link", systemImage: "link")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    Text("Encrypted organizing")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 32)
-                .padding(.bottom, 48)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showDevSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.subheadline)
+                .padding(.top, 200)
+
+                VStack {
+                    Spacer()
+
+                    VStack(spacing: 16) {
+                        Button {
+                            showScanner = true
+                        } label: {
+                            Label("Scan Invite QR Code", systemImage: "qrcode.viewfinder")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+
+                        Button {
+                            showLinkEntry = true
+                        } label: {
+                            Label("Enter Invite Link", systemImage: "link")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
                     }
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 48)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .background(Color.avPaper)
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    showDevSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.subheadline)
+                        .padding()
                 }
             }
             .navigationDestination(isPresented: $showScanner) {
@@ -61,6 +67,8 @@ struct SplashView: View {
             .sheet(isPresented: $showDevSettings) {
                 DevSettingsView()
             }
+            .toolbar(.hidden, for: .navigationBar)
         }
+        .background(Color.avPaper)
     }
 }

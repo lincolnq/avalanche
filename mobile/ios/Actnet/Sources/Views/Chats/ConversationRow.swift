@@ -14,7 +14,7 @@ struct ConversationRow: View {
         HStack(spacing: 12) {
             // Group/DM avatar placeholder
             Circle()
-                .fill(Color.gray.opacity(0.2))
+                .fill(Color.sand200)
                 .frame(width: 48, height: 48)
                 .overlay {
                     Image(systemName: conversation.isGroup ? "person.3" : "person")
@@ -53,7 +53,7 @@ struct ConversationRow: View {
                             .fontWeight(.medium)
                             .foregroundStyle(.white)
                             .frame(width: 18, height: 18)
-                            .background(Color.accentColor, in: Circle())
+                            .background(Color.avBrand, in: Circle())
                     }
 
                     if unreadCount > 0 {
@@ -63,7 +63,7 @@ struct ConversationRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.blue, in: Capsule())
+                            .background(Color.avNotification, in: Capsule())
                     }
                 }
             }

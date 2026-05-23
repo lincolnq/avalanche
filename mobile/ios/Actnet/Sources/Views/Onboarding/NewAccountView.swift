@@ -16,7 +16,7 @@ struct NewAccountView: View {
 
             // TODO: Avatar photo picker
             Circle()
-                .fill(Color.gray.opacity(0.2))
+                .fill(Color.sand200)
                 .frame(width: 100, height: 100)
                 .overlay {
                     Image(systemName: "camera")
@@ -31,7 +31,7 @@ struct NewAccountView: View {
 
             if let error = errorMessage {
                 Text(error)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.avError)
                     .font(.callout)
             }
 
@@ -54,6 +54,8 @@ struct NewAccountView: View {
             Spacer()
         }
         .padding(.top, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.avPaper)
         .navigationTitle("Create Account")
         .navigationBarTitleDisplayMode(.inline)
     }

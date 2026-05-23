@@ -4,10 +4,13 @@ struct RootView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        if appState.isOnboarding {
-            SplashView()
-        } else {
-            MainTabView()
+        Group {
+            if appState.isOnboarding {
+                SplashView()
+            } else {
+                MainTabView()
+            }
         }
+        .background(Color.avPaper)
     }
 }

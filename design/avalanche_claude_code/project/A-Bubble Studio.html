@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>A-Bubble · Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --cream:    #F4EFE6;
+    --paper:    #ECE5D6;
+    --ink:      #1F1815;
+    --rule:     rgba(31,24,21,0.12);
+    --muted:    rgba(31,24,21,0.55);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: "Inter", "Helvetica Neue", system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 48px 96px;
+  }
+
+  /* ── Page header ── */
+  .pagehdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 56px;
+  }
+  .pagehdr h1 {
+    font-size: 44px;
+    margin: 0;
+    letter-spacing: -0.02em;
+    font-weight: 600;
+    line-height: 1.05;
+  }
+  .pagehdr .meta {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ── Section ── */
+  .sec { margin-bottom: 80px; }
+  .sec-hdr {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 28px;
+  }
+  .sec-num {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+  }
+  .sec-title {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .sec-sub {
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 540px;
+    line-height: 1.55;
+    margin-left: auto;
+    text-wrap: pretty;
+  }
+
+  /* ── Hero artboard ── */
+  .hero {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 32px;
+    align-items: stretch;
+  }
+  .hero-stage {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 420px;
+    position: relative;
+  }
+  .hero-side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 4px 4px 4px 0;
+  }
+  .hero-side h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+  }
+  .hero-side p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--muted);
+    text-wrap: pretty;
+  }
+  .spec {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    align-items: center;
+    color: var(--muted);
+  }
+  .swatch {
+    width: 14px; height: 14px;
+    border-radius: 2px;
+    border: 1px solid var(--rule);
+  }
+  .stamp {
+    position: absolute;
+    top: 18px; left: 22px;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+  }
+  .stamp-r { left: auto; right: 22px; }
+
+  /* ── Color grid ── */
+  .colorgrid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+  }
+  .color-tile {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 24px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    position: relative;
+  }
+  .color-tile .glyph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 130px;
+  }
+  .color-tile .lbl {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    text-align: center;
+    line-height: 1.4;
+  }
+  .color-tile .hex {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    color: var(--ink);
+    opacity: 0.8;
+  }
+  .color-tile .name { font-weight: 600; color: var(--ink); }
+  .color-tile.is-original::before {
+    content: "ORIGINAL";
+    position: absolute;
+    top: 10px; right: 12px;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+  }
+
+  /* ── Form grid ── */
+  .formgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .form-tile {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 36px 24px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    min-height: 320px;
+  }
+  .form-tile .glyph {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  .form-tile h4 {
+    margin: 16px 0 4px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .form-tile p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    text-align: center;
+    max-width: 220px;
+    text-wrap: pretty;
+  }
+  .form-tile .badge {
+    position: absolute;
+    top: 14px; left: 18px;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+  }
+
+  /* ── In context ── */
+  .contextgrid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .ctx {
+    border-radius: 22px;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .ctx::after {
+    content: attr(data-label);
+    position: absolute;
+    bottom: 10px; left: 14px;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    color: rgba(255,255,255,0.6);
+  }
+  .ctx.light::after { color: rgba(31,24,21,0.5); }
+
+  /* ── Pairings ── */
+  .pairs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .pair {
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 32px 28px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .pair .word {
+    font-size: 36px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .pair .lbl {
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.14em;
+    margin-top: 8px;
+  }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="logos.jsx"></script>
+<script type="text/babel" src="abubble-studio.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+(function(){
+const { A_BASE, A_TAIL_LONG, A_TAIL_SHARP, A_TAIL_LEFT, ABG } = window.ABubbleStudio;
+
+// ── Color exploration ────────────────────────────────────────
+// 10 candidates against your peach. Warm-leaning per your brief.
+const COLORS = [
+  { name: 'Peach',    hex: '#FFA184', note: 'Your original' , isOriginal: true },
+  { name: 'Clay',     hex: '#C9542B', note: 'Stronger, dock-ready' },
+  { name: 'Brick',    hex: '#A33823', note: 'Authoritative + warm' },
+  { name: 'Pumpkin',  hex: '#E8761D', note: 'Energetic, loud' },
+  { name: 'Cinnabar', hex: '#D14B2C', note: 'Punchy red-orange' },
+  { name: 'Amber',    hex: '#D4A04A', note: 'Earthy / golden' },
+  { name: 'Rose',     hex: '#C76870', note: 'Dusty + organizer-soft' },
+  { name: 'Plum',     hex: '#6B3E50', note: 'Quiet contrast w/ wordmark' },
+  { name: 'Moss',     hex: '#6B7F4D', note: 'Off-warm — anti-cliché' },
+  { name: 'Ink',      hex: '#1F1815', note: 'Monochrome / serious' },
+];
+
+// ── Form refinements ─────────────────────────────────────────
+const FORMS = [
+  { id: 'orig',    badge: 'F.0', title: 'Original',
+    desc: 'Your path, untouched. Subtle left-side bulge, tucked-right tail.',
+    props: { path: A_BASE, color: '#C9542B' } },
+  { id: 'counter', badge: 'F.1', title: 'With counter',
+    desc: 'A small bean-shaped opening punched out. Now reads unambiguously as the letter a.',
+    props: { path: A_BASE, color: '#C9542B', counter: true } },
+  { id: 'voice',   badge: 'F.2', title: 'Voice dots',
+    desc: 'Three dots inside the bubble — explicit chat-app vocabulary. Optional, scales down poorly.',
+    props: { path: A_BASE, color: '#C9542B', voice: '#F4EFE6' } },
+  { id: 'outline', badge: 'F.3', title: 'Outline',
+    desc: 'Stroked silhouette. Lighter visual weight; pairs well with a heavier wordmark.',
+    props: { path: A_BASE, color: '#C9542B', outline: true, strokeWidth: 8 } },
+  { id: 'long',    badge: 'F.4', title: 'Longer tail',
+    desc: 'Tail pushed further out and down. More overt chat-bubble read, a touch more playful.',
+    props: { path: A_TAIL_LONG, color: '#C9542B' } },
+  { id: 'sharp',   badge: 'F.5', title: 'Sharp tail',
+    desc: 'Tail is a clean triangle, no curvature. Crisper and more graphic at favicon size.',
+    props: { path: A_TAIL_SHARP, color: '#C9542B' } },
+];
+
+// ── In context ───────────────────────────────────────────────
+const CONTEXTS = [
+  { bg: '#F4EFE6', color: '#C9542B', label: 'CREAM',     light: true },
+  { bg: '#1F1815', color: '#FFA184', label: 'INK',       light: false },
+  { bg: '#C9542B', color: '#F4EFE6', label: 'CLAY',      light: false },
+  { bg: '#77260C', color: '#FFA184', label: 'WORDMARK',  light: false },
+];
+
+// ── Pairings (wordmark color × bubble color) ─────────────────
+const PAIRS = [
+  { wordHex: '#77260C', bubHex: '#FFA184', lbl: 'YOUR ORIGINAL' },
+  { wordHex: '#1F1815', bubHex: '#C9542B', lbl: 'INK + CLAY' },
+  { wordHex: '#77260C', bubHex: '#C9542B', lbl: 'WORDMARK + CLAY' },
+  { wordHex: '#1F1815', bubHex: '#E8761D', lbl: 'INK + PUMPKIN' },
+  { wordHex: '#3B1A0D', bubHex: '#D4A04A', lbl: 'COFFEE + AMBER' },
+  { wordHex: '#1F1815', bubHex: '#FFA184', lbl: 'INK + PEACH' },
+];
+
+function MiniABG({ color, height = 110 }) {
+  return <ABG height={height} color={color}/>;
+}
+
+function App() {
+  return (
+    <div className="wrap">
+
+      {/* Page header */}
+      <header className="pagehdr">
+        <div>
+          <div className="meta">Avalanche · brand studio</div>
+          <h1>A-Bubble · color &amp; form</h1>
+        </div>
+        <div className="meta">v0.2 · 2026·05·23</div>
+      </header>
+
+      {/* ── 01 · The mark ───────────────────────────────────── */}
+      <section className="sec">
+        <div className="sec-hdr">
+          <span className="sec-num">01 / MARK</span>
+          <h2 className="sec-title">Your starting point</h2>
+          <p className="sec-sub">
+            Custom lowercase a with a tail tucked into the lower-right bowl.
+            Asymmetric left-side bulge gives it personality without breaking from typographic logic.
+          </p>
+        </div>
+        <div className="hero">
+          <div className="hero-stage">
+            <span className="stamp">A · PEACH ORIGINAL</span>
+            <span className="stamp stamp-r mono">87 × 117.5</span>
+            <ABG height={280} color="#FFA184"/>
+          </div>
+          <div className="hero-side">
+            <h3>What's working</h3>
+            <p>The custom counter-less silhouette is distinctive — most lowercase a logos read as text;
+              this reads as an icon that <em>happens</em> to be a letter. The tail does a lot of heavy
+              lifting toward "chat".</p>
+            <h3 style={{marginTop: 18}}>What to push</h3>
+            <p>The peach lacks punch when the glyph is alone (no wordmark to anchor it). I'd test
+              warmer + denser colors. The shape is solid — only minor tweaks below.</p>
+            <div style={{marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8}}>
+              <div className="spec"><span className="swatch" style={{background: '#FFA184'}}></span>
+                <span className="mono">#FFA184 · bubble</span></div>
+              <div className="spec"><span className="swatch" style={{background: '#77260C'}}></span>
+                <span className="mono">#77260C · wordmark</span></div>
+              <div className="spec"><span className="swatch" style={{background: '#F4EFE6', borderColor:'#ddd'}}></span>
+                <span className="mono">#F4EFE6 · paper</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 02 · Color ──────────────────────────────────────── */}
+      <section className="sec">
+        <div className="sec-hdr">
+          <span className="sec-num">02 / COLOR</span>
+          <h2 className="sec-title">Bubble color, ten ways</h2>
+          <p className="sec-sub">
+            Your peach is light; great as wordmark counterpoint, less great as a standalone app icon.
+            Below — same shape, warmer and denser options. All anti-icy.
+          </p>
+        </div>
+        <div className="colorgrid">
+          {COLORS.map(c => (
+            <div key={c.hex} className={`color-tile ${c.isOriginal ? 'is-original' : ''}`}>
+              <div className="glyph"><MiniABG color={c.hex} /></div>
+              <div className="lbl">
+                <div className="name">{c.name}</div>
+                <div className="hex mono">{c.hex}</div>
+                <div style={{marginTop: 4}}>{c.note}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 03 · Form ───────────────────────────────────────── */}
+      <section className="sec">
+        <div className="sec-hdr">
+          <span className="sec-num">03 / FORM</span>
+          <h2 className="sec-title">Shape refinements</h2>
+          <p className="sec-sub">
+            Minor variations on the silhouette. All keep your bulge + tucked-tail DNA.
+            None of these change the wordmark.
+          </p>
+        </div>
+        <div className="formgrid">
+          {FORMS.map(f => (
+            <div key={f.id} className="form-tile">
+              <span className="badge">{f.badge}</span>
+              <div className="glyph"><ABG height={170} {...f.props}/></div>
+              <h4>{f.title}</h4>
+              <p>{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 04 · In context ─────────────────────────────────── */}
+      <section className="sec">
+        <div className="sec-hdr">
+          <span className="sec-num">04 / CONTEXT</span>
+          <h2 className="sec-title">As an app icon</h2>
+          <p className="sec-sub">
+            The mark on four backgrounds. Tests whether each color choice survives outside the
+            wordmark and at icon scale.
+          </p>
+        </div>
+        <div className="contextgrid">
+          {CONTEXTS.map(c => (
+            <div key={c.label}
+                 className={`ctx ${c.light ? 'light' : ''}`}
+                 style={{ background: c.bg }}
+                 data-label={c.label}>
+              <ABG height={160} color={c.color}/>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 05 · Pairings ───────────────────────────────────── */}
+      <section className="sec">
+        <div className="sec-hdr">
+          <span className="sec-num">05 / PAIRING</span>
+          <h2 className="sec-title">Wordmark + bubble color combos</h2>
+          <p className="sec-sub">
+            Color of the bubble plays off the wordmark color. Your originals first, then options.
+          </p>
+        </div>
+        <div className="pairs">
+          {PAIRS.map((p, i) => (
+            <div key={i} className="pair">
+              <ABG height={70} color={p.bubHex}/>
+              <div>
+                <div className="word" style={{color: p.wordHex}}>valanche</div>
+                <div className="lbl">{p.lbl}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div style={{
+        marginTop: 64, paddingTop: 28,
+        borderTop: '1px solid var(--rule)',
+        display: 'flex', justifyContent: 'space-between',
+        fontSize: 11, letterSpacing: '0.18em', color: 'var(--muted)',
+        fontFamily: '"JetBrains Mono", ui-monospace, Menlo, monospace',
+      }}>
+        <span>AVALANCHE · A-BUBBLE STUDIO</span>
+        <span>NEXT: PICK A COLOR + FORM AND I'LL DROP IT BACK INTO YOUR WORDMARK</span>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+})();
+</script>
+</body>
+</html>

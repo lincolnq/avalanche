@@ -19,7 +19,7 @@ struct JoiningServerView: View {
 
             if let error = errorMessage {
                 Text(error)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.avError)
                     .font(.callout)
             }
 
@@ -42,6 +42,8 @@ struct JoiningServerView: View {
             Spacer()
         }
         .padding(.top, 48)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.avPaper)
         .navigationTitle("Join Server")
         .navigationBarTitleDisplayMode(.inline)
     }

@@ -22,6 +22,8 @@ struct NetworkView: View {
                     serverList
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.avPaper)
             .navigationTitle("Network")
             .task { await loadProjects() }
             .sheet(isPresented: $showWebView) {
@@ -37,6 +39,7 @@ struct NetworkView: View {
 
     private var serverList: some View {
         List {
+
             ForEach(allServers) { server in
                 Section(server.name) {
                     let projects = projectsByServer[server.id] ?? []
@@ -71,6 +74,9 @@ struct NetworkView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.avPaper)
+        .listRowBackground(Color.sand50)
     }
 
     private var allServers: [ServerInfo] {

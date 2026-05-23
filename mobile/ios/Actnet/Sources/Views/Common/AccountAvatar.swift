@@ -12,7 +12,7 @@ struct AccountAvatar: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
         } else {
-            let color = Color.accentColor
+            let color = Color.avBrand
             Circle()
                 .fill(color.opacity(0.2))
                 .frame(width: size, height: size)

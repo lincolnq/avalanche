@@ -34,6 +34,8 @@ struct ComposeMessageView: View {
                         .textInputAutocapitalization(.never)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.avPaper)
             .navigationTitle("New Message")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

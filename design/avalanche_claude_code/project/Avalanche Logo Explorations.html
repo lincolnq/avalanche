@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Avalanche · Logo Explorations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #f0eee9; }
+  body { font-family: "Inter", "Helvetica Neue", system-ui, sans-serif; color: #1F1815; }
+  #root { height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="logos.jsx"></script>
+<script type="text/babel" src="logos-refined.jsx"></script>
+<script type="text/babel" src="logos-abubble.jsx"></script>
+<script type="text/babel" src="logos-lowera.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+(function(){
+// Pull globals via window to avoid redeclaring non-configurable properties.
+const DesignCanvas   = window.DesignCanvas;
+const DCSection      = window.DCSection;
+const DCArtboard     = window.DCArtboard;
+const DCPostIt       = window.DCPostIt;
+const LogoCard       = window.LogoCard;
+const P              = window.AvlPalette;
+const SlattedA       = window.SlattedA;
+const DotA           = window.DotA;
+const FacetA         = window.FacetA;
+const EchoA          = window.EchoA;
+const BubbleCascade  = window.BubbleCascade;
+const Pulse          = window.Pulse;
+const WaveCone       = window.WaveCone;
+const BubbleTri      = window.BubbleTri;
+const Cluster        = window.Cluster;
+const Tumble         = window.Tumble;
+const Swarm          = window.Swarm;
+const Nodes          = window.Nodes;
+
+// Refined glyphs (round 2)
+const SlattedA_Tight   = window.SlattedA_Tight;
+const SlattedA_Wide    = window.SlattedA_Wide;
+const SlattedA_Taper   = window.SlattedA_Taper;
+const SlattedA_Angled  = window.SlattedA_Angled;
+const WaveCone_Tight   = window.WaveCone_Tight;
+const WaveCone_Apex    = window.WaveCone_Apex;
+const WaveCone_Voice   = window.WaveCone_Voice;
+const WaveCone_Diamond = window.WaveCone_Diamond;
+const BubbleTri_Sharp    = window.BubbleTri_Sharp;
+const BubbleTri_Hollow   = window.BubbleTri_Hollow;
+const BubbleTri_Dialogue = window.BubbleTri_Dialogue;
+const BubbleTri_Tilt     = window.BubbleTri_Tilt;
+const CascadeTri     = window.CascadeTri;
+const CascadeAA      = window.CascadeAA;
+const CascadeStrata  = window.CascadeStrata;
+const CascadeMass    = window.CascadeMass;
+
+// A×Bubble fusions
+const ABubble_Counter  = window.ABubble_Counter;
+const ABubble_Open     = window.ABubble_Open;
+const ABubble_Hollow   = window.ABubble_Hollow;
+const ABubble_Stencil  = window.ABubble_Stencil;
+
+// Lowercase a × chat-bubble fusions
+const LowerA_Single   = window.LowerA_Single;
+const LowerA_Bubble   = window.LowerA_Bubble;
+const LowerA_Double   = window.LowerA_Double;
+const LowerA_AsBubble = window.LowerA_AsBubble;
+
+const W = 340, H = 420;
+
+// Each entry: id, label (top-of-card grip label), card props
+const LETTERFORM = [
+  { id: 'slatted',  label: '01 · Slatted A',  name: 'Slatted A',  code: 'A.01',
+    desc: 'Letterform cut by horizontal strata. Reads as “avalanche” without ever showing snow.',
+    Glyph: SlattedA },
+  { id: 'dot-a',    label: '02 · Dot A',      name: 'Dot A',      code: 'A.02',
+    desc: 'A made of many small voices. Most grassroots-coded of the letterforms.',
+    Glyph: DotA },
+  { id: 'facet-a',  label: '03 · Faceted A',  name: 'Faceted A',  code: 'A.03',
+    desc: 'Two-tone folded A. Solid, slightly playful, reads at favicon size.',
+    Glyph: FacetA },
+  { id: 'echo-a',   label: '04 · Echo A',     name: 'Echo A',     code: 'A.04',
+    desc: 'Motion-trail A. Unstoppable & in-flight. Note: less legible at 14px.',
+    Glyph: EchoA },
+];
+
+const MASS = [
+  { id: 'cascade',  label: '05 · Cascade',    name: 'Cascade',    code: 'M.01',
+    desc: 'Three chat bubbles tumbling down-right. Most literal “chat-app” read.',
+    Glyph: BubbleCascade },
+  { id: 'tumble',   label: '06 · Tumble',     name: 'Tumble',     code: 'M.02',
+    desc: 'Three blocks falling at angles. Abstract, kinetic, no overt symbolism.',
+    Glyph: Tumble },
+  { id: 'swarm',    label: '07 · Swarm',      name: 'Swarm',      code: 'M.03',
+    desc: 'Sierpinski cluster — six triangles forming one. Many → one.',
+    Glyph: Swarm },
+  { id: 'cluster',  label: '08 · Cluster',    name: 'Cluster',    code: 'M.04',
+    desc: 'Loose constellation of voices, dot-sized. Organic, grassroots, irregular.',
+    Glyph: Cluster },
+];
+
+const SIGNAL = [
+  { id: 'pulse',     label: '09 · Pulse',     name: 'Pulse',      code: 'S.01',
+    desc: 'Concentric triangles. Signal radiating from a triangular core.',
+    Glyph: Pulse },
+  { id: 'wave',      label: '10 · Wave Cone', name: 'Wave Cone',  code: 'S.02',
+    desc: 'Signal bars stacked into a triangular silhouette. Voice → many.',
+    Glyph: WaveCone },
+  { id: 'bubble-tri',label: '11 · Bubble-Tri',name: 'Bubble-Tri', code: 'S.03',
+    desc: 'Rounded triangle with a chat tail. Most directly chat-app coded.',
+    Glyph: BubbleTri },
+  { id: 'nodes',     label: '12 · Nodes',     name: 'Nodes',      code: 'S.04',
+    desc: 'Three-node graph with link spine. Encrypted peer network read.',
+    Glyph: Nodes },
+];
+
+// ─── Round 2: refinements of the four favorites ───
+const R_SLATTED = [
+  { id: 'r-slat-orig',   label: 'A · Original',  name: 'Slatted · Original',  code: 'A.R0',
+    desc: '4 even slats. Reference point.',
+    Glyph: SlattedA },
+  { id: 'r-slat-tight',  label: 'B · Tight',     name: 'Slatted · Tight',     code: 'A.R1',
+    desc: '6 thin slats. Denser, more technical feel — reads as “signal”.',
+    Glyph: SlattedA_Tight },
+  { id: 'r-slat-wide',   label: 'C · Wide',      name: 'Slatted · Wide',      code: 'A.R2',
+    desc: '3 thick slats. Boldest, most graphic — best for icon contexts.',
+    Glyph: SlattedA_Wide },
+  { id: 'r-slat-taper',  label: 'D · Taper',     name: 'Slatted · Taper',     code: 'A.R3',
+    desc: 'Gaps widen toward the base — implies an actual cascade accumulating.',
+    Glyph: SlattedA_Taper },
+  { id: 'r-slat-angled', label: 'E · Angled',    name: 'Slatted · Angled',    code: 'A.R4',
+    desc: 'Slats tilted ~7°. Subtle downhill motion without losing legibility.',
+    Glyph: SlattedA_Angled },
+];
+
+const R_WAVE = [
+  { id: 'r-wave-orig',    label: 'A · Original', name: 'Wave Cone · Original', code: 'W.R0',
+    desc: '6 progressively-wider bars. Reference point.',
+    Glyph: WaveCone },
+  { id: 'r-wave-tight',   label: 'B · Tight',    name: 'Wave Cone · Tight',    code: 'W.R1',
+    desc: '8 thin bars. Higher resolution; reads almost as a halftoned triangle.',
+    Glyph: WaveCone_Tight },
+  { id: 'r-wave-apex',    label: 'C · Apex',     name: 'Wave Cone · Apex',     code: 'W.R2',
+    desc: 'Solid triangular source emitting bars below — clear broadcast read.',
+    Glyph: WaveCone_Apex },
+  { id: 'r-wave-voice',   label: 'D · Voice',    name: 'Wave Cone · Voice',    code: 'W.R3',
+    desc: 'Bar widths jitter slightly — reads as audio waveform / actual speech.',
+    Glyph: WaveCone_Voice },
+  { id: 'r-wave-diamond', label: 'E · Diamond',  name: 'Wave Cone · Diamond',  code: 'W.R4',
+    desc: 'Two cones meeting in the middle. Signal both directions, peer-to-peer.',
+    Glyph: WaveCone_Diamond },
+];
+
+const R_BUBBLETRI = [
+  { id: 'r-bt-orig',     label: 'A · Original', name: 'Bubble-Tri · Original',  code: 'B.R0',
+    desc: 'Soft triangle, centered tail. Reference point.',
+    Glyph: BubbleTri },
+  { id: 'r-bt-sharp',    label: 'B · Sharp',    name: 'Bubble-Tri · Sharp',     code: 'B.R1',
+    desc: 'Tighter corner radii. More authoritative; still unmistakably a chat bubble.',
+    Glyph: BubbleTri_Sharp },
+  { id: 'r-bt-hollow',   label: 'C · Hollow',   name: 'Bubble-Tri · Hollow',    code: 'B.R2',
+    desc: 'Outline form with an inner mini-bubble. “Voice inside the envelope” — secure read.',
+    Glyph: BubbleTri_Hollow },
+  { id: 'r-bt-dialogue', label: 'D · Dialogue', name: 'Bubble-Tri · Dialogue',  code: 'B.R3',
+    desc: 'Two bubble-tris overlapping. Reads as community, conversation, group.',
+    Glyph: BubbleTri_Dialogue },
+  { id: 'r-bt-tilt',     label: 'E · Tilt',     name: 'Bubble-Tri · Tilt',      code: 'B.R4',
+    desc: 'Off-axis tail, slight rotation. Dynamic, less corporate.',
+    Glyph: BubbleTri_Tilt },
+];
+
+const R_CASCADE = [
+  { id: 'r-csc-tri',     label: 'A · Triangles', name: 'Cascade · Triangles',  code: 'C.R1',
+    desc: 'Three downward triangles cascading. Abstract, no metaphor, very flexible.',
+    Glyph: CascadeTri },
+  { id: 'r-csc-aa',      label: 'B · A-stack',   name: 'Cascade · A-stack',    code: 'C.R2',
+    desc: 'Three mini A’s cascading down-right. Letterform + momentum in one mark.',
+    Glyph: CascadeAA },
+  { id: 'r-csc-strata',  label: 'C · Strata',    name: 'Cascade · Strata',     code: 'C.R3',
+    desc: 'Stacked horizontal layers, widening as they settle. Geological / earthy.',
+    Glyph: CascadeStrata },
+  { id: 'r-csc-mass',    label: 'D · Mass',      name: 'Cascade · Mass',       code: 'C.R4',
+    desc: 'A particle storm — sparse at top, dense at the base. Most literal avalanche.',
+    Glyph: CascadeMass },
+];
+
+const R_LOWERA = [
+  { id: 'r-la-single',  label: 'A · Single-story', name: 'Lower-a · Single', code: 'LA.1',
+    desc: 'Futura-style geometric a. Bowl already IS a circle — reads most bubble-like. Tail drops off lower-left.',
+    Glyph: LowerA_Single },
+  { id: 'r-la-bubble',  label: 'B · Tail-corner',  name: 'Lower-a · Tail-corner', code: 'LA.2',
+    desc: 'Same skeleton, but tail attaches at the bowl/stem corner — dead-on chat bubble vocabulary.',
+    Glyph: LowerA_Bubble },
+  { id: 'r-la-double',  label: 'C · Double-story', name: 'Lower-a · Double', code: 'LA.3',
+    desc: 'Familiar typographic a (the one in this sentence). Most legible as a letter; tail makes the bubble read.',
+    Glyph: LowerA_Double },
+  { id: 'r-la-as',      label: 'D · A-as-Bubble',  name: 'Lower-a · As-Bubble', code: 'LA.4',
+    desc: 'Bubble silhouette with the a’s counter cut out of it. Bubble first, letter second — most app-icon-coded.',
+    Glyph: LowerA_AsBubble },
+];
+
+const R_ABUBBLE = [
+  { id: 'r-ab-counter', label: 'A · Counter', name: 'A-Bubble · Counter', code: 'AB.1',
+    desc: 'Bubble silhouette with the A’s inner counter cut out. The counter’s bottom edge does the work of the crossbar. Reads as bubble first, A second.',
+    Glyph: ABubble_Counter },
+  { id: 'r-ab-open',    label: 'B · Open',    name: 'A-Bubble · Open',    code: 'AB.2',
+    desc: 'Full A letterform with bubble-rounded corners and a chat tail off the right foot. Legs stay open. Most-A read.',
+    Glyph: ABubble_Open },
+  { id: 'r-ab-hollow',  label: 'C · Hollow',  name: 'A-Bubble · Hollow',  code: 'AB.3',
+    desc: 'Outline version with a small filled bubble sitting on the implied crossbar. “Voice inside an A.”',
+    Glyph: ABubble_Hollow },
+  { id: 'r-ab-stencil', label: 'D · Stencil', name: 'A-Bubble · Stencil', code: 'AB.4',
+    desc: 'Solid bubble silhouette with BOTH a triangular counter and an explicit crossbar slot. Boldest read of the letter.',
+    Glyph: ABubble_Stencil },
+];
+
+function App() {
+  const renderCard = (item) => (
+    <DCArtboard key={item.id} id={item.id} label={item.label} width={W} height={H}>
+      <LogoCard
+        name={item.name}
+        code={item.code}
+        desc={item.desc}
+        Glyph={item.Glyph}
+      />
+    </DCArtboard>
+  );
+
+  return (
+    <DesignCanvas>
+      <DCSection
+        id="intro"
+        title="Avalanche · Logo glyphs"
+        subtitle="Round 2 (top) refines your four picks. Round 1 (below) is the full atomic exploration for reference."
+      >
+        <DCPostIt top={20} left={40} width={300} rotate={-1.5}>
+          <strong>Refinement →</strong><br/>
+          You picked Slatted A, Wave Cone, Bubble-Tri, and the cascade idea (sans bubbles).
+          Each direction now has 4–5 variations exploring weight, proportion, angle, and concept.
+          <br/><br/>
+          Scale strip on every card so you can see what holds up at favicon size.
+        </DCPostIt>
+      </DCSection>
+
+      <DCSection
+        id="r-slatted"
+        title="Slatted A — refinements"
+        subtitle="Same letterform, different cadence. Slat count, gap weight, taper, angle."
+      >
+        {R_SLATTED.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-wave"
+        title="Wave Cone — refinements"
+        subtitle="Density, source, rhythm, symmetry. Same triangular silhouette throughout."
+      >
+        {R_WAVE.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-bt"
+        title="Bubble-Tri — refinements"
+        subtitle="Sharper, hollowed, doubled, tilted. The most explicitly chat-app coded family."
+      >
+        {R_BUBBLETRI.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-ab"
+        title="Bubble-Tri × A — fusion attempts"
+        subtitle="Chat bubble that also reads as the letter A. Subtle → bold."
+      >
+        {R_ABUBBLE.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-la"
+        title="Lowercase a × chat-bubble tail"
+        subtitle="Two traditions of lowercase a (single-story geometric, double-story typographic), each fused with a chat tail."
+      >
+        {R_LOWERA.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-cascade"
+        title="Cascade — non-bubble takes"
+        subtitle="Same cascading motion, different vocabulary: triangles, mini-A’s, strata, particle mass."
+      >
+        {R_CASCADE.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="r-notes"
+        title="—"
+        subtitle="Round 1 originals below for reference."
+      >
+        <DCPostIt top={0} left={40} width={320} rotate={-1.2}>
+          <strong>My picks from R2</strong><br/><br/>
+          • <strong>Slatted Taper</strong> — the only one that <em>says</em> avalanche structurally.<br/><br/>
+          • <strong>Wave Cone Apex</strong> — clearest narrative: one voice → many.<br/><br/>
+          • <strong>Bubble-Tri Hollow</strong> — most distinct, encodes the e2e idea visually.<br/><br/>
+          • <strong>Cascade Strata</strong> — most genuinely “avalanche-y” without literalism.
+        </DCPostIt>
+      </DCSection>
+
+      <DCSection
+        id="letterform"
+        title="R1 · Letterform A"
+        subtitle="Original exploration. A capital A, treated four ways."
+      >
+        {LETTERFORM.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="mass"
+        title="R1 · Mass & Movement"
+        subtitle="Original exploration. No letter, no metaphor — just kinetic mass."
+      >
+        {MASS.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="signal"
+        title="R1 · Signal & Network"
+        subtitle="Original exploration. Triangular silhouettes for broadcast, voice, and peer-network reads."
+      >
+        {SIGNAL.map(renderCard)}
+      </DCSection>
+
+      <DCSection
+        id="next"
+        title="Next steps"
+        subtitle="Once you've picked favorites I can: refine weight & proportions · pair with a wordmark · test on app icon backgrounds · explore animated/lockup variants."
+      >
+        <DCPostIt top={0} left={40} width={320} rotate={1}>
+          <strong>What I'd flag</strong><br/><br/>
+          • <strong>Dot A</strong> and <strong>Cluster</strong> are most “organizer” coded — many small voices.<br/><br/>
+          • <strong>Slatted A</strong> and <strong>Faceted A</strong> have the broadest mainstream appeal.<br/><br/>
+          • <strong>Swarm</strong> and <strong>Wave Cone</strong> hold up best at favicon size.<br/><br/>
+          • <strong>Echo A</strong> and <strong>Bubble Cascade</strong> are visually loudest but lose detail small.
+        </DCPostIt>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+})();
+</script>
+</body>
+</html>
