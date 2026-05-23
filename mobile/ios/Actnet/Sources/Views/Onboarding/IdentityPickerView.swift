@@ -11,7 +11,7 @@ struct IdentityPickerView: View {
 
     var body: some View {
         if appState.accounts.isEmpty {
-            NewAccountView(inviteToken: inviteToken)
+            NewAccountView(inviteToken: inviteToken, showRecoverLink: true)
         } else {
             existingAccountPicker
         }
@@ -40,9 +40,17 @@ struct IdentityPickerView: View {
 
             Section {
                 NavigationLink {
-                    NewAccountView(inviteToken: inviteToken)
+                    NewAccountView(inviteToken: inviteToken, showRecoverLink: false)
                 } label: {
-                    Label("Create a new account", systemImage: "plus.circle")
+                    Label("Create a new identity", systemImage: "plus.circle")
+                        .foregroundStyle(Color.avBrand)
+                }
+
+                NavigationLink {
+                    RecoveryExplainerView()
+                } label: {
+                    Label("Recover an identity", systemImage: "person.badge.key")
+                        .foregroundStyle(.orange)
                 }
             }
         }

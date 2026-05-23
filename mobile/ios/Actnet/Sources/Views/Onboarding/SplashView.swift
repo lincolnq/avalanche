@@ -3,6 +3,7 @@ import SwiftUI
 struct SplashView: View {
     @State private var showScanner = false
     @State private var showLinkEntry = false
+    @State private var showRecovery = false
     @State private var showDevSettings = false
 
     var body: some View {
@@ -41,6 +42,13 @@ struct SplashView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
+
+                        Button {
+                            showRecovery = true
+                        } label: {
+                            Text("Recover account")
+                                .font(.subheadline)
+                        }
                     }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 48)
@@ -63,6 +71,9 @@ struct SplashView: View {
             }
             .navigationDestination(isPresented: $showLinkEntry) {
                 InviteLinkEntryView()
+            }
+            .navigationDestination(isPresented: $showRecovery) {
+                RecoveryExplainerView()
             }
             .sheet(isPresented: $showDevSettings) {
                 DevSettingsView()

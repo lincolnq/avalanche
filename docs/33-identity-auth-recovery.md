@@ -304,3 +304,48 @@ The exact implementation needs to be planned out for this. For now we can just s
 A monospace-text console that scrolls through status updates as the app works in the background. Used for both signup and recovery.
 
 After completion, the console transitions to the signed-in Chats screen, which will hopefully have a welcome message or something, but that's up to the server.
+
+---
+
+## Implementation TODOs
+
+### iOS screens (UI shell, no WebAuthn yet)
+
+- [x] Landing Page (SplashView): add "Recover account" button
+- [x] Choose ID Page (IdentityPickerView): add "Recover" option
+- [x] New ID Page (NewAccountView): add "recover an existing identity instead" link (hidden when navigated from Choose ID page). Remove server name from header (server is already known from invite context).
+- [x] Passkey Explainer Page: new screen after New ID. Shows profile preview, "Create Passkey" (placeholder), "Use a recovery phrase instead" (placeholder), "Skip recovery setup". All paths call createAccount inline with a spinner.
+- [x] Recovery Explainer Page: new screen. "Recover using Passkey" (placeholder), "Enter your recovery phrase instead" (placeholder). For now, shows placeholder UI.
+- [ ] Recovery Console: new screen. Monospace scrolling log of recovery steps. Placeholder for now (no recovery backend yet).
+
+### WebAuthn / Passkey integration
+
+- [ ] Add `AuthenticationServices` framework for passkey support
+- [ ] Implement WebAuthn registration ceremony (ASAuthorizationPlatformPublicKeyCredentialProvider)
+- [ ] Implement PRF extension for symmetric key derivation
+- [ ] Generate P-256 rotation key during signup
+- [ ] Encrypt recovery blob (rotation key + identity key + server list) with PRF-derived key
+- [ ] Upload recovery blob to server during registration
+- [ ] Implement WebAuthn authentication ceremony for recovery flow
+- [ ] Download and decrypt recovery blob during recovery
+
+### Server endpoints
+
+- [ ] `GET /v1/recovery/{did}` — unauthenticated endpoint to download encrypted recovery blob
+- [ ] `POST /v1/devices/replace` — authenticated by rotation key signature, replaces device
+- [ ] Store recovery blob in accounts table (opaque ciphertext column)
+- [ ] Accept recovery blob upload in `POST /v1/accounts`
+
+### DID / PLC directory
+
+- [ ] Generate DID genesis operation (signed by rotation key)
+- [ ] Submit genesis operation to PLC directory
+- [ ] Resolve DID from PLC directory during recovery
+- [ ] DID update operation for key rotation after recovery
+
+### Recovery blob lifecycle
+
+- [ ] Re-encrypt recovery blob when joining a new server (update server list)
+- [ ] Upload updated blob to all servers
+- [ ] Cache recovery key derived key in Secure Enclave for re-encryption without re-prompting
+- [ ] Written-down recovery phrase alternative flow

@@ -3,14 +3,15 @@ import SwiftUI
 struct NewAccountView: View {
     @EnvironmentObject var appState: AppState
     let inviteToken: InviteToken
+    var showRecoverLink: Bool = true
 
     @State private var displayName = ""
-    @State private var isRegistering = false
-    @State private var errorMessage: String?
+    @State private var showPasskeyExplainer = false
+    @State private var showRecovery = false
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("Joining \(inviteToken.serverName)")
+            Text("Create a new identity")
                 .font(.headline)
                 .foregroundStyle(.secondary)
 
@@ -29,51 +30,40 @@ struct NewAccountView: View {
                 .padding(.horizontal, 32)
                 .multilineTextAlignment(.center)
 
-            if let error = errorMessage {
-                Text(error)
-                    .foregroundStyle(Color.avError)
-                    .font(.callout)
-            }
-
             Button {
-                register()
+                showPasskeyExplainer = true
             } label: {
-                if isRegistering {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                } else {
-                    Text("Continue")
-                        .frame(maxWidth: .infinity)
-                }
+                Text("Next")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(.horizontal, 32)
-            .disabled(displayName.isEmpty || isRegistering)
+            .disabled(displayName.isEmpty)
 
             Spacer()
+
+            if showRecoverLink {
+                Button {
+                    showRecovery = true
+                } label: {
+                    Text("Recover an existing identity instead")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 16)
+            }
         }
         .padding(.top, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.avPaper)
-        .navigationTitle("Create Account")
+        .navigationTitle("New Identity")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func register() {
-        isRegistering = true
-        errorMessage = nil
-        Task {
-            do {
-                try await appState.createAccount(
-                    serverUrl: inviteToken.serverUrl.absoluteString,
-                    serverName: inviteToken.serverName,
-                    displayName: displayName
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-                isRegistering = false
-            }
+        .navigationDestination(isPresented: $showPasskeyExplainer) {
+            PasskeyExplainerView(inviteToken: inviteToken, displayName: displayName)
+        }
+        .navigationDestination(isPresented: $showRecovery) {
+            RecoveryExplainerView()
         }
     }
 }
