@@ -2,7 +2,7 @@ name: Actnet
 options:
   bundleIdPrefix: org.actnet
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
   xcodeVersion: "16.3"
 
 targets:

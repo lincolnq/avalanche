@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Receives APNs callbacks and forwards the device token to PushManager.
+@MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
     var appState: AppState?
 

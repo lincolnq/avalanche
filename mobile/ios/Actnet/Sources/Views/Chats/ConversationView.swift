@@ -29,8 +29,8 @@ struct ConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition($scrollPosition)
-            .onChange(of: scrollPosition.itemID as? Int64) { _, visibleSentAtMs in
-                guard scenePhase == .active, let threshold = visibleSentAtMs else { return }
+            .onScrollTargetVisibilityChange(idType: Int64.self) { visibleIDs in
+                guard scenePhase == .active, let threshold = visibleIDs.last else { return }
                 appState.markMessagesReadUpTo(
                     sentAtMs: threshold,
                     conversationId: conversation.id,

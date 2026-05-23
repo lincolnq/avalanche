@@ -18,6 +18,7 @@ enum PushManager {
     }
 
     /// Called when APNs issues a device token. Registers it with all active cores.
+    @MainActor
     static func didReceiveToken(_ tokenData: Data, appState: AppState) {
         let tokenString = tokenData.map { String(format: "%02x", $0) }.joined()
         let cores = appState.activeCores()
