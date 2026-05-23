@@ -38,6 +38,49 @@
 - Public profiles: client-owned profile blobs (display name, avatar, bio) pushed to servers
 - Multi-account support in mobile app
 
+## Mesh Fallback / BitChat protocol (optional — implement only after core features are stable)
+
+See `docs/32-bitchat-fallback.md` for the full design. BLE + WiFi Direct mesh transport as a
+seamless automatic fallback when the homeserver is unreachable. Signal E2E encryption is
+preserved; BitChat is used as a transport layer only.
+
+### M1 — Rust transport abstraction
+- [ ] `ConnectivityMonitor` state machine (`core/crates/app-core/src/connectivity.rs`)
+- [ ] `TransportDispatcher` with homeserver/mesh routing (`core/crates/app-core/src/transport.rs`)
+- [ ] FFI: `connectivity_state()`, `inject_mesh_message()`, `build_prekey_bundle_for_mesh()`
+- [ ] Store: `mesh_fingerprints` table migration
+
+### M2 — Swift packet layer
+- [ ] `BitchatPacket` serialization (`ACTNET_DM`, `ACTNET_ANNOUNCE`, `ACTNET_PREKEY_*`)
+- [ ] `MeshBloomFilter`, `MeshFingerprintStore`
+- [ ] `MeshAnnounceManager` with Ed25519 announce signing and verification
+
+### M3 — BLE transport
+- [ ] `BLEMeshTransport` (CoreBluetooth; adapted from BitChat open-source)
+- [ ] `MeshTransportManager` top-level coordinator
+- [ ] `AppState`: `connectivityState` `@Published`, mesh wiring in `messageWsLoop`
+- [ ] Switch to explicit `Info.plist`; add Bluetooth usage strings and `UIBackgroundModes`
+
+### M4 — WiFi Direct transport
+- [ ] `WiFiDirectTransport` (MultipeerConnectivity)
+
+### M5 — UX and prekey over mesh
+- [ ] `MeshModeBanner`, per-message transport indicator, reconnect toast
+- [ ] Prekey request/response over mesh (enables new sessions without homeserver)
+
+### M6 — Reliability
+- [ ] Backlog drain on `Offline → Online` transition
+- [ ] Nonce deduplication in `inject_mesh_message`
+- [ ] Delivery/read receipts routed through `TransportDispatcher`
+- [ ] 72-hour TTL for mesh-only messages; background cleanup task
+
+### Deferred mesh items
+- Nostr relay as third-tier fallback (M7+; for dispersed users when internet exists but homeserver is seized)
+- Group messages over mesh (after Sender Keys land in Stage 4)
+- Android BLE/WiFi Direct transport
+- Multi-hop prekey rate-limiting (prevent one-time prekey pool depletion by relay attackers)
+- Noise_XX channel encryption for relay node authentication (defence-in-depth)
+
 ## Push Notifications
 
 ### 1. Push relay service (`core/crates/relay/`)
