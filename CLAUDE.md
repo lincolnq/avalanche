@@ -129,6 +129,8 @@ FFI constraints (do not violate):
 
 ## Contributing workflow
 
+The PR template at `.github/pull_request_template.md` is auto-populated by GitHub when you open a PR. It includes layer-specific checklists (server, mobile/FFI, crypto) — fill in every applicable section before requesting review.
+
 When implementing a TODO item from `docs/02-todos-deferred.md`:
 
 1. Implement the feature on a dedicated branch (never directly on `main`).
