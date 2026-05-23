@@ -113,14 +113,15 @@ Sam now has two identities. Both appear in the app. Chats from both identities a
 4. PRF extension derives the symmetric key. The WebAuthn user handle contains Sam's DID.
 5. App resolves the DID via the PLC directory → discovers the home server → downloads the encrypted recovery blob. (Fallback: Sam enters a server URL manually.)
 6. App decrypts the recovery blob with the PRF-derived key. This yields the DID rotation key, identity keypair, and the full list of homeservers.
-7. App restores the identity keypair — same keys as before.
-8. App re-registers on all homeservers from the list, uploading fresh prekeys.
-9. Sam is back. Existing sessions continue. Contacts see no safety number change.
+7. App restores the identity keypair — same identity key as before.
+8. App generates a new device_id and signs a device replacement request with the rotation key. On each homeserver: the server verifies the rotation key signature against the PLC directory, revokes the old device (invalidates its session tokens and prekey bundles), and registers the new device_id with fresh prekeys. The identity key stays the same, so contacts see no safety number change.
+9. Sam is back. Existing sessions continue seamlessly.
 10. If Sam has additional identities: Settings → Add account → "Recover existing identity" → repeat steps 2-9 with the next passkey. Each recovery is independent — one passkey per identity, one Face ID prompt each.
 
 **Technical details:**
 - WebAuthn authentication with PRF extension. Same salt as during setup produces the same symmetric key.
 - Recovery blob downloaded via `GET /v1/recovery/{did}` (new endpoint, unauthenticated — the blob is opaque ciphertext, safe to serve publicly).
+- **Device replacement:** The old and new devices share the same identity key, so the server can't distinguish them by key alone. The rotation key — which only exists in the recovery blob, not on the device during normal operation — serves as proof of authority to replace the device. The app signs a replacement request with the rotation key, the server revokes the old device_id (invalidating its session tokens so it can no longer authenticate), and registers the new device_id. This is a new server endpoint: `POST /v1/devices/replace`, authenticated by rotation key signature rather than session token.
 - If the blob includes the full identity keypair: sessions continue seamlessly, no safety number change.
 - If the blob includes only the rotation key: Sam can sign a DID update to add a new signing key, but sessions reset and contacts see a safety number change. This is the fallback if blob updates fell behind.
 - After recovery, app re-authenticates to each homeserver via challenge-response with the restored identity key.
@@ -158,14 +159,6 @@ Passkeys are never touched during normal use. They exist solely for recovery.
 | Recovery blob | Homeserver(s), encrypted | Contains rotation key + identity key + server list, decryptable only with passkey |
 | Session token | Device (memory/keychain) | Authenticating API requests to homeserver |
 
-## Summary: Passkey and Key Counts
-
-For a user with N DIDs across any number of servers:
-
-- **Passkeys:** N (one per DID)
-- **Rotation keys:** N (one per DID)
-- **Identity keys:** N (one per DID)
-- **Recovery blobs:** N (one per DID, replicated across that DID's servers)
 
 ---
 
@@ -188,3 +181,126 @@ Privacy tradeoff: connecting a Bluesky account means Bluesky can verify that ide
 ### Other OAuth providers
 
 Any OAuth provider could serve as an identity authority using the same pattern as Bluesky. The difference is that non-Bluesky providers don't use `did:plc`, so the actnet homeserver would create a new DID on the user's behalf and link it to the OAuth identity. Recovery = re-authenticate with the provider. Same lossy recovery (new keys, safety number change) as the Bluesky case.
+
+
+## Screen Flow
+
+```
+ ┌────────────────┐
+ │    Landing     │
+ │                │
+ │ [Scan QR]      │
+ │ Enter code     │
+ │ Recover        │
+ └──┬──────────┬──┘
+    │ invite   │ recover
+    │ link     │
+    ▼          ▼
+ ┌────────┐  ┌────────────────┐
+ │Choose  │  │   Recovery     │
+ │ID page │  │   Explainer    │
+ │(if ≥1  │  │                │
+ │ID on   │  │ [Passkey]      │
+ │device) │  │ Phrase ->      │
+ │        │  └───────┬────────┘
+ │ Alice  │          │
+ │[+] New │          │ WebAuthn sheet
+ │[⚷] Re- │          │ (system UI: pick
+ │  cover │          │  passkey, Face ID)
+ └┬──┬──┬─┘          │
+  │  │  │            ▼
+  │  │  │ recover  ┌────────────────┐
+  │  │  └─────────►│   Recovery     │
+  │  │             │   Console      │
+  │  │             └───────┬────────┘
+  │  │ new                 │
+  │  ▼                     │
+  │ ┌────────────────┐     │
+  │ │    New ID      │     │
+  │ │                │     │
+  │ │ [photo]        │     │
+  │ │ Display Name   │     │
+  │ │ [Next]         │     │
+  │ │ recover ->     │     │
+  │ └───────┬────────┘     │
+  │         │              │
+  │         ▼              │
+  │ ┌────────────────┐     │
+  │ │  Server Step   │     │
+  │ │  (optional)    │     │
+  │ └───────┬────────┘     │
+  │         │              │
+  │         ▼              │
+  │ ┌────────────────┐     │
+  │ │    Passkey     │     │
+  │ │   Explainer    │     │
+  │ │                │     │
+  │ │ [photo+name]   │     │
+  │ │ [Create]       │     │
+  │ │ phrase ->      │     │
+  │ │ skip ->        │     │
+  │ └───────┬────────┘     │
+  │         │              │
+  │   WebAuthn sheet       |
+  │         │              │
+  │         ▼              │
+  │ ┌────────────────┐     │
+  │ │    Signup      │     │
+  │ │   Console      │     │
+  │ └───────┬────────┘     │
+  │         │              │
+  │ existing│              │
+  │ identity│              │
+  │         ▼              ▼
+  │ ┌──────────────────────────┐
+  └►│       SIGNED IN!         │
+    └──────────────────────────┘
+```
+
+## Screen Details
+
+### Landing Page
+- **Scan invitation** — primary action, opens camera
+- **Enter invite code** — secondary, text entry
+- **Recover account** — secondary, navigates to Recovery Explainer
+
+### Choose ID Page
+Shown when the user already has one or more identities on this device and scans/taps an invite link. First-time users skip straight to New ID.
+
+- "Log into [server name] with:"
+- List of existing identities on this device (tap to join this server with that identity)
+- [green] **+ New identity** — navigates to New ID page
+- [yellow] **⚷ Recover** — navigates to Recovery Explainer
+
+### New ID Page
+- "Create a new identity for [server name]:"
+- Profile picture field (optional)
+- Display Name field (required)
+- (future) Icon field for disambiguation
+- **Next** button — primary action, disabled until display name is entered
+- Small "recover an existing identity instead →" at bottom (hidden if navigated from Choose ID page, since Recover is already an option there)
+
+### Server Step (deferred)
+A webview provided by the homeserver for any pre-account-creation requirements: terms of service agreement, additional signup info, org-specific onboarding, etc. The invite token tells the app whether a server step exists and what URL to load. If the server doesn't specify one, this screen is skipped entirely.
+
+This also runs when an existing identity joins a new server (after tapping an identity on the Choose ID page). 
+
+The exact implementation needs to be planned out for this. For now we can just skip implementing it, but it will be important later.
+
+### Passkey Explainer Page
+- "Create a passkey to protect this identity"
+- Shows the profile picture and display name as they will appear on the Choose ID page in the future
+- "Passkeys are stored securely in your password manager or iCloud, and synced across all your devices. You'll use it to sign back into this identity if you lose this device. [More about passkeys →]" (links to explainer page on our website)
+- **⚷ Create Passkey** — primary action. Triggers a WebAuthn registration ceremony: the system presents a sheet (1Password, iCloud Keychain, or hardware key), the user confirms with Face ID, and a new passkey is created for the `theavalanche.net` relying party.
+- "Use a recovery phrase instead →" — generates a high-entropy memorable phrase, user writes it down
+- "Skip recovery setup →" — proceeds without recovery (server may nag later)
+
+### Recovery Explainer Page
+- "Recover an identity"
+- **⚷ Recover using Passkey** — primary action. Triggers a WebAuthn authentication ceremony: the system presents a sheet showing all passkeys stored for `theavalanche.net`. The user picks one and confirms with Face ID. The app receives the PRF-derived symmetric key and the DID from the user handle. If the user picks an identity that is already signed-in on this device, we explain that they're already signed in and prompt to pick another.
+- "Enter your recovery phrase instead →" — text entry for the written-down phrase
+
+### Progress Console
+A monospace-text console that scrolls through status updates as the app works in the background. Used for both signup and recovery.
+
+After completion, the console transitions to the signed-in Chats screen, which will hopefully have a welcome message or something, but that's up to the server.
