@@ -41,6 +41,7 @@ pub mod error;
 pub mod groups;
 pub mod messages;
 pub mod prekeys;
+pub mod push;
 pub mod schema;
 pub mod session;
 

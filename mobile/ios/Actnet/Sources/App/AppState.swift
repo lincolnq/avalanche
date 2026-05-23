@@ -163,6 +163,7 @@ final class AppState: ObservableObject {
             }
 
             startMessagePolling()
+            Task { await PushManager.requestPermissionAndRegister(appState: self) }
         }
     }
 
@@ -240,6 +241,13 @@ final class AppState: ObservableObject {
 
         isOnboarding = false
         startMessagePolling()
+        Task { await PushManager.requestPermissionAndRegister(appState: self) }
+    }
+
+    /// Returns all active core instances. Used by PushManager and other utilities
+    /// that need to iterate across accounts without direct access to `cores`.
+    func activeCores() -> [any AppCoreProtocol] {
+        Array(cores.values)
     }
 
     func joinServer(serverUrl: String, serverName: String, existingAccountId: String) async throws {
@@ -341,6 +349,35 @@ final class AppState: ObservableObject {
                         recipientDeviceId: 1,
                         timestamps: timestamps
                     )
+                }
+            }
+        }
+    }
+
+    /// Mark messages as read up to (and including) the given sentAtMs timestamp.
+    /// Only marks received messages (not own outgoing). Sends read receipts for newly-read messages.
+    func markMessagesReadUpTo(sentAtMs threshold: Int64, conversationId: String, accountId: String) {
+        guard var messages = messagesByConversation[conversationId] else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        var readTimestampsBySender: [String: [Int64]] = [:]
+        var changed = false
+        for i in messages.indices {
+            let msg = messages[i]
+            guard msg.readAtMs == nil && msg.senderAccountId != accountId && msg.sentAtMs <= threshold else { continue }
+            messages[i].readAtMs = nowMs
+            changed = true
+            readTimestampsBySender[msg.senderAccountId, default: []].append(msg.sentAtMs)
+        }
+        guard changed else { return }
+        messagesByConversation[conversationId] = messages
+
+        if let core = cores[accountId] {
+            let convId = conversationId
+            let timestampsBySender = readTimestampsBySender
+            Task.detached {
+                try? core.markMessagesRead(conversationId: convId, upToSentAtMs: threshold)
+                for (senderDid, timestamps) in timestampsBySender {
+                    try? core.sendReadReceipt(recipientDid: senderDid, recipientDeviceId: 1, timestamps: timestamps)
                 }
             }
         }

@@ -80,6 +80,14 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         // Mock: no-op
     }
 
+    func registerPushToken(deviceToken: String, platform: String) throws {
+        // Mock: no-op
+    }
+
+    func rotatePushPseudonym() throws {
+        // Mock: no-op
+    }
+
     func drainReceiptUpdates() -> [DeliveryStatusUpdate] {
         // Mock: no receipt updates
         []
