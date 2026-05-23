@@ -96,4 +96,13 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
     // Add delivery_status column for outgoing message status tracking.
     // 0 = sending, 1 = sent, 2 = delivered, 3 = read
     "ALTER TABLE message_history ADD COLUMN delivery_status INTEGER NOT NULL DEFAULT 1",
+    // Push notification pseudonym + device token for this device.
+    // Constrained to one row via id = 1.
+    "CREATE TABLE IF NOT EXISTS push_state (\
+        id            INTEGER PRIMARY KEY CHECK (id = 1),\
+        pseudonym     TEXT    NOT NULL,\
+        device_token  TEXT    NOT NULL,\
+        platform      TEXT    NOT NULL,\
+        registered_at INTEGER NOT NULL\
+    )",
 ];

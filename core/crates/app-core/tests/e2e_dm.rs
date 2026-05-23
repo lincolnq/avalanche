@@ -8,6 +8,7 @@
 //! Each test creates fresh accounts so they don't interfere with each other.
 
 use app_core::AppCore;
+use std::path::Path;
 
 fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
@@ -107,4 +108,46 @@ async fn multiple_messages_in_one_fetch() {
     assert_eq!(msgs[0].plaintext, b"msg1");
     assert_eq!(msgs[1].plaintext, b"msg2");
     assert_eq!(msgs[2].plaintext, b"msg3");
+}
+
+#[tokio::test]
+async fn login_re_authenticates() {
+    // Verifies the challenge-response auth flow works end-to-end.
+    // Regression test for the broken `authenticate()` that sent the old
+    // pre-challenge-response format and always got a 422.
+    let url = server_url();
+
+    // Use a temp file-backed store so state survives across two Store::open calls.
+    let db_path = std::env::temp_dir().join(format!(
+        "actnet-test-login-{}.db",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+
+    let store1 = store::Store::open(
+        Path::new(&db_path),
+        &store::DatabaseKey::from_passphrase("test-key".to_string()),
+    )
+    .await
+    .unwrap();
+    store1.migrate().await.unwrap();
+    AppCore::create_account_with_store(&url, store1, None, false)
+        .await
+        .unwrap();
+
+    // Re-open the same DB and login — exercises the challenge-response flow.
+    let store2 = store::Store::open(
+        Path::new(&db_path),
+        &store::DatabaseKey::from_passphrase("test-key".to_string()),
+    )
+    .await
+    .unwrap();
+    let core = AppCore::login_with_store(store2).await.unwrap();
+
+    // A successful fetch proves the session token is valid.
+    core.receive_messages_async().await.unwrap();
+
+    let _ = std::fs::remove_file(&db_path);
 }

@@ -46,7 +46,7 @@ pub struct AccountInfoResponse {
 // ── Authentication ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct ChallengeResponse {
+pub(crate) struct ChallengeResponse {
     pub nonce: String,
 }
 

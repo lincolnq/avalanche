@@ -160,6 +160,7 @@ final class AppState: ObservableObject {
             }
 
             startMessagePolling()
+            Task { await PushManager.requestPermissionAndRegister(appState: self) }
         }
     }
 
@@ -237,6 +238,13 @@ final class AppState: ObservableObject {
 
         isOnboarding = false
         startMessagePolling()
+        Task { await PushManager.requestPermissionAndRegister(appState: self) }
+    }
+
+    /// Returns all active core instances. Used by PushManager and other utilities
+    /// that need to iterate across accounts without direct access to `cores`.
+    func activeCores() -> [any AppCoreProtocol] {
+        Array(cores.values)
     }
 
     func joinServer(serverUrl: String, serverName: String, existingAccountId: String) async throws {

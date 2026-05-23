@@ -3,7 +3,6 @@
 ## Mobile app
 - Recovery key UI: setup and backup flows (banner currently always shows, hardcoded false)
 - Scroll-position-based read marking (see docs/31-read-tracking.md, Stage B)
-- Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
@@ -69,15 +68,11 @@ The iOS app (`mobile/ios/`) is the reference implementation. The Android app (Ko
 - [ ] `MockServiceTest.kt` — verify `MockAppCore.receiveMessagesWs()` delivers echo reply after ≥1.5 s
 - [ ] Cross-platform interop test: iOS sends encrypted DM, Android decrypts it against a real test homeserver (add to `core/crates/app-core/tests/`)
 ## Crypto / protocol
-- Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
-- Protobuf message envelope: plaintext is raw bytes, design calls for ContentMessage protobuf (proto/content.proto)
 - DB encryption key from Secure Enclave instead of hardcoded "dev-placeholder-key"
 
 ## Server
 - WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.
-- Message expiry: background task to delete expired messages, configurable per-group/DM
 - Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
-- DID document resolution endpoint (GET /.well-known/did/:did)
 
 ## Project-wide
 - Settle on a better name: rename repo, update bundle IDs, update `actnet://` URL scheme to match, update all references in code and docs
@@ -85,7 +80,6 @@ The iOS app (`mobile/ios/`) is the reference implementation. The Android app (Ko
 ## Big milestones (not yet started)
 - Groups: action-bound (zkgroup) and cross-server casual (Sender Keys)
 - Invite links & onboarding: QR codes, deep links, auto-enrollment into groups/Projects
-- Push notifications (see Push Notifications section below)
 - Projects framework: SDK, scoped bot permissions, JS bridge for webviews
 - First-party Projects: channel directory, team assignment, action-day map, Q&A bot, collab docs, engagement tracking
 - Federation: server-to-server protocol, cross-server DMs, full DID portability (PLC directory), guest access
@@ -135,3 +129,10 @@ Defer until the Android app reaches a stable milestone.
 - [ ] Handle per-OS secure storage: macOS Keychain, Windows Credential Manager, Linux Secret Service / `libsecret`
 - [ ] Handle per-OS notification APIs: macOS `UserNotifications`, Windows `Windows.UI.Notifications`, Linux `libnotify`
 - [ ] Handle per-OS deep link / URL scheme registration for `actnet://`
+## Push Notifications (remaining work)
+- Android client: FCM token registration, pseudonym lifecycle, wakeup handling
+- Relay: real APNs sending via `a2` crate (env vars: APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID)
+- Relay: real FCM sending
+- iOS: periodic pseudonym rotation (weekly timer)
+- iOS: opt-out setting for high-risk users (poll-only mode)
+- Testing: verify relay payloads contain zero user-identifiable content; APNs/FCM sandbox integration test
