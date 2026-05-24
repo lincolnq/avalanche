@@ -14,11 +14,13 @@ use crate::state::AppState;
 
 mod accounts;
 mod auth;
+mod devices;
 mod did;
 mod messages;
 mod prekeys;
 mod projects;
 mod push;
+mod recovery;
 mod registration;
 mod websocket;
 
@@ -33,4 +35,6 @@ pub fn router() -> Router<AppState> {
         .merge(projects::routes())
         .merge(push::routes())
         .merge(accounts::routes())
+        .merge(recovery::routes())
+        .merge(devices::routes())
 }

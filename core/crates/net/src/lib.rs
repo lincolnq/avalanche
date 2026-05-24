@@ -79,6 +79,7 @@ impl Client {
             },
             "display_name": req.display_name,
             "is_bot": req.is_bot,
+            "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
         });
 
         let resp = self.http
@@ -377,6 +378,82 @@ impl Client {
     pub async fn resolve_did(&self, did: &str) -> Result<serde_json::Value, NetError> {
         let resp = self.http
             .get(format!("{}/.well-known/did/{}", self.server_url, did))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(resp.json().await?)
+    }
+
+    // ── Recovery ─────────────────────────────────────────────────────────
+
+    /// Download the encrypted recovery blob for a DID (unauthenticated).
+    pub async fn get_recovery_blob(&self, did: &str) -> Result<Vec<u8>, NetError> {
+        let resp = self.http
+            .get(format!("{}/v1/recovery/{}", self.server_url, did))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        let body: RecoveryBlobResponse = resp.json().await?;
+        BASE64_STANDARD.decode(&body.recovery_blob)
+            .map_err(|e| NetError::Base64(e.to_string()))
+    }
+
+    /// Update the encrypted recovery blob (authenticated).
+    pub async fn update_recovery_blob(&self, blob: &[u8]) -> Result<(), NetError> {
+        let resp = self.authed_request(reqwest::Method::PUT, "/v1/recovery")
+            .json(&serde_json::json!({
+                "recovery_blob": BASE64_STANDARD.encode(blob),
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(())
+    }
+
+    /// Replace a device (authenticated by rotation key signature, not session token).
+    pub async fn replace_device(&self, req: &ReplaceDeviceRequest) -> Result<ReplaceDeviceResponse, NetError> {
+        let body = serde_json::json!({
+            "did": req.did,
+            "old_device_id": req.old_device_id,
+            "new_device_id": req.new_device_id,
+            "new_identity_key": BASE64_STANDARD.encode(&req.new_identity_key),
+            "new_registration_id": req.new_registration_id,
+            "nonce": req.nonce,
+            "rotation_key_signature": BASE64_STANDARD.encode(&req.rotation_key_signature),
+            "rotation_key": BASE64_STANDARD.encode(&req.rotation_key),
+            "signed_prekey": {
+                "id": req.signed_prekey_id,
+                "public_key": BASE64_STANDARD.encode(&req.signed_prekey_public),
+                "signature": BASE64_STANDARD.encode(&req.signed_prekey_signature),
+            },
+            "one_time_prekeys": req.one_time_prekeys.iter().map(|(id, pk)| {
+                serde_json::json!({"id": id, "public_key": BASE64_STANDARD.encode(pk)})
+            }).collect::<Vec<_>>(),
+            "kyber_prekey": {
+                "id": req.kyber_prekey_id,
+                "public_key": BASE64_STANDARD.encode(&req.kyber_prekey_public),
+                "signature": BASE64_STANDARD.encode(&req.kyber_prekey_signature),
+            },
+            "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
+        });
+
+        let resp = self.http
+            .post(format!("{}/v1/devices/replace", self.server_url))
+            .json(&body)
             .send()
             .await?;
 

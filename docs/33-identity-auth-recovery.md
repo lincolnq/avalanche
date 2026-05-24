@@ -320,21 +320,22 @@ After completion, the console transitions to the signed-in Chats screen, which w
 
 ### WebAuthn / Passkey integration
 
-- [ ] Add `AuthenticationServices` framework for passkey support
-- [ ] Implement WebAuthn registration ceremony (ASAuthorizationPlatformPublicKeyCredentialProvider)
-- [ ] Implement PRF extension for symmetric key derivation
-- [ ] Generate P-256 rotation key during signup
-- [ ] Encrypt recovery blob (rotation key + identity key + server list) with PRF-derived key
-- [ ] Upload recovery blob to server during registration
-- [ ] Implement WebAuthn authentication ceremony for recovery flow
-- [ ] Download and decrypt recovery blob during recovery
+- [x] Add `AuthenticationServices` framework for passkey support
+- [x] Implement WebAuthn registration ceremony (ASAuthorizationPlatformPublicKeyCredentialProvider)
+- [x] Implement PRF extension for symmetric key derivation
+- [x] Generate P-256 rotation key during signup
+- [x] Encrypt recovery blob (rotation key + identity key + server list) with PRF-derived key
+- [x] Upload recovery blob to server during registration
+- [x] Implement WebAuthn authentication ceremony for recovery flow
+- [x] Download and decrypt recovery blob during recovery
 
 ### Server endpoints
 
-- [ ] `GET /v1/recovery/{did}` — unauthenticated endpoint to download encrypted recovery blob
-- [ ] `POST /v1/devices/replace` — authenticated by rotation key signature, replaces device
-- [ ] Store recovery blob in accounts table (opaque ciphertext column)
-- [ ] Accept recovery blob upload in `POST /v1/accounts`
+- [x] `GET /v1/recovery/{did}` — unauthenticated endpoint to download encrypted recovery blob
+- [x] `POST /v1/devices/replace` — authenticated by rotation key signature, replaces device
+- [x] Store recovery blob in accounts table (opaque ciphertext column)
+- [x] Accept recovery blob upload in `POST /v1/accounts`
+- [x] `PUT /v1/recovery` — authenticated endpoint to update recovery blob
 
 ### DID / PLC directory
 

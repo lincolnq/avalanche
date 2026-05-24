@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 
 struct PasskeyExplainerView: View {
     @EnvironmentObject var appState: AppState
@@ -48,9 +49,7 @@ struct PasskeyExplainerView: View {
 
             VStack(spacing: 12) {
                 Button {
-                    // TODO: WebAuthn registration ceremony
-                    // For now, proceed directly to signup
-                    register()
+                    registerWithPasskey()
                 } label: {
                     if isRegistering {
                         ProgressView()
@@ -66,7 +65,7 @@ struct PasskeyExplainerView: View {
 
                 Button {
                     // TODO: Recovery phrase generation flow
-                    register()
+                    register(recoveryKey: Data())
                 } label: {
                     Text("Use a recovery phrase instead")
                         .font(.subheadline)
@@ -74,7 +73,7 @@ struct PasskeyExplainerView: View {
                 .disabled(isRegistering)
 
                 Button {
-                    register()
+                    register(recoveryKey: Data())
                 } label: {
                     Text("Skip recovery setup")
                         .font(.caption)
@@ -91,7 +90,55 @@ struct PasskeyExplainerView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func register() {
+    private func registerWithPasskey() {
+        isRegistering = true
+        errorMessage = nil
+        Task {
+            do {
+                // Get the window for the ASAuthorization sheet.
+                guard let window = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .flatMap(\.windows)
+                    .first(where: \.isKeyWindow) else {
+                    errorMessage = "Could not find app window"
+                    isRegistering = false
+                    return
+                }
+
+                let passkeyManager = PasskeyManager()
+                // The DID doesn't exist yet — we use a placeholder that will be
+                // stored in the passkey's user handle. During recovery, the client
+                // reads this to know which DID to look up. We'll create the account
+                // first to get the DID, but since we need the recovery key before
+                // registration, we use a temporary ID and the server will assign the
+                // real DID.
+                //
+                // Actually, the flow is: create passkey → get recovery key →
+                // create account (which generates the DID) → done.
+                // The DID in the passkey is for recovery lookup. Since we don't have
+                // it yet, we register the passkey with a placeholder and would need
+                // to update it later. For now, we proceed with the registration and
+                // the recovery blob on the server is keyed by DID anyway.
+                let tempId = "pending-\(UUID().uuidString.prefix(8))"
+                let result = try await passkeyManager.register(
+                    did: tempId,
+                    displayName: displayName,
+                    anchor: window
+                )
+
+                // Now create the account with the PRF-derived recovery key.
+                register(recoveryKey: result.recoveryKey)
+            } catch let error as ASAuthorizationError where error.code == .canceled {
+                // User cancelled — don't show error, just re-enable buttons.
+                isRegistering = false
+            } catch {
+                errorMessage = error.localizedDescription
+                isRegistering = false
+            }
+        }
+    }
+
+    private func register(recoveryKey: Data) {
         isRegistering = true
         errorMessage = nil
         Task {
@@ -99,7 +146,8 @@ struct PasskeyExplainerView: View {
                 try await appState.createAccount(
                     serverUrl: inviteToken.serverUrl.absoluteString,
                     serverName: inviteToken.serverName,
-                    displayName: displayName
+                    displayName: displayName,
+                    recoveryKey: recoveryKey
                 )
                 // createAccount sets isOnboarding = false, which navigates away
             } catch {

@@ -24,6 +24,13 @@ store          = { path = "crates/store" }
 # Pinned to a specific commit for reproducible builds. Update deliberately.
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4c460615cdbe4ed53b23a5d1bf71493514bf2a80" }
 rand = "0.9"
+# p256, aes-gcm, sha2 are kept on the 0.x series that shares rand_core 0.6 with
+# libsignal's pinned commit. Upgrading these to their latest (which uses rand_core
+# 0.9) would not eliminate the split — libsignal would still pull in 0.6 — and
+# would just add a *third* rand_core version to the graph.
+p256        = { version = "0.13", features = ["ecdsa"] }
+aes-gcm     = "0.10"
+sha2        = "0.10"
 
 # Async
 tokio      = { version = "1", features = ["full"] }
@@ -41,7 +48,7 @@ reqwest = { version = "0.12", features = ["json"] }
 # Server
 axum        = { version = "0.8", features = ["ws"] }
 axum-extra  = { version = "0.10", features = ["typed-header"] }
-sqlx        = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+sqlx        = { version = "0.8.0", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "json", "migrate"] }
 tower-http  = { version = "0.6", features = ["cors", "trace"] }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -49,16 +56,15 @@ serde_json  = "1"
 base64      = "0.22"
 base32      = "0.5"
 time        = { version = "0.3", features = ["serde"] }
-sha2        = "0.10"
 
 # FFI
 uniffi = "0.29"
 
 # Error handling
-thiserror = "1"
+thiserror = "2"
 
 # WebSocket client
-tokio-tungstenite = "0.25"
+tokio-tungstenite = "0.26"
 futures-util = "0.3"
 
 # Serialization

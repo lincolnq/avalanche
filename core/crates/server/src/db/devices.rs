@@ -105,6 +105,40 @@ pub async fn find_by_pk(conn: &mut PgConnection, device_pk: i64) -> Result<Optio
     Ok(row.map(Device::from_row))
 }
 
+/// Delete a device and all its dependent rows (session tokens, prekeys, queued messages).
+pub async fn delete(conn: &mut PgConnection, device_pk: i64) -> Result<(), sqlx::Error> {
+    // Delete dependent rows first (no ON DELETE CASCADE in schema).
+    sqlx::query("DELETE FROM session_tokens WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM signed_prekeys WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM one_time_prekeys WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM kyber_prekeys WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM message_queue WHERE recipient_device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM push_pseudonyms WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM devices WHERE id = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// List all devices for an account (by DID).
 pub async fn list_by_did(conn: &mut PgConnection, did: &str) -> Result<Vec<Device>, sqlx::Error> {
     let rows = sqlx::query(

@@ -1,6 +1,6 @@
 name: Actnet
 options:
-  bundleIdPrefix: org.actnet
+  bundleIdPrefix: net.theavalanche
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.3"
@@ -15,9 +15,15 @@ targets:
         group: Generated
     dependencies:
       - framework: ../AppCoreFFI.xcframework
+    entitlements:
+      path: Actnet.entitlements
+      properties:
+        com.apple.developer.associated-domains:
+          - webcredentials:theavalanche.net
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.actnet.app
+        DEVELOPMENT_TEAM: 7FVK3RR3TV
+        PRODUCT_BUNDLE_IDENTIFIER: net.theavalanche.app
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "6.0"

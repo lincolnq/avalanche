@@ -26,6 +26,7 @@ base64      = { workspace = true }
 libsignal-protocol = { workspace = true }
 time        = { workspace = true }
 sha2        = { workspace = true }
+p256        = { workspace = true }
 base32      = { workspace = true }
 reqwest     = { workspace = true }
 

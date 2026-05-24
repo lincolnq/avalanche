@@ -94,6 +94,43 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+    /// Save the P-256 rotation key (private + public halves).
+    pub async fn save_rotation_key(
+        &self,
+        private_key: &[u8],
+        public_key: &[u8],
+    ) -> Result<(), StoreError> {
+        let priv_bytes = private_key.to_vec();
+        let pub_bytes = public_key.to_vec();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO rotation_key (id, private_key, public_key)
+                     VALUES (1, ?1, ?2)",
+                    rusqlite::params![priv_bytes, pub_bytes],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load the P-256 rotation key. Returns `None` if not yet generated.
+    pub async fn load_rotation_key(&self) -> Result<Option<(Vec<u8>, Vec<u8>)>, StoreError> {
+        self.conn
+            .call(|conn| {
+                conn.query_row(
+                    "SELECT private_key, public_key FROM rotation_key WHERE id = 1",
+                    [],
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// Load registration details. Returns `None` if not yet registered.
     pub async fn load_registration(&self) -> Result<Option<RegistrationInfo>, StoreError> {
         let result = self

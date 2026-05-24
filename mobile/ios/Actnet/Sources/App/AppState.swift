@@ -200,7 +200,9 @@ final class AppState: ObservableObject {
             .appendingPathComponent("actnet", isDirectory: true)
     }
 
-    func createAccount(serverUrl: String, serverName: String, displayName: String) async throws {
+    /// Create a new account. `recoveryKey` is a 32-byte symmetric key from
+    /// passkey PRF or recovery phrase. Pass empty Data to skip recovery setup.
+    func createAccount(serverUrl: String, serverName: String, displayName: String, recoveryKey: Data = Data()) async throws {
         let dir = dbDir
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -209,8 +211,9 @@ final class AppState: ObservableObject {
         let dbKey = try SecureEnclaveKeyManager.dbPassphrase()
 
         let svc = _service
+        let rk = recoveryKey
         let core = try await Task.detached {
-            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey)
+            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, recoveryKey: rk)
         }.value
 
         let did = core.did()

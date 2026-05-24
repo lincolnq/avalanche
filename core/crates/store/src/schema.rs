@@ -105,4 +105,11 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         platform      TEXT    NOT NULL,\
         registered_at INTEGER NOT NULL\
     )",
+    // P-256 rotation key for DID operations and recovery.
+    // Constrained to one row. Private key is stored as SEC1 scalar bytes.
+    "CREATE TABLE IF NOT EXISTS rotation_key (\
+        id            INTEGER PRIMARY KEY CHECK (id = 1),\
+        private_key   BLOB    NOT NULL,\
+        public_key    BLOB    NOT NULL\
+    )",
 ];

@@ -44,6 +44,10 @@ struct RegisterRequest {
     display_name: Option<String>,
     #[serde(default)]
     is_bot: bool,
+    /// Encrypted recovery blob (opaque ciphertext). Contains rotation key +
+    /// identity key + server list, encrypted with the user's passkey-derived
+    /// symmetric key. Optional — if absent, no recovery is possible.
+    recovery_blob: Option<String>, // base64
 }
 
 #[derive(Deserialize)]
@@ -90,11 +94,23 @@ async fn register(
         }
     }
 
+    let recovery_blob = req
+        .recovery_blob
+        .as_deref()
+        .map(|b| BASE64_STANDARD.decode(b))
+        .transpose()
+        .map_err(|_| ServerError::BadRequest("invalid base64 recovery_blob".into()))?;
+
     let mut conn = state.db.acquire().await?;
 
     // Create account.
     let account_id =
         db::accounts::create(&mut conn, &did, req.display_name.as_deref(), req.is_bot).await?;
+
+    // Store recovery blob if provided.
+    if let Some(blob) = &recovery_blob {
+        db::accounts::update_recovery_blob(&mut conn, account_id, Some(blob)).await?;
+    }
 
     // Create device.
     let device_pk = db::devices::create(

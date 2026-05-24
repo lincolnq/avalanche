@@ -1,4 +1,5 @@
 /core/target/
+/core/relay.db*
 
 # macOS
 .DS_Store
