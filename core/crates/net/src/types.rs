@@ -12,6 +12,8 @@ use crate::error::NetError;
 // ── Registration ─────────────────────────────────────────────────────────────
 
 pub struct RegisterRequest {
+    /// Client-generated DID (from PLC directory genesis operation).
+    pub did: Option<String>,
     pub identity_key: Vec<u8>,
     pub registration_id: i32,
     pub device_id: i32,
@@ -27,6 +29,9 @@ pub struct RegisterRequest {
     pub is_bot: bool,
     /// Encrypted recovery blob (opaque ciphertext). Optional.
     pub recovery_blob: Option<Vec<u8>>,
+    /// Ed25519 signature of `"register:{did}"` proving identity key possession.
+    /// Required when `did` is provided.
+    pub identity_key_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

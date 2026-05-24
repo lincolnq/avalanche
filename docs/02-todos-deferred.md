@@ -4,14 +4,20 @@
 - Make it super easy to launch Postgres, the main server & relevant Projects all at once in dev
 
 ## Mobile app
-- Passkey recovery: implement WebAuthn passkey creation during signup, PRF-based recovery blob encryption, and recovery flow on new device (see docs/33-identity-auth-recovery.md). Remove the old RecoveryKeyBanner.
+- Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)
+- Account recovery is not yet implemented / working
+- Written-down recovery phrase alternative to passkey (generate memorable phrase, encrypt recovery blob with it, cache derived key in Secure Enclave)
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 
+## Privacy / identity
+- PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
+- DID update operation for key rotation after recovery (submit new signing key to PLC directory, signed by rotation key)
+- Re-encrypt and re-upload recovery blob to all servers when joining a new server (update server list)
+- Cache recovery derived key in Secure Enclave so re-encryption doesn't require re-prompting passkey/phrase
+
 ## Crypto / protocol
-- Kyber prekey pool: upload one-time Kyber prekeys with server-side atomic consumption (like EC one-time prekeys), keep one last-resort key. Currently only a single last-resort key is used.
-- Protobuf message envelope: plaintext is raw bytes, design calls for ContentMessage protobuf (proto/content.proto)
 - Stale device detection: when a device re-registers (new identity key, new prekeys), the server should reject messages sent to the old device state. `POST /v1/messages` should check that the sender's session is compatible with the recipient's current registration (e.g., compare `registration_id`). On rejection, the sender's client should fetch the new prekey bundle and re-establish the session. Without this, messages encrypted to old keys are silently undeliverable after a key reset.
 
 ## Server
@@ -19,7 +25,7 @@
 - Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
 
 ## Project-wide
-- Settle on a better name: rename repo, update bundle IDs, update `actnet://` URL scheme to match, update all references in code and docs
+- Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`
 
 ## Big milestones (not yet started)
 - Groups: action-bound (zkgroup) and cross-server casual (Sender Keys)

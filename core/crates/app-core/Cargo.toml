@@ -24,6 +24,10 @@ prost              = "0.14"
 p256               = { workspace = true }
 aes-gcm            = { workspace = true }
 sha2               = { workspace = true }
+base32             = { workspace = true }
+bs58               = { workspace = true }
+serde_ipld_dagcbor = { workspace = true }
+reqwest            = { workspace = true }
 
 [build-dependencies]
 prost-build           = "0.14"

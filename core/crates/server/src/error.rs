@@ -36,18 +36,20 @@ pub enum ServerError {
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            ServerError::Db(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
-            ServerError::NotFound => (StatusCode::NOT_FOUND, "not found"),
-            ServerError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
-            ServerError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad request"),
-            ServerError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limited"),
-            ServerError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+        let (status, message) = match self {
+            ServerError::Db(ref e) => {
+                tracing::error!("database error: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
+            }
+            ServerError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            ServerError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            ServerError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ServerError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limited".to_string()),
+            ServerError::Internal(ref msg) => {
+                tracing::error!("internal error: {msg}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
+            }
         };
-
-        if matches!(self, ServerError::Db(_) | ServerError::Internal(_)) {
-            tracing::error!(%self);
-        }
 
         (status, message).into_response()
     }

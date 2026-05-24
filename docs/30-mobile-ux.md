@@ -15,9 +15,7 @@ Invite links are web URLs on the homeserver's domain (e.g., `https://myorg.examp
 
 - Explains what's happening ("You've been invited to join [Org Name]")
 - Links to the App Store / Play Store if the app isn't installed
-- Has an "Open in actnet" button that fires a custom URL scheme (`actnet://invite/<server>/<token>`) to hand off to the app
-
-We use a custom URL scheme rather than Universal Links / App Links because those require a fixed domain hardcoded into the app binary at build time, which doesn't work when any homeserver can generate invite links.
+- Has an "Open in Avalanche" button that links to `https://go.theavalanche.net/invite/<server>/<token>`, which opens the app via Universal Links (iOS) / App Links (Android)
 
 ## Registration flow
 

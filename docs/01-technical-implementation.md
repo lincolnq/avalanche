@@ -517,7 +517,7 @@ Each stage produces a testable, shippable increment. Later stages depend on earl
 - Project registration API on the homeserver: a Project declares its scopes (e.g., "read availability for users in this group," "send push to RSVP'd attendees") and receives a Project identity
 - User-facing permission grant flow: when a user is added to a Project-managed group or opens a Project for the first time, the app presents the requested scopes for approval
 - Bot first-class support: bots are created as Project-owned accounts with their own keys; they join groups as normal members; their presence is visible to all group members
-- Project deep links: `actnet://project/<server>/<project-id>/<path>` scheme registered on iOS and Android; links open the correct Project view or navigate into a chat
+- Project deep links: `https://go.theavalanche.net/project/<server>/<project-id>/<path>` Universal Links registered on iOS and Android; links open the correct Project view or navigate into a chat
 - **Network tab** in the app: hierarchical list of servers → Projects; tap a Project to open its full-screen view
 - Project host SDK (Rust crate + documentation): the interface Project developers use to interact with the substrate
 
@@ -526,7 +526,7 @@ Each stage produces a testable, shippable increment. Later stages depend on earl
 **Testing:**
 - Scope enforcement test: a Project attempts an operation outside its granted scopes; the server rejects it
 - Bot visibility test: all group members can enumerate bots in their group; a bot cannot hide its presence
-- Deep link test: tapping an `actnet://` link from outside the app opens the correct view on both platforms
+- Deep link test: tapping a `https://go.theavalanche.net/` link from outside the app opens the correct view on both platforms
 - SDK smoke test: a minimal "hello world" Project (a bot that echoes messages) is built against the SDK and run against a test homeserver
 
 ---

@@ -70,15 +70,16 @@ final class AppState: ObservableObject {
 
     // MARK: - Deep linking
 
-    /// Handle an `actnet://` deep link URL.
-    /// Supported: `actnet://conversation/<recipient_did>`
+    /// Handle a deep link URL.
+    /// Supported: `https://go.theavalanche.net/conversation/<recipient_did>`
     func handleDeepLink(_ url: URL) {
         print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
-        guard url.scheme == "actnet" else { return }
-        guard url.host == "conversation" else { return }
+        guard Self.isDeepLink(url) else { return }
 
-        // Path is "/<recipient_did>"
-        let did = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathComponents = url.pathComponents.filter { $0 != "/" }
+        guard pathComponents.first == "conversation", pathComponents.count >= 2 else { return }
+
+        let did = pathComponents[1]
         guard !did.isEmpty, let accountId = accounts.first?.id else {
             print("[DeepLink] failed: did='\(did)', accounts=\(accounts.count)")
             return
@@ -88,6 +89,11 @@ final class AppState: ObservableObject {
         let conv = findOrCreateDMConversation(recipientDid: did, accountId: accountId)
         selectedTab = .chats
         navigateToConversation = conv
+    }
+
+    /// Check if a URL is a deep link for this app.
+    static func isDeepLink(_ url: URL) -> Bool {
+        url.host == "go.theavalanche.net"
     }
 
     // MARK: - Unread count (derived from in-memory messages)

@@ -40,49 +40,43 @@ struct ProjectWebView: View {
     }
 }
 
-/// Intercepts `actnet://` URLs so WKWebView recognizes the scheme.
-/// Without this, WKWebView silently drops navigation to unknown schemes.
-class DeepLinkSchemeHandler: NSObject, WKURLSchemeHandler {
-    let onDeepLink: ((URL) -> Void)?
-
-    init(onDeepLink: ((URL) -> Void)?) {
-        self.onDeepLink = onDeepLink
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
-        let url = urlSchemeTask.request.url!
-        print("[SchemeHandler] intercepted: \(url)")
-        onDeepLink?(url)
-        // Fail the load — we don't want to actually render anything.
-        urlSchemeTask.didFailWithError(URLError(.cancelled))
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {}
-}
-
 struct WebViewRepresentable: UIViewRepresentable {
     let url: URL
     var onDeepLink: ((URL) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onDeepLink: onDeepLink)
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        let handler = DeepLinkSchemeHandler(onDeepLink: onDeepLink)
-        // Keep a strong reference so it isn't deallocated.
-        context.coordinator.schemeHandler = handler
-        config.setURLSchemeHandler(handler, forURLScheme: "actnet")
-
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero)
+        webView.navigationDelegate = context.coordinator
         webView.load(URLRequest(url: url))
         return webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    class Coordinator: NSObject {
-        var schemeHandler: DeepLinkSchemeHandler?
+    /// Intercepts navigations to `go.theavalanche.net` and routes them as deep links.
+    class Coordinator: NSObject, WKNavigationDelegate {
+        let onDeepLink: ((URL) -> Void)?
+
+        init(onDeepLink: ((URL) -> Void)?) {
+            self.onDeepLink = onDeepLink
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            if let url = navigationAction.request.url, AppState.isDeepLink(url) {
+                print("[WebView] intercepted deep link: \(url)")
+                onDeepLink?(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
     }
 }

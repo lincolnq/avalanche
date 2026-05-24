@@ -39,7 +39,7 @@ struct InviteLinkEntryView: View {
     }
 
     private func validateLink() {
-        // TODO: Parse actnet://invite/<server>/<token> URL
+        // TODO: Parse https://go.theavalanche.net/invite/<server>/<token> URL
         // For now, accept anything as a mock token pointing at the dev server
         guard !linkText.isEmpty else { return }
         inviteToken = InviteToken(

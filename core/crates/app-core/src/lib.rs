@@ -18,6 +18,7 @@
 //! thread/dispatch queue, never from the main/UI thread.
 
 pub mod error;
+pub mod plc;
 pub mod recovery;
 
 pub mod proto {
@@ -157,7 +158,7 @@ impl AppCore {
             None
         };
 
-        let inner = rt.block_on(Self::create_inner(&server_url, store, None, false, rk.as_ref()))
+        let inner = rt.block_on(Self::create_inner(&server_url, store, None, false, rk.as_ref(), true))
             .map_err(AppErrorFfi::from)?;
 
         Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) }))
@@ -487,6 +488,7 @@ impl AppCore {
         display_name: Option<String>,
         is_bot: bool,
         recovery_key: Option<&[u8; 32]>,
+        use_plc_directory: bool,
     ) -> Result<AppCoreInner, AppError> {
         let identity = crypto::IdentityKeyPair::generate();
         let registration_id = rand::Rng::random::<u32>(&mut rand::rng()) & 0x3FFF;
@@ -499,8 +501,24 @@ impl AppCore {
             .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
             .collect::<Result<_, _>>()?;
 
-        // Generate P-256 rotation key for recovery.
-        let (rotation_key_private, _rotation_key_public) = recovery::generate_rotation_key();
+        // Generate P-256 rotation key for DID and recovery.
+        let (rotation_key_private, rotation_key_public) = recovery::generate_rotation_key();
+
+        // Build and submit DID genesis operation to the PLC directory.
+        let client_did = if use_plc_directory {
+            let identity_pub_bytes = identity.public_key().serialize();
+            let genesis_op = plc::build_genesis_op(
+                &rotation_key_public,
+                &identity_pub_bytes,
+                server_url,
+            );
+            let signed_op = plc::sign_plc_op(&genesis_op, &rotation_key_private)?;
+            let did = plc::derive_did(&signed_op)?;
+            plc::submit_genesis(&did, &signed_op).await?;
+            Some(did)
+        } else {
+            None
+        };
 
         // Build and encrypt recovery blob if a recovery key is provided.
         let recovery_blob = if let Some(key) = recovery_key {
@@ -514,8 +532,22 @@ impl AppCore {
             None
         };
 
+        // Sign "register:{did}:{server_url}" with the identity key to prove possession.
+        // Server URL is included to prevent cross-server replay of the signature.
+        let identity_key_signature = if let Some(ref did) = client_did {
+            let payload = format!("register:{did}:{server_url}");
+            let sig = identity
+                .private_key()
+                .calculate_signature(payload.as_bytes(), &mut rand::rngs::OsRng.unwrap_err())
+                .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e.into())))?;
+            Some(BASE64_URL_SAFE_NO_PAD.encode(&sig))
+        } else {
+            None
+        };
+
         let client = net::Client::new(server_url);
         let reg_resp = client.register(&RegisterRequest {
+            did: client_did.clone(),
             identity_key: identity.public_key().serialize(),
             registration_id: registration_id as i32,
             device_id: device_id as i32,
@@ -529,10 +561,11 @@ impl AppCore {
             display_name,
             is_bot,
             recovery_blob,
+            identity_key_signature,
         }).await?;
 
         store.save_identity(&identity, registration_id).await?;
-        store.save_rotation_key(&rotation_key_private, &_rotation_key_public).await?;
+        store.save_rotation_key(&rotation_key_private, &rotation_key_public).await?;
         store.save_registration(&RegistrationInfo {
             account_id: reg_resp.did.clone(),
             server_url: server_url.to_string(),
@@ -622,7 +655,7 @@ impl AppCore {
         display_name: Option<String>,
         is_bot: bool,
     ) -> Result<Self, AppError> {
-        let inner = Self::create_inner(server_url, store, display_name, is_bot, None).await?;
+        let inner = Self::create_inner(server_url, store, display_name, is_bot, None, false).await?;
         Ok(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) })
     }
 

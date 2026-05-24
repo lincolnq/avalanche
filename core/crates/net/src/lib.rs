@@ -61,6 +61,7 @@ impl Client {
     /// Register a new account. Returns DID and session token.
     pub async fn register(&self, req: &RegisterRequest) -> Result<RegisterResponse, NetError> {
         let body = serde_json::json!({
+            "did": req.did,
             "identity_key": BASE64_STANDARD.encode(&req.identity_key),
             "registration_id": req.registration_id,
             "device_id": req.device_id,
@@ -80,6 +81,7 @@ impl Client {
             "display_name": req.display_name,
             "is_bot": req.is_bot,
             "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
+            "identity_key_signature": req.identity_key_signature,
         });
 
         let resp = self.http

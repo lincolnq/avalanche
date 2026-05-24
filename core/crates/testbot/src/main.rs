@@ -164,7 +164,7 @@ async fn index() -> impl IntoResponse {
                 }
                 const data = await resp.json();
                 status.textContent = 'Bot created! Opening conversation...';
-                window.location.href = 'actnet://conversation/' + data.bot.did;
+                window.location.href = 'https://go.theavalanche.net/conversation/' + data.bot.did;
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
                 btn.disabled = false;

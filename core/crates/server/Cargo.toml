@@ -29,6 +29,7 @@ sha2        = { workspace = true }
 p256        = { workspace = true }
 base32      = { workspace = true }
 reqwest     = { workspace = true }
+bs58        = { workspace = true }
 
 [dev-dependencies]
 tokio                = { workspace = true }

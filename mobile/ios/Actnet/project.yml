@@ -20,6 +20,7 @@ targets:
       properties:
         com.apple.developer.associated-domains:
           - webcredentials:theavalanche.net
+          - applinks:go.theavalanche.net
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
@@ -36,7 +37,3 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
     info:
       path: Info.plist
-      properties:
-        CFBundleURLTypes:
-          - CFBundleURLSchemes:
-              - actnet

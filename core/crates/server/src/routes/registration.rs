@@ -8,18 +8,16 @@
 //!
 //! - **No authentication on registration.** Anyone can create an account.
 //!   Rate limiting by IP (not yet implemented) is the primary abuse control.
-//! - **DID generation is a local stub.** The `did:plc` is derived from a
-//!   SHA-256 hash of the identity key, server URL, and timestamp. It is only
-//!   resolvable on this server. Full PLC directory integration ships in
-//!   Stage 9.
-//! - **Identity key is stored as-is.** The server trusts the client's
-//!   self-reported identity key. In the full protocol, the DID document's
-//!   verification method would be checked against the PLC directory.
+//! - **DID verification.** When the client provides a DID, the server
+//!   verifies it against the PLC directory: the DID must exist and the
+//!   `avalanche` verification method must match the client's identity key.
+//!   If no DID is provided (tests/bots), the server generates a local stub.
 //! - **Prekeys are public material.** The server stores and serves public
 //!   key halves; private halves never leave the client.
 
 use axum::{extract::State, routing::post, Json, Router};
 use base64::prelude::*;
+use libsignal_protocol as signal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
@@ -32,6 +30,8 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct RegisterRequest {
+    /// Client-generated DID (from PLC directory). If absent, server generates a stub.
+    did: Option<String>,
     identity_key: String, // base64
     registration_id: i32,
     device_id: i32,
@@ -48,6 +48,10 @@ struct RegisterRequest {
     /// identity key + server list, encrypted with the user's passkey-derived
     /// symmetric key. Optional — if absent, no recovery is possible.
     recovery_blob: Option<String>, // base64
+    /// Ed25519 signature proving possession of the identity key.
+    /// Signs the canonical payload `"register:{did}"` (base64url, no padding).
+    /// Required when `did` is provided.
+    identity_key_signature: Option<String>, // base64url
 }
 
 #[derive(Deserialize)]
@@ -85,8 +89,23 @@ async fn register(
         .decode(&req.identity_key)
         .map_err(|_| ServerError::BadRequest("invalid base64 identity_key".into()))?;
 
-    // Generate a did:plc stub: hash identity_key + server_url + timestamp.
-    let did = generate_did_plc(&identity_key, &state.config.server_url);
+    // Human accounts must provide a DID verified against the PLC directory,
+    // plus a signature proving possession of the identity key.
+    // Bot accounts may omit both.
+    let did = if let Some(client_did) = &req.did {
+        if !client_did.starts_with("did:plc:") {
+            return Err(ServerError::BadRequest("DID must start with did:plc:".into()));
+        }
+        verify_did_plc(client_did, &identity_key).await?;
+        verify_identity_key_signature(client_did, &state.config.server_url, &identity_key, &req.identity_key_signature)?;
+        client_did.clone()
+    } else if req.is_bot {
+        generate_local_did(&identity_key, &state.config.server_url)
+    } else {
+        return Err(ServerError::BadRequest(
+            "did is required for non-bot accounts".into(),
+        ));
+    };
 
     if let Some(name) = &req.display_name {
         if name.len() > 100 {
@@ -133,8 +152,8 @@ async fn register(
             "publicKeyBase64": req.identity_key,
         }],
         "service": [{
-            "id": format!("{did}#actnet"),
-            "type": "ActnetHomeserver",
+            "id": format!("{did}#avalanche"),
+            "type": "AvalancheHomeserver",
             "serviceEndpoint": state.config.server_url,
         }],
     });
@@ -209,7 +228,146 @@ async fn store_prekeys(
     Ok(())
 }
 
-fn generate_did_plc(identity_key: &[u8], server_url: &str) -> String {
+/// Verify that the client actually holds the private key for the identity key.
+///
+/// The client signs `"register:{did}:{server_url}"` with the Ed25519 identity key.
+/// This prevents an attacker from registering with someone else's public key,
+/// and the server URL binding prevents cross-server replay.
+fn verify_identity_key_signature(
+    did: &str,
+    server_url: &str,
+    identity_key_bytes: &[u8],
+    signature: &Option<String>,
+) -> Result<(), ServerError> {
+    let sig_b64 = signature
+        .as_deref()
+        .ok_or_else(|| ServerError::BadRequest("identity_key_signature is required".into()))?;
+
+    let sig_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(sig_b64)
+        .map_err(|_| ServerError::BadRequest("invalid base64 identity_key_signature".into()))?;
+
+    let identity_key = signal::IdentityKey::decode(identity_key_bytes)
+        .map_err(|_| ServerError::BadRequest("invalid identity_key".into()))?;
+
+    let payload = format!("register:{did}:{server_url}");
+    let valid = identity_key
+        .public_key()
+        .verify_signature(payload.as_bytes(), &sig_bytes);
+
+    if !valid {
+        tracing::warn!(
+            "identity_key_signature failed for DID {did} \
+             (server_url used in payload: {server_url})"
+        );
+        return Err(ServerError::BadRequest(
+            "identity_key_signature verification failed".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Verify a client-provided DID against the PLC directory.
+///
+/// Fetches the DID document, finds the `actnet` verification method,
+/// decodes the `did:key`, and checks it matches the identity key.
+async fn verify_did_plc(did: &str, identity_key: &[u8]) -> Result<(), ServerError> {
+    let url = format!("https://plc.directory/{did}");
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| ServerError::Internal(format!("PLC directory request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerError::BadRequest(format!(
+            "DID not found in PLC directory: {did}"
+        )));
+    }
+
+    let doc: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| ServerError::Internal(format!("PLC directory response parse failed: {e}")))?;
+
+    // The resolved DID document has verificationMethod as an array of objects:
+    //   { "id": "did:plc:...#avalanche", "type": "Multikey", "publicKeyMultibase": "z6Mk..." }
+    // Find the entry whose id ends with "#avalanche".
+    let vm_array = doc
+        .get("verificationMethod")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            ServerError::BadRequest("DID document missing verificationMethod array".into())
+        })?;
+
+    let avalanche_vm = vm_array
+        .iter()
+        .find(|vm| {
+            vm.get("id")
+                .and_then(|id| id.as_str())
+                .is_some_and(|id| id.ends_with("#avalanche"))
+        })
+        .ok_or_else(|| {
+            ServerError::BadRequest("DID document missing #avalanche verification method".into())
+        })?;
+
+    let pub_key_multibase = avalanche_vm
+        .get("publicKeyMultibase")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            ServerError::BadRequest("avalanche verification method missing publicKeyMultibase".into())
+        })?;
+
+    // publicKeyMultibase is "z" + base58btc(multicodec_prefix + raw_key).
+    // This is the same encoding as did:key without the "did:key:" prefix.
+    let plc_pub_key =
+        decode_did_key_ed25519(&format!("did:key:{pub_key_multibase}")).map_err(|e| {
+            ServerError::BadRequest(format!("invalid verification method in DID doc: {e}"))
+        })?;
+
+    // The client's identity_key is libsignal format: 0x05 prefix + 32 raw bytes.
+    // Strip the prefix for comparison.
+    let client_raw = if identity_key.len() == 33 && identity_key[0] == 0x05 {
+        &identity_key[1..]
+    } else {
+        identity_key
+    };
+
+    if plc_pub_key != client_raw {
+        return Err(ServerError::BadRequest(
+            "identity key does not match DID document verification method".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Decode a `did:key:z...` (Ed25519) to the raw 32-byte public key.
+fn decode_did_key_ed25519(did_key: &str) -> Result<Vec<u8>, String> {
+    let z_part = did_key
+        .strip_prefix("did:key:z")
+        .ok_or("did:key must start with did:key:z")?;
+
+    let bytes = bs58::decode(z_part)
+        .into_vec()
+        .map_err(|e| format!("base58 decode failed: {e}"))?;
+
+    // Expect multicodec prefix 0xed 0x01 (Ed25519) + 32 bytes.
+    if bytes.len() < 2 {
+        return Err("did:key payload too short".into());
+    }
+    if bytes[0] != 0xed || bytes[1] != 0x01 {
+        return Err(format!(
+            "unexpected multicodec prefix: [{:#04x}, {:#04x}], expected Ed25519 [0xed, 0x01]",
+            bytes[0], bytes[1]
+        ));
+    }
+
+    Ok(bytes[2..].to_vec())
+}
+
+/// Generate a local-only DID for bot accounts that don't use the PLC directory.
+/// Uses `did:local:` prefix to make it clear this is not a real PLC DID.
+fn generate_local_did(identity_key: &[u8], server_url: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(identity_key);
     hasher.update(server_url.as_bytes());
@@ -221,9 +379,8 @@ fn generate_did_plc(identity_key: &[u8], server_url: &str) -> String {
             .to_le_bytes(),
     );
     let hash = hasher.finalize();
-    // did:plc uses base32 lowercase, truncated to 24 chars.
     let encoded = base32::encode(base32::Alphabet::Rfc4648Lower { padding: false }, &hash);
-    format!("did:plc:{}", &encoded[..24])
+    format!("did:local:{}", &encoded[..24])
 }
 
 fn generate_token() -> String {
