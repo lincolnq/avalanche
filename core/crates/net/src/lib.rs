@@ -98,6 +98,21 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    /// Validate an invite token against the server.
+    pub async fn validate_invite(&self, token: &str) -> Result<InviteValidationResponse, NetError> {
+        let resp = self.http
+            .get(format!("{}/v1/invites/{}", self.server_url, token))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(resp.json().await?)
+    }
+
     /// Step 1 of authentication: request a challenge nonce from the server.
     pub async fn challenge(&self, did: &str, device_id: i32) -> Result<String, NetError> {
         let resp = self.http

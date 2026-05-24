@@ -4,6 +4,7 @@ struct InviteLinkEntryView: View {
     @State private var linkText = ""
     @State private var inviteToken: InviteToken?
     @State private var errorMessage: String?
+    @State private var isValidating = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -19,12 +20,18 @@ struct InviteLinkEntryView: View {
                     .font(.callout)
             }
 
-            Button("Continue") {
+            Button {
                 validateLink()
+            } label: {
+                if isValidating {
+                    ProgressView()
+                } else {
+                    Text("Continue")
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(linkText.isEmpty)
+            .disabled(linkText.isEmpty || isValidating)
 
             Spacer()
         }
@@ -39,13 +46,24 @@ struct InviteLinkEntryView: View {
     }
 
     private func validateLink() {
-        // TODO: Parse https://go.theavalanche.net/invite/<server>/<token> URL
-        // For now, accept anything as a mock token pointing at the dev server
-        guard !linkText.isEmpty else { return }
-        inviteToken = InviteToken(
-            serverUrl: URL(string: DevServerActnetService.defaultServerUrl)!,
-            serverName: "Dev Server",
-            token: "mock-token"
-        )
+        errorMessage = nil
+        isValidating = true
+
+        Task {
+            do {
+                let token: InviteToken
+                if let url = URL(string: linkText), url.host == "go.theavalanche.net" {
+                    // Full URL: https://go.theavalanche.net/invite/<token>
+                    token = try await InviteToken.from(url: url)
+                } else {
+                    // Bare token string
+                    token = try await InviteToken.from(token: linkText.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                inviteToken = token
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isValidating = false
+        }
     }
 }

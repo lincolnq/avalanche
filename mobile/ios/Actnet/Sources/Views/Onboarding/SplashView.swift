@@ -1,10 +1,13 @@
 import SwiftUI
 
 struct SplashView: View {
+    @EnvironmentObject var appState: AppState
     @State private var showScanner = false
     @State private var showLinkEntry = false
     @State private var showRecovery = false
     @State private var showDevSettings = false
+    @State private var pendingInvite: InviteToken?
+    @State private var isValidatingDeepLink = false
 
     var body: some View {
         NavigationStack {
@@ -79,6 +82,23 @@ struct SplashView: View {
                 DevSettingsView()
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(item: $pendingInvite) { token in
+                IdentityPickerView(inviteToken: token)
+            }
+            .onChange(of: appState.pendingInviteToken) {
+                if let token = appState.pendingInviteToken {
+                    appState.pendingInviteToken = nil
+                    isValidatingDeepLink = true
+                    Task {
+                        do {
+                            pendingInvite = try await InviteToken.from(token: token)
+                        } catch {
+                            print("[SplashView] invite validation failed: \(error)")
+                        }
+                        isValidatingDeepLink = false
+                    }
+                }
+            }
         }
         .background(Color.avPaper)
     }

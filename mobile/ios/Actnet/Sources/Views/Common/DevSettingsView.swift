@@ -3,41 +3,65 @@ import SwiftUI
 struct DevSettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var showMyQRCode = false
+    @State private var showLogoutConfirmation = false
+
+    private var isLoggedIn: Bool { !appState.accounts.isEmpty }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Service Mode") {
-                    ForEach(ServiceMode.allCases, id: \.rawValue) { mode in
+                if isLoggedIn {
+                    Section {
                         Button {
-                            appState.switchMode(mode)
-                            dismiss()
+                            showMyQRCode = true
                         } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(mode.rawValue)
-                                    Text(subtitle(for: mode))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if appState.serviceMode == mode {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.avBrand)
-                                }
-                            }
+                            Label("My QR Code", systemImage: "qrcode")
                         }
-                        .foregroundStyle(.primary)
+                    }
+
+                    Section {
+                        Button(role: .destructive) {
+                            showLogoutConfirmation = true
+                        } label: {
+                            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     }
                 }
 
-                if appState.serviceMode == .devServer {
-                    Section("Dev Server") {
-                        HStack {
-                            Text("URL")
-                            Spacer()
-                            Text(DevServerActnetService.defaultServerUrl)
-                                .foregroundStyle(.secondary)
+                if !isLoggedIn {
+                    Section("Service Mode") {
+                        ForEach(ServiceMode.allCases, id: \.rawValue) { mode in
+                            Button {
+                                appState.switchMode(mode)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(mode.rawValue)
+                                        Text(subtitle(for: mode))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if appState.serviceMode == mode {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.avBrand)
+                                    }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                    }
+
+                    if appState.serviceMode == .devServer {
+                        Section("Dev Server") {
+                            HStack {
+                                Text("URL")
+                                Spacer()
+                                Text(DevServerActnetService.defaultServerUrl)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -65,6 +89,17 @@ struct DevSettingsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .navigationDestination(isPresented: $showMyQRCode) {
+                MyQRCodeView()
+            }
+            .confirmationDialog("Log out?", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
+                Button("Log Out", role: .destructive) {
+                    appState.logout()
+                    dismiss()
+                }
+            } message: {
+                Text("This will remove all accounts and messages from this device.")
             }
         }
     }

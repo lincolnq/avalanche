@@ -198,6 +198,15 @@ impl RawFetchResponse {
     }
 }
 
+// ── Invites ─────────────────────────────────────────────────────────────────
+
+/// Response from validating an invite token.
+#[derive(Debug, Deserialize)]
+pub struct InviteValidationResponse {
+    pub server_name: String,
+    pub post_onboarding_redirect: Option<String>,
+}
+
 // ── Projects ────────────────────────────────────────────────────────────────
 
 /// A Project installed on the homeserver.

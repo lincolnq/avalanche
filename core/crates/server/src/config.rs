@@ -29,6 +29,10 @@ pub struct Config {
     pub projects_json: String,
     /// Push relay URL (e.g. "http://localhost:3002"). If unset, push is disabled.
     pub relay_url: Option<String>,
+    /// Human-readable server name (shown to users during invite/onboarding).
+    pub server_name: String,
+    /// Domain used for deep link URLs in invite redirects (default: go.theavalanche.net).
+    pub invite_domain: String,
 }
 
 impl Config {
@@ -67,6 +71,10 @@ impl Config {
             projects_json: std::env::var("PROJECTS")
                 .unwrap_or_else(|_| "[]".to_string()),
             relay_url: std::env::var("RELAY_URL").ok(),
+            server_name: std::env::var("SERVER_NAME")
+                .unwrap_or_else(|_| "Avalanche Server".to_string()),
+            invite_domain: std::env::var("INVITE_DOMAIN")
+                .unwrap_or_else(|_| "go.theavalanche.net".to_string()),
         }
     }
 }

@@ -149,7 +149,14 @@ struct PasskeyExplainerView: View {
                     displayName: displayName,
                     recoveryKey: recoveryKey
                 )
-                // createAccount sets isOnboarding = false, which navigates away
+                // createAccount sets isOnboarding = false, which navigates to MainTabView.
+                // If the invite has a post-onboarding redirect, follow it.
+                if let redirect = inviteToken.postOnboardingRedirect,
+                   let url = URL(string: redirect) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        appState.handleDeepLink(url)
+                    }
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 isRegistering = false

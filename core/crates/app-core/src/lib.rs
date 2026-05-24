@@ -479,6 +479,46 @@ pub fn download_recovery_blob(
     }).map_err(AppErrorFfi::from)
 }
 
+/// Decoded invite token info returned to the mobile layer.
+#[derive(uniffi::Record)]
+pub struct InviteInfo {
+    pub server_url: String,
+    pub server_name: String,
+    pub inviter_did: Option<String>,
+    pub post_onboarding_redirect: Option<String>,
+}
+
+/// Parse and validate an invite token.
+/// `token` is the base64url-encoded JSON payload from the invite URL.
+/// Decodes locally to extract the server URL, then calls the server to validate.
+#[uniffi::export]
+pub fn validate_invite(token: String) -> Result<InviteInfo, AppErrorFfi> {
+    ffi_runtime().block_on(async {
+        let json_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(&token)
+            .map_err(|_| AppError::Protocol("invalid base64url invite token".into()))?;
+
+        #[derive(serde::Deserialize)]
+        struct TokenPayload {
+            server_url: String,
+            inviter_did: Option<String>,
+        }
+
+        let payload: TokenPayload = serde_json::from_slice(&json_bytes)
+            .map_err(|_| AppError::Protocol("invalid invite token JSON".into()))?;
+
+        let client = net::Client::new(&payload.server_url);
+        let resp = client.validate_invite(&token).await?;
+
+        Ok::<_, AppError>(InviteInfo {
+            server_url: payload.server_url,
+            server_name: resp.server_name,
+            inviter_did: payload.inviter_did,
+            post_onboarding_redirect: resp.post_onboarding_redirect,
+        })
+    }).map_err(AppErrorFfi::from)
+}
+
 // ── Internal async implementation (not exported via FFI) ────────────────────
 
 impl AppCore {

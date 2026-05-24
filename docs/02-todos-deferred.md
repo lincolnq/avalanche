@@ -14,6 +14,7 @@
 - Offline indicator (show when server is unreachable / WS disconnected)
 - Persist message history locally (currently messages are only in memory)
 - Account switcher UI for multi-account support
+- My QR Code screen uses `accounts.first` — should use the active/selected account once multi-account is implemented
 
 ## Privacy / identity
 - PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.

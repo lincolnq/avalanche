@@ -16,6 +16,7 @@ mod accounts;
 mod auth;
 mod devices;
 mod did;
+mod invites;
 mod messages;
 mod prekeys;
 mod projects;
@@ -37,4 +38,5 @@ pub fn router() -> Router<AppState> {
         .merge(accounts::routes())
         .merge(recovery::routes())
         .merge(devices::routes())
+        .merge(invites::routes())
 }

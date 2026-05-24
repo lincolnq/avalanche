@@ -71,25 +71,54 @@ final class AppState: ObservableObject {
     // MARK: - Deep linking
 
     /// Handle a deep link URL.
-    /// Supported: `https://go.theavalanche.net/conversation/<recipient_did>`
+    /// Supported:
+    /// - `https://go.theavalanche.net/conversation/<recipient_did>`
+    /// - `https://go.theavalanche.net/invite/<token>`
     func handleDeepLink(_ url: URL) {
         print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
         guard Self.isDeepLink(url) else { return }
 
         let pathComponents = url.pathComponents.filter { $0 != "/" }
-        guard pathComponents.first == "conversation", pathComponents.count >= 2 else { return }
+        guard let action = pathComponents.first, pathComponents.count >= 2 else { return }
 
-        let did = pathComponents[1]
-        guard !did.isEmpty, let accountId = accounts.first?.id else {
-            print("[DeepLink] failed: did='\(did)', accounts=\(accounts.count)")
-            return
+        switch action {
+        case "conversation":
+            let did = pathComponents[1]
+            guard !did.isEmpty, let accountId = accounts.first?.id else {
+                print("[DeepLink] failed: did='\(did)', accounts=\(accounts.count)")
+                return
+            }
+            print("[DeepLink] navigating to conversation with \(did)")
+            let conv = findOrCreateDMConversation(recipientDid: did, accountId: accountId)
+            selectedTab = .chats
+            navigateToConversation = conv
+
+        case "invite":
+            let token = pathComponents[1]
+            print("[DeepLink] handling invite token")
+            // Try to decode the token locally to check if we're already on the server.
+            if let data = Data(base64URLEncoded: token),
+               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let serverUrl = payload["server_url"] as? String,
+               let inviterDid = payload["inviter_did"] as? String,
+               let account = accounts.first(where: { $0.servers.contains(where: { $0.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }) }) {
+                // Already registered on this server — skip to DM.
+                print("[DeepLink] already on server, opening DM with \(inviterDid)")
+                let conv = findOrCreateDMConversation(recipientDid: inviterDid, accountId: account.id)
+                selectedTab = .chats
+                navigateToConversation = conv
+            } else {
+                // Not on this server — start onboarding flow.
+                pendingInviteToken = token
+            }
+
+        default:
+            print("[DeepLink] unknown action: \(action)")
         }
-
-        print("[DeepLink] navigating to conversation with \(did)")
-        let conv = findOrCreateDMConversation(recipientDid: did, accountId: accountId)
-        selectedTab = .chats
-        navigateToConversation = conv
     }
+
+    /// Pending invite token from a deep link, picked up by the onboarding flow.
+    @Published var pendingInviteToken: String?
 
     /// Check if a URL is a deep link for this app.
     static func isDeepLink(_ url: URL) -> Bool {
@@ -171,6 +200,20 @@ final class AppState: ObservableObject {
             startMessagePolling()
             Task { await PushManager.requestPermissionAndRegister(appState: self) }
         }
+    }
+
+    func logout() {
+        for (_, task) in wsLoopTasks { task.cancel() }
+        wsLoopTasks.removeAll()
+        accounts.removeAll()
+        conversations.removeAll()
+        messagesByConversation.removeAll()
+        cores.removeAll()
+        displayNameCache.removeAll()
+        displayNameInFlight.removeAll()
+        Self.clearPersistedAccounts()
+        Self.clearPersistedConversations()
+        isOnboarding = true
     }
 
     func switchMode(_ mode: ServiceMode) {
