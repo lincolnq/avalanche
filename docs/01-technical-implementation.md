@@ -567,6 +567,7 @@ Observer bots in action-bound groups surface high-engagement moments to an organ
 - Cross-server casual groups: ad-hoc encrypted group chats spanning homeservers (peer-managed, no Project required)
 - Guest participation in action-bound groups: homeserver A issues a guest credential for a user, homeserver B's Project accepts it and grants scoped access
 - Selective federation: homeserver admins configure an allowlist of servers they federate with
+- Client-side DID verification on session init: when establishing a Signal session with a user on a remote server, the client resolves the sender's DID against the PLC directory to verify the identity key in the prekey bundle matches. One-time check per contact, not per message — the server can't do this since it has no concept of Signal sessions
 
 **Why ninth:** Federation is a meaningful differentiator for resilience and multi-org organizing, but the system is fully usable without it. Every first-party Project works on a single homeserver. Deferring federation means the complexity of cross-server delivery, DID portability, and guest credentials doesn't slow down the path to a working, deployable product. It also means the federation design can be informed by real usage patterns from the single-server deployment rather than guessed at upfront.
 
