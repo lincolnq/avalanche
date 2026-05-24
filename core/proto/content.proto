@@ -7,6 +7,12 @@ message ContentMessage {
     ReceiptMessage receipt = 2;
   }
   uint64 timestamp_ms = 15;
+  // Sender's profile key (32 bytes, AES-256-GCM). When present, recipients
+  // can fetch and decrypt the sender's encrypted profile blob. Attached to
+  // any ContentMessage variant when the sender has chosen to share their
+  // profile with the recipient. Empty bytes (length 0) means "not sharing
+  // this time" — protobuf has no native optional-bytes distinction.
+  bytes profile_key = 17;
 }
 
 message TextMessage {

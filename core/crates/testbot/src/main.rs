@@ -373,13 +373,18 @@ async fn bot_message_loop(
             // Generate reply after the read receipt.
             let mut runner = bot.lock().await;
 
+            // Look up the sender's display name from the local cache. The
+            // profile_key was attached to this very message, so app-core has
+            // already fetched and decrypted the profile blob in handle_inbound_profile_key.
+            let user_display_name = runner.app_core.contact_display_name_async(&msg.sender_did).await;
+
             runner.conversation.push(ConversationMessage {
                 role: "user".into(),
                 content: plaintext,
             });
 
             let response =
-                generate_response(&anthropic_key, &runner.conversation).await;
+                generate_response(&anthropic_key, &runner.conversation, user_display_name.as_deref()).await;
 
             tracing::info!("[bot {}] >>> to {}: {:?}", bot_did, msg.sender_did, response);
 
@@ -408,6 +413,7 @@ async fn bot_message_loop(
 async fn generate_response(
     api_key: &Option<String>,
     conversation: &[ConversationMessage],
+    user_display_name: Option<&str>,
 ) -> String {
     let Some(api_key) = api_key else {
         return echo_response(conversation);
@@ -423,10 +429,19 @@ async fn generate_response(
         })
         .collect();
 
+    let mut system_prompt = String::from(
+        "You are a friendly chatbot on the actnet platform. Keep your responses \
+         concise and conversational. You're chatting with an activist — be \
+         supportive and helpful."
+    );
+    if let Some(name) = user_display_name {
+        system_prompt.push_str(&format!(" The user's display name is {name}."));
+    }
+
     let body = serde_json::json!({
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": 1024,
-        "system": "You are a friendly chatbot on the actnet platform. Keep your responses concise and conversational. You're chatting with an activist — be supportive and helpful.",
+        "system": system_prompt,
         "messages": messages,
     });
 

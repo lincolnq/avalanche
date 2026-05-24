@@ -261,8 +261,9 @@ final class AppState: ObservableObject {
 
         let svc = _service
         let rk = recoveryKey
+        let dn = displayName
         let core = try await Task.detached {
-            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, recoveryKey: rk)
+            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, recoveryKey: rk, displayName: dn)
         }.value
 
         let did = core.did()

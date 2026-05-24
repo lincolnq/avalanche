@@ -6,7 +6,9 @@ import Foundation
 protocol ActnetService: Sendable {
     /// Create a new account. `recoveryKey` is a 32-byte symmetric key from
     /// passkey PRF or recovery phrase. Pass empty Data to skip recovery setup.
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, recoveryKey: Data) throws -> any AppCoreProtocol
+    /// `displayName` is the user's chosen display name; encrypted under a
+    /// freshly generated profile key and uploaded alongside registration.
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, recoveryKey: Data, displayName: String) throws -> any AppCoreProtocol
     func login(dbPath: String, dbKey: String) throws -> any AppCoreProtocol
 }
 

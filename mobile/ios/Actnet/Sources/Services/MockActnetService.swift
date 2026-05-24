@@ -9,9 +9,12 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
     private var nextMessageId: Int64 = 1
     private let lock = NSLock()
     private var storedMessages: [String: [StoredMessageFfi]] = [:]  // keyed by conversation_id
+    private var ownDisplayName_: String
+    private var contactDisplayNames: [String: String] = [:]
 
-    init(did: String? = nil) {
+    init(did: String? = nil, displayName: String = "") {
         self.mockDid = did ?? "did:plc:mock\(UUID().uuidString.prefix(8).lowercased())"
+        self.ownDisplayName_ = displayName
     }
 
     func did() -> String { mockDid }
@@ -101,6 +104,31 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         // Mock: no-op
     }
 
+    func ownDisplayName() throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        return ownDisplayName_
+    }
+
+    func setDisplayName(displayName: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        ownDisplayName_ = displayName
+    }
+
+    func contactDisplayName(did: String) throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        return contactDisplayNames[did] ?? ""
+    }
+
+    func refreshContactProfile(did: String) throws -> Bool {
+        // Mock: nothing to refresh from.
+        false
+    }
+
+    func primeContactProfile(did: String, displayName: String, profileKey: Data) throws {
+        lock.lock(); defer { lock.unlock() }
+        contactDisplayNames[did] = displayName
+    }
+
     func unreadCount(conversationId: String) throws -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
@@ -151,9 +179,9 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
 
 /// Mock service that creates fake accounts and seeds initial conversations.
 struct MockActnetService: ActnetService {
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, recoveryKey: Data) throws -> any AppCoreProtocol {
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, recoveryKey: Data, displayName: String) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5) // simulate network
-        return MockAppCore()
+        return MockAppCore(displayName: displayName)
     }
 
     func login(dbPath: String, dbKey: String) throws -> any AppCoreProtocol {

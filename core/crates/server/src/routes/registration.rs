@@ -48,6 +48,10 @@ struct RegisterRequest {
     /// identity key + server list, encrypted with the user's passkey-derived
     /// symmetric key. Optional — if absent, no recovery is possible.
     recovery_blob: Option<String>, // base64
+    /// Encrypted profile blob (opaque ciphertext, AES-256-GCM under the user's
+    /// profile key). Optional — accounts without a profile show DID as the
+    /// display name to contacts until set via `PUT /v1/profile`.
+    encrypted_profile: Option<String>, // base64
     /// Ed25519 signature proving possession of the identity key.
     /// Signs the canonical payload `"register:{did}"` (base64url, no padding).
     /// Required when `did` is provided.
@@ -129,6 +133,17 @@ async fn register(
     // Store recovery blob if provided.
     if let Some(blob) = &recovery_blob {
         db::accounts::update_recovery_blob(&mut conn, account_id, Some(blob)).await?;
+    }
+
+    // Store encrypted profile blob if provided.
+    if let Some(profile_b64) = &req.encrypted_profile {
+        let profile_blob = BASE64_STANDARD
+            .decode(profile_b64)
+            .map_err(|_| ServerError::BadRequest("invalid base64 encrypted_profile".into()))?;
+        if profile_blob.len() > 16 * 1024 {
+            return Err(ServerError::BadRequest("encrypted_profile too large".into()));
+        }
+        db::profiles::upsert(&mut conn, account_id, &profile_blob).await?;
     }
 
     // Create device.

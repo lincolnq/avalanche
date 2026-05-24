@@ -112,4 +112,18 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         private_key   BLOB    NOT NULL,\
         public_key    BLOB    NOT NULL\
     )",
+    // Local profile state: own profile key + cached display name.
+    // Constrained to one row.
+    "CREATE TABLE IF NOT EXISTS own_profile (\
+        id            INTEGER PRIMARY KEY CHECK (id = 1),\
+        profile_key   BLOB    NOT NULL,\
+        display_name  TEXT    NOT NULL\
+    )",
+    // Cached decrypted contact profiles, keyed by DID.
+    "CREATE TABLE IF NOT EXISTS contact_profiles (\
+        did           TEXT    PRIMARY KEY,\
+        display_name  TEXT    NOT NULL,\
+        profile_key   BLOB    NOT NULL,\
+        fetched_at    INTEGER NOT NULL\
+    )",
 ];

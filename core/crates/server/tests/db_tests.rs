@@ -762,3 +762,47 @@ async fn full_auth_flow_wrong_signature_rejected() {
     let valid = stored_key.public_key().verify_signature(&nonce_bytes, &bad_sig);
     assert!(!valid, "signature from a different key should be rejected");
 }
+
+// ── Profile tests ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn profile_upsert_and_get() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let did = "did:plc:profiletest0000001";
+    let account_id = server::db::accounts::create(&mut *tx, did, None, false).await.unwrap();
+
+    let blob = b"opaque-encrypted-profile-bytes";
+    server::db::profiles::upsert(&mut *tx, account_id, blob).await.unwrap();
+
+    let got = server::db::profiles::get_by_account_id(&mut *tx, account_id).await.unwrap();
+    assert_eq!(got.as_deref(), Some(blob.as_ref()));
+}
+
+#[tokio::test]
+async fn profile_upsert_overwrites() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let did = "did:plc:profiletest0000002";
+    let account_id = server::db::accounts::create(&mut *tx, did, None, false).await.unwrap();
+
+    server::db::profiles::upsert(&mut *tx, account_id, b"v1").await.unwrap();
+    server::db::profiles::upsert(&mut *tx, account_id, b"v2").await.unwrap();
+
+    let got = server::db::profiles::get_by_account_id(&mut *tx, account_id).await.unwrap();
+    assert_eq!(got.as_deref(), Some(b"v2".as_ref()));
+}
+
+#[tokio::test]
+async fn profile_get_missing_returns_none() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let did = "did:plc:profiletest0000003";
+    let account_id = server::db::accounts::create(&mut *tx, did, None, false).await.unwrap();
+
+    let got = server::db::profiles::get_by_account_id(&mut *tx, account_id).await.unwrap();
+    assert!(got.is_none());
+}

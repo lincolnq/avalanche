@@ -19,6 +19,7 @@ mod did;
 mod invites;
 mod messages;
 mod prekeys;
+mod profile;
 mod projects;
 mod push;
 mod recovery;
@@ -39,4 +40,5 @@ pub fn router() -> Router<AppState> {
         .merge(recovery::routes())
         .merge(devices::routes())
         .merge(invites::routes())
+        .merge(profile::routes())
 }

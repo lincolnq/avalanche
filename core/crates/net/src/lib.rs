@@ -81,6 +81,7 @@ impl Client {
             "display_name": req.display_name,
             "is_bot": req.is_bot,
             "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
+            "encrypted_profile": req.encrypted_profile.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "identity_key_signature": req.identity_key_signature,
         });
 
@@ -480,6 +481,49 @@ impl Client {
         }
 
         Ok(resp.json().await?)
+    }
+
+    // ── Profile ──────────────────────────────────────────────────────────
+
+    /// Upload the caller's encrypted profile blob.
+    pub async fn put_profile(&self, encrypted_blob: &[u8]) -> Result<(), NetError> {
+        let resp = self.authed_request(reqwest::Method::PUT, "/v1/profile")
+            .json(&serde_json::json!({
+                "encrypted_blob": BASE64_STANDARD.encode(encrypted_blob),
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Fetch a contact's encrypted profile blob. Returns `Ok(None)` on 404
+    /// (which is returned identically whether the DID is unknown or simply
+    /// has no profile, so callers can't distinguish those cases).
+    pub async fn get_profile(&self, did: &str) -> Result<Option<Vec<u8>>, NetError> {
+        let resp = self
+            .authed_request(reqwest::Method::GET, &format!("/v1/profile/{}", did))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct R { encrypted_blob: String }
+        let body: R = resp.json().await?;
+        let blob = BASE64_STANDARD
+            .decode(&body.encrypted_blob)
+            .map_err(|e| NetError::Base64(e.to_string()))?;
+        Ok(Some(blob))
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

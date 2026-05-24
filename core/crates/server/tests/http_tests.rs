@@ -36,6 +36,8 @@ async fn test_state() -> AppState {
         project_token_lifetime_secs: 3600,
         projects_json: "[]".into(),
         relay_url: None,
+        server_name: "Test".into(),
+        invite_domain: "go.example.test".into(),
     };
     AppState::new(pool, config)
 }

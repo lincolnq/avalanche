@@ -29,6 +29,8 @@ pub struct RegisterRequest {
     pub is_bot: bool,
     /// Encrypted recovery blob (opaque ciphertext). Optional.
     pub recovery_blob: Option<Vec<u8>>,
+    /// Encrypted profile blob (AES-256-GCM under the user's profile key). Optional.
+    pub encrypted_profile: Option<Vec<u8>>,
     /// Ed25519 signature of `"register:{did}"` proving identity key possession.
     /// Required when `did` is provided.
     pub identity_key_signature: Option<String>,

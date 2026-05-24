@@ -19,6 +19,7 @@
 
 pub mod error;
 pub mod plc;
+pub mod profile;
 pub mod recovery;
 
 pub mod proto {
@@ -135,6 +136,11 @@ impl AppCore {
     /// If provided, a recovery blob is encrypted and uploaded to the server.
     /// Pass an empty vec to skip recovery setup.
     ///
+    /// `display_name` is the user's chosen display name. A profile key is
+    /// generated, the name is encrypted under it, and the blob is uploaded
+    /// atomically with registration. The profile key travels with outgoing
+    /// messages so contacts can fetch and decrypt the blob.
+    ///
     /// Call from a background thread — this blocks until complete.
     #[uniffi::constructor]
     pub fn create_account(
@@ -142,6 +148,7 @@ impl AppCore {
         db_path: String,
         db_key: String,
         recovery_key: Vec<u8>,
+        display_name: String,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -158,7 +165,7 @@ impl AppCore {
             None
         };
 
-        let inner = rt.block_on(Self::create_inner(&server_url, store, None, false, rk.as_ref(), true))
+        let inner = rt.block_on(Self::create_inner(&server_url, store, Some(display_name), false, rk.as_ref(), true))
             .map_err(AppErrorFfi::from)?;
 
         Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) }))
@@ -207,9 +214,11 @@ impl AppCore {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
             let body = String::from_utf8_lossy(&plaintext).into_owned();
+            let profile_key = inner.own_profile_key().await;
             let msg = ContentMessage {
                 body: Some(Body::Text(TextMessage { body })),
                 timestamp_ms: sent_at_ms as u64,
+                profile_key,
             };
             inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
@@ -258,12 +267,14 @@ impl AppCore {
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
+            let profile_key = inner.own_profile_key().await;
             let msg = ContentMessage {
                 body: Some(Body::Receipt(ReceiptMessage {
                     r#type: receipt_message::Type::Read as i32,
                     timestamps: timestamps.into_iter().map(|t| t as u64).collect(),
                 })),
                 timestamp_ms: 0,
+                profile_key,
             };
             inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
@@ -418,6 +429,95 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    /// Return the user's own display name from the local profile cache.
+    /// Empty string if no profile has been set yet.
+    pub fn own_display_name(&self) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let name = inner.store.load_own_profile().await
+                .map_err(AppError::from)?
+                .map(|p| p.display_name)
+                .unwrap_or_default();
+            Ok::<_, AppError>(name)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Update the user's display name. Re-encrypts the profile blob with the
+    /// existing profile key and uploads it. The local cached name updates
+    /// immediately on success.
+    pub fn set_display_name(&self, display_name: String) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let own = inner.store.load_own_profile().await
+                .map_err(AppError::from)?
+                .ok_or_else(|| AppError::Protocol("no own profile (account not yet set up)".into()))?;
+            if own.profile_key.len() != profile::PROFILE_KEY_LEN {
+                return Err(AppError::Protocol("stored profile key has wrong length".into()));
+            }
+            let mut key = [0u8; profile::PROFILE_KEY_LEN];
+            key.copy_from_slice(&own.profile_key);
+            let blob = profile::encrypt_profile(
+                &profile::ProfilePlaintext { display_name: display_name.clone() },
+                &key,
+            )?;
+            inner.client.put_profile(&blob).await?;
+            inner.store.update_own_display_name(&display_name).await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Look up the cached display name for a contact. Returns empty string if
+    /// no profile has been cached yet (the UI should fall back to the DID).
+    pub fn contact_display_name(&self, did: String) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let name = inner.store.load_contact_profile(&did).await
+                .map_err(AppError::from)?
+                .map(|p| p.display_name)
+                .unwrap_or_default();
+            Ok::<_, AppError>(name)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Re-fetch a contact's encrypted profile and update the cache if the
+    /// decrypted name changed. Call this when the user opens a conversation
+    /// — it's the primary change-detection path.
+    ///
+    /// Returns true if the cached display name was updated.
+    pub fn refresh_contact_profile(&self, did: String) -> Result<bool, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let cached = inner.store.load_contact_profile(&did).await
+                .map_err(AppError::from)?;
+            let cached = match cached {
+                Some(c) if c.profile_key.len() == profile::PROFILE_KEY_LEN => c,
+                _ => return Ok::<_, AppError>(false),
+            };
+
+            let blob = match inner.client.get_profile(&did).await? {
+                Some(b) => b,
+                None => return Ok(false),
+            };
+
+            let mut key = [0u8; profile::PROFILE_KEY_LEN];
+            key.copy_from_slice(&cached.profile_key);
+            let plaintext = match profile::decrypt_profile(&blob, &key) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            };
+
+            let changed = plaintext.display_name != cached.display_name;
+            inner.store.upsert_contact_profile(&store::profiles::ContactProfile {
+                did,
+                display_name: plaintext.display_name,
+                profile_key: cached.profile_key,
+                fetched_at: Timestamp::now(),
+            }).await.map_err(AppError::from)?;
+            Ok(changed)
+        }).map_err(AppErrorFfi::from)
+    }
+
     /// Check whether this account has a recovery blob set up (has rotation key in store).
     pub fn has_recovery(&self) -> bool {
         ffi_runtime().block_on(async {
@@ -486,6 +586,14 @@ pub struct InviteInfo {
     pub server_name: String,
     pub inviter_did: Option<String>,
     pub post_onboarding_redirect: Option<String>,
+    /// Inviter's plaintext display name from the token. Shown on the invite
+    /// acceptance screen before any server communication. The encrypted
+    /// profile blob is the source of truth once fetched.
+    pub inviter_display_name: Option<String>,
+    /// Inviter's 32-byte profile key from the token, base64url-encoded.
+    /// The new client primes its contact_profiles cache with this so the
+    /// auto-DM can show the inviter's name from the very first frame.
+    pub inviter_profile_key: Option<Vec<u8>>,
 }
 
 /// Parse and validate an invite token.
@@ -501,7 +609,13 @@ pub fn validate_invite(token: String) -> Result<InviteInfo, AppErrorFfi> {
         #[derive(serde::Deserialize)]
         struct TokenPayload {
             server_url: String,
+            #[serde(default)]
             inviter_did: Option<String>,
+            #[serde(default)]
+            inviter_display_name: Option<String>,
+            /// base64url-encoded 32-byte profile key.
+            #[serde(default)]
+            inviter_profile_key: Option<String>,
         }
 
         let payload: TokenPayload = serde_json::from_slice(&json_bytes)
@@ -510,13 +624,50 @@ pub fn validate_invite(token: String) -> Result<InviteInfo, AppErrorFfi> {
         let client = net::Client::new(&payload.server_url);
         let resp = client.validate_invite(&token).await?;
 
+        let inviter_profile_key = payload.inviter_profile_key
+            .as_deref()
+            .map(|b| BASE64_URL_SAFE_NO_PAD.decode(b))
+            .transpose()
+            .map_err(|_| AppError::Protocol("invalid base64url inviter_profile_key".into()))?
+            .filter(|b| b.len() == profile::PROFILE_KEY_LEN);
+
         Ok::<_, AppError>(InviteInfo {
             server_url: payload.server_url,
             server_name: resp.server_name,
             inviter_did: payload.inviter_did,
             post_onboarding_redirect: resp.post_onboarding_redirect,
+            inviter_display_name: payload.inviter_display_name,
+            inviter_profile_key,
         })
     }).map_err(AppErrorFfi::from)
+}
+
+/// Prime the local contact_profiles cache with an inviter's profile key and
+/// display name extracted from an invite token. Called by the mobile layer
+/// after `create_account` when an invite was accepted, so the auto-DM with
+/// the inviter shows their name from the first frame.
+#[uniffi::export]
+impl AppCore {
+    pub fn prime_contact_profile(
+        &self,
+        did: String,
+        display_name: String,
+        profile_key: Vec<u8>,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            if profile_key.len() != profile::PROFILE_KEY_LEN {
+                return Err(AppError::Protocol("profile_key must be 32 bytes".into()));
+            }
+            let inner = self.inner.lock().await;
+            inner.store.upsert_contact_profile(&store::profiles::ContactProfile {
+                did,
+                display_name,
+                profile_key,
+                fetched_at: Timestamp::now(),
+            }).await.map_err(AppError::from)?;
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
 }
 
 // ── Internal async implementation (not exported via FFI) ────────────────────
@@ -572,6 +723,23 @@ impl AppCore {
             None
         };
 
+        // Generate profile key + encrypt the display name for human accounts.
+        // Bots send plaintext display_name (server stores it directly for
+        // looking up bot names). Humans send encrypted_profile instead, keyed
+        // by a 32-byte profile key distributed via outgoing messages.
+        let (profile_key, encrypted_profile, profile_display_name) =
+            if !is_bot {
+                let name = display_name.clone().unwrap_or_default();
+                let key = profile::generate_profile_key();
+                let blob = profile::encrypt_profile(
+                    &profile::ProfilePlaintext { display_name: name.clone() },
+                    &key,
+                )?;
+                (Some(key), Some(blob), Some(name))
+            } else {
+                (None, None, None)
+            };
+
         // Sign "register:{did}:{server_url}" with the identity key to prove possession.
         // Server URL is included to prevent cross-server replay of the signature.
         let identity_key_signature = if let Some(ref did) = client_did {
@@ -598,14 +766,27 @@ impl AppCore {
             kyber_prekey_id: kyber.wire.id as i32,
             kyber_prekey_public: kyber.wire.public_key.clone(),
             kyber_prekey_signature: kyber.wire.signature.clone(),
-            display_name,
+            // Human accounts never put plaintext name on the server — name is
+            // delivered via the encrypted profile blob below. Only bots use
+            // server-side display_name.
+            display_name: if is_bot { display_name } else { None },
             is_bot,
             recovery_blob,
+            encrypted_profile: encrypted_profile.clone(),
             identity_key_signature,
         }).await?;
 
         store.save_identity(&identity, registration_id).await?;
         store.save_rotation_key(&rotation_key_private, &rotation_key_public).await?;
+
+        // Persist own profile state locally so the UI can render our display
+        // name without re-decrypting the blob.
+        if let (Some(key), Some(name)) = (profile_key.as_ref(), profile_display_name.as_ref()) {
+            store.save_own_profile(&store::profiles::OwnProfile {
+                profile_key: key.to_vec(),
+                display_name: name.clone(),
+            }).await?;
+        }
         store.save_registration(&RegistrationInfo {
             account_id: reg_resp.did.clone(),
             server_url: server_url.to_string(),
@@ -713,12 +894,14 @@ impl AppCore {
         timestamps: Vec<i64>,
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
+        let profile_key = inner.own_profile_key().await;
         let msg = ContentMessage {
             body: Some(Body::Receipt(ReceiptMessage {
                 r#type: receipt_message::Type::Read as i32,
                 timestamps: timestamps.into_iter().map(|t| t as u64).collect(),
             })),
             timestamp_ms: 0,
+            profile_key,
         };
         inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
     }
@@ -734,9 +917,11 @@ impl AppCore {
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
         let body = String::from_utf8_lossy(plaintext).into_owned();
+        let profile_key = inner.own_profile_key().await;
         let msg = ContentMessage {
             body: Some(Body::Text(TextMessage { body })),
             timestamp_ms: sent_at_ms as u64,
+            profile_key,
         };
         inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
     }
@@ -750,6 +935,17 @@ impl AppCore {
     /// Get DID (async-friendly, for tests).
     pub async fn did_async(&self) -> String {
         self.inner.lock().await.did.clone()
+    }
+
+    /// Look up a cached contact's display name (async, for tests and bots).
+    /// Returns `None` if no profile has been received yet for this DID.
+    pub async fn contact_display_name_async(&self, did: &str) -> Option<String> {
+        let inner = self.inner.lock().await;
+        inner.store.load_contact_profile(did).await
+            .ok()
+            .flatten()
+            .map(|p| p.display_name)
+            .filter(|n| !n.is_empty())
     }
 
     /// Get device_id (async-friendly, for tests).
@@ -823,7 +1019,13 @@ impl AppCore {
 
         // 5. Parse envelope. Handle receipts internally; return content messages.
         match ContentMessage::decode(decrypted.plaintext.as_slice()) {
-            Ok(msg) => match msg.body {
+            Ok(msg) => {
+                // Process inbound profile_key (any variant may carry one).
+                if !msg.profile_key.is_empty() {
+                    let inner = self.inner.lock().await;
+                    inner.handle_inbound_profile_key(&decrypted.sender_did, &msg.profile_key).await;
+                }
+                match msg.body {
                 Some(Body::Receipt(receipt)) => {
                     // Receipt — update delivery status in store and buffer for Swift.
                     // DELIVERY (0) = status 2, READ (1) = status 3.
@@ -858,12 +1060,14 @@ impl AppCore {
                     // Auto-send delivery receipt back to the sender.
                     if let Some(ts) = sent_at {
                         let mut inner = self.inner.lock().await;
+                        let profile_key = inner.own_profile_key().await;
                         let delivery = ContentMessage {
                             body: Some(Body::Receipt(ReceiptMessage {
                                 r#type: receipt_message::Type::Delivery as i32,
                                 timestamps: vec![ts as u64],
                             })),
                             timestamp_ms: 0,
+                            profile_key,
                         };
                         let _ = inner.send_dm(
                             &decrypted.sender_did,
@@ -883,7 +1087,8 @@ impl AppCore {
                     // ContentMessage with no body — treat raw bytes as plain text (backward compat).
                     Ok(vec![decrypted])
                 }
-            },
+                }
+            }
             Err(_) => {
                 // Not a valid protobuf — treat raw bytes as plain text (backward compat).
                 Ok(vec![decrypted])
@@ -893,6 +1098,58 @@ impl AppCore {
 }
 
 impl AppCoreInner {
+    /// Process an inbound `profile_key` from a ContentMessage. If non-empty
+    /// and different from any cached key, fetch the sender's encrypted blob,
+    /// decrypt, and update the contact_profiles cache. Errors are swallowed
+    /// — profile fetches are best-effort and must never block message
+    /// delivery.
+    async fn handle_inbound_profile_key(&self, sender_did: &str, profile_key: &[u8]) {
+        if profile_key.len() != profile::PROFILE_KEY_LEN {
+            return;
+        }
+
+        let needs_fetch = match self.store.load_contact_profile_key(sender_did).await {
+            Ok(Some(cached)) => cached != profile_key,
+            Ok(None) => true,
+            Err(_) => return,
+        };
+        if !needs_fetch {
+            return;
+        }
+
+        let blob = match self.client.get_profile(sender_did).await {
+            Ok(Some(b)) => b,
+            Ok(None) | Err(_) => return,
+        };
+
+        let mut key = [0u8; profile::PROFILE_KEY_LEN];
+        key.copy_from_slice(profile_key);
+        let plaintext = match profile::decrypt_profile(&blob, &key) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        let _ = self.store.upsert_contact_profile(&store::profiles::ContactProfile {
+            did: sender_did.to_string(),
+            display_name: plaintext.display_name,
+            profile_key: profile_key.to_vec(),
+            fetched_at: Timestamp::now(),
+        }).await;
+    }
+
+    /// Load the user's own profile key as bytes, or empty if not yet set.
+    /// Empty bytes in the proto field signal "not sharing" — recipients ignore
+    /// a zero-length `profile_key` field.
+    async fn own_profile_key(&self) -> Vec<u8> {
+        self.store
+            .load_own_profile()
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.profile_key)
+            .unwrap_or_default()
+    }
+
     /// Send raw bytes (already enveloped) as an encrypted DM.
     async fn send_dm(
         &mut self,
@@ -979,7 +1236,12 @@ impl AppCoreInner {
             let raw = self.decrypt_inbound(msg).await?;
             // Parse envelope: unwrap content, skip receipts (handled internally).
             match ContentMessage::decode(raw.plaintext.as_slice()) {
-                Ok(content) => match content.body {
+                Ok(content) => {
+                    if !content.profile_key.is_empty() {
+                        // Note that this will block on network if we have not already downloaded the contact's profile blob
+                        self.handle_inbound_profile_key(&raw.sender_did, &content.profile_key).await;
+                    }
+                    match content.body {
                     Some(Body::Receipt(receipt)) => {
                         let status: u8 = if receipt.r#type == receipt_message::Type::Read as i32 { 3 } else { 2 };
                         let timestamps: Vec<i64> = receipt.timestamps.into_iter().map(|t| t as i64).collect();
@@ -993,12 +1255,14 @@ impl AppCoreInner {
                         let sent_at = if content.timestamp_ms > 0 { Some(content.timestamp_ms as i64) } else { None };
                         // Auto-send delivery receipt.
                         if let Some(ts) = sent_at {
+                            let profile_key = self.own_profile_key().await;
                             let delivery = ContentMessage {
                                 body: Some(Body::Receipt(ReceiptMessage {
                                     r#type: receipt_message::Type::Delivery as i32,
                                     timestamps: vec![ts as u64],
                                 })),
                                 timestamp_ms: 0,
+                                profile_key,
                             };
                             let _ = self.send_dm(
                                 &raw.sender_did,
@@ -1013,7 +1277,8 @@ impl AppCoreInner {
                         // ContentMessage with no body — backward compat.
                         decrypted.push(raw);
                     }
-                },
+                    }
+                }
                 Err(_) => {
                     // Not valid protobuf — backward compat: raw plaintext.
                     decrypted.push(raw);

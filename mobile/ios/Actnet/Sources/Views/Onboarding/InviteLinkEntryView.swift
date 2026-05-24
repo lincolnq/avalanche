@@ -33,6 +33,15 @@ struct InviteLinkEntryView: View {
             .controlSize(.large)
             .disabled(linkText.isEmpty || isValidating)
 
+            #if DEBUG
+            Button("Use localhost:3000 (dev)") {
+                linkText = Self.localhostDevToken
+                validateLink()
+            }
+            .font(.callout)
+            .disabled(isValidating)
+            #endif
+
             Spacer()
         }
         .padding(.top, 32)
@@ -44,6 +53,19 @@ struct InviteLinkEntryView: View {
             IdentityPickerView(inviteToken: token)
         }
     }
+
+    /// Base64url-encoded JSON payload `{"server_url": "http://localhost:3000"}`.
+    /// The dev homeserver accepts any token whose embedded server_url matches
+    /// its own — no admin-issued secret needed. Debug-only convenience.
+    private static let localhostDevToken: String = {
+        let json = #"{"server_url":"http://localhost:3000"}"#
+        let data = Data(json.utf8)
+        // base64url, no padding
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }()
 
     private func validateLink() {
         errorMessage = nil
