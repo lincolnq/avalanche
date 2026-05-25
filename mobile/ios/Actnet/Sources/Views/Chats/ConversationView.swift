@@ -77,12 +77,18 @@ struct ConversationView: View {
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            appState.currentConversationId = conversation.id
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
             // Re-fetch the contact's encrypted profile and update the cached
             // display name if it changed. Primary change-detection path.
             if let recipientDid = conversation.recipientDid {
                 appState.refreshContactProfile(did: recipientDid, accountId: conversation.accountId)
+            }
+        }
+        .onDisappear {
+            if appState.currentConversationId == conversation.id {
+                appState.currentConversationId = nil
             }
         }
         .task(id: conversation.id) {

@@ -33,6 +33,15 @@ final class AppState: ObservableObject {
     @Published var serviceMode: ServiceMode
     @Published var selectedTab: Tab = .chats
     @Published var navigateToConversation: Conversation?
+    /// ID of the conversation currently visible on screen, or nil. Set by
+    /// `ConversationView.onAppear`/`onDisappear`. Used to suppress
+    /// notifications for the chat the user is actively reading.
+    @Published var currentConversationId: String?
+    /// Whether the app's scene is in the `.active` phase. Driven by
+    /// `ActnetApp`'s `onChange(of: scenePhase)`. Used to decide whether to
+    /// fire a banner (background/inactive → always show; active → suppress
+    /// only when viewing the relevant conversation).
+    @Published var isAppActive: Bool = true
 
     enum Tab {
         case calls, chats, network
@@ -513,6 +522,7 @@ final class AppState: ObservableObject {
         }
         guard changed else { return }
         messagesByConversation[conversationId] = messages
+        NotificationPresenter.updateBadge(appState: self)
 
         // Persist to SQLCipher and send read receipts in the background.
         if let core = cores[accountId] {
@@ -547,6 +557,7 @@ final class AppState: ObservableObject {
         }
         guard changed else { return }
         messagesByConversation[conversationId] = messages
+        NotificationPresenter.updateBadge(appState: self)
 
         if let core = cores[accountId] {
             let convId = conversationId
@@ -816,6 +827,17 @@ final class AppState: ObservableObject {
                 deliveryStatus: 1  // sent
             )
             Task.detached { try? core.saveMessage(msg: stored) }
+        }
+
+        // Fire a local notification (respects scene phase + currently-viewed
+        // conversation; updates the app badge regardless).
+        if let conv = conversations.first(where: { $0.id == convId }) {
+            NotificationPresenter.present(
+                message: message,
+                conversation: conv,
+                senderDisplayName: displayName(for: senderDid, accountId: accountId),
+                appState: self
+            )
         }
     }
 
