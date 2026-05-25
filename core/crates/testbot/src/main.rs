@@ -227,7 +227,7 @@ async fn text_me(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64;
-            bot.send_dm_async(&user_did_clone, 1, opening.as_bytes(), now_ms)
+            bot.send_dm_async(&user_did_clone, opening.as_bytes(), now_ms)
                 .await
                 .map_err(|e| {
                     tracing::error!("[bot {}] failed to send opening message: {}", bot_did, e);
@@ -364,7 +364,7 @@ async fn bot_message_loop(
             if let Some(sender_ts) = msg.sent_at_ms {
                 let runner = bot.lock().await;
                 if let Err(e) = runner.app_core.send_read_receipt_async(
-                    &msg.sender_did, msg.sender_device_id, vec![sender_ts],
+                    &msg.sender_did, vec![sender_ts],
                 ).await {
                     tracing::warn!("[bot {}] failed to send read receipt: {}", bot_did, e);
                 }
@@ -399,7 +399,7 @@ async fn bot_message_loop(
                 .as_millis() as i64;
             if let Err(e) = runner
                 .app_core
-                .send_dm_async(&msg.sender_did, msg.sender_device_id, response.as_bytes(), reply_ts)
+                .send_dm_async(&msg.sender_did, response.as_bytes(), reply_ts)
                 .await
             {
                 tracing::error!("[bot {}] failed to send to {}: {}", bot_did, msg.sender_did, e);

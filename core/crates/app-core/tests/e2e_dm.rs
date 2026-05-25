@@ -36,10 +36,9 @@ async fn alice_sends_dm_to_bob() {
     let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
 
     let bob_did = bob.did_async().await;
-    let bob_device = bob.device_id_async().await;
 
     let plaintext = b"Hello Bob, this is a secret message!";
-    alice.send_dm_async(&bob_did, bob_device, plaintext, now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, plaintext, now_ms()).await.unwrap();
 
     let messages = bob.receive_messages_async().await.unwrap();
     assert_eq!(messages.len(), 1);
@@ -59,30 +58,28 @@ async fn bidirectional_conversation() {
     let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
 
     let alice_did = alice.did_async().await;
-    let alice_device = alice.device_id_async().await;
     let bob_did = bob.did_async().await;
-    let bob_device = bob.device_id_async().await;
 
     // Alice → Bob (PreKey message, establishes session).
-    alice.send_dm_async(&bob_did, bob_device, b"Hey Bob", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, b"Hey Bob", now_ms()).await.unwrap();
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Bob");
 
     // Bob → Alice (Bob's first message back, also a PreKey message).
-    bob.send_dm_async(&alice_did, alice_device, b"Hey Alice", now_ms()).await.unwrap();
+    bob.send_dm_async(&alice_did, b"Hey Alice", now_ms()).await.unwrap();
     let msgs = alice.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Alice");
 
     // Alice → Bob (Whisper message, session established).
-    alice.send_dm_async(&bob_did, bob_device, b"How are you?", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, b"How are you?", now_ms()).await.unwrap();
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"How are you?");
 
     // Bob → Alice (Whisper message).
-    bob.send_dm_async(&alice_did, alice_device, b"Doing great!", now_ms()).await.unwrap();
+    bob.send_dm_async(&alice_did, b"Doing great!", now_ms()).await.unwrap();
     let msgs = alice.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Doing great!");
@@ -96,12 +93,11 @@ async fn multiple_messages_in_one_fetch() {
     let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
 
     let bob_did = bob.did_async().await;
-    let bob_device = bob.device_id_async().await;
 
     // Alice sends 3 messages before Bob fetches.
-    alice.send_dm_async(&bob_did, bob_device, b"msg1", now_ms()).await.unwrap();
-    alice.send_dm_async(&bob_did, bob_device, b"msg2", now_ms()).await.unwrap();
-    alice.send_dm_async(&bob_did, bob_device, b"msg3", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, b"msg1", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, b"msg2", now_ms()).await.unwrap();
+    alice.send_dm_async(&bob_did, b"msg3", now_ms()).await.unwrap();
 
     let msgs = bob.receive_messages_async().await.unwrap();
     assert_eq!(msgs.len(), 3);

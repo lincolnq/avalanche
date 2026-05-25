@@ -22,6 +22,10 @@ struct DevServerActnetService: ActnetService {
         }
         return try AppCore.finalizeAccount(prepared: concrete, dbPath: dbPath, dbKey: dbKey, recoveryKey: recoveryKey, displayName: displayName)
     }
+
+    func recoverFromBlob(serverUrl: String, did: String, recoveryKey: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
+        try AppCore.recoverFromBlob(serverUrl: serverUrl, did: did, recoveryKey: recoveryKey, dbPath: dbPath, dbKey: dbKey, displayName: displayName)
+    }
 }
 
 enum ActnetServiceError: LocalizedError {

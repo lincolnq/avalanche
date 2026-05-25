@@ -302,6 +302,52 @@ final class AppState: ObservableObject {
         try await finishAccountRegistration(core: core, serverUrl: serverUrl, serverName: serverName, displayName: displayName, dbFilename: dbFilename)
     }
 
+    /// Recover an account from a passkey-protected recovery blob. Downloads
+    /// the blob from `serverUrl` keyed by `did`, decrypts with `recoveryKey`,
+    /// replaces the device on the home server, and signs the user in.
+    ///
+    /// `displayName` may be empty — the recovered account will appear in the
+    /// account list with a placeholder until the user updates it from Settings.
+    func recoverAccount(
+        serverUrl: String,
+        serverName: String,
+        did: String,
+        recoveryKey: Data,
+        displayName: String
+    ) async throws {
+        let dir = dbDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let dbFilename = "account-\(UUID().uuidString.prefix(8)).db"
+        let dbPath = dir.appendingPathComponent(dbFilename).path
+        let dbKey = try SecureEnclaveKeyManager.dbPassphrase()
+
+        let svc = _service
+        let rk = recoveryKey
+        let recoveryDid = did
+        let core = try await Task.detached {
+            try svc.recoverFromBlob(
+                serverUrl: serverUrl,
+                did: recoveryDid,
+                recoveryKey: rk,
+                dbPath: dbPath,
+                dbKey: dbKey,
+                displayName: displayName
+            )
+        }.value
+
+        let resolvedDisplayName = displayName.isEmpty
+            ? "Account \(String(did.suffix(6)))"
+            : displayName
+        try await finishAccountRegistration(
+            core: core,
+            serverUrl: serverUrl,
+            serverName: serverName,
+            displayName: resolvedDisplayName,
+            dbFilename: dbFilename
+        )
+    }
+
     private func finishAccountRegistration(
         core: any AppCoreProtocol,
         serverUrl: String,
@@ -446,7 +492,7 @@ final class AppState: ObservableObject {
         try await Task.detached { try core.saveMessage(msg: stored) }.value
 
         try await Task.detached {
-            try core.sendDm(recipientDid: recipientDid, recipientDeviceId: 1, plaintext: plaintext, sentAtMs: nowMs)
+            try core.sendDm(recipientDid: recipientDid, plaintext: plaintext, sentAtMs: nowMs)
         }.value
     }
 
@@ -478,7 +524,6 @@ final class AppState: ObservableObject {
                 for (senderDid, timestamps) in timestampsBySender {
                     try? core.sendReadReceipt(
                         recipientDid: senderDid,
-                        recipientDeviceId: 1,
                         timestamps: timestamps
                     )
                 }
@@ -509,7 +554,7 @@ final class AppState: ObservableObject {
             Task.detached {
                 try? core.markMessagesRead(conversationId: convId, upToSentAtMs: threshold)
                 for (senderDid, timestamps) in timestampsBySender {
-                    try? core.sendReadReceipt(recipientDid: senderDid, recipientDeviceId: 1, timestamps: timestamps)
+                    try? core.sendReadReceipt(recipientDid: senderDid, timestamps: timestamps)
                 }
             }
         }

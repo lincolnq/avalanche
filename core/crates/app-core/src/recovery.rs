@@ -37,6 +37,24 @@ pub struct RecoveryBlobPlaintext {
     pub identity_keypair: String,
     /// List of homeserver URLs the user is registered on.
     pub servers: Vec<String>,
+    /// 32-byte profile key (base64). Used to encrypt the user's display
+    /// name into the server-stored profile blob. Restoring it on recovery
+    /// keeps existing contacts pointed at the same profile blob, so their
+    /// cached display name stays valid.
+    ///
+    /// `#[serde(default)]` keeps old blobs (created before this field was
+    /// added) deserializable — they'll restore as `""` and the recovery
+    /// flow falls back to leaving the profile unset.
+    #[serde(default)]
+    pub profile_key: String,
+    /// User's display name in plaintext (mirrors what the server-side
+    /// encrypted profile blob decrypts to). Stored locally as
+    /// `own_profile.display_name`; carried in the recovery blob so a
+    /// fresh device can restore it without prompting.
+    ///
+    /// `#[serde(default)]` keeps old blobs deserializable.
+    #[serde(default)]
+    pub display_name: String,
 }
 
 /// Encrypt a recovery blob with a 32-byte symmetric key.
@@ -111,15 +129,27 @@ pub fn sign_with_rotation_key(
 }
 
 /// Build a recovery blob plaintext from the current account state.
+///
+/// `profile_key` is the 32-byte symmetric key that encrypts the user's
+/// profile blob on each homeserver. Pass `&[]` to omit (e.g. for bot
+/// accounts that have no profile).
 pub fn build_recovery_plaintext(
     rotation_key_private: &[u8],
     identity_keypair_bytes: &[u8],
     servers: &[String],
+    profile_key: &[u8],
+    display_name: &str,
 ) -> RecoveryBlobPlaintext {
     RecoveryBlobPlaintext {
         rotation_key: BASE64_STANDARD.encode(rotation_key_private),
         identity_keypair: BASE64_STANDARD.encode(identity_keypair_bytes),
         servers: servers.to_vec(),
+        profile_key: if profile_key.is_empty() {
+            String::new()
+        } else {
+            BASE64_STANDARD.encode(profile_key)
+        },
+        display_name: display_name.to_string(),
     }
 }
 
@@ -134,6 +164,8 @@ mod tests {
             rotation_key: BASE64_STANDARD.encode(b"fake-rotation-key"),
             identity_keypair: BASE64_STANDARD.encode(b"fake-identity-keypair"),
             servers: vec!["https://server1.example".into(), "https://server2.example".into()],
+            profile_key: BASE64_STANDARD.encode([7u8; 32]),
+            display_name: "Sam".into(),
         };
 
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
@@ -142,6 +174,35 @@ mod tests {
         assert_eq!(decrypted.rotation_key, plaintext.rotation_key);
         assert_eq!(decrypted.identity_keypair, plaintext.identity_keypair);
         assert_eq!(decrypted.servers, plaintext.servers);
+        assert_eq!(decrypted.profile_key, plaintext.profile_key);
+        assert_eq!(decrypted.display_name, plaintext.display_name);
+    }
+
+    #[test]
+    fn old_blob_format_still_decrypts() {
+        // Blobs written before profile_key/display_name fields existed should
+        // still decrypt — the new fields default to "" via #[serde(default)].
+        let key = [42u8; 32];
+        let json = serde_json::json!({
+            "rotation_key": BASE64_STANDARD.encode(b"old-rot"),
+            "identity_keypair": BASE64_STANDARD.encode(b"old-identity"),
+            "servers": ["https://old.example"],
+        });
+        let plaintext_bytes = serde_json::to_vec(&json).unwrap();
+
+        // Hand-build the encrypted blob to simulate an old client's output.
+        use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+        let cipher = Aes256Gcm::new((&key).into());
+        let nonce_bytes = [0u8; NONCE_LEN];
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ct = cipher.encrypt(nonce, plaintext_bytes.as_slice()).unwrap();
+        let mut blob = nonce_bytes.to_vec();
+        blob.extend_from_slice(&ct);
+
+        let decrypted = decrypt_recovery_blob(&blob, &key).unwrap();
+        assert_eq!(decrypted.servers, vec!["https://old.example".to_string()]);
+        assert_eq!(decrypted.profile_key, "");
+        assert_eq!(decrypted.display_name, "");
     }
 
     #[test]
@@ -152,6 +213,8 @@ mod tests {
             rotation_key: "dGVzdA==".into(),
             identity_keypair: "dGVzdA==".into(),
             servers: vec![],
+            profile_key: String::new(),
+            display_name: String::new(),
         };
 
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();

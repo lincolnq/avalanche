@@ -390,6 +390,27 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    /// List the active device_ids for an account. Used by senders to fan-out
+    /// encrypted message envelopes across all of a recipient's devices.
+    pub async fn fetch_devices(&self, did: &str) -> Result<Vec<i32>, NetError> {
+        let resp = self
+            .authed_request(reqwest::Method::GET, &format!("/v1/accounts/{}/devices", did))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            device_ids: Vec<i32>,
+        }
+        let body: Resp = resp.json().await?;
+        Ok(body.device_ids)
+    }
+
     // ── DID ──────────────────────────────────────────────────────────────
 
     /// Resolve a DID document (public, no auth needed).
@@ -409,8 +430,11 @@ impl Client {
 
     // ── Recovery ─────────────────────────────────────────────────────────
 
-    /// Download the encrypted recovery blob for a DID (unauthenticated).
-    pub async fn get_recovery_blob(&self, did: &str) -> Result<Vec<u8>, NetError> {
+    /// Download the encrypted recovery blob and the account's current
+    /// device list (unauthenticated). The device list is needed during
+    /// recovery to target the existing device for replacement; bundling it
+    /// with the blob avoids an extra authenticated round-trip.
+    pub async fn get_recovery_blob(&self, did: &str) -> Result<crate::types::RecoveryBundle, NetError> {
         let resp = self.http
             .get(format!("{}/v1/recovery/{}", self.server_url, did))
             .send()
@@ -422,8 +446,13 @@ impl Client {
         }
 
         let body: RecoveryBlobResponse = resp.json().await?;
-        BASE64_STANDARD.decode(&body.recovery_blob)
-            .map_err(|e| NetError::Base64(e.to_string()))
+        let blob = BASE64_STANDARD
+            .decode(&body.recovery_blob)
+            .map_err(|e| NetError::Base64(e.to_string()))?;
+        Ok(crate::types::RecoveryBundle {
+            blob,
+            device_ids: body.device_ids,
+        })
     }
 
     /// Update the encrypted recovery blob (authenticated).

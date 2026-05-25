@@ -26,6 +26,10 @@ pub struct RegistrationInfo {
     pub account_id: String,
     pub server_url: String,
     pub registered_at: Timestamp,
+    /// The local libsignal-style device_id assigned to this client. Currently
+    /// always 1 (single-device), but threaded explicitly through registration
+    /// + recovery so callers don't have to assume a fixed value.
+    pub device_id: u32,
 }
 
 impl Store {
@@ -81,12 +85,13 @@ impl Store {
         let account_id = info.account_id.clone();
         let server_url = info.server_url.clone();
         let registered_at = info.registered_at.as_millis();
+        let device_id = info.device_id;
         self.conn
             .call(move |conn| {
                 conn.execute(
-                    "INSERT OR REPLACE INTO account (id, account_id, server_url, registered_at)
-                     VALUES (1, ?1, ?2, ?3)",
-                    rusqlite::params![account_id, server_url, registered_at],
+                    "INSERT OR REPLACE INTO account (id, account_id, server_url, registered_at, device_id)
+                     VALUES (1, ?1, ?2, ?3, ?4)",
+                    rusqlite::params![account_id, server_url, registered_at, device_id],
                 )?;
                 Ok(())
             })
@@ -137,13 +142,15 @@ impl Store {
             .conn
             .call(|conn| {
                 conn.query_row(
-                    "SELECT account_id, server_url, registered_at FROM account WHERE id = 1",
+                    "SELECT account_id, server_url, registered_at, device_id
+                     FROM account WHERE id = 1",
                     [],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, i64>(2)?,
+                            row.get::<_, u32>(3)?,
                         ))
                     },
                 )
@@ -153,10 +160,11 @@ impl Store {
             .await
             .map_err(StoreError::Db)?;
 
-        Ok(result.map(|(account_id, server_url, registered_at)| RegistrationInfo {
+        Ok(result.map(|(account_id, server_url, registered_at, device_id)| RegistrationInfo {
             account_id,
             server_url,
             registered_at: Timestamp(registered_at),
+            device_id,
         }))
     }
 }

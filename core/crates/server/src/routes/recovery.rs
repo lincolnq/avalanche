@@ -28,6 +28,12 @@ pub fn routes() -> Router<AppState> {
 #[derive(Serialize)]
 struct RecoveryBlobResponse {
     recovery_blob: String, // base64
+    /// Active device_ids for the account, returned alongside the blob so the
+    /// recovering client can target the correct old device in its replace
+    /// request without an extra authenticated round-trip. Safe to expose
+    /// here: this endpoint is already gated by knowing the DID, and the
+    /// device list is just small integers with no key material.
+    device_ids: Vec<i32>,
 }
 
 async fn get_recovery_blob(
@@ -38,8 +44,10 @@ async fn get_recovery_blob(
     let blob = db::accounts::get_recovery_blob(&mut conn, &did)
         .await?
         .ok_or(ServerError::NotFound)?;
+    let devices = db::devices::list_by_did(&mut conn, &did).await?;
     Ok(Json(RecoveryBlobResponse {
         recovery_blob: BASE64_STANDARD.encode(blob),
+        device_ids: devices.into_iter().map(|d| d.device_id).collect(),
     }))
 }
 

@@ -113,27 +113,17 @@ struct RecoveryConsoleView: View {
 
         log("Downloading recovery blob for \(targetDid)...")
         do {
-            let servers = try await Task.detached {
-                try downloadRecoveryBlob(
-                    serverUrl: serverUrl,
-                    did: targetDid,
-                    recoveryKey: self.recoveryKey
-                )
-            }.value
-            log("[ok] Recovery blob decrypted successfully!")
-            log("Found \(servers.count) server(s): \(servers.joined(separator: ", "))")
-
-            // TODO: Full recovery flow:
-            // 1. Restore identity keypair from blob
-            // 2. Generate new device_id
-            // 3. Call POST /v1/devices/replace on each server (signed by rotation key)
-            // 4. Generate fresh prekeys
-            // 5. Create local store with restored identity
-            // 6. Navigate to signed-in state
-            log("")
-            log("[!] Device replacement not yet implemented in client.")
-            log("The recovery blob was decrypted — your identity can be restored.")
-            log("Full recovery (device replace + re-auth) coming soon.")
+            try await appState.recoverAccount(
+                serverUrl: serverUrl,
+                serverName: serverUrl,
+                did: targetDid,
+                recoveryKey: recoveryKey,
+                displayName: ""
+            )
+            log("[ok] Identity restored. Replacing device on home server...")
+            log("[ok] Signed in!")
+            // `recoverAccount` flips `appState.isOnboarding = false`, which
+            // swaps the root view to MainTabView. No explicit navigation needed.
         } catch {
             log("[!] Recovery failed: \(error.localizedDescription)")
             log("Check that the server URL and recovery key are correct.")

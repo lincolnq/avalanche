@@ -131,12 +131,14 @@ async fn registration_round_trip() {
         account_id: "did:plc:abc123".to_string(),
         server_url: "https://home.example.com".to_string(),
         registered_at: Timestamp::now(),
+        device_id: 1,
     };
     store.save_registration(&info).await.unwrap();
 
     let loaded = store.load_registration().await.unwrap().expect("registration should be present");
     assert_eq!(loaded.account_id, info.account_id);
     assert_eq!(loaded.server_url, info.server_url);
+    assert_eq!(loaded.device_id, info.device_id);
 }
 
 #[tokio::test]

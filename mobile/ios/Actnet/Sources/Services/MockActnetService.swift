@@ -20,7 +20,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
     func did() -> String { mockDid }
     func deviceId() -> UInt32 { mockDeviceId }
 
-    func sendDm(recipientDid: String, recipientDeviceId: UInt32, plaintext: Data, sentAtMs: Int64) throws {
+    func sendDm(recipientDid: String, plaintext: Data, sentAtMs: Int64) throws {
         // Simulate a slight network delay
         Thread.sleep(forTimeInterval: 0.1)
 
@@ -97,7 +97,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         return count
     }
 
-    func sendReadReceipt(recipientDid: String, recipientDeviceId: UInt32, timestamps: [Int64]) throws {
+    func sendReadReceipt(recipientDid: String, timestamps: [Int64]) throws {
         // Mock: no-op
     }
 
@@ -224,6 +224,11 @@ struct MockActnetService: ActnetService {
     func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, recoveryKey: Data, displayName: String) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5)
         return MockAppCore(did: prepared.did(), displayName: displayName)
+    }
+
+    func recoverFromBlob(serverUrl: String, did: String, recoveryKey: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
+        Thread.sleep(forTimeInterval: 0.5)
+        return MockAppCore(did: did, displayName: displayName)
     }
 }
 

@@ -33,7 +33,7 @@ use std::sync::Arc;
 use base64::prelude::*;
 use crypto::session::{self, DeviceAddress, EncryptedMessage, MessageKind};
 use error::{AppError, AppErrorFfi};
-use net::types::{OutboundMessage, RegisterRequest};
+use net::types::{OutboundMessage, RegisterRequest, ReplaceDeviceRequest};
 use proto::{content_message::Body, receipt_message, ContentMessage, ReceiptMessage, TextMessage};
 use prost::Message as _;
 use rand::TryRngCore as _;
@@ -227,6 +227,275 @@ impl AppCore {
         Ok(Arc::new(Self { inner: Mutex::new(inner), ws: Mutex::new(None), receipt_updates: Mutex::new(Vec::new()) }))
     }
 
+    /// Recover an account from a passkey-protected recovery blob.
+    ///
+    /// 1. Downloads the encrypted blob from `server_url` keyed by `did`.
+    /// 2. Decrypts with `recovery_key` (32-byte PRF-derived symmetric key).
+    /// 3. Extracts the identity keypair, rotation key, and server list.
+    /// 4. Generates a new `device_id`, fresh prekeys, and a fresh registration ID.
+    /// 5. Signs a replacement payload with the rotation key and POSTs to
+    ///    `/v1/devices/replace` on the primary server (first in the blob's
+    ///    server list, falling back to `server_url`). The server revokes the
+    ///    old device's sessions/prekeys and registers the new one, returning a
+    ///    session token.
+    /// 6. Opens a fresh local SQLCipher store at `db_path` and persists the
+    ///    restored identity, rotation key, registration, and prekeys.
+    /// 7. Returns an `AppCore` ready to send/receive messages.
+    ///
+    /// The recovered account keeps the original identity key, so contacts see
+    /// no safety-number change.
+    ///
+    /// `display_name` is optional — pass an empty string to leave it unset
+    /// (the user can update it from Settings later). The blob does not carry
+    /// the original profile key, so a fresh profile key is generated.
+    ///
+    /// **Multi-server caveat:** if the blob lists more than one server, only
+    /// the primary one is replaced. Replacing on the remaining servers is a TODO.
+    ///
+    /// Call from a background thread — this blocks until complete.
+    #[uniffi::constructor]
+    pub fn recover_from_blob(
+        server_url: String,
+        did: String,
+        recovery_key: Vec<u8>,
+        db_path: String,
+        db_key: String,
+        display_name: String,
+    ) -> Result<Arc<Self>, AppErrorFfi> {
+        let rt = ffi_runtime();
+        rt.block_on(async move {
+            if recovery_key.len() != 32 {
+                return Err(AppError::Protocol("recovery_key must be 32 bytes".into()));
+            }
+            let mut rk = [0u8; 32];
+            rk.copy_from_slice(&recovery_key);
+
+            // Download the blob and the current device list (one unauthenticated call).
+            let bundle = net::Client::new(&server_url).get_recovery_blob(&did).await?;
+            let plaintext = recovery::decrypt_recovery_blob(&bundle.blob, &rk)?;
+
+            // Restore identity keypair.
+            let identity_bytes = BASE64_STANDARD
+                .decode(&plaintext.identity_keypair)
+                .map_err(|_| AppError::Protocol("invalid base64 identity in blob".into()))?;
+            let identity = crypto::IdentityKeyPair::deserialize(&identity_bytes)?;
+
+            // Restore rotation key (private), re-derive the public half.
+            let rotation_key_private = BASE64_STANDARD
+                .decode(&plaintext.rotation_key)
+                .map_err(|_| AppError::Protocol("invalid base64 rotation key in blob".into()))?;
+            let rotation_signing = p256::ecdsa::SigningKey::from_bytes(
+                (&rotation_key_private[..]).into(),
+            )
+            .map_err(|e| AppError::Protocol(format!("invalid rotation private key: {e}")))?;
+            let rotation_key_public = rotation_signing
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes()
+                .to_vec();
+
+            // Pick the server we'll talk to (and that AppCore will be bound to).
+            let primary_server = plaintext
+                .servers
+                .first()
+                .cloned()
+                .unwrap_or_else(|| server_url.clone());
+
+            // Pick the existing device_id from the bundle and reuse it for
+            // the new device so existing senders keep working. The server
+            // deletes the old device row before inserting the new one, so
+            // reusing the ID doesn't conflict with UNIQUE (account_id, device_id).
+            //
+            // `min()` is arbitrary here — we expect exactly one device today.
+            // For multi-device, this is wrong: recovery means "I lost one
+            // device" and shouldn't silently kill the others. Revisit to
+            // either register a fresh device_id alongside the existing ones,
+            // or prompt the user to pick which device to replace.
+            let old_device_id: u32 = bundle
+                .device_ids
+                .iter()
+                .copied()
+                .min()
+                .map(|d| d as u32)
+                .unwrap_or(1);
+            let new_device_id: u32 = old_device_id;
+            let new_registration_id = rand::Rng::random::<u32>(&mut rand::rng()) & 0x3FFF;
+
+            // Fresh prekeys signed by the restored identity.
+            let signed = crypto::prekeys::generate_signed_prekey(&identity, 1)?;
+            let one_time = crypto::prekeys::generate_one_time_prekeys(1, 20)?;
+            let kyber = crypto::prekeys::generate_kyber_prekey(&identity, 1)?;
+            let one_time_kyber: Vec<crypto::prekeys::GeneratedKyberPreKey> = (1u32..=20)
+                .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
+                .collect::<Result<_, _>>()?;
+
+            // Challenge → sign with rotation key → replace.
+            let primary_client = net::Client::new(&primary_server);
+            let nonce = primary_client.challenge(&did, old_device_id as i32).await?;
+            let replace_payload =
+                format!("replace:{did}:{old_device_id}:{new_device_id}:{nonce}");
+            let rotation_sig =
+                recovery::sign_with_rotation_key(&rotation_key_private, replace_payload.as_bytes())?;
+
+            let reg_resp = primary_client
+                .replace_device(&ReplaceDeviceRequest {
+                    did: did.clone(),
+                    old_device_id: old_device_id as i32,
+                    new_device_id: new_device_id as i32,
+                    new_identity_key: identity.public_key().serialize(),
+                    new_registration_id: new_registration_id as i32,
+                    nonce,
+                    rotation_key_signature: rotation_sig,
+                    rotation_key: rotation_key_public.clone(),
+                    signed_prekey_id: signed.wire.id as i32,
+                    signed_prekey_public: signed.wire.public_key.clone(),
+                    signed_prekey_signature: signed.wire.signature.clone(),
+                    one_time_prekeys: one_time
+                        .iter()
+                        .map(|k| (k.wire.id as i32, k.wire.public_key.clone()))
+                        .collect(),
+                    kyber_prekey_id: kyber.wire.id as i32,
+                    kyber_prekey_public: kyber.wire.public_key.clone(),
+                    kyber_prekey_signature: kyber.wire.signature.clone(),
+                    recovery_blob: None,
+                })
+                .await?;
+
+            // Open the local store and persist the restored identity.
+            let store = store::Store::open(
+                Path::new(&db_path),
+                &store::DatabaseKey::from_passphrase(db_key),
+            )
+            .await
+            .map_err(AppError::from)?;
+
+            store.save_identity(&identity, new_registration_id).await?;
+            store
+                .save_rotation_key(&rotation_key_private, &rotation_key_public)
+                .await?;
+            store
+                .save_registration(&RegistrationInfo {
+                    account_id: did.clone(),
+                    server_url: primary_server.clone(),
+                    registered_at: Timestamp::now(),
+                    device_id: new_device_id,
+                })
+                .await?;
+            store.save_signed_prekey(signed.wire.id, &signed.record).await?;
+            store
+                .save_one_time_prekeys(
+                    &one_time
+                        .iter()
+                        .map(|k| (k.wire.id, k.record.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .await?;
+            store
+                .save_kyber_prekeys(&[(kyber.wire.id, kyber.record.clone())])
+                .await?;
+            store
+                .save_kyber_prekeys(
+                    &one_time_kyber
+                        .iter()
+                        .map(|k| (k.wire.id, k.record.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .await?;
+
+            // Restore the user's profile from the blob if it carries one.
+            // Newer blobs include profile_key + display_name so we can keep
+            // the same identity contacts already have cached. Older blobs
+            // (created before that field existed) won't have these — fall
+            // back to the FFI `display_name` parameter and mint a fresh key.
+            //
+            // `profile_to_restore` holds the (32-byte key, display name) pair
+            // we will persist locally and re-upload to the server.
+            let blob_profile_key: Option<Vec<u8>> = if plaintext.profile_key.is_empty() {
+                None
+            } else {
+                Some(BASE64_STANDARD
+                    .decode(&plaintext.profile_key)
+                    .map_err(|_| AppError::Protocol("invalid base64 profile_key in blob".into()))?)
+            };
+
+            let profile_to_restore: Option<(Vec<u8>, String)> = match blob_profile_key {
+                Some(key) if key.len() == profile::PROFILE_KEY_LEN => {
+                    Some((key, plaintext.display_name.clone()))
+                }
+                _ if !display_name.is_empty() => {
+                    let key = profile::generate_profile_key();
+                    Some((key.to_vec(), display_name.clone()))
+                }
+                _ => None,
+            };
+
+            if let Some((key, name)) = &profile_to_restore {
+                store
+                    .save_own_profile(&store::profiles::OwnProfile {
+                        profile_key: key.clone(),
+                        display_name: name.clone(),
+                    })
+                    .await?;
+            }
+
+            // Authenticated client carries the session token returned by replace.
+            let client = net::Client::with_token(&primary_server, reg_resp.session_token);
+
+            // Upload one-time Kyber public halves separately (matching create_inner).
+            client
+                .upload_prekeys(&net::types::UploadPrekeysRequest {
+                    signed_prekey: None,
+                    one_time_prekeys: None,
+                    kyber_prekey: None,
+                    one_time_kyber_prekeys: Some(
+                        one_time_kyber
+                            .iter()
+                            .map(|k| {
+                                (
+                                    k.wire.id as i32,
+                                    k.wire.public_key.clone(),
+                                    k.wire.signature.clone(),
+                                )
+                            })
+                            .collect(),
+                    ),
+                })
+                .await?;
+
+            // Re-upload the encrypted profile so the server-side blob matches
+            // the (possibly freshly minted) profile_key. Without this, contacts
+            // that see our profile_key on outbound messages would fail to
+            // decrypt the server's stored blob.
+            if let Some((key, name)) = &profile_to_restore {
+                let mut key_arr = [0u8; profile::PROFILE_KEY_LEN];
+                key_arr.copy_from_slice(key);
+                let encrypted = profile::encrypt_profile(
+                    &profile::ProfilePlaintext { display_name: name.clone() },
+                    &key_arr,
+                )?;
+                client.put_profile(&encrypted).await?;
+            }
+
+            let local_address = DeviceAddress::new(
+                AccountId::new(&did),
+                DeviceId::new(new_device_id),
+            );
+
+            Ok::<_, AppError>(Arc::new(Self {
+                inner: Mutex::new(AppCoreInner {
+                    store,
+                    client,
+                    local_address,
+                    did,
+                    device_id: new_device_id,
+                }),
+                ws: Mutex::new(None),
+                receipt_updates: Mutex::new(Vec::new()),
+            }))
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
     /// Load an existing account from the local store and authenticate.
     ///
     /// Call from a background thread — this blocks until complete.
@@ -258,12 +527,12 @@ impl AppCore {
 
     /// Send an encrypted DM to a recipient. Plaintext is wrapped in a
     /// content envelope (with the sender's timestamp) before encryption.
+    /// Internally fans out one ciphertext per active recipient device.
     ///
     /// Call from a background thread — this blocks until complete.
     pub fn send_dm(
         &self,
         recipient_did: String,
-        recipient_device_id: u32,
         plaintext: Vec<u8>,
         sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
@@ -276,7 +545,7 @@ impl AppCore {
                 timestamp_ms: sent_at_ms as u64,
                 profile_key,
             };
-            inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
+            inner.send_dm(&recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -315,10 +584,10 @@ impl AppCore {
     }
 
     /// Send a read receipt to a recipient for the given message timestamps.
+    /// Fans out to all of the recipient's active devices.
     pub fn send_read_receipt(
         &self,
         recipient_did: String,
-        recipient_device_id: u32,
         timestamps: Vec<i64>,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
@@ -332,7 +601,7 @@ impl AppCore {
                 timestamp_ms: 0,
                 profile_key,
             };
-            inner.send_dm(&recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
+            inner.send_dm(&recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -520,11 +789,14 @@ impl AppCore {
                 .ok_or(AppError::NoAccount)?;
             let rotation = inner.store.load_rotation_key().await?
                 .ok_or(AppError::Protocol("no rotation key in store".into()))?;
+            let own_profile = inner.store.load_own_profile().await?;
 
             let plaintext = recovery::build_recovery_plaintext(
                 &rotation.0,
                 &identity.serialize(),
                 &servers,
+                own_profile.as_ref().map(|p| p.profile_key.as_slice()).unwrap_or(&[]),
+                own_profile.as_ref().map(|p| p.display_name.as_str()).unwrap_or(""),
             );
             let blob = recovery::encrypt_recovery_blob(&plaintext, &key)?;
             inner.client.update_recovery_blob(&blob).await?;
@@ -676,8 +948,8 @@ pub fn download_recovery_blob(
         key.copy_from_slice(&recovery_key);
 
         let client = net::Client::new(&server_url);
-        let blob = client.get_recovery_blob(&did).await?;
-        let plaintext = recovery::decrypt_recovery_blob(&blob, &key)?;
+        let bundle = client.get_recovery_blob(&did).await?;
+        let plaintext = recovery::decrypt_recovery_blob(&bundle.blob, &key)?;
         Ok(plaintext.servers)
     }).map_err(AppErrorFfi::from)
 }
@@ -884,22 +1156,14 @@ impl AppCore {
             plc::submit_genesis(did, signed_op).await?;
         }
 
-        // Build and encrypt recovery blob if a recovery key is provided.
-        let recovery_blob = if let Some(key) = recovery_key {
-            let plaintext = recovery::build_recovery_plaintext(
-                &rotation_key_private,
-                &identity.serialize(),
-                &[server_url.to_string()],
-            );
-            Some(recovery::encrypt_recovery_blob(&plaintext, key)?)
-        } else {
-            None
-        };
-
         // Generate profile key + encrypt the display name for human accounts.
         // Bots send plaintext display_name (server stores it directly for
         // looking up bot names). Humans send encrypted_profile instead, keyed
         // by a 32-byte profile key distributed via outgoing messages.
+        //
+        // Done before the recovery blob is built so the profile_key and
+        // display_name can be sealed into the blob — letting recovery
+        // restore the same profile without prompting the user again.
         let (profile_key, encrypted_profile, profile_display_name) =
             if !is_bot {
                 let name = display_name.clone().unwrap_or_default();
@@ -912,6 +1176,20 @@ impl AppCore {
             } else {
                 (None, None, None)
             };
+
+        // Build and encrypt recovery blob if a recovery key is provided.
+        let recovery_blob = if let Some(key) = recovery_key {
+            let plaintext = recovery::build_recovery_plaintext(
+                &rotation_key_private,
+                &identity.serialize(),
+                &[server_url.to_string()],
+                profile_key.as_ref().map(|k| k.as_slice()).unwrap_or(&[]),
+                profile_display_name.as_deref().unwrap_or(""),
+            );
+            Some(recovery::encrypt_recovery_blob(&plaintext, key)?)
+        } else {
+            None
+        };
 
         // Sign "register:{did}:{server_url}" with the identity key to prove possession.
         // Server URL is included to prevent cross-server replay of the signature.
@@ -964,6 +1242,7 @@ impl AppCore {
             account_id: reg_resp.did.clone(),
             server_url: server_url.to_string(),
             registered_at: Timestamp::now(),
+            device_id,
         }).await?;
 
         store.save_signed_prekey(signed.wire.id, &signed.record).await?;
@@ -1010,9 +1289,10 @@ impl AppCore {
             .ok_or(AppError::NoAccount)?;
 
         let client = net::Client::new(&reg.server_url);
+        let device_id = reg.device_id;
 
         // Challenge-response: fetch nonce, sign it with our Ed25519 identity key.
-        let nonce = client.challenge(&reg.account_id, 1).await?;
+        let nonce = client.challenge(&reg.account_id, device_id as i32).await?;
         let nonce_bytes = BASE64_URL_SAFE_NO_PAD
             .decode(&nonce)
             .map_err(|_| AppError::Protocol("server returned invalid nonce encoding".into()))?;
@@ -1021,12 +1301,12 @@ impl AppCore {
             .calculate_signature(&nonce_bytes, &mut rand::rngs::OsRng.unwrap_err())
             .map_err(|e| AppError::Crypto(crypto::CryptoError::Signal(e.into())))?;
 
-        let auth = client.authenticate(&reg.account_id, 1, &nonce, &signature).await?;
+        let auth = client.authenticate(&reg.account_id, device_id as i32, &nonce, &signature).await?;
         let client = net::Client::with_token(&reg.server_url, auth.session_token);
 
         let local_address = DeviceAddress::new(
             AccountId::new(&reg.account_id),
-            DeviceId::new(1),
+            DeviceId::new(device_id),
         );
 
         Ok(AppCoreInner {
@@ -1034,7 +1314,7 @@ impl AppCore {
             client,
             local_address,
             did: reg.account_id,
-            device_id: 1,
+            device_id,
         })
     }
 
@@ -1061,10 +1341,10 @@ impl AppCore {
     }
 
     /// Async send_read_receipt for use in tests and the testbot.
+    /// Fans out across all of the recipient's active devices.
     pub async fn send_read_receipt_async(
         &self,
         recipient_did: &str,
-        recipient_device_id: u32,
         timestamps: Vec<i64>,
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
@@ -1077,15 +1357,15 @@ impl AppCore {
             timestamp_ms: 0,
             profile_key,
         };
-        inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
+        inner.send_dm(recipient_did, &msg.encode_to_vec(), None).await
     }
 
     /// Async send_dm for use in tests running inside a tokio runtime.
-    /// Wraps plaintext in a content envelope before encryption.
+    /// Wraps plaintext in a content envelope before encryption. Fans out
+    /// across all of the recipient's active devices.
     pub async fn send_dm_async(
         &self,
         recipient_did: &str,
-        recipient_device_id: u32,
         plaintext: &[u8],
         sent_at_ms: i64,
     ) -> Result<(), AppError> {
@@ -1097,7 +1377,7 @@ impl AppCore {
             timestamp_ms: sent_at_ms as u64,
             profile_key,
         };
-        inner.send_dm(recipient_did, recipient_device_id, &msg.encode_to_vec(), None).await
+        inner.send_dm(recipient_did, &msg.encode_to_vec(), None).await
     }
 
     /// Async receive_messages for use in tests running inside a tokio runtime.
@@ -1245,7 +1525,6 @@ impl AppCore {
                         };
                         let _ = inner.send_dm(
                             &decrypted.sender_did,
-                            decrypted.sender_device_id,
                             &delivery.encode_to_vec(),
                             None,
                         ).await;
@@ -1325,13 +1604,47 @@ impl AppCoreInner {
     }
 
     /// Send raw bytes (already enveloped) as an encrypted DM.
+    /// Fan-out send: fetches the recipient's active device list and encrypts a
+    /// copy of `plaintext` for each device, sending them as one batch.
+    ///
+    /// Mirrors Signal's `SignalServiceMessageSender.sendMessage` shape: callers
+    /// don't think about device IDs. Stale-device handling (`409`/`410`) is a
+    /// later improvement — for now, each send hits `GET /v1/accounts/{did}/devices`.
     async fn send_dm(
+        &mut self,
+        recipient_did: &str,
+        plaintext: &[u8],
+        expiry_secs: Option<i64>,
+    ) -> Result<(), AppError> {
+        let device_ids = self.client.fetch_devices(recipient_did).await?;
+        if device_ids.is_empty() {
+            return Err(AppError::Protocol(format!(
+                "no active devices for recipient {recipient_did}"
+            )));
+        }
+
+        let mut envelopes = Vec::with_capacity(device_ids.len());
+        for device_id in device_ids {
+            let env = self
+                .encrypt_for_device(recipient_did, device_id as u32, plaintext, expiry_secs)
+                .await?;
+            envelopes.push(env);
+        }
+
+        self.client.send_messages(&envelopes).await?;
+        Ok(())
+    }
+
+    /// Per-device encryption helper: establishes a Double Ratchet session if
+    /// needed (fetching that device's prekey bundle), encrypts the plaintext,
+    /// and returns the `OutboundMessage` envelope ready for `send_messages`.
+    async fn encrypt_for_device(
         &mut self,
         recipient_did: &str,
         recipient_device_id: u32,
         plaintext: &[u8],
         expiry_secs: Option<i64>,
-    ) -> Result<(), AppError> {
+    ) -> Result<OutboundMessage, AppError> {
         let recipient_addr = DeviceAddress::new(
             AccountId::new(recipient_did),
             DeviceId::new(recipient_device_id),
@@ -1388,7 +1701,7 @@ impl AppCoreInner {
             plaintext,
         ).await?;
 
-        self.client.send_messages(&[OutboundMessage {
+        Ok(OutboundMessage {
             recipient_did: recipient_did.to_string(),
             recipient_device_id: recipient_device_id as i32,
             ciphertext: encrypted.ciphertext,
@@ -1397,9 +1710,7 @@ impl AppCoreInner {
                 MessageKind::Whisper => 1,
             },
             expiry_secs,
-        }]).await?;
-
-        Ok(())
+        })
     }
 
     async fn receive_messages(&mut self) -> Result<Vec<DecryptedMessage>, AppError> {
@@ -1440,7 +1751,6 @@ impl AppCoreInner {
                             };
                             let _ = self.send_dm(
                                 &raw.sender_did,
-                                raw.sender_device_id,
                                 &delivery.encode_to_vec(),
                                 None,
                             ).await;

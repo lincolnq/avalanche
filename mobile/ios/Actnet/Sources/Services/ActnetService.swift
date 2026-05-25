@@ -19,4 +19,9 @@ protocol ActnetService: Sendable {
     /// Stage 2: consume the prepared handle, submit the PLC genesis op, and
     /// register the account with the homeserver.
     func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, recoveryKey: Data, displayName: String) throws -> any AppCoreProtocol
+
+    /// Recover an account from a passkey-protected recovery blob. Downloads
+    /// the blob, decrypts with `recoveryKey`, replaces the old device on the
+    /// home server, and returns an `AppCoreProtocol` bound to a fresh local store.
+    func recoverFromBlob(serverUrl: String, did: String, recoveryKey: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol
 }

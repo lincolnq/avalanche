@@ -112,6 +112,10 @@ pub async fn delete(conn: &mut PgConnection, device_pk: i64) -> Result<(), sqlx:
         .bind(device_pk)
         .execute(&mut *conn)
         .await?;
+    sqlx::query("DELETE FROM auth_challenges WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
     sqlx::query("DELETE FROM signed_prekeys WHERE device_pk = $1")
         .bind(device_pk)
         .execute(&mut *conn)
@@ -121,6 +125,10 @@ pub async fn delete(conn: &mut PgConnection, device_pk: i64) -> Result<(), sqlx:
         .execute(&mut *conn)
         .await?;
     sqlx::query("DELETE FROM kyber_prekeys WHERE device_pk = $1")
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM one_time_kyber_prekeys WHERE device_pk = $1")
         .bind(device_pk)
         .execute(&mut *conn)
         .await?;

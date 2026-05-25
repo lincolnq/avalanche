@@ -231,6 +231,17 @@ pub struct ProjectTokenResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RecoveryBlobResponse {
     pub recovery_blob: String, // base64
+    #[serde(default)]
+    pub device_ids: Vec<i32>,
+}
+
+/// Decoded result of `get_recovery_blob` — the encrypted blob bytes plus the
+/// account's currently active device_ids, used by the recovery flow to target
+/// the old device for replacement.
+#[derive(Debug)]
+pub struct RecoveryBundle {
+    pub blob: Vec<u8>,
+    pub device_ids: Vec<i32>,
 }
 
 // ── Device replacement ──────────────────────────────────────────────────────

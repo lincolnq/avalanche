@@ -126,4 +126,7 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         profile_key   BLOB    NOT NULL,\
         fetched_at    INTEGER NOT NULL\
     )",
+    // Local device_id assigned to this client (defaults to 1 — single device).
+    // Persisted so login/recovery don't have to assume a fixed value.
+    "ALTER TABLE account ADD COLUMN device_id INTEGER NOT NULL DEFAULT 1",
 ];
