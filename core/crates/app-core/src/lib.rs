@@ -172,7 +172,7 @@ fn build_authed_client(
     initial_token: Option<String>,
 ) -> net::Client {
     let signer: Arc<dyn net::Signer> = Arc::new(IdentitySigner {
-        identity_bytes: identity.serialize().into(),
+        identity_bytes: identity.serialize(),
     });
     net::Client::new(server_url).with_signer(did, device_id, signer, initial_token)
 }
@@ -1712,17 +1712,10 @@ async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
 async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppError> {
     // Hold the lock just long enough to clone what we need, then release
     // before doing network I/O. Avoids blocking parallel send_dm calls.
-    let (url, client_for_auth) = {
+    let url = {
         let inner = core.inner.lock().await;
-        (
-            inner.client.server_url().to_string(),
-            // The Client itself is not Clone, but we just need to call ensure_authenticated
-            // on it — do that under the lock, briefly. The HTTP I/O inside ensure_authenticated
-            // releases its own internal lock between awaits.
-            (),
-        )
+        inner.client.server_url().to_string()
     };
-    let _ = client_for_auth;
 
     // ensure_authenticated needs to call client.challenge/authenticate.
     // It manages its own auth lock internally; we just hold the inner lock
