@@ -160,13 +160,24 @@ async fn status(
 
 // ── Fetch bundle ─────────────────────────────────────────────────────────────
 
+// Wire-format note: do NOT add `#[serde(deny_unknown_fields)]` to any of the
+// request or response types in this file. Permissive parsing is what gives
+// us forward compatibility — older clients and servers can ignore fields
+// they don't recognize, which is how we plan to introduce new prekey types
+// (e.g. ML-KEM replacements for Kyber) without flag days. Adding new fields
+// is non-breaking; reinterpreting existing ones is not.
+
 #[derive(Serialize)]
 struct BundleResponse {
     identity_key: String,
     registration_id: i32,
     signed_prekey: SignedPreKeyWire,
     one_time_prekey: Option<OneTimePreKeyWire>,
-    kyber_prekey: KyberPreKeyWire,
+    // `Option` rather than required so a future server can omit the Kyber
+    // slot (e.g. after migrating to a different KEM) without redefining the
+    // struct shape. Today we always emit `Some`; the JSON output is
+    // identical to a required field while that's the case.
+    kyber_prekey: Option<KyberPreKeyWire>,
 }
 
 #[derive(Serialize)]
@@ -232,11 +243,11 @@ async fn fetch(
             id: k.id,
             public_key: BASE64_STANDARD.encode(&k.public_key),
         }),
-        kyber_prekey: KyberPreKeyWire {
+        kyber_prekey: Some(KyberPreKeyWire {
             id: bundle.kyber_prekey.id,
             public_key: BASE64_STANDARD.encode(&bundle.kyber_prekey.public_key),
             signature: BASE64_STANDARD.encode(&bundle.kyber_prekey.signature),
-        },
+        }),
     }))
 }
 
