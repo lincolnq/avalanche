@@ -5,6 +5,17 @@ struct MyQRCodeView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var showScanner = false
+    @State private var pastedInvite: String = ""
+
+    private var pastedInviteURL: URL? {
+        let trimmed = pastedInvite.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), AppState.isDeepLink(url) else {
+            return nil
+        }
+        let components = url.pathComponents.filter { $0 != "/" }
+        guard components.first == "invite", components.count >= 2 else { return nil }
+        return url
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -12,16 +23,6 @@ struct MyQRCodeView: View {
                let server = account.servers.first {
                 let token = makeInviteToken(serverUrl: server.url.absoluteString, inviterDid: account.id)
                 let url = "https://go.theavalanche.net/invite/\(token)"
-                
-                Button {
-                    showScanner = true
-                } label: {
-                    Label("Scan", systemImage: "camera")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .padding(.horizontal, 32)
                 
                 if let qrImage = generateQRCode(from: url) {
                     Image(uiImage: qrImage)
@@ -35,13 +36,6 @@ struct MyQRCodeView: View {
                 Text(account.displayName)
                     .font(.title2)
                     .fontWeight(.semibold)
-
-                Text(url)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 24)
 
                 HStack(spacing: 16) {
                     Button {
@@ -63,6 +57,50 @@ struct MyQRCodeView: View {
             }
 
             Spacer()
+
+            Button {
+                showScanner = true
+            } label: {
+                Label("Scan", systemImage: "camera")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .padding(.horizontal, 32)
+
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField("Paste invite link", text: $pastedInvite)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+
+                    Button {
+                        if let s = UIPasteboard.general.string {
+                            pastedInvite = s
+                        }
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    if let url = pastedInviteURL {
+                        appState.handleDeepLink(url)
+                        dismiss()
+                    }
+                } label: {
+                    Label("Send Message", systemImage: "paperplane")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(pastedInviteURL == nil)
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 24)
         }
         .padding(.top, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
