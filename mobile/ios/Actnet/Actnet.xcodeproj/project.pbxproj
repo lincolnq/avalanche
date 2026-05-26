@@ -38,6 +38,7 @@
 		9A5A0F932631DA4A71A0A632 /* InviteToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D6AA10E40B490772D3A29A3 /* InviteToken.swift */; };
 		A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEE393F3CBD5B0C5D48ACDC /* PushManager.swift */; };
 		A58A9D263F1E4921F319B28F /* IdentityPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AB2D93100F9BA3D2C8BBD22 /* IdentityPickerView.swift */; };
+		ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */; };
 		B1BE1C0F66D5E81BA2BE3ED4 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28910BDF4DFA815CEDDA7F15 /* AppLog.swift */; };
 		C239EC74DDDF816075F9D6C2 /* PasskeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6168BA4AD89E27656AE0A59 /* PasskeyManager.swift */; };
 		C8BE5993A5A4E8838F9D0C29 /* ConversationRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0BC2191A5A534D46806501B /* ConversationRow.swift */; };
@@ -91,6 +92,7 @@
 		661A952A0D325A00D0F054E9 /* DevServerActnetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevServerActnetService.swift; sourceTree = "<group>"; };
 		6A58CC23E0AF8302F283FC87 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6B7C0912B10EFE68A1C776BB /* AppCoreFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = AppCoreFFI.xcframework; path = ../AppCoreFFI.xcframework; sourceTree = "<group>"; };
+		6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCameraView.swift; sourceTree = "<group>"; };
 		77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeMessageView.swift; sourceTree = "<group>"; };
 		7FEE393F3CBD5B0C5D48ACDC /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryKeyBanner.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 				9C977CCCEBCC89682DA83AC6 /* LogViewerView.swift */,
 				14AE2F220E680D0CE0A5810E /* MainTabView.swift */,
 				CA3B34B7A3FF40359D732B62 /* OfflineBanner.swift */,
+				6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */,
 			);
 			path = Common;
 			sourceTree = "<group>";
@@ -413,6 +416,7 @@
 				32CE74DAA7C93CB87BEDAD15 /* ProjectInfo.swift in Sources */,
 				766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */,
 				A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */,
+				ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */,
 				13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */,
 				99FD87ED3F4EB328193828FF /* RecoveryConsoleView.swift in Sources */,
 				6C9898720C9563E270D15E23 /* RecoveryExplainerView.swift in Sources */,
@@ -444,6 +448,7 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Avalanche;
 				INFOPLIST_KEY_CFBundleName = Avalanche;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Avalanche needs camera access to scan invite QR codes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -594,6 +599,7 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Avalanche;
 				INFOPLIST_KEY_CFBundleName = Avalanche;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Avalanche needs camera access to scan invite QR codes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				LD_RUNPATH_SEARCH_PATHS = (

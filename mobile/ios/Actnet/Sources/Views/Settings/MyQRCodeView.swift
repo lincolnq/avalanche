@@ -3,6 +3,8 @@ import CoreImage.CIFilterBuiltins
 
 struct MyQRCodeView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var showScanner = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -10,7 +12,17 @@ struct MyQRCodeView: View {
                let server = account.servers.first {
                 let token = makeInviteToken(serverUrl: server.url.absoluteString, inviterDid: account.id)
                 let url = "https://go.theavalanche.net/invite/\(token)"
-
+                
+                Button {
+                    showScanner = true
+                } label: {
+                    Label("Scan", systemImage: "camera")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.horizontal, 32)
+                
                 if let qrImage = generateQRCode(from: url) {
                     Image(uiImage: qrImage)
                         .interpolation(.none)
@@ -24,16 +36,27 @@ struct MyQRCodeView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("Scan to start a conversation")
+                Text(url)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 24)
 
-                ShareLink(item: url) {
-                    Label("Share Invite Link", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 16) {
+                    Button {
+                        UIPasteboard.general.string = url
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .padding(.horizontal, 32)
+
             } else {
                 Text("No account")
                     .foregroundStyle(.secondary)
@@ -46,6 +69,13 @@ struct MyQRCodeView: View {
         .background(Color.avPaper)
         .navigationTitle("My QR Code")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showScanner) {
+            QRScannerView { value in
+                guard let url = URL(string: value), AppState.isDeepLink(url) else { return }
+                appState.handleDeepLink(url)
+                dismiss()
+            }
+        }
     }
 
     private func makeInviteToken(serverUrl: String, inviterDid: String) -> String {

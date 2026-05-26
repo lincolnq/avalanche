@@ -16,7 +16,7 @@ struct DevSettingsView: View {
                         Button {
                             showMyQRCode = true
                         } label: {
-                            Label("My QR Code", systemImage: "qrcode")
+                            Label("Invite & Scan", systemImage: "qrcode")
                         }
                     }
 
@@ -92,6 +92,11 @@ struct DevSettingsView: View {
             }
             .navigationDestination(isPresented: $showMyQRCode) {
                 MyQRCodeView()
+            }
+            .onChange(of: appState.navigateToConversation) {
+                if appState.navigateToConversation != nil {
+                    dismiss()
+                }
             }
             .confirmationDialog("Log out?", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
                 Button("Log Out", role: .destructive) {

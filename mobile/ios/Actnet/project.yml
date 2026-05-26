@@ -35,5 +35,6 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Avalanche
         INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "Avalanche needs camera access to scan invite QR codes."
     info:
       path: Info.plist

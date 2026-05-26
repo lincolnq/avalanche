@@ -445,7 +445,6 @@ Built: iOS app (SwiftUI) with UniFFI bindings to Rust core. Account creation wit
 - **Notifications:** Local notifications when a message arrives while the app is backgrounded. APNs integration via the push relay for wakeups when the app is killed. Content-free payloads only — the relay sees pseudonyms, not user identities.
 - **Homeserver deployment:** Production homeserver on real infrastructure. TLS, backups, monitoring. Server admin tooling for generating invite tokens.
 - **App Store submission:** Provisioning, review, TestFlight → public release. Bundle ID `net.theavalanche.app`, team `7FVK3RR3TV`.
-- **Polish:** Offline indicator, incoming message banner while app is in foreground, persistent message history across app restarts, display names shown in conversation list and messages, basic error handling for network failures.
 
 **Why now:** The crypto and protocol layers are solid. The app needs to be usable by real people — that means they need to find each other, get notified, and install from the App Store. Everything else (groups, projects, federation) can wait until there are real users sending real messages.
 
