@@ -14,6 +14,7 @@
 - Scope the ATS exception for `ts.net` (in `mobile/ios/Actnet/project.yml` → `info.properties.NSAppTransportSecurity`) before any non-dev build. It currently applies to all of `ts.net` and to every build config so a Tailscale-hosted dev server is reachable over HTTP. For TestFlight / App Store builds the exception should be removed entirely (or wrapped in a debug-only configuration), and dev should switch to TLS via `tailscale cert`.
 
 ## Privacy / identity
+- Consider allowing `did:local:` DIDs for human (non-bot) accounts, not just bots. Allowing `did:local:` for humans would let small orgs run a homeserver without publishing identities globally.
 - PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
 - DID update operation for key rotation after recovery (submit new signing key to PLC directory, signed by rotation key)
 - Re-encrypt and re-upload recovery blob to all servers when joining a new server (update server list)

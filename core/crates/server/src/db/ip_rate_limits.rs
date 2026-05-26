@@ -5,6 +5,12 @@ use sqlx::{PgConnection, Row};
 ///
 /// The window is aligned to epoch time in chunks of `window_secs` seconds.
 /// Returns `true` if allowed, `false` if the limit has been reached.
+///
+/// `ACTNET_DISABLE_IP_RATE_LIMITS=1` bypasses the check entirely (returns
+/// `Ok(true)` without touching the DB). Intended for the dev server and
+/// e2e tests, where a developer iterating locally would otherwise burn
+/// through the registration quota in a handful of runs. Production never
+/// sets this.
 pub async fn check_and_increment(
     conn: &mut PgConnection,
     ip: &str,
@@ -12,6 +18,10 @@ pub async fn check_and_increment(
     limit: i32,
     window_secs: i64,
 ) -> Result<bool, sqlx::Error> {
+    if std::env::var("ACTNET_DISABLE_IP_RATE_LIMITS").ok().as_deref() == Some("1") {
+        return Ok(true);
+    }
+
     let row = sqlx::query(
         "INSERT INTO ip_rate_limit_counters (ip, action, window_start, count)
          VALUES (

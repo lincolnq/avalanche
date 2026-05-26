@@ -32,8 +32,8 @@ async fn test_store() -> store::Store {
 async fn alice_sends_dm_to_bob() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
 
     let bob_did = bob.did_async().await;
 
@@ -54,8 +54,8 @@ async fn alice_sends_dm_to_bob() {
 async fn bidirectional_conversation() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
 
     let alice_did = alice.did_async().await;
     let bob_did = bob.did_async().await;
@@ -89,8 +89,8 @@ async fn bidirectional_conversation() {
 async fn multiple_messages_in_one_fetch() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, false).await.unwrap();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
 
     let bob_did = bob.did_async().await;
 
@@ -129,7 +129,7 @@ async fn login_re_authenticates() {
     .await
     .unwrap();
     store1.migrate().await.unwrap();
-    AppCore::create_account_with_store(&url, store1, None, false)
+    AppCore::create_account_with_store(&url, store1, None, true)
         .await
         .unwrap();
 

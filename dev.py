@@ -182,7 +182,7 @@ def main():
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
-        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1"},
+        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1"},
     ))
 
     processes.append(subprocess.Popen(
