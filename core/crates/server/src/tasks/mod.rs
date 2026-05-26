@@ -76,6 +76,10 @@ pub fn spawn_all(state: AppState) {
             if n > 0 {
                 tracing::info!(count = n, "stale rate limit counters deleted");
             }
+            let n = db::ip_rate_limits::delete_stale(&mut conn).await?;
+            if n > 0 {
+                tracing::info!(count = n, "stale IP rate limit counters deleted");
+            }
             Ok(())
         },
     ));

@@ -72,6 +72,18 @@ async fn update_recovery_blob(
         .await?
         .ok_or(ServerError::Internal("device not found for session".into()))?;
 
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        device.account_id,
+        crate::middleware::rate_limit::ACTION_UPDATE_RECOVERY,
+        crate::middleware::rate_limit::LIMIT_UPDATE_RECOVERY,
+        crate::middleware::rate_limit::WINDOW_UPDATE_RECOVERY,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
     db::accounts::update_recovery_blob(&mut conn, device.account_id, Some(&blob)).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

@@ -28,7 +28,7 @@ use base64::prelude::*;
 use libsignal_protocol as signal;
 use serde::{Deserialize, Serialize};
 
-use crate::{db, error::ServerError, state::AppState};
+use crate::{db, error::ServerError, middleware::client_ip::ClientIp, state::AppState};
 
 const CHALLENGE_LIFETIME_SECS: i64 = 300; // 5 minutes
 
@@ -53,9 +53,22 @@ struct ChallengeResponse {
 
 async fn issue_challenge(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServerError> {
     let mut conn = state.db.acquire().await?;
+
+    if !db::ip_rate_limits::check_and_increment(
+        &mut conn,
+        &ip,
+        crate::middleware::rate_limit::ACTION_AUTH_CHALLENGE,
+        crate::middleware::rate_limit::LIMIT_AUTH_CHALLENGE,
+        crate::middleware::rate_limit::WINDOW_AUTH_CHALLENGE,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
 
     let device = db::devices::find_by_did(&mut conn, &req.did, req.device_id)
         .await?
@@ -90,9 +103,22 @@ struct TokenResponse {
 
 async fn issue_token(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<TokenRequest>,
 ) -> Result<Json<TokenResponse>, ServerError> {
     let mut conn = state.db.acquire().await?;
+
+    if !db::ip_rate_limits::check_and_increment(
+        &mut conn,
+        &ip,
+        crate::middleware::rate_limit::ACTION_AUTH_TOKEN,
+        crate::middleware::rate_limit::LIMIT_AUTH_TOKEN,
+        crate::middleware::rate_limit::WINDOW_AUTH_TOKEN,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
 
     let device = db::devices::find_by_did(&mut conn, &req.did, req.device_id)
         .await?

@@ -186,6 +186,22 @@ final class AppState: ObservableObject {
                     try svc.login(dbPath: dbPath, dbKey: dbKey)
                 }.value
                 self.cores[core.did()] = core
+
+                // Refresh display name from the local profile store. The
+                // persisted name in UserDefaults can be stale (e.g. recovered
+                // accounts started with an empty placeholder).
+                if let coreName = try? await Task.detached(operation: { try core.ownDisplayName() }).value,
+                   !coreName.isEmpty,
+                   coreName != p.displayName,
+                   let idx = accounts.firstIndex(where: { $0.id == p.did }) {
+                    accounts[idx].displayName = coreName
+                    Self.persistAccount(PersistedAccount(
+                        did: p.did,
+                        displayName: coreName,
+                        dbFilename: p.dbFilename,
+                        servers: p.servers
+                    ))
+                }
             } catch {
                 print("Failed to authenticate account \(p.did) (will show offline): \(error)")
             }
@@ -351,9 +367,18 @@ final class AppState: ObservableObject {
             )
         }.value
 
-        let resolvedDisplayName = displayName.isEmpty
-            ? "Account \(String(did.suffix(6)))"
-            : displayName
+        // Prefer the display name that the recovery blob restored into the
+        // local profile store. Falls back to the user-supplied name, then to
+        // a placeholder.
+        let restoredName = (try? await Task.detached(operation: { try core.ownDisplayName() }).value) ?? ""
+        let resolvedDisplayName: String
+        if !restoredName.isEmpty {
+            resolvedDisplayName = restoredName
+        } else if !displayName.isEmpty {
+            resolvedDisplayName = displayName
+        } else {
+            resolvedDisplayName = "Account \(String(did.suffix(6)))"
+        }
         try await finishAccountRegistration(
             core: core,
             serverUrl: serverUrl,

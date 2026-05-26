@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 
-use crate::{db, error::ServerError, state::AppState};
+use crate::{db, error::ServerError, middleware::client_ip::ClientIp, state::AppState};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/v1/accounts", post(register))
@@ -87,8 +87,24 @@ struct RegisterResponse {
 
 async fn register(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(axum::http::StatusCode, Json<RegisterResponse>), ServerError> {
+    {
+        let mut conn = state.db.acquire().await?;
+        if !db::ip_rate_limits::check_and_increment(
+            &mut conn,
+            &ip,
+            crate::middleware::rate_limit::ACTION_REGISTER,
+            crate::middleware::rate_limit::LIMIT_REGISTER,
+            crate::middleware::rate_limit::WINDOW_REGISTER,
+        )
+        .await?
+        {
+            return Err(ServerError::RateLimited);
+        }
+    }
+
     let identity_key = BASE64_STANDARD
         .decode(&req.identity_key)
         .map_err(|_| ServerError::BadRequest("invalid base64 identity_key".into()))?;
@@ -334,8 +350,8 @@ async fn verify_did_plc(did: &str, identity_key: &[u8]) -> Result<(), ServerErro
 
     // publicKeyMultibase is "z" + base58btc(multicodec_prefix + raw_key).
     // This is the same encoding as did:key without the "did:key:" prefix.
-    let plc_pub_key =
-        decode_did_key_ed25519(&format!("did:key:{pub_key_multibase}")).map_err(|e| {
+    let plc_pub_key = crate::plc::decode_did_key_ed25519(&format!("did:key:{pub_key_multibase}"))
+        .map_err(|e| {
             ServerError::BadRequest(format!("invalid verification method in DID doc: {e}"))
         })?;
 
@@ -354,30 +370,6 @@ async fn verify_did_plc(did: &str, identity_key: &[u8]) -> Result<(), ServerErro
     }
 
     Ok(())
-}
-
-/// Decode a `did:key:z...` (Ed25519) to the raw 32-byte public key.
-fn decode_did_key_ed25519(did_key: &str) -> Result<Vec<u8>, String> {
-    let z_part = did_key
-        .strip_prefix("did:key:z")
-        .ok_or("did:key must start with did:key:z")?;
-
-    let bytes = bs58::decode(z_part)
-        .into_vec()
-        .map_err(|e| format!("base58 decode failed: {e}"))?;
-
-    // Expect multicodec prefix 0xed 0x01 (Ed25519) + 32 bytes.
-    if bytes.len() < 2 {
-        return Err("did:key payload too short".into());
-    }
-    if bytes[0] != 0xed || bytes[1] != 0x01 {
-        return Err(format!(
-            "unexpected multicodec prefix: [{:#04x}, {:#04x}], expected Ed25519 [0xed, 0x01]",
-            bytes[0], bytes[1]
-        ));
-    }
-
-    Ok(bytes[2..].to_vec())
 }
 
 /// Generate a local-only DID for bot accounts that don't use the PLC directory.

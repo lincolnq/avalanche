@@ -107,9 +107,27 @@ async fn replace_device(
         .verify(payload.as_bytes(), &signature)
         .map_err(|_| ServerError::Unauthorized)?;
 
-    // TODO: Verify the rotation key matches the DID document's rotation key
-    // from the PLC directory. For now, we trust the self-reported key since
-    // PLC directory integration is not yet implemented (same as registration).
+    // Verify the rotation key is in the PLC directory's authorized
+    // rotationKeys list for this DID. Without this check, a valid
+    // self-signature proves nothing — anyone can sign with their own
+    // freshly generated key.
+    //
+    // did:local: identifiers (bot accounts) are not in the PLC directory
+    // and cannot use this flow.
+    if !req.did.starts_with("did:plc:") {
+        return Err(ServerError::BadRequest(
+            "device replacement requires a did:plc: identifier".into(),
+        ));
+    }
+    let submitted_compressed = verifying_key.to_encoded_point(true).as_bytes().to_vec();
+    let authorized = crate::plc::fetch_rotation_keys_p256(&req.did).await?;
+    if !authorized.iter().any(|k| k == &submitted_compressed) {
+        tracing::warn!(
+            did = %req.did,
+            "device replace rejected: submitted rotation key not in PLC rotationKeys"
+        );
+        return Err(ServerError::Unauthorized);
+    }
 
     let mut conn = state.db.acquire().await?;
 

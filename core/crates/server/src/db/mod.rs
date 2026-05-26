@@ -23,5 +23,6 @@ pub mod prekeys;
 pub mod profiles;
 pub mod project_tokens;
 pub mod push;
+pub mod ip_rate_limits;
 pub mod rate_limits;
 pub mod sessions;

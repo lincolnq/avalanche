@@ -6,7 +6,13 @@
 //! (via WebAuthn PRF extension) or recovery phrase.
 //!
 //! Encryption: AES-256-GCM with a random 12-byte nonce.
-//! Format: `nonce (12 bytes) || ciphertext || tag (16 bytes)`
+//! Wire format: `version (1 byte) || nonce (12 bytes) || ciphertext || tag (16 bytes)`
+//!
+//! The leading version byte identifies the blob format so future revisions
+//! (e.g. switching cipher, changing the plaintext schema, or adopting a
+//! length-prefixed binary plaintext) can be detected on decrypt and
+//! migrated, instead of being silently misinterpreted. Always bump
+//! [`RECOVERY_BLOB_VERSION`] when changing anything below.
 //!
 //! The plaintext is a JSON object:
 //! ```json
@@ -27,6 +33,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 
 const NONCE_LEN: usize = 12;
+
+/// Current recovery-blob wire-format version. Bump whenever the byte layout
+/// or plaintext schema changes in a non-backward-compatible way. Decryption
+/// rejects unknown versions so old clients fail loudly rather than parsing
+/// garbage.
+pub const RECOVERY_BLOB_VERSION: u8 = 1;
 
 /// Plaintext contents of a recovery blob.
 #[derive(Serialize, Deserialize)]
@@ -73,8 +85,9 @@ pub fn encrypt_recovery_blob(
         .encrypt(nonce, json.as_slice())
         .map_err(|e| AppError::Protocol(format!("recovery blob encryption failed: {e}")))?;
 
-    // nonce || ciphertext (includes GCM tag)
-    let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    // version || nonce || ciphertext (includes GCM tag)
+    let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
+    blob.push(RECOVERY_BLOB_VERSION);
     blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&ciphertext);
     Ok(blob)
@@ -85,11 +98,18 @@ pub fn decrypt_recovery_blob(
     blob: &[u8],
     symmetric_key: &[u8; 32],
 ) -> Result<RecoveryBlobPlaintext, AppError> {
-    if blob.len() < NONCE_LEN + 16 {
+    if blob.len() < 1 + NONCE_LEN + 16 {
         return Err(AppError::Protocol("recovery blob too short".into()));
     }
 
-    let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+    let version = blob[0];
+    if version != RECOVERY_BLOB_VERSION {
+        return Err(AppError::Protocol(format!(
+            "unsupported recovery blob version: {version} (expected {RECOVERY_BLOB_VERSION})"
+        )));
+    }
+
+    let (nonce_bytes, ciphertext) = blob[1..].split_at(NONCE_LEN);
     let nonce = Nonce::from_slice(nonce_bytes);
 
     let cipher = Aes256Gcm::new(symmetric_key.into());
@@ -196,13 +216,48 @@ mod tests {
         let nonce_bytes = [0u8; NONCE_LEN];
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = cipher.encrypt(nonce, plaintext_bytes.as_slice()).unwrap();
-        let mut blob = nonce_bytes.to_vec();
+        let mut blob = vec![RECOVERY_BLOB_VERSION];
+        blob.extend_from_slice(&nonce_bytes);
         blob.extend_from_slice(&ct);
 
         let decrypted = decrypt_recovery_blob(&blob, &key).unwrap();
         assert_eq!(decrypted.servers, vec!["https://old.example".to_string()]);
         assert_eq!(decrypted.profile_key, "");
         assert_eq!(decrypted.display_name, "");
+    }
+
+    #[test]
+    fn unknown_version_byte_rejected() {
+        let key = [42u8; 32];
+        let plaintext = RecoveryBlobPlaintext {
+            rotation_key: "dGVzdA==".into(),
+            identity_keypair: "dGVzdA==".into(),
+            servers: vec![],
+            profile_key: String::new(),
+            display_name: String::new(),
+        };
+        let mut blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
+        blob[0] = 0xFF;
+        let result = decrypt_recovery_blob(&blob, &key);
+        let err_msg = match result {
+            Err(e) => format!("{e:?}"),
+            Ok(_) => panic!("expected version rejection"),
+        };
+        assert!(err_msg.contains("unsupported recovery blob version"), "got: {err_msg}");
+    }
+
+    #[test]
+    fn encoded_blob_starts_with_version_byte() {
+        let key = [42u8; 32];
+        let plaintext = RecoveryBlobPlaintext {
+            rotation_key: "dGVzdA==".into(),
+            identity_keypair: "dGVzdA==".into(),
+            servers: vec![],
+            profile_key: String::new(),
+            display_name: String::new(),
+        };
+        let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
+        assert_eq!(blob[0], RECOVERY_BLOB_VERSION);
     }
 
     #[test]

@@ -6,6 +6,12 @@ message ContentMessage {
     TextMessage    text    = 1;
     ReceiptMessage receipt = 2;
   }
+  // Reserved for upcoming body variants (typing, timer-change, group
+  // control, call signaling, etc.). Field numbers inside a `oneof` share
+  // the parent message's number space, so reservations live here at the
+  // message level. Pick a number from this block when adding a new
+  // variant; never reuse 1-2 even if removed.
+  reserved 3 to 14;
   uint64 timestamp_ms = 15;
   // Sender's profile key (32 bytes, AES-256-GCM). When present, recipients
   // can fetch and decrypt the sender's encrypted profile blob. Attached to
@@ -13,14 +19,25 @@ message ContentMessage {
   // profile with the recipient. Empty bytes (length 0) means "not sharing
   // this time" — protobuf has no native optional-bytes distinction.
   bytes profile_key = 17;
+  // Reserved for future cross-cutting envelope metadata (group_id,
+  // conversation_id, ephemeral_ttl_secs, etc.).
+  reserved 18 to 30;
 }
 
 message TextMessage {
   string body = 1;
+  // Future: attachments, mentions, reply_to, formatting.
+  reserved 2 to 10;
 }
 
 message ReceiptMessage {
-  enum Type { DELIVERY = 0; READ = 1; }
+  enum Type {
+    DELIVERY = 0;
+    READ     = 1;
+    // Future: VIEWED (disappearing-media), PLAYED (voice notes), etc.
+    reserved 2 to 5;
+  }
   Type             type       = 1;
   repeated uint64  timestamps = 2;
+  reserved 3 to 10;
 }

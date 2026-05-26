@@ -54,6 +54,18 @@ async fn upload_profile(
         .await?
         .ok_or(ServerError::Internal("device not found for session".into()))?;
 
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        device.account_id,
+        crate::middleware::rate_limit::ACTION_UPDATE_PROFILE,
+        crate::middleware::rate_limit::LIMIT_UPDATE_PROFILE,
+        crate::middleware::rate_limit::WINDOW_UPDATE_PROFILE,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
     db::profiles::upsert(&mut conn, device.account_id, &blob).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
