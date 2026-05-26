@@ -17,7 +17,7 @@ mod auth;
 mod devices;
 mod did;
 mod invites;
-mod messages;
+pub(crate) mod messages;
 mod prekeys;
 mod profile;
 mod projects;

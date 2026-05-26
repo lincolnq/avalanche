@@ -166,7 +166,10 @@ Auth: required
 Body: { messages: [{ recipient_did, recipient_device_id, ciphertext, message_kind }] }
 Response: 200 { sent: [...ids] }
 ```
-Enqueues per recipient device. Notifies via WebSocket if connected.
+Enqueues per recipient device. Pushes the ciphertext over the recipient's
+WebSocket immediately if connected. This HTTP route remains as a fallback;
+the primary send path for connected clients is the WS `SendRequest` frame
+(see § 3), which executes the same enqueue logic.
 
 ### Message Fetch
 ```
@@ -194,24 +197,74 @@ Response: 200 DID document JSON, or 404
 ## 3. WebSocket Protocol
 
 ### Connection
+
 ```
 GET /v1/ws?token=<session_token>
 ```
-Upgrades to WebSocket. Server associates connection with (account, device).
 
-### Server → Client
-- `{ "type": "message", "id": 123, "ciphertext": "<base64>", "message_kind": 0, "enqueued_at": "..." }` — encrypted message delivered inline (no separate HTTP fetch needed)
-- `{ "type": "prekey_low", "one_time_remaining": 2, "kyber_remaining": 1 }` — refill needed
-- `{ "type": "pong" }` — keepalive response
+Upgrades to a binary WebSocket. Auth is the session token in the query
+parameter (custom headers aren't supported by the browser WS API). The
+server validates the token before completing the upgrade; an invalid
+token gets HTTP 401, not a WS connection. The connection is associated
+with `(account, device)` for its lifetime.
 
-### Client → Server
-- `{ "type": "ack", "message_ids": [123, 456] }` — acknowledge delivery (server deletes from queue)
-- `{ "type": "ping" }` — keepalive
+### Wire format
 
-### Connection Management
-- In-memory `HashMap<DevicePk, Sender>` behind `Arc<RwLock<...>>`.
-- Message enqueue pushes the full ciphertext over the WebSocket immediately if the device is connected. If not connected, the message stays in the queue and is delivered via `GET /v1/messages` on reconnect (or pushed over WebSocket when the device reconnects).
-- Connection dropped on token expiry.
+Each frame is a single `actnet.ws.WsFrame` protobuf (defined in
+`proto/ws.proto`), encoded as binary. Either side may originate any
+request variant; responses echo the originator's `frame.id` for
+correlation.
+
+```
+WsFrame {
+  uint64 id;        // correlation id; echoed in responses
+  oneof body {
+    SendRequest, SendResponse,        // client → server, server → client
+    DeliverRequest, DeliverAck,       // server → client, client → server
+    Keepalive,                        // either direction
+    PrekeyLowNotification,            // server → client, fire-and-forget
+  }
+}
+```
+
+Forward compatibility is by reserved field numbers in the oneof and at
+the message level (numbers 8–20 at the top level, plus per-variant
+reservations). New variants are added without breaking existing clients.
+
+### Flows
+
+- **Send messages** (client → server): client sends `SendRequest` with a
+  fresh `frame.id`. Server enqueues per recipient device (same code
+  path as HTTP `POST /v1/messages`) and replies `SendResponse` with the
+  same `frame.id`, carrying `message_ids` on success or `error` +
+  HTTP-like `status` on failure.
+- **Deliver messages** (server → client): on connect, server drains the
+  device's queue and sends one `DeliverRequest` per message, each with
+  a server-allocated `frame.id`. New messages enqueued while connected
+  are pushed the same way. Client replies `DeliverAck` with the
+  matching `frame.id`; the server then deletes the row.
+- **Keepalive** (either direction): sender emits `Keepalive`, receiver
+  replies with `Keepalive` carrying the same `frame.id`.
+- **Prekey low** (server → client): fire-and-forget; the client should
+  refill via `PUT /v1/prekeys`.
+
+### Fallbacks
+
+HTTP `POST /v1/messages`, `GET /v1/messages`, and `DELETE /v1/messages`
+remain live for clients that can't keep a WS open (poll mode, tests,
+debugging). The HTTP send path is the fallback in `app-core` when the
+WS is not connected or returns an error.
+
+### Connection management
+
+- In-memory `HashMap<DevicePk, Sender<WsPush>>` behind
+  `Arc<RwLock<...>>` carries typed push payloads from the message
+  enqueue path and the prekey vacuum task to the WS handler.
+- Per-connection state in the WS handler tracks outstanding
+  `DeliverRequest` frame IDs (`HashMap<u64, message_id>`) so the
+  matching `DeliverAck` can identify which queued row to delete.
+- Connection drops on token expiry. Clients reconnect; the on-connect
+  drain replays any unacked queued messages.
 
 ---
 

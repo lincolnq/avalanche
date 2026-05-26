@@ -49,6 +49,7 @@ struct WebViewRepresentable: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
+        print("[WebView] loading \(url.absoluteString)")
         let webView = WKWebView(frame: .zero)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator

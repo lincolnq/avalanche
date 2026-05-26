@@ -203,6 +203,11 @@ pub struct AppCore {
     /// Handle to the background reconnect task. Held so it doesn't get
     /// detached; the task self-exits when the last `Arc<AppCore>` drops.
     reconnect_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Live WebSocket connection, if any. Set by the reconnect loop on a
+    /// successful connect and cleared when the receive loop exits.
+    /// `send_dm` prefers the WS when present and falls back to HTTP `POST
+    /// /v1/messages` otherwise.
+    ws: std::sync::Mutex<Option<net::ws::WsConnection>>,
 }
 
 struct AppCoreInner {
@@ -226,6 +231,7 @@ impl AppCore {
             event_tx,
             event_rx: Mutex::new(event_rx),
             reconnect_task: std::sync::Mutex::new(None),
+            ws: std::sync::Mutex::new(None),
         }
     }
 
@@ -411,8 +417,27 @@ impl AppCore {
             let mut rk = [0u8; 32];
             rk.copy_from_slice(&recovery_key);
 
+            // Resolve the homeserver URL from PLC for did:plc: DIDs. The
+            // caller-supplied `server_url` is used as a fallback for
+            // did:local: bots (no PLC entry) and as a last resort if the PLC
+            // lookup fails for transient reasons.
+            let bootstrap_server = if did.starts_with("did:plc:") {
+                match plc::resolve_homeserver_url(&did).await {
+                    Ok(url) => url,
+                    Err(e) => {
+                        eprintln!(
+                            "PLC resolution failed during recovery for {did}: {e}; \
+                             falling back to caller-supplied server_url"
+                        );
+                        server_url.clone()
+                    }
+                }
+            } else {
+                server_url.clone()
+            };
+
             // Download the blob and the current device list (one unauthenticated call).
-            let bundle = net::Client::new(&server_url).get_recovery_blob(&did).await?;
+            let bundle = net::Client::new(&bootstrap_server).get_recovery_blob(&did).await?;
             let plaintext = recovery::decrypt_recovery_blob(&bundle.blob, &rk)?;
 
             // Restore identity keypair.
@@ -436,11 +461,13 @@ impl AppCore {
                 .to_vec();
 
             // Pick the server we'll talk to (and that AppCore will be bound to).
+            // Prefer the blob's server list; if empty, reuse the bootstrap
+            // server (PLC-resolved for did:plc:, caller-supplied otherwise).
             let primary_server = plaintext
                 .servers
                 .first()
                 .cloned()
-                .unwrap_or_else(|| server_url.clone());
+                .unwrap_or_else(|| bootstrap_server.clone());
 
             // Pick the existing device_id from the bundle and reuse it for
             // the new device so existing senders keep working. The server
@@ -687,6 +714,7 @@ impl AppCore {
         sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
             let body = String::from_utf8_lossy(&plaintext).into_owned();
             let profile_key = inner.own_profile_key().await;
@@ -695,7 +723,7 @@ impl AppCore {
                 timestamp_ms: sent_at_ms as u64,
                 profile_key,
             };
-            inner.send_dm(&recipient_did, &msg.encode_to_vec(), None).await
+            inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -704,8 +732,9 @@ impl AppCore {
     /// Call from a background thread — this blocks until complete.
     pub fn receive_messages(&self) -> Result<Vec<DecryptedMessage>, AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
-            inner.receive_messages().await
+            inner.receive_messages(ws.as_ref()).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -741,6 +770,7 @@ impl AppCore {
         timestamps: Vec<i64>,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
             let profile_key = inner.own_profile_key().await;
             let msg = ContentMessage {
@@ -751,7 +781,7 @@ impl AppCore {
                 timestamp_ms: 0,
                 profile_key,
             };
-            inner.send_dm(&recipient_did, &msg.encode_to_vec(), None).await
+            inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
     }
 
@@ -1109,6 +1139,18 @@ impl AppCore {
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
+}
+
+/// Resolve a `did:plc:*` against the PLC directory and return the homeserver
+/// URL advertised in its DID document. Used by the recovery flow to locate
+/// where the encrypted recovery blob lives without asking the user to type
+/// their server URL. Returns an error for `did:local:*` (no PLC entry) or if
+/// the DID has no `AvalancheHomeserver` service entry.
+#[uniffi::export]
+pub fn resolve_homeserver_from_plc(did: String) -> Result<String, AppErrorFfi> {
+    ffi_runtime()
+        .block_on(async { plc::resolve_homeserver_url(&did).await })
+        .map_err(AppErrorFfi::from)
 }
 
 /// Download and decrypt a recovery blob from a homeserver (unauthenticated).
@@ -1532,6 +1574,7 @@ impl AppCore {
         recipient_did: &str,
         timestamps: Vec<i64>,
     ) -> Result<(), AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
         let profile_key = inner.own_profile_key().await;
         let msg = ContentMessage {
@@ -1542,7 +1585,7 @@ impl AppCore {
             timestamp_ms: 0,
             profile_key,
         };
-        inner.send_dm(recipient_did, &msg.encode_to_vec(), None).await
+        inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
     }
 
     /// Async send_dm for use in tests running inside a tokio runtime.
@@ -1554,6 +1597,7 @@ impl AppCore {
         plaintext: &[u8],
         sent_at_ms: i64,
     ) -> Result<(), AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
         let body = String::from_utf8_lossy(plaintext).into_owned();
         let profile_key = inner.own_profile_key().await;
@@ -1562,13 +1606,14 @@ impl AppCore {
             timestamp_ms: sent_at_ms as u64,
             profile_key,
         };
-        inner.send_dm(recipient_did, &msg.encode_to_vec(), None).await
+        inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
     }
 
     /// Async receive_messages for use in tests running inside a tokio runtime.
     pub async fn receive_messages_async(&self) -> Result<Vec<DecryptedMessage>, AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
-        inner.receive_messages().await
+        inner.receive_messages(ws.as_ref()).await
     }
 
     /// Get DID (async-friendly, for tests).
@@ -1626,10 +1671,12 @@ async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
         core.publish_state(ConnectionState::Connecting);
 
         match try_connect_ws(&core).await {
-            Ok(mut ws) => {
+            Ok(ws) => {
                 core.publish_state(ConnectionState::Connected);
+                *core.ws.lock().expect("ws mutex poisoned") = Some(ws.clone());
                 let connected_at = std::time::Instant::now();
-                run_receive_loop(&core, &mut ws).await;
+                run_receive_loop(&core, &ws).await;
+                *core.ws.lock().expect("ws mutex poisoned") = None;
                 // Only reset backoff if the connection was actually usable.
                 // A handshake that succeeds but disconnects within a second
                 // counts as a failure for backoff purposes — otherwise we
@@ -1696,10 +1743,10 @@ async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppErro
 
 /// Pull messages off an open WebSocket until it errors or closes. Each
 /// decrypted message + extracted receipt update is pushed to `event_tx`.
-async fn run_receive_loop(core: &AppCore, ws: &mut net::ws::WsConnection) {
+async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
     loop {
-        let raw_msg = match ws.next_message().await {
-            Ok(Some(msg)) => msg,
+        let delivery = match ws.next_message().await {
+            Ok(Some(d)) => d,
             Ok(None) => {
                 eprintln!("[ws] connection closed cleanly");
                 return;
@@ -1713,22 +1760,22 @@ async fn run_receive_loop(core: &AppCore, ws: &mut net::ws::WsConnection) {
         // Decrypt under the inner lock; release before any further work.
         let decrypted = {
             let mut inner = core.inner.lock().await;
-            match inner.decrypt_inbound(&raw_msg).await {
+            match inner.decrypt_inbound(&delivery.message).await {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!(
                         "[ws] failed to decrypt message {} from {:?}: {}, acking to skip",
-                        raw_msg.id, raw_msg.sender_did, e
+                        delivery.message.id, delivery.message.sender_did, e
                     );
                     drop(inner);
-                    let _ = ws.ack(&[raw_msg.id]).await;
+                    let _ = ws.ack(delivery.ack_token).await;
                     continue;
                 }
             }
         };
 
         // Ack on the wire so the server stops re-delivering it.
-        let _ = ws.ack(&[raw_msg.id]).await;
+        let _ = ws.ack(delivery.ack_token).await;
 
         // Parse the content envelope and emit appropriate IncomingEvents.
         process_decrypted(core, decrypted).await;
@@ -1796,6 +1843,7 @@ async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessage) {
 
             // Auto-send delivery receipt to the sender.
             if let Some(ts) = sent_at {
+                let ws = core.ws.lock().expect("ws mutex poisoned").clone();
                 let mut inner = core.inner.lock().await;
                 let profile_key = inner.own_profile_key().await;
                 let delivery = ContentMessage {
@@ -1807,7 +1855,7 @@ async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessage) {
                     profile_key,
                 };
                 let _ = inner
-                    .send_dm(&decrypted.sender_did, &delivery.encode_to_vec(), None)
+                    .send_dm(ws.as_ref(), &decrypted.sender_did, &delivery.encode_to_vec(), None)
                     .await;
             }
 
@@ -1887,6 +1935,7 @@ impl AppCoreInner {
     /// later improvement — for now, each send hits `GET /v1/accounts/{did}/devices`.
     async fn send_dm(
         &mut self,
+        ws: Option<&net::ws::WsConnection>,
         recipient_did: &str,
         plaintext: &[u8],
         expiry_secs: Option<i64>,
@@ -1906,6 +1955,27 @@ impl AppCoreInner {
             envelopes.push(env);
         }
 
+        // Prefer the WebSocket when open — saves a TCP handshake per send.
+        // Fall back to HTTP on no connection or WS-side failure (the server's
+        // HTTP route is the same enqueue path either way).
+        if let Some(ws) = ws {
+            let proto_msgs: Vec<net::proto::OutboundMessage> = envelopes
+                .iter()
+                .map(|e| net::proto::OutboundMessage {
+                    recipient_did: e.recipient_did.clone(),
+                    recipient_device_id: e.recipient_device_id,
+                    ciphertext: e.ciphertext.clone(),
+                    message_kind: e.message_kind as i32,
+                    expiry_secs: e.expiry_secs,
+                })
+                .collect();
+            match ws.send_messages(proto_msgs).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    eprintln!("[ws] send failed, falling back to HTTP: {e}");
+                }
+            }
+        }
         self.client.send_messages(&envelopes).await?;
         Ok(())
     }
@@ -1988,7 +2058,10 @@ impl AppCoreInner {
         })
     }
 
-    async fn receive_messages(&mut self) -> Result<Vec<DecryptedMessage>, AppError> {
+    async fn receive_messages(
+        &mut self,
+        ws: Option<&net::ws::WsConnection>,
+    ) -> Result<Vec<DecryptedMessage>, AppError> {
         let inbound = self.client.fetch_messages().await?;
         let mut decrypted = Vec::with_capacity(inbound.len());
 
@@ -2025,6 +2098,7 @@ impl AppCoreInner {
                                 profile_key,
                             };
                             let _ = self.send_dm(
+                                ws,
                                 &raw.sender_did,
                                 &delivery.encode_to_vec(),
                                 None,

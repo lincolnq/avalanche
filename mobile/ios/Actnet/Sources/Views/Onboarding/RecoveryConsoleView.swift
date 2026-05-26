@@ -90,16 +90,27 @@ struct RecoveryConsoleView: View {
         }
 
         log("DID: \(did)")
-        log("Resolving DID from PLC directory...")
-        try? await Task.sleep(nanoseconds: 300_000_000)
 
-        // TODO: Resolve DID via PLC directory to find home server.
-        // For now, we don't have PLC directory integration.
-        // The recovery blob should be on the home server listed in the DID doc.
-        // Until PLC is implemented, we need the user to tell us the server.
-        log("[!] PLC directory lookup not yet implemented.")
-        log("Please enter your home server URL to continue.")
-        needsServerUrl = true
+        // did:local:* (bot/test accounts) have no PLC entry — fall straight
+        // through to the manual URL prompt.
+        guard did.hasPrefix("did:plc:") else {
+            log("DID is not a did:plc:* — manual home server URL required.")
+            needsServerUrl = true
+            return
+        }
+
+        log("Resolving DID from PLC directory...")
+        let resolved: String
+        do {
+            resolved = try await Task.detached { try resolveHomeserverFromPlc(did: did) }.value
+        } catch {
+            log("[!] PLC lookup failed: \(error.localizedDescription)")
+            log("Please enter your home server URL to continue.")
+            needsServerUrl = true
+            return
+        }
+        log("[ok] Home server: \(resolved)")
+        await performRecoveryWithServer(serverUrl: resolved)
     }
 
     private func performRecoveryWithServer(serverUrl: String) async {

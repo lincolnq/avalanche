@@ -30,6 +30,13 @@ p256        = { workspace = true }
 base32      = { workspace = true }
 reqwest     = { workspace = true }
 bs58        = { workspace = true }
+prost        = "0.14"
+futures-util = "0.3"
+dotenvy      = "0.15"
+
+[build-dependencies]
+prost-build         = "0.14"
+protoc-bin-vendored = "3.0"
 
 [dev-dependencies]
 tokio                = { workspace = true }

@@ -32,7 +32,7 @@ use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{db, error::ServerError, middleware::auth::AuthDevice, state::AppState, state::WsMessage};
+use crate::{db, error::ServerError, middleware::auth::AuthDevice, state::{AppState, PendingDelivery, WsPush}};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -62,11 +62,25 @@ struct SendResponse {
     sent: Vec<i64>,
 }
 
-async fn send(
-    State(state): State<AppState>,
-    auth: AuthDevice,
-    Json(req): Json<SendRequest>,
-) -> Result<Json<SendResponse>, ServerError> {
+/// One message to enqueue, with ciphertext already decoded from the wire.
+/// Used by both the HTTP send handler and the WS SendRequest handler.
+pub(crate) struct SendInput {
+    pub recipient_did: String,
+    pub recipient_device_id: i32,
+    pub ciphertext: Vec<u8>,
+    pub message_kind: i16,
+    pub expiry_secs: Option<i64>,
+}
+
+/// Persist a batch of messages, push to live WS connections, fire push-relay
+/// wakeups for offline recipients. Returns the server-assigned message IDs
+/// in input order. Shared by the HTTP `POST /v1/messages` handler and the
+/// WS `SendRequest` handler.
+pub(crate) async fn send_messages(
+    state: &AppState,
+    device_pk: i64,
+    inputs: &[SendInput],
+) -> Result<Vec<i64>, ServerError> {
     let mut conn = state.db.acquire().await?;
 
     // Look up sender's account ID and device_id for metadata columns.
@@ -75,7 +89,7 @@ async fn send(
          FROM devices d JOIN accounts a ON a.id = d.account_id
          WHERE d.id = $1",
     )
-    .bind(auth.device_pk)
+    .bind(device_pk)
     .fetch_one(&mut *conn)
     .await?;
     let sender_account_id: i64 = row.get("account_id");
@@ -94,14 +108,10 @@ async fn send(
         return Err(ServerError::RateLimited);
     }
 
-    let mut sent = Vec::with_capacity(req.messages.len());
+    let mut sent = Vec::with_capacity(inputs.len());
     let mut ws_pushes = Vec::new();
 
-    for msg in &req.messages {
-        let ciphertext = BASE64_STANDARD
-            .decode(&msg.ciphertext)
-            .map_err(|_| ServerError::BadRequest("invalid base64 ciphertext".into()))?;
-
+    for msg in inputs {
         let device = db::devices::find_by_did(&mut conn, &msg.recipient_did, msg.recipient_device_id)
             .await?
             .ok_or(ServerError::NotFound)?;
@@ -114,33 +124,32 @@ async fn send(
             &mut conn,
             device.id,
             Some(sender_account_id),
-            Some(auth.device_pk),
-            &ciphertext,
+            Some(device_pk),
+            &msg.ciphertext,
             msg.message_kind,
             expiry,
         )
         .await?;
 
-        ws_pushes.push((device.id, msg_id, ciphertext, msg.message_kind));
+        ws_pushes.push((device.id, msg_id, msg.ciphertext.clone(), msg.message_kind));
         sent.push(msg_id);
     }
 
-    // Push over WebSocket after all messages are persisted.
-    // Collect offline device PKs for push relay wakeup.
+    // Push over WebSocket after all messages are persisted. Collect offline
+    // device PKs for push relay wakeup.
     let mut offline_device_pks = Vec::new();
 
     for (device_id, msg_id, ciphertext, message_kind) in ws_pushes {
         let ws_conns = state.ws_connections.read().await;
         if let Some(tx) = ws_conns.get(&device_id) {
-            let ws_msg = serde_json::json!({
-                "type": "message",
-                "id": msg_id,
-                "ciphertext": BASE64_STANDARD.encode(&ciphertext),
-                "message_kind": message_kind,
-                "sender_did": sender_did,
-                "sender_device_id": sender_device_id,
-            });
-            let _ = tx.send(WsMessage(ws_msg.to_string()));
+            let _ = tx.send(WsPush::Delivery(PendingDelivery {
+                message_id: msg_id,
+                ciphertext,
+                message_kind,
+                sender_did: Some(sender_did.clone()),
+                sender_device_id: Some(sender_device_id),
+                enqueued_at: None,
+            }));
         } else {
             offline_device_pks.push(device_id);
         }
@@ -157,6 +166,31 @@ async fn send(
         }
     }
 
+    Ok(sent)
+}
+
+async fn send(
+    State(state): State<AppState>,
+    auth: AuthDevice,
+    Json(req): Json<SendRequest>,
+) -> Result<Json<SendResponse>, ServerError> {
+    let inputs: Vec<SendInput> = req
+        .messages
+        .into_iter()
+        .map(|m| {
+            Ok(SendInput {
+                recipient_did: m.recipient_did,
+                recipient_device_id: m.recipient_device_id,
+                ciphertext: BASE64_STANDARD
+                    .decode(&m.ciphertext)
+                    .map_err(|_| ServerError::BadRequest("invalid base64 ciphertext".into()))?,
+                message_kind: m.message_kind,
+                expiry_secs: m.expiry_secs,
+            })
+        })
+        .collect::<Result<_, ServerError>>()?;
+
+    let sent = send_messages(&state, auth.device_pk, &inputs).await?;
     Ok(Json(SendResponse { sent }))
 }
 

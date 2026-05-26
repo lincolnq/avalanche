@@ -1,0 +1,99 @@
+syntax = "proto3";
+package actnet.ws;
+
+// Frame exchanged on the `/v1/ws` WebSocket. Each frame is a single
+// `WsFrame` protobuf, encoded as binary. Either side may originate any
+// request variant; the responding side replies with a frame carrying the
+// same `id`. Keepalives are likewise paired by `id`.
+//
+// Forward compatibility: field numbers inside the `body` oneof and at the
+// message level share the parent's number space. Numbers 7-20 are reserved
+// here for future variants (typing indicators, presence, group-control,
+// sender-key distribution, etc.). When adding a new variant, pick a number
+// from the reserved range and update the reservation.
+//
+// Wire format is intentionally minimal: there is no `verb`/`path`/`headers`
+// abstraction. This protocol is for messaging only — other server APIs
+// remain on plain HTTP.
+message WsFrame {
+  // Correlation id chosen by the side that originates the request.
+  // Responses (SendResponse, DeliverAck, Keepalive reply) echo it back.
+  // For fire-and-forget frames the value is ignored.
+  uint64 id = 1;
+
+  oneof body {
+    SendRequest         send_request         = 2;
+    SendResponse        send_response        = 3;
+    DeliverRequest      deliver_request      = 4;
+    DeliverAck          deliver_ack          = 5;
+    Keepalive           keepalive            = 6;
+    PrekeyLowNotification prekey_low         = 7;
+  }
+  reserved 8 to 20;
+}
+
+// Client → server: send one or more encrypted messages.
+message SendRequest {
+  repeated OutboundMessage messages = 1;
+  reserved 2 to 10;
+}
+
+message OutboundMessage {
+  string recipient_did       = 1;
+  int32  recipient_device_id = 2;
+  bytes  ciphertext          = 3;
+  int32  message_kind        = 4;
+  // Per-message expiry override in seconds. Server clamps to its
+  // configured min/max bounds. Absent = server default.
+  optional int64 expiry_secs = 5;
+  reserved 6 to 10;
+}
+
+// Server → client: result of a SendRequest. `frame.id` matches the
+// originating SendRequest's frame.id.
+message SendResponse {
+  // Server-assigned message IDs, one per OutboundMessage in request order.
+  // Empty if `error` is set.
+  repeated int64 message_ids = 1;
+  // If set, the whole batch failed. Plain-English description.
+  optional string error = 2;
+  // Optional HTTP-like status code so future error variants don't need
+  // string parsing on the client. 0 = unset, 200 = OK, 4xx/5xx as usual.
+  uint32 status = 3;
+  reserved 4 to 10;
+}
+
+// Server → client: an incoming encrypted message for this device. The
+// client must reply with a DeliverAck carrying the same frame.id before
+// the server will delete the queued row.
+message DeliverRequest {
+  int64  message_id        = 1;
+  bytes  ciphertext        = 2;
+  int32  message_kind      = 3;
+  // Sender metadata. Unset for sealed-sender mode (not yet implemented).
+  optional string sender_did       = 4;
+  optional int32  sender_device_id = 5;
+  optional string enqueued_at      = 6; // ISO 8601 / RFC 3339 string
+  reserved 7 to 14;
+}
+
+// Client → server: acknowledge a DeliverRequest. The frame.id matches the
+// DeliverRequest's frame.id; the server uses it to look up which queued
+// message to delete.
+message DeliverAck {
+  reserved 1 to 10;
+}
+
+// Bidirectional liveness probe. The receiver replies with a Keepalive
+// carrying the same frame.id.
+message Keepalive {
+  reserved 1 to 10;
+}
+
+// Server → client: prekey pools are running low. No response expected.
+// The client is expected to upload more prekeys via `PUT /v1/prekeys`.
+message PrekeyLowNotification {
+  int64 one_time_remaining = 1;
+  int64 kyber_remaining    = 2;
+  reserved 3 to 10;
+}

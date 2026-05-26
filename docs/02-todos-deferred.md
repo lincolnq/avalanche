@@ -5,16 +5,13 @@
 
 ## Mobile app
 - Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)
-- Account recovery is not yet implemented / working
 - Written-down recovery phrase alternative to passkey (generate memorable phrase, encrypt recovery blob with it, cache derived key in Secure Enclave)
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
-- Banner/notification for incoming messages while app is in foreground
-- Offline indicator (show when server is unreachable / WS disconnected)
-- Persist message history locally (currently messages are only in memory)
 - Account switcher UI for multi-account support
 - My QR Code screen uses `accounts.first` — should use the active/selected account once multi-account is implemented
+- Scope the ATS exception for `ts.net` (in `mobile/ios/Actnet/project.yml` → `info.properties.NSAppTransportSecurity`) before any non-dev build. It currently applies to all of `ts.net` and to every build config so a Tailscale-hosted dev server is reachable over HTTP. For TestFlight / App Store builds the exception should be removed entirely (or wrapped in a debug-only configuration), and dev should switch to TLS via `tailscale cert`.
 
 ## Privacy / identity
 - PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
@@ -28,7 +25,6 @@
 - Stale device detection: when a device re-registers (new identity key, new prekeys), the server should reject messages sent to the old device state. `POST /v1/messages` should check that the sender's session is compatible with the recipient's current registration (e.g., compare `registration_id`). On rejection, the sender's client should fetch the new prekey bundle and re-establish the session. Without this, messages encrypted to old keys are silently undeliverable after a key reset.
 
 ## Server
-- WebSocket request/response framing: tunnel HTTP-style request/response pairs over the WebSocket (like Signal does), with request IDs and correlated responses. Move message sends and acks onto the WS transport, replacing the current split of HTTP sends + WS acks. This gives persistent-connection benefits while keeping clear success/failure semantics per operation.
 - Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
 
 ## Project-wide

@@ -20,6 +20,11 @@ pub mod error;
 pub mod types;
 pub mod ws;
 
+/// Generated protobuf types for the `/v1/ws` framing.
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/actnet.ws.rs"));
+}
+
 use std::sync::{Arc, Mutex};
 
 use base64::prelude::*;

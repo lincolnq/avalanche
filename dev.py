@@ -3,10 +3,35 @@
 
 import json
 import os
+import pathlib
 import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
+
+
+def load_env(path):
+    """Minimal .env loader. Doesn't override values already in os.environ."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+load_env(pathlib.Path(__file__).resolve().parent / ".env")
+
+
+def project_host():
+    """Scheme + hostname clients should use to reach project services. Derived
+    from SERVER_URL so e.g. a Tailscale Magic DNS server URL also points
+    project webviews at the same reachable host."""
+    parsed = urlparse(os.environ.get("SERVER_URL", "http://localhost:3000"))
+    return parsed.scheme or "http", parsed.hostname or "localhost"
 
 # ── Project services ────────────────────────────────────────────────────────
 # Each project gets a sequential port starting at 3001.
@@ -133,7 +158,11 @@ def main():
     wait_for_postgres()
     run_migrations()
 
-    # Assign ports and build PROJECTS JSON for the server
+    # Assign ports and build PROJECTS JSON for the server.
+    # Project URLs use the same host clients use to reach the homeserver
+    # (from SERVER_URL), so a Tailscale / LAN dev setup also gives phones
+    # a reachable URL for project webviews.
+    scheme, host = project_host()
     next_port = 3001
     projects_json = []
     project_launches = []
@@ -142,7 +171,7 @@ def main():
         next_port += 1
         projects_json.append({
             "name": project["name"],
-            "url": f"http://localhost:{port}",
+            "url": f"{scheme}://{host}:{port}",
             "description": project["description"],
         })
         project_launches.append((project, port))
@@ -153,7 +182,7 @@ def main():
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
-        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug"},
+        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1"},
     ))
 
     processes.append(subprocess.Popen(
@@ -163,7 +192,7 @@ def main():
     ))
 
     for project, port in project_launches:
-        print(f"  {project['name']} -> localhost:{port}")
+        print(f"  {project['name']} -> {host}:{port}")
         processes.append(subprocess.Popen(
             ["cargo", "run", "-p", project["package"]],
             cwd=CORE_DIR,

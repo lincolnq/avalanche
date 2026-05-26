@@ -511,10 +511,13 @@ async fn prekey_vacuum_sends_notification_when_below_threshold() {
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
 
     let msg = rx_ws.try_recv().expect("expected a prekey_low notification");
-    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
-    assert_eq!(parsed["type"], "prekey_low");
-    assert_eq!(parsed["one_time_remaining"], 2);
-    assert_eq!(parsed["kyber_remaining"], 1);
+    match msg {
+        server::state::WsPush::PrekeyLow { one_time_remaining, kyber_remaining } => {
+            assert_eq!(one_time_remaining, 2);
+            assert_eq!(kyber_remaining, 1);
+        }
+        other => panic!("expected PrekeyLow, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -555,9 +558,12 @@ async fn prekey_vacuum_notifies_when_only_ec_low() {
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
 
     let msg = rx_ws.try_recv().expect("EC count below threshold should trigger notification");
-    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
-    assert_eq!(parsed["type"], "prekey_low");
-    assert_eq!(parsed["one_time_remaining"], 2);
+    match msg {
+        server::state::WsPush::PrekeyLow { one_time_remaining, .. } => {
+            assert_eq!(one_time_remaining, 2);
+        }
+        other => panic!("expected PrekeyLow, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -576,9 +582,12 @@ async fn prekey_vacuum_notifies_when_only_kyber_low() {
     server::tasks::notify_if_prekeys_low(&mut *tx, device_pk, 10, &tx_ws).await.unwrap();
 
     let msg = rx_ws.try_recv().expect("Kyber count below threshold should trigger notification");
-    let parsed: serde_json::Value = serde_json::from_str(&msg.0).unwrap();
-    assert_eq!(parsed["type"], "prekey_low");
-    assert_eq!(parsed["kyber_remaining"], 1);
+    match msg {
+        server::state::WsPush::PrekeyLow { kyber_remaining, .. } => {
+            assert_eq!(kyber_remaining, 1);
+        }
+        other => panic!("expected PrekeyLow, got {other:?}"),
+    }
 }
 
 // ── Project token tests ─────────────────────────────────────────────────────

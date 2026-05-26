@@ -80,7 +80,7 @@ ci: check clippy test-server
 # ----------------------------------------------------------------------------
 
 dev:
-	cd core && RUST_LOG=tower_http=debug,server=debug cargo run -p server
+	cd core && ACTNET_ALLOW_DEV_DB=1 RUST_LOG=tower_http=debug,server=debug cargo run -p server
 
 db-up:
 	docker compose -f infra/docker-compose.yml up -d
@@ -96,6 +96,9 @@ relay:
 
 dev-all:
 	python3 dev.py
+
+dev-invite:
+	@python3 dev-invite.py
 
 # ----------------------------------------------------------------------------
 # iOS — see the build-chain diagram at the top of this file.

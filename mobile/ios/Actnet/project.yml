@@ -38,3 +38,15 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: "Avalanche needs camera access to scan invite QR codes."
     info:
       path: Info.plist
+      properties:
+        # ATS exception for Tailscale Magic DNS so we can reach a dev
+        # homeserver / project webview at e.g.
+        #   http://<host>.tailNNNNN.ts.net:3000
+        # The Tailscale tunnel provides WireGuard encryption end-to-end,
+        # so the plaintext HTTP between the iOS app and the dev machine
+        # never crosses the public internet in cleartext.
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true

@@ -47,3 +47,8 @@ pub mod plc;
 pub mod routes;
 pub mod state;
 pub mod tasks;
+
+/// Generated protobuf types for the `/v1/ws` framing.
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/actnet.ws.rs"));
+}

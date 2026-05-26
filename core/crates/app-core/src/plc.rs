@@ -203,10 +203,61 @@ pub async fn resolve_did(did: &str) -> Result<serde_json::Value, AppError> {
     }
 }
 
+/// Extract the AvalancheHomeserver service endpoint from a resolved DID
+/// document. The resolved document has `service` as an array of objects with
+/// `id`, `type`, and `serviceEndpoint` fields (not the BTreeMap used in PLC
+/// operations).
+pub fn extract_homeserver_endpoint(doc: &serde_json::Value) -> Option<String> {
+    doc.get("service")?
+        .as_array()?
+        .iter()
+        .find(|s| {
+            s.get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t == "AvalancheHomeserver")
+        })
+        .and_then(|s| s.get("serviceEndpoint").and_then(|e| e.as_str()))
+        .map(|s| s.to_string())
+}
+
+/// Look up a `did:plc:*` in the PLC directory and return the homeserver URL
+/// advertised in its DID document.
+pub async fn resolve_homeserver_url(did: &str) -> Result<String, AppError> {
+    let doc = resolve_did(did).await?;
+    extract_homeserver_endpoint(&doc).ok_or_else(|| {
+        AppError::Protocol(format!(
+            "DID document for {did} has no AvalancheHomeserver service"
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recovery::generate_rotation_key;
+
+    #[test]
+    fn extract_homeserver_endpoint_finds_avalanche_service() {
+        let doc = serde_json::json!({
+            "service": [
+                { "id": "#other", "type": "OtherService", "serviceEndpoint": "https://nope" },
+                { "id": "#hs", "type": "AvalancheHomeserver", "serviceEndpoint": "https://hs.example" },
+            ]
+        });
+        assert_eq!(
+            extract_homeserver_endpoint(&doc).as_deref(),
+            Some("https://hs.example")
+        );
+    }
+
+    #[test]
+    fn extract_homeserver_endpoint_missing_returns_none() {
+        let doc = serde_json::json!({ "service": [] });
+        assert_eq!(extract_homeserver_endpoint(&doc), None);
+
+        let doc = serde_json::json!({});
+        assert_eq!(extract_homeserver_endpoint(&doc), None);
+    }
 
     #[test]
     fn did_key_p256_encoding() {

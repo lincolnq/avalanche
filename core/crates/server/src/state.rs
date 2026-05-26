@@ -20,9 +20,32 @@ use tokio::sync::{mpsc, RwLock};
 
 use crate::config::Config;
 
-/// A WebSocket message to push to a connected device.
+/// A pending message delivery to push to a connected device. The WebSocket
+/// handler allocates a frame correlation id, records `message_id` against
+/// it, encodes a `DeliverRequest` protobuf frame, and sends it. The server
+/// removes the queued message only after receiving the matching `DeliverAck`.
 #[derive(Debug, Clone)]
-pub struct WsMessage(pub String);
+pub struct PendingDelivery {
+    pub message_id: i64,
+    pub ciphertext: Vec<u8>,
+    pub message_kind: i16,
+    pub sender_did: Option<String>,
+    pub sender_device_id: Option<i32>,
+    pub enqueued_at: Option<String>,
+}
+
+/// Server-initiated WebSocket push. Variants correspond to the
+/// non-response frame types in `proto/ws.proto`.
+#[derive(Debug, Clone)]
+pub enum WsPush {
+    /// An incoming message ciphertext to deliver to the device.
+    Delivery(PendingDelivery),
+    /// The device's prekey pools are below threshold; client should refill.
+    PrekeyLow {
+        one_time_remaining: i64,
+        kyber_remaining: i64,
+    },
+}
 
 /// Shared application state, available to all request handlers via Axum's
 /// State extractor.
@@ -31,7 +54,7 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,
     /// Connected WebSocket devices: internal device PK -> sender channel.
-    pub ws_connections: Arc<RwLock<HashMap<i64, mpsc::UnboundedSender<WsMessage>>>>,
+    pub ws_connections: Arc<RwLock<HashMap<i64, mpsc::UnboundedSender<WsPush>>>>,
 }
 
 impl AppState {
