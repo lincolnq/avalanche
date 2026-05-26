@@ -116,6 +116,7 @@ dependencies = [
  "store",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "types",
  "uniffi",
 ]

@@ -33,7 +33,7 @@ make dev-all   # starts Postgres, applies migrations, launches homeserver + rela
 
 This runs the homeserver on `localhost:3000` and the [testbot](docs/21-chatbot-project.md) on `localhost:3001`. To make the testbot respond with AI instead of echoing, copy `.env.example` to `.env` and add your [Anthropic API key](https://console.anthropic.com/).
 
-### Run the iOS app
+### Run the iOS app on simulator
 
 ```bash
 make ios       # build Rust → XCFramework, generate Swift bindings, generate Xcode project
@@ -42,6 +42,22 @@ make ios       # build Rust → XCFramework, generate Swift bindings, generate X
 Then open `mobile/ios/Actnet/Actnet.xcodeproj` in Xcode, select an iPhone simulator, and run.
 
 On first launch, switch to **Dev Server** mode in settings, then create an account pointing at `http://localhost:3000`.
+
+### Run on a real device
+
+You'll need Tailscale on both your phone and laptop, signed in to the same tailnet. Create a free Tailscale account and install the app on both. Your laptop will get a DNS name like `<host>.tail<NNNNN>.ts.net`.
+
+In your `.env` (copy `.env.example` first if you haven't), set:
+
+```
+SERVER_URL=http://<host>.tail<NNNNN>.ts.net:3000
+```
+
+Then plug your iOS device into your laptop. On the phone, enable **Settings → Privacy & Security → Developer Mode** and trust the laptop when prompted. In Xcode, pick the connected device as the run target and launch. First-time device prep takes a few minutes.
+
+On first launch, switch to **Dev Server** mode in the app's settings — the app currently defaults to mock mode.
+
+To sign up, run `make dev-invite` (install `qrencode` first with `brew install qrencode`) and scan the QR with your phone's camera.
 
 ## Docs
 

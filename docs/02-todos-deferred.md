@@ -1,7 +1,8 @@
 # Deferred TODOs
 
-## Dev Infra
-- Make simple makefile commands to build the entire ios -- currently we can build the Rust code, but I think it's worth having a command that runs xcodebuild, since Claude likes to run it to ensure its changes compile. In general we should make 'compile everything' commands at the root with a Makefile.
+## Next
+- iOS app defaults to mock `ActnetService` mode instead of the live one, which is confusing — a fresh install looks like it's working but isn't actually talking to a homeserver. Default to live mode and make mock an explicit opt-in (debug menu toggle, env-var, or build config).
+- Rename everything to avalanche
 
 ## Mobile app
 - Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)

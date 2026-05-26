@@ -425,7 +425,7 @@ impl AppCore {
                 match plc::resolve_homeserver_url(&did).await {
                     Ok(url) => url,
                     Err(e) => {
-                        eprintln!(
+                        tracing::warn!(
                             "PLC resolution failed during recovery for {did}: {e}; \
                              falling back to caller-supplied server_url"
                         );
@@ -1685,11 +1685,11 @@ async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
                 if connected_at.elapsed() >= std::time::Duration::from_secs(5) {
                     backoff_sec = 1;
                 } else {
-                    eprintln!("[ws] connection dropped after {:?}, not resetting backoff", connected_at.elapsed());
+                    tracing::debug!("[ws] connection dropped after {:?}, not resetting backoff", connected_at.elapsed());
                 }
             }
             Err(e) => {
-                eprintln!("[ws] connect failed: {e}");
+                tracing::debug!("[ws] connect failed: {e}");
             }
         }
 
@@ -1748,11 +1748,11 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
         let delivery = match ws.next_message().await {
             Ok(Some(d)) => d,
             Ok(None) => {
-                eprintln!("[ws] connection closed cleanly");
+                tracing::debug!("[ws] connection closed cleanly");
                 return;
             }
             Err(e) => {
-                eprintln!("[ws] receive error: {e}");
+                tracing::debug!("[ws] receive error: {e}");
                 return;
             }
         };
@@ -1763,7 +1763,7 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
             match inner.decrypt_inbound(&delivery.message).await {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!(
+                    tracing::warn!(
                         "[ws] failed to decrypt message {} from {:?}: {}, acking to skip",
                         delivery.message.id, delivery.message.sender_did, e
                     );
@@ -1972,7 +1972,7 @@ impl AppCoreInner {
             match ws.send_messages(proto_msgs).await {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    eprintln!("[ws] send failed, falling back to HTTP: {e}");
+                    tracing::debug!("[ws] send failed, falling back to HTTP: {e}");
                 }
             }
         }
