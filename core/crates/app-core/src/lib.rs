@@ -958,24 +958,78 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
-    /// Register a push device token with the homeserver via a fresh pseudonym.
-    /// Generates a random pseudonym, persists it locally, and notifies the server.
+    /// Register / refresh the push registration for this device.
     ///
-    /// `platform` is `"apns"` (iOS) or `"fcm"` (Android).
+    /// Always re-uploads the current `(pseudonym, device_token, platform,
+    /// environment)` to the relay and the pseudonym to the homeserver —
+    /// both endpoints accept idempotent re-registers, and re-uploading on
+    /// every launch is the easiest way to recover from changes the client
+    /// can't detect locally (relay URL change, relay losing its SQLite,
+    /// device_token churn, etc.).
+    ///
+    /// Rotates the pseudonym (and unregisters the old one) when the
+    /// existing registration is older than [`PUSH_ROTATION_MAX_AGE_SECONDS`]
+    /// or its `(device_token, platform)` has changed.
+    ///
+    /// - `platform`: `"apns"` (iOS) or `"fcm"` (Android).
+    /// - `relay_url`: base URL of the push relay.
+    /// - `environment`: `"sandbox"` (debug builds) or `"production"` (App Store/TestFlight).
     ///
     /// Call from a background thread — this blocks until complete.
-    pub fn register_push_token(&self, device_token: String, platform: String) -> Result<(), AppErrorFfi> {
+    pub fn register_push_token(
+        &self,
+        device_token: String,
+        platform: String,
+        relay_url: String,
+        environment: String,
+    ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
-            let bytes: [u8; 32] = rand::Rng::random(&mut rand::rng());
-            let pseudonym = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(bytes);
-            inner.store.save_push_state(store::push::PushState {
-                pseudonym: pseudonym.clone(),
-                device_token,
-                platform,
-            }).await.map_err(AppError::Store)?;
+            let existing = inner.store.load_push_state().await.map_err(AppError::Store)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            let rotate = match &existing {
+                None => true,
+                Some(s) => {
+                    s.device_token != device_token
+                        || s.platform != platform
+                        || now - s.registered_at >= PUSH_ROTATION_MAX_AGE_SECONDS
+                }
+            };
+
+            let pseudonym = if rotate {
+                let bytes: [u8; 32] = rand::Rng::random(&mut rand::rng());
+                let new_pseudonym = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(bytes);
+                inner.store.save_push_state(store::push::PushState {
+                    pseudonym: new_pseudonym.clone(),
+                    device_token: device_token.clone(),
+                    platform: platform.clone(),
+                    registered_at: 0, // ignored by save
+                }).await.map_err(AppError::Store)?;
+                new_pseudonym
+            } else {
+                existing.as_ref().unwrap().pseudonym.clone()
+            };
+
+            // Always re-register — relay+server treat this as INSERT OR REPLACE.
+            inner.client
+                .register_push_with_relay(&relay_url, &pseudonym, &device_token, &platform, &environment)
+                .await.map_err(AppError::Net)?;
             inner.client.register_push_pseudonym(&pseudonym).await
                 .map_err(AppError::Net)?;
+
+            // If we rotated, retire the previous pseudonym. Best-effort —
+            // a failure leaves a stranded row that the relay's GC reaps.
+            if rotate {
+                if let Some(old) = existing {
+                    let _ = inner.client.unregister_push_with_relay(&relay_url, &old.pseudonym).await;
+                    let _ = inner.client.unregister_push_pseudonym(&old.pseudonym).await;
+                }
+            }
+
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
@@ -1114,32 +1168,13 @@ impl AppCore {
         })
     }
 
-    /// Rotate the push pseudonym: register a new one, then unregister the old one.
-    /// The relay keeps the old pseudonym active for a 7-day grace period.
-    ///
-    /// Call from a background thread — this blocks until complete.
-    pub fn rotate_push_pseudonym(&self) -> Result<(), AppErrorFfi> {
-        ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let old = inner.store.load_push_state().await
-                .map_err(AppError::Store)?;
-            if let Some(old_state) = old {
-                let bytes: [u8; 32] = rand::Rng::random(&mut rand::rng());
-                let new_pseudonym = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(bytes);
-                inner.store.save_push_state(store::push::PushState {
-                    pseudonym: new_pseudonym.clone(),
-                    device_token: old_state.device_token,
-                    platform: old_state.platform,
-                }).await.map_err(AppError::Store)?;
-                inner.client.register_push_pseudonym(&new_pseudonym).await
-                    .map_err(AppError::Net)?;
-                inner.client.unregister_push_pseudonym(&old_state.pseudonym).await
-                    .map_err(AppError::Net)?;
-            }
-            Ok::<_, AppError>(())
-        }).map_err(AppErrorFfi::from)
-    }
 }
+
+/// How long a push pseudonym can live before [`AppCore::register_push_token`]
+/// rotates it. Picked to match the relay's 7-day grace period after
+/// `/v1/unregister` so old pseudonyms stay alive on the relay during the
+/// brief overlap.
+const PUSH_ROTATION_MAX_AGE_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// Resolve a `did:plc:*` against the PLC directory and return the homeserver
 /// URL advertised in its DID document. Used by the recovery flow to locate

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Start all actnet dev services: Postgres, homeserver, relay, and project services."""
+"""Start actnet dev services: Postgres, homeserver, and project services.
+
+The push relay is a separate, single-instance service shared across all
+environments (dev + production). It is not launched here — point the
+homeserver at the running relay by setting RELAY_URL in .env."""
 
 import json
 import os
@@ -151,7 +155,7 @@ def main():
 
     # Build all crates in parallel while Postgres starts up
     print("Building...")
-    subprocess.run(["cargo", "build", "-p", "server", "-p", "relay"] +
+    subprocess.run(["cargo", "build", "-p", "server"] +
                    [f"-p{p['package']}" for p in PROJECTS],
                    cwd=CORE_DIR, check=True)
 
@@ -179,16 +183,16 @@ def main():
     # Launch all services
     processes = []
 
+    relay_url = os.environ.get("RELAY_URL")
+    if relay_url:
+        print(f"  Homeserver → relay: {relay_url}")
+    else:
+        print("  RELAY_URL not set — homeserver will not send push wakeups")
+
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
         env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1"},
-    ))
-
-    processes.append(subprocess.Popen(
-        ["cargo", "run", "-p", "relay"],
-        cwd=CORE_DIR,
-        env={**os.environ, "RUST_LOG": "relay=debug"},
     ))
 
     for project, port in project_launches:

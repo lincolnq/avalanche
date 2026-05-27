@@ -512,6 +512,63 @@ impl Client {
         Ok(())
     }
 
+    /// Register `(pseudonym, device_token, platform, environment)` directly
+    /// with the push relay. The relay does not require auth — pseudonym is
+    /// the opaque rendezvous identifier the homeserver later uses to
+    /// trigger wakeups.
+    pub async fn register_push_with_relay(
+        &self,
+        relay_url: &str,
+        pseudonym: &str,
+        device_token: &str,
+        platform: &str,
+        environment: &str,
+    ) -> Result<(), NetError> {
+        let body = serde_json::json!({
+            "pseudonym": pseudonym,
+            "device_token": device_token,
+            "platform": platform,
+            "environment": environment,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/v1/register", relay_url.trim_end_matches('/')))
+            .json(&body)
+            .send()
+            .await
+            .map_err(NetError::Http)?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Unregister a pseudonym from the relay (rotation / logout).
+    pub async fn unregister_push_with_relay(
+        &self,
+        relay_url: &str,
+        pseudonym: &str,
+    ) -> Result<(), NetError> {
+        let body = serde_json::json!({ "pseudonym": pseudonym });
+        let resp = self
+            .http
+            .post(format!("{}/v1/unregister", relay_url.trim_end_matches('/')))
+            .json(&body)
+            .send()
+            .await
+            .map_err(NetError::Http)?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default(),
+            ));
+        }
+        Ok(())
+    }
+
     // ── Account info ─────────────────────────────────────────────────────
 
     /// Look up an account's display name and bot flag.

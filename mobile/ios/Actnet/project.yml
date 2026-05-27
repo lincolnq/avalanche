@@ -21,6 +21,7 @@ targets:
         com.apple.developer.associated-domains:
           - webcredentials:theavalanche.net
           - applinks:go.theavalanche.net
+        aps-environment: development
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
@@ -50,3 +51,11 @@ targets:
             ts.net:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
+        # Required so silent pushes (content-available: 1) wake the app
+        # in the background to fetch new messages.
+        UIBackgroundModes:
+          - remote-notification
+        # Push relay URL, baked into the build. Read at runtime by
+        # PushManager. Substituted from the RELAY_URL env var at
+        # xcodegen time (empty string if unset → push disabled).
+        RELAY_URL: ${RELAY_URL}

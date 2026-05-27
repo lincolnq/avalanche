@@ -32,5 +32,11 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>RELAY_URL</key>
+	<string>https://relay.theavalanche.net</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

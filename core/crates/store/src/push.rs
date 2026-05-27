@@ -10,10 +10,15 @@ pub struct PushState {
     pub pseudonym: String,
     pub device_token: String,
     pub platform: String,
+    /// Unix seconds when this registration was created. Used by the client
+    /// to decide whether the pseudonym is due for rotation.
+    pub registered_at: i64,
 }
 
 impl Store {
     /// Persist the current push registration. Replaces any prior state.
+    /// The `registered_at` field on `state` is ignored — the current time
+    /// is always written, since save = fresh registration.
     pub async fn save_push_state(&self, state: PushState) -> Result<(), StoreError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -39,13 +44,15 @@ impl Store {
         self.conn
             .call(|conn| {
                 conn.query_row(
-                    "SELECT pseudonym, device_token, platform FROM push_state WHERE id = 1",
+                    "SELECT pseudonym, device_token, platform, registered_at \
+                     FROM push_state WHERE id = 1",
                     [],
                     |row| {
                         Ok(PushState {
                             pseudonym: row.get(0)?,
                             device_token: row.get(1)?,
                             platform: row.get(2)?,
+                            registered_at: row.get(3)?,
                         })
                     },
                 )

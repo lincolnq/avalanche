@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "actnet-relay"
+name = "relay"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,3 +18,10 @@ tower-http         = { workspace = true }
 reqwest          = { workspace = true }
 rusqlite         = { workspace = true }
 tokio-rusqlite   = { workspace = true }
+# `ring` instead of the default openssl feature so the relay binary has
+# no C dependencies — clean musl static build for droplet deployment.
+a2               = { version = "0.10", default-features = false, features = ["ring"] }
+
+[[example]]
+name = "send_test_push"
+path = "examples/send_test_push.rs"

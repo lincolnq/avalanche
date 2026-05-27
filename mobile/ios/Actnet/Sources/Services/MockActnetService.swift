@@ -101,13 +101,10 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         // Mock: no-op
     }
 
-    func registerPushToken(deviceToken: String, platform: String) throws {
+    func registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) throws {
         // Mock: no-op
     }
 
-    func rotatePushPseudonym() throws {
-        // Mock: no-op
-    }
 
     // MARK: - Connection state
 

@@ -21,16 +21,25 @@
 //!
 //! # APNs/FCM
 //!
-//! Currently logs the wakeup intent. To enable real APNs sending, set:
+//! APNs sending uses the `a2` crate with token-based auth. The same `.p8`
+//! works for both sandbox and production endpoints; the relay builds one
+//! client per environment and routes each wakeup by the `environment`
+//! stored at registration time (clients pass it based on `#if DEBUG`).
+//! Configure via:
 //!   APNS_KEY_PATH   — path to the .p8 private key file
 //!   APNS_KEY_ID     — 10-character key ID from Apple Developer portal
 //!   APNS_TEAM_ID    — 10-character team ID
-//!   APNS_BUNDLE_ID  — app bundle ID (e.g. org.example.actnet)
-//! and integrate the `a2` crate (https://crates.io/crates/a2) with token-based auth.
-//! The notification payload must be content-free: `{"aps":{"content-available":1}}`.
+//!   APNS_BUNDLE_ID  — app bundle ID (e.g. net.theavalanche.app)
+//! If APNS_KEY_PATH is unset the relay still runs but wakeups are logged
+//! only. Payloads are content-free silent pushes (`content-available: 1`,
+//! PushType::Background, Priority::Normal).
 
 use std::sync::Arc;
 
+use a2::{
+    Client, ClientConfig, DefaultNotificationBuilder, Endpoint, NotificationBuilder,
+    NotificationOptions, Priority, PushType,
+};
 use axum::{
     extract::{Json, State},
     http::StatusCode,
@@ -46,6 +55,66 @@ use tracing_subscriber::EnvFilter;
 
 struct RelayState {
     conn: Connection,
+    apns: Option<Apns>,
+}
+
+/// Two APNs clients (sandbox + production) sharing a single `.p8`. Wakeups
+/// route to the right one based on the `environment` column from each
+/// registration. Debug builds get sandbox device tokens; TestFlight/App
+/// Store builds get production tokens — sending one to the wrong endpoint
+/// returns `BadDeviceToken`.
+struct Apns {
+    sandbox: Client,
+    production: Client,
+    bundle_id: String,
+}
+
+impl Apns {
+    /// Build both clients from env vars; returns None if APNS_KEY_PATH unset.
+    fn from_env() -> Option<Self> {
+        let key_path = std::env::var("APNS_KEY_PATH").ok()?;
+        let key_id = std::env::var("APNS_KEY_ID")
+            .expect("APNS_KEY_ID required when APNS_KEY_PATH is set");
+        let team_id = std::env::var("APNS_TEAM_ID")
+            .expect("APNS_TEAM_ID required when APNS_KEY_PATH is set");
+        let bundle_id = std::env::var("APNS_BUNDLE_ID")
+            .expect("APNS_BUNDLE_ID required when APNS_KEY_PATH is set");
+
+        let mk = |endpoint: Endpoint| -> Client {
+            let mut key = std::fs::File::open(&key_path)
+                .unwrap_or_else(|e| panic!("failed to open {key_path}: {e}"));
+            Client::token(&mut key, &key_id, &team_id, ClientConfig::new(endpoint))
+                .expect("failed to build APNs client")
+        };
+
+        tracing::info!(bundle = %bundle_id, "APNs clients configured (sandbox + production)");
+        Some(Self {
+            sandbox: mk(Endpoint::Sandbox),
+            production: mk(Endpoint::Production),
+            bundle_id,
+        })
+    }
+
+    async fn send_silent(&self, environment: &str, device_token: &str) -> Result<(), a2::Error> {
+        let client = match environment {
+            "production" => &self.production,
+            _ => &self.sandbox, // default to sandbox for unknown/missing values
+        };
+        let payload = DefaultNotificationBuilder::new()
+            .set_content_available()
+            .build(
+                device_token,
+                NotificationOptions {
+                    apns_topic: Some(&self.bundle_id),
+                    apns_push_type: Some(PushType::Background),
+                    apns_priority: Some(Priority::Normal),
+                    ..Default::default()
+                },
+            );
+        let resp = client.send(payload).await?;
+        tracing::debug!(code = resp.code, apns_id = ?resp.apns_id, "APNs response");
+        Ok(())
+    }
 }
 
 // ── Client endpoints ────────────────────────────────────────────────────────
@@ -55,6 +124,9 @@ struct RegisterRequest {
     pseudonym: String,
     device_token: String,
     platform: String,
+    /// "sandbox" or "production" for APNs. Clients pick based on build
+    /// flavor (`#if DEBUG` → sandbox). Ignored for non-APNs platforms.
+    environment: String,
 }
 
 #[derive(Serialize)]
@@ -70,9 +142,9 @@ async fn register(
     let result = state.conn.call(move |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO push_registrations \
-             (pseudonym, device_token, platform, registered_at, rotated_at) \
-             VALUES (?1, ?2, ?3, strftime('%s','now'), NULL)",
-            rusqlite::params![req.pseudonym, req.device_token, req.platform],
+             (pseudonym, device_token, platform, environment, registered_at, rotated_at) \
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'), NULL)",
+            rusqlite::params![req.pseudonym, req.device_token, req.platform, req.environment],
         )?;
         Ok(())
     }).await;
@@ -148,25 +220,43 @@ async fn wakeup(
         let result = state.conn.call(move |conn| {
             use rusqlite::OptionalExtension as _;
             conn.query_row(
-                "SELECT device_token, platform FROM push_registrations \
+                "SELECT device_token, platform, environment FROM push_registrations \
                  WHERE pseudonym = ?1 \
                  AND (rotated_at IS NULL OR rotated_at > strftime('%s','now') - 604800)",
                 rusqlite::params![ps],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                )),
             ).optional()
             .map_err(Into::into)
         }).await;
 
         match result {
-            Ok(Some((device_token, platform))) => {
-                // TODO: Replace with real APNs/FCM sending (see module doc for env vars).
-                tracing::info!(
-                    pseudonym = %pseudonym,
-                    platform = %platform,
-                    token_prefix = %&device_token[..8.min(device_token.len())],
-                    "sending wakeup push (stubbed — wire APNs/FCM to send for real)"
-                );
-                woken.push(pseudonym);
+            Ok(Some((device_token, platform, environment))) => {
+                let token_prefix = &device_token[..8.min(device_token.len())];
+                if platform == "apns" {
+                    if let Some(apns) = &state.apns {
+                        match apns.send_silent(&environment, &device_token).await {
+                            Ok(()) => {
+                                tracing::info!(token_prefix, %environment, "sent APNs wakeup");
+                                woken.push(pseudonym);
+                            }
+                            Err(e) => {
+                                tracing::error!(token_prefix, %environment, error = %e, "APNs send failed");
+                                unknown.push(pseudonym);
+                            }
+                        }
+                    } else {
+                        tracing::info!(token_prefix, "APNs not configured, logging wakeup only");
+                        woken.push(pseudonym);
+                    }
+                } else {
+                    // FCM not yet implemented.
+                    tracing::warn!(%platform, token_prefix, "unsupported platform, skipping");
+                    unknown.push(pseudonym);
+                }
             }
             Ok(None) => {
                 tracing::debug!(pseudonym = %pseudonym, "unknown or expired pseudonym, skipping");
@@ -230,10 +320,17 @@ async fn main() {
                  pseudonym      TEXT PRIMARY KEY,
                  device_token   TEXT NOT NULL,
                  platform       TEXT NOT NULL,
+                 environment    TEXT NOT NULL DEFAULT 'sandbox',
                  registered_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
                  rotated_at     INTEGER
              );",
         )?;
+        // Migration for existing pre-environment databases. SQLite has no
+        // IF NOT EXISTS on ADD COLUMN, so just swallow "duplicate column".
+        let _ = conn.execute(
+            "ALTER TABLE push_registrations ADD COLUMN environment TEXT NOT NULL DEFAULT 'sandbox'",
+            [],
+        );
         Ok(())
     })
     .await
@@ -244,7 +341,12 @@ async fn main() {
         .expect("failed to open gc connection");
     tokio::spawn(gc_loop(gc_conn));
 
-    let state = Arc::new(RelayState { conn });
+    let apns = Apns::from_env();
+    if apns.is_none() {
+        tracing::warn!("APNS_KEY_PATH not set — wakeups will be logged but not delivered");
+    }
+
+    let state = Arc::new(RelayState { conn, apns });
 
     let app = Router::new()
         .route("/v1/register", post(register))

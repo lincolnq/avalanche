@@ -56,6 +56,34 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         print("[PushManager] failed to register for remote notifications: \(error)")
     }
 
+    /// Called when a silent push (content-available: 1) is delivered. iOS
+    /// gives us ~30s of background runtime to fetch new messages. We kick
+    /// the WebSocket-backed message polling loops (idempotent — no-op if
+    /// already running) and give them a short window to drain anything
+    /// the relay woke us up for. The event loop dispatches each message
+    /// through NotificationPresenter, which schedules the local banner.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        print("[PushHandler] silent push received, app state = \(application.applicationState.rawValue)")
+        Task { @MainActor in
+            guard let appState else {
+                completionHandler(.noData)
+                return
+            }
+            if appState.accounts.isEmpty {
+                await appState.restoreAccounts()
+            } else {
+                appState.startMessagePolling()
+            }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            print("[PushHandler] completing background fetch")
+            completionHandler(.newData)
+        }
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     /// Called when a notification is delivered while the app is in the

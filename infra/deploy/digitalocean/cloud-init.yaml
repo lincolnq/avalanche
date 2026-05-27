@@ -1,0 +1,258 @@
+#cloud-config
+#
+# ════════════════════════════════════════════════════════════════════════════
+#  Avalanche homeserver — one-shot DigitalOcean bootstrap
+# ════════════════════════════════════════════════════════════════════════════
+#
+#  WHAT TO DO:
+#    1. Edit the THREE lines below marked  >>> EDIT <<<.
+#    2. Create a DigitalOcean droplet:
+#         - Region: any
+#         - Image:  Ubuntu 24.04 LTS x64
+#         - Size:   Basic / Regular SSD / $6 (1 GB RAM, 1 vCPU, 25 GB)
+#         - Auth:   SSH key (not password)
+#         - Advanced → "Add Initial Scripts (user data)": paste this file.
+#    3. Point your domain's DNS A-record at the droplet's public IP.
+#    4. Wait ~3 minutes. SSH in (`ssh root@<ip>`) and run `actnet-status`
+#       to see the QR code for your first invite.
+#
+#  TIME: ~3 minutes from droplet creation to working homeserver.
+#
+#  WHAT THIS SETS UP:
+#    - Ubuntu hardening: firewall (22/80/443 only), swap, kernel tuning.
+#    - PostgreSQL 16, tuned for a 1 GB box, listening on a Unix socket.
+#    - The actnet server binary, running as a systemd service.
+#    - Caddy, fronting the server with auto-renewing Let's Encrypt TLS.
+#    - Nightly `pg_dump` to /var/backups/actnet (last 7 kept).
+#    - The first invite link, printed to the console + saved to a QR file.
+#
+# ════════════════════════════════════════════════════════════════════════════
+
+write_files:
+  # ──────────────────────────────────────────────────────────────────────
+  #  >>> EDIT <<<  Operator-supplied values.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /etc/actnet/bootstrap.env
+    permissions: '0600'
+    content: |
+      SERVER_URL="https://av.example.org"
+      SERVER_NAME="Your Org's Homeserver"
+      RELAY_URL="https://relay.actnet.example"
+
+  # ──────────────────────────────────────────────────────────────────────
+  #  PostgreSQL tuning for a 1 GB droplet.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /etc/postgresql/16/main/conf.d/actnet.conf
+    permissions: '0644'
+    content: |
+      shared_buffers = 128MB
+      effective_cache_size = 512MB
+      work_mem = 4MB
+      maintenance_work_mem = 32MB
+      max_connections = 20
+      wal_compression = on
+      # Postgres listens only on the Unix socket — nothing on TCP.
+      listen_addresses = ''
+
+  # ──────────────────────────────────────────────────────────────────────
+  #  systemd unit for the homeserver binary.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /etc/systemd/system/actnet.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Avalanche homeserver
+      After=network-online.target postgresql.service
+      Wants=network-online.target
+      Requires=postgresql.service
+
+      [Service]
+      Type=simple
+      User=actnet
+      Group=actnet
+      EnvironmentFile=/etc/actnet/actnet.env
+      ExecStart=/usr/local/lib/actnet/actnet-server
+      WorkingDirectory=/var/lib/actnet
+      Restart=always
+      RestartSec=5
+
+      # Hardening
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+      ReadWritePaths=/var/lib/actnet
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ──────────────────────────────────────────────────────────────────────
+  #  Nightly backup script + cron.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /usr/local/sbin/actnet-backup
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      mkdir -p /var/backups/actnet
+      ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+      sudo -u postgres pg_dump --clean --if-exists actnet \
+          | gzip > "/var/backups/actnet/$ts.sql.gz"
+      # Keep the 7 newest backups.
+      ls -1t /var/backups/actnet/*.sql.gz | tail -n +8 | xargs -r rm --
+
+  - path: /etc/cron.d/actnet-backup
+    permissions: '0644'
+    content: |
+      # Nightly pg_dump at 03:17 UTC.
+      17 3 * * * root /usr/local/sbin/actnet-backup
+
+  # ──────────────────────────────────────────────────────────────────────
+  #  Operator convenience: `actnet-status` prints health + invite QR.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /usr/local/bin/actnet-status
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+      echo "── service ──────────────────────────────────────"
+      systemctl is-active actnet caddy postgresql || true
+      echo
+      echo "── public URL ───────────────────────────────────"
+      grep '^SERVER_URL=' /etc/actnet/actnet.env | cut -d= -f2-
+      echo
+      echo "── first invite ─────────────────────────────────"
+      if [ -f /var/lib/actnet/first-invite.txt ]; then
+          cat /var/lib/actnet/first-invite.txt
+          echo
+          if command -v qrencode >/dev/null; then
+              qrencode -t ANSIUTF8 < /var/lib/actnet/first-invite.txt
+          fi
+      else
+          echo "(not generated yet — run: actnet-invite-first)"
+      fi
+
+  # ──────────────────────────────────────────────────────────────────────
+  #  Main bootstrap script. Runs once at first boot via `runcmd`.
+  # ──────────────────────────────────────────────────────────────────────
+  - path: /usr/local/sbin/actnet-bootstrap
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+      source /etc/actnet/bootstrap.env
+
+      # ─── Extract bare hostname from SERVER_URL for Caddy. ──────────────
+      HOSTNAME="$(echo "$SERVER_URL" | sed -E 's#^https?://##; s#/.*##')"
+
+      # ─── Swap (DO 1GB droplets ship with none). ────────────────────────
+      if [ ! -f /swapfile ]; then
+          fallocate -l 1G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+      # ─── Kernel tuning for low-memory PG. ──────────────────────────────
+      cat > /etc/sysctl.d/99-actnet.conf <<EOF
+      vm.overcommit_memory = 2
+      vm.overcommit_ratio = 80
+      vm.swappiness = 10
+      EOF
+      sysctl --system
+
+      # ─── Packages. ─────────────────────────────────────────────────────
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq \
+          ca-certificates curl gnupg ufw \
+          postgresql-16 postgresql-client-16 \
+          qrencode
+
+      # Caddy from its official apt repo.
+      curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+          | gpg --dearmor -o /usr/share/keyrings/caddy-stable.gpg
+      echo "deb [signed-by=/usr/share/keyrings/caddy-stable.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
+          > /etc/apt/sources.list.d/caddy-stable.list
+      apt-get update -qq
+      apt-get install -y -qq caddy
+
+      # ─── Firewall. ─────────────────────────────────────────────────────
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp 80/tcp 443/tcp
+      ufw --force enable
+
+      # ─── actnet user + dirs. ───────────────────────────────────────────
+      useradd --system --home /var/lib/actnet --shell /usr/sbin/nologin actnet || true
+      install -d -o actnet -g actnet -m 750 /var/lib/actnet
+      install -d -o root   -g root   -m 755 /usr/local/lib/actnet
+
+      # ─── PostgreSQL: socket-only, dedicated role + database. ───────────
+      systemctl restart postgresql
+      # The `actnet` OS user authenticates via peer auth on the Unix socket.
+      sudo -u postgres createuser actnet || true
+      sudo -u postgres createdb -O actnet actnet || true
+
+      # ─── Caddyfile (auto-TLS for the operator's domain). ───────────────
+      cat > /etc/caddy/Caddyfile <<EOF
+      $HOSTNAME {
+          reverse_proxy 127.0.0.1:3000
+          encode gzip
+          log {
+              output stdout
+              format console
+          }
+      }
+      EOF
+
+      # ─── actnet env (DATABASE_URL uses the Unix socket, no password). ──
+      install -d -o root -g actnet -m 750 /etc/actnet
+      cat > /etc/actnet/actnet.env <<EOF
+      SERVER_URL=$SERVER_URL
+      SERVER_NAME=$SERVER_NAME
+      RELAY_URL=$RELAY_URL
+      BIND_ADDR=127.0.0.1:3000
+      DATABASE_URL=postgresql:///actnet?host=/var/run/postgresql
+      EOF
+      chown root:actnet /etc/actnet/actnet.env
+      chmod 640 /etc/actnet/actnet.env
+
+      # ─── Server binary. ────────────────────────────────────────────────
+      # TODO(deploy): replace with the real GitHub Releases URL once
+      # actnet-server-linux-x86_64 is published. The binary is expected to
+      # run embedded sqlx migrations on startup — see docs/40-deployment.md.
+      if [ -n "${ACTNET_BINARY_URL:-}" ]; then
+          curl -fsSL -o /usr/local/lib/actnet/actnet-server "$ACTNET_BINARY_URL"
+          chmod +x /usr/local/lib/actnet/actnet-server
+      else
+          touch /usr/local/lib/actnet/MISSING_BINARY
+      fi
+
+      # ─── Start services. ───────────────────────────────────────────────
+      systemctl daemon-reload
+      systemctl enable --now caddy
+      if [ -x /usr/local/lib/actnet/actnet-server ]; then
+          systemctl enable --now actnet
+      fi
+
+      # ─── First invite (best-effort; binary may not exist yet). ─────────
+      # TODO(deploy): when the actnet-invite CLI ships, generate a one-shot
+      # admin invite here and save it to /var/lib/actnet/first-invite.txt.
+      # Until then, leave a placeholder so `actnet-status` is informative.
+      echo "(first-invite generation pending CLI — see docs/40-deployment.md)" \
+          > /var/lib/actnet/first-invite.txt
+      chown actnet:actnet /var/lib/actnet/first-invite.txt
+
+      echo "[bootstrap] done"
+
+runcmd:
+  - [ /usr/local/sbin/actnet-bootstrap ]
+
+final_message: |
+  Avalanche homeserver bootstrap finished in $UPTIME seconds.
+
+    SSH in and run:    actnet-status
+    Service logs:      journalctl -u actnet -f
+    Caddy / TLS logs:  journalctl -u caddy -f

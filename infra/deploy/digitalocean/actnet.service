@@ -1,0 +1,24 @@
+[Unit]
+Description=actnet homeserver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=actnet
+Group=actnet
+EnvironmentFile=/etc/actnet/actnet.env
+ExecStart=/usr/local/lib/actnet/actnet-server
+WorkingDirectory=/var/lib/actnet
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/actnet
+
+[Install]
+WantedBy=multi-user.target

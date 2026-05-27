@@ -1,0 +1,22 @@
+# actnet reverse-proxy + auto-TLS via Let's Encrypt.
+#
+# Replace `your-domain.example.com` with your actual hostname, then run:
+#   systemctl restart caddy
+#
+# Caddy automatically obtains and renews a certificate for the listed
+# hostname, provided DNS for it points at this droplet's public IP and
+# ports 80/443 are open in the firewall.
+
+your-domain.example.com {
+    reverse_proxy 127.0.0.1:3000
+    encode gzip
+
+    # WebSocket upgrades are handled transparently by reverse_proxy in
+    # recent Caddy versions — no extra config needed.
+
+    # Basic access log; tail with: journalctl -u caddy -f
+    log {
+        output stdout
+        format console
+    }
+}

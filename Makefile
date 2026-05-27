@@ -22,7 +22,9 @@
 #   make ios             # build the iOS app for the simulator (most common)
 #   make xcode           # prepare bindings + xcframework + xcodeproj for the
 #                        # already-open Xcode (no xcodebuild)
-#   make dev-all         # run homeserver + testbot + relay together (preferred)
+#   make dev-all         # run homeserver + testbot together (preferred).
+#                        # Run the relay separately via `make relay`;
+#                        # set RELAY_URL in .env so the server can reach it.
 #   make test            # Rust unit tests (crypto + store + types + server)
 #   make test-e2e        # app-core integration tests (needs a running server)
 #   make db-up / db-down # start/stop Postgres in docker-compose
@@ -46,7 +48,7 @@ SWIFT_BINDING := mobile/ios/Generated/app_core.swift
 XCFRAMEWORK_STAMP := mobile/ios/AppCoreFFI.xcframework/Info.plist
 XCODE_PROJ_FILE := mobile/ios/Actnet/Actnet.xcodeproj/project.pbxproj
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down ios xcode bindings dev testbot relay dev-all
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down ios xcode bindings dev testbot relay relay-release dev-all
 
 # ----------------------------------------------------------------------------
 # Rust
@@ -93,6 +95,22 @@ testbot:
 
 relay:
 	cd core && RUST_LOG=relay=debug,tower_http=debug cargo run -p relay
+
+# Build a portable Linux x86_64 release binary in Docker so it'll run on
+# any modern Debian/Ubuntu droplet (links against the host's libssl/libcrypto).
+# Output: dist/relay
+relay-release:
+	@command -v docker >/dev/null || { echo "Docker required for relay-release"; exit 1; }
+	@mkdir -p dist
+	docker run --rm --platform linux/amd64 \
+	  -v "$(PWD)":/src -w /src/core \
+	  -e CARGO_TARGET_DIR=/src/dist/cargo-target \
+	  rust:1-bookworm \
+	  bash -c "apt-get update -qq && apt-get install -y -qq libssl-dev pkg-config && cargo build --release -p relay"
+	cp dist/cargo-target/release/relay dist/relay
+	@strip dist/relay 2>/dev/null || true
+	@ls -lh dist/relay
+	@echo "Built dist/relay — copy to droplet with scp."
 
 dev-all:
 	python3 dev.py
@@ -151,8 +169,12 @@ $(XCFRAMEWORK_STAMP): $(RUST_SOURCES) $(SWIFT_BINDING)
 
 # Regenerate the Xcode project when project.yml changes or when the Swift
 # source tree gains/loses files (xcodegen globs Sources/).
-$(XCODE_PROJ_FILE): mobile/ios/Actnet/project.yml $(SWIFT_SOURCES)
-	cd mobile/ios/Actnet && xcodegen generate
+$(XCODE_PROJ_FILE): mobile/ios/Actnet/project.yml $(SWIFT_SOURCES) $(wildcard .env)
+	@# Source .env so RELAY_URL (and similar) reach xcodegen for ${VAR}
+	@# substitution in project.yml. `set -a` auto-exports each var.
+	@# .env is a wildcard prereq so changes to RELAY_URL trigger a
+	@# regenerate (and if .env is absent, no prereq is added).
+	cd mobile/ios/Actnet && set -a; [ -f $(PWD)/.env ] && . $(PWD)/.env; set +a; xcodegen generate
 	@# Mark generated plists so they're obviously not hand-editable
 	@for f in mobile/ios/Actnet/Actnet.entitlements mobile/ios/Actnet/Info.plist; do \
 		if [ -f "$$f" ]; then \
