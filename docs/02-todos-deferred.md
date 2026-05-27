@@ -15,7 +15,6 @@
 - Scope the ATS exception for `ts.net` (in `mobile/ios/Actnet/project.yml` → `info.properties.NSAppTransportSecurity`) before any non-dev build. It currently applies to all of `ts.net` and to every build config so a Tailscale-hosted dev server is reachable over HTTP. For TestFlight / App Store builds the exception should be removed entirely (or wrapped in a debug-only configuration), and dev should switch to TLS via `tailscale cert`.
 
 ## Privacy / identity
-- Account deletion flow (required by App Store guideline 5.1.1(v)). In-app: Settings → Delete account → confirmation → server deletion → wipe local SQLCipher DB + keychain → return to onboarding. Server-side: cascade delete across accounts/devices/prekeys/signed_prekeys/kyber_prekeys/message_queue/did_documents in a single transaction. Design decisions to make: (1) tombstone row vs hard delete — a tombstone (account_id + deleted_at, no keys/profile) lets the server return a definitive "deleted" signal instead of bare 404, friendlier for clients distinguishing deleted/hiccup/never-existed (Signal does roughly this); (2) client UX for deleted contacts — keep the thread, mark contact as deleted, disable send, don't auto-delete the user's history; (3) group membership propagation — action-bound groups can do server-side membership updates, cross-server Sender Keys groups are messier (no authoritative member list). Federation caveat: other servers may have cached the DID document; staleness window resolves on next fetch (404). Disclose in privacy policy.
 - Consider allowing `did:local:` DIDs for human (non-bot) accounts, not just bots. Allowing `did:local:` for humans would let small orgs run a homeserver without publishing identities globally.
 - PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
 - DID update operation for key rotation after recovery (submit new signing key to PLC directory, signed by rotation key)
@@ -46,28 +45,18 @@
 
 See `docs/32-bitchat-fallback.md` for the full design. BLE mesh transport as a fallback when the homeserver is unreachable.
 
+## App Store readiness
+- Implement abuse handling per `docs/12-abuse-handling.md`: message-request gate for unknown senders, block list (client-side, multi-device synced), Report Spam in the request UI, homeserver-mediated cross-server abuse report endpoint, account-level enforcement ladder on receiving server.
+- Display-name profanity filter (client-side, on by default, tap-to-reveal). Satisfies the "filter objectionable material" prong of App Store 1.2 at the profile layer.
+- Projects framework App Store 4.7 compliance: (1) maintain a Project index with universal links (4.7.4); (2) per-Project consent prompt before granting data/permissions, re-prompt on permission expansion (4.7.3); (3) age-restriction mechanism for mature Projects with verified or declared age (4.7.5); (4) keep the JS bridge surface conservative — no exposing native APIs without prior Apple approval (4.7.2). Document policy that all in-Project digital-goods purchases route through IAP (4.7.1 / 3.1).
+- Privacy policy URL plumbing: homeserver metadata endpoint exposes the operator's privacy policy URL; client displays it during signup alongside the app's own policy. Required because each homeserver is a separate data controller under GDPR.
+- Reviewer demo flow: passkey-only signup is hostile to App Review. Either ship a debug build flag that bypasses passkey with a synthetic key, or pre-provision a reviewer account with embedded credentials and document in review notes. Without this, first submission will be rejected for "couldn't complete signup."
+- Support contact info: support email shown in Settings → About (mailto link is fine, no ticketing system needed) and Support URL set in App Store Connect. Required by 1.2 (UGC contact) and 1.5 (developer info).
+- Age rating: aim for 12+ (matching Signal), set via honest answers to the App Store Connect rating questionnaire — acknowledge UGC exists but no shipped objectionable content, no gambling, no unrestricted web. Don't use "Kids" or "Children" anywhere in metadata (2.3.8).
+- Account deletion flow (required by App Store guideline 5.1.1(v)). In-app: Settings → Delete account → confirmation → server deletion → wipe local SQLCipher DB + keychain → return to onboarding. Server-side: cascade delete across accounts/devices/prekeys/signed_prekeys/kyber_prekeys/message_queue/did_documents in a single transaction. Design decisions to make: (1) tombstone row vs hard delete — a tombstone (account_id + deleted_at, no keys/profile) lets the server return a definitive "deleted" signal instead of bare 404, friendlier for clients distinguishing deleted/hiccup/never-existed (Signal does roughly this); (2) client UX for deleted contacts — keep the thread, mark contact as deleted, disable send, don't auto-delete the user's history; (3) group membership propagation — action-bound groups can do server-side membership updates, cross-server Sender Keys groups are messier (no authoritative member list). Federation caveat: other servers may have cached the DID document; staleness window resolves on next fetch (404). Disclose in privacy policy.
+
+
 ## Push Notifications
-
-### 1. Push relay service (`core/crates/relay/`)
-- [ ] DB table: `(pseudonym) → (device_token, platform, registered_at)`
-- [ ] Client endpoint: register/update/delete pseudonym-to-token mapping
-- [ ] Homeserver endpoint: accept wakeup-by-pseudonym, fire content-free push to APNs/FCM
-- [ ] Pseudonym rotation: grace period (~1 week) where old pseudonym still works
-- [ ] APNs integration (content-free wakeup payload)
-- [ ] FCM integration (content-free wakeup payload)
-
-### 2. Server integration
-- [ ] On message delivery to offline device, look up push pseudonym and ping relay
-- [ ] Hook into existing WebSocket connection tracking to determine online/offline
-- [ ] Server config: relay URL
-
-### 3. Mobile client (iOS first, then Android)
-- [ ] Request push permission during signup
-- [ ] Register device token with APNs/FCM
-- [ ] Register per-(user, server) pseudonym with relay on account creation
-- [ ] On wakeup: connect WebSocket, fetch queued messages
-- [ ] Periodic pseudonym rotation (default weekly)
-- [ ] Opt-out setting for high-risk users (poll-only mode)
 
 ### 4. Testing & privacy
 - [ ] Verify relay payloads contain zero user-identifiable content
