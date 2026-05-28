@@ -11,7 +11,7 @@ Docs are numbered by category. First digit = area, second digit = sequence withi
 | `0x` | Core design | [`00`](00-design.md) this doc · [`01`](01-technical-implementation.md) technical implementation · [`02`](02-todos-deferred.md) deferred TODOs / backlog |
 | `1x` | Server | [`10`](10-server-implementation.md) server implementation · [`11`](11-core-api-sketch.md) core API sketch · [`12`](12-abuse-handling.md) abuse handling · [`13`](13-federation.md) federation |
 | `2x` | Projects | [`20`](20-project-security.md) project security · [`21`](21-chatbot-project.md) chatbot project |
-| `3x` | Mobile apps | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-bitchat-fallback.md) bitchat fallback · [`33`](33-identity-auth-recovery.md) identity / auth / recovery · [`34`](34-invite-tokens.md) invite tokens · [`35`](35-profiles.md) profiles · [`36`](36-connection-state.md) connection state |
+| `3x` | Mobile apps | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-bitchat-fallback.md) bitchat fallback · [`33`](33-identity-auth-recovery.md) identity / auth / recovery · [`34`](34-invite-tokens.md) invite tokens · [`35`](35-contacts-and-profiles.md) contacts and profiles · [`36`](36-connection-state.md) connection state |
 | `4x` | Deployment & infra | [`40`](40-deployment.md) deployment · [`41`](41-relay-deployment.md) relay deployment |
 
 ## Premise
@@ -55,7 +55,7 @@ With E2E encryption, messages are encrypted on your device and only your recipie
 
 Normally when you sign up for a service, your account belongs to that service — if it disappears, so does your account. Here, your identity is a **DID** (decentralized identifier): a cryptographic identity you control, which a homeserver hosts but does not own. If a homeserver is seized or shut down, you move your DID to another server and bring your connections, group memberships, and credentials with you. We use `did:plc`, the same method Bluesky uses, which also means your identity could be ported across both networks without migration.
 
-Each DID has a minimal profile attached — display name (required), avatar, short bio. The profile is client-owned: stored locally and pushed as an encrypted blob to every server the DID is registered on (see `docs/35-profiles.md`). The server stores ciphertext it cannot read — a seized server yields DIDs but not real names. One DID, one name everywhere. Changing your name updates it on all servers. If you want different names in different contexts, you create separate accounts (separate DIDs). Like Signal, when you create your account, you'll be prompted to write down or store a recovery key someplace safe.
+Each DID has a minimal profile attached — display name (required), avatar, short bio. The profile is client-owned: stored locally and pushed as an encrypted blob to the user's discovery server, which acts as the authoritative copy and proxies fetches for any other server (see `docs/35-contacts-and-profiles.md`). The server stores ciphertext it cannot read — a seized server yields DIDs but not real names. One DID, one name everywhere. Changing your name updates it on all servers. If you want different names in different contexts, you create separate accounts (separate DIDs). Like Signal, when you create your account, you'll be prompted to write down or store a recovery key someplace safe.
 
 ### Membership privacy
 

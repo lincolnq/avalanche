@@ -61,7 +61,7 @@ The client picks which of its member servers to send through; that server then m
 1. **Is R a local member of S?** → queue locally on S. R's devices connected to S receive it. **No federation.**
 2. **Otherwise** → resolve R's DID to R's discovery server H. Federate the ciphertext to H. R's devices connected to H receive it.
 
-**Learned route.** When the client receives a message from contact C via a websocket to server X, and X is one of the client's member servers, the client records "for C, route via X." Subsequent sends to C go via X instead of the discovery server. If a send via the learned route fails because R is no longer a member of X, the client falls back to the discovery server and forgets the learned route.
+**Learned route.** When the client receives a message from contact C via a websocket to server X, and X is one of the client's member servers, the client records "for C, route via X." Subsequent sends to C go via X instead of the discovery server. If a send via the learned route fails because R is no longer a member of X, the client falls back to the discovery server and forgets the learned route. Storage lives on the contact row (see `35-contacts-and-profiles.md`).
 
 ### Why this converges
 

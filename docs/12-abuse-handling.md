@@ -4,6 +4,8 @@
 
 How blocking, spam reporting, and account-level enforcement work in an E2E-encrypted, federated system where the server cannot read message content.
 
+The contact record itself — the local row that carries block state and other per-DID state described below — is specified in `35-contacts-and-profiles.md`. This doc owns the abuse-handling semantics; storage layout lives there.
+
 ## Goals
 
 1. Give users meaningful tools to control their own inbox (block, mute, refuse first contact).
@@ -48,7 +50,7 @@ The primary filter. A message from a DID the recipient has never accepted appear
 The conversation list shows the thread with the sender's claimed display name and a preview of the first message — same as any other conversation. A subtle indicator ("Message request" label or similar) distinguishes it.
 
 When the recipient opens the conversation, instead of the normal compose UI they see:
-- Sender's DID, claimed display name, and profile avatar (all client-trusted; see `35-profiles.md`)
+- Sender's DID, claimed display name, and profile avatar (all client-trusted; see `35-contacts-and-profiles.md`)
 - The message thread, read-only
 - Three actions at the bottom: **Accept**, **Delete**, **Report Spam and Block**
 
@@ -266,7 +268,7 @@ This means reports propagate two ways: locally on P (account-level enforcement a
 
 ## 6. Profile-level abuse
 
-Display names, avatars, and bios are user-supplied profile fields visible to anyone who can fetch the profile (see `35-profiles.md`). These are abuse vectors distinct from message content because they're broadcast, not addressed.
+Display names, avatars, and bios are user-supplied profile fields visible to anyone who can fetch the profile (see `35-contacts-and-profiles.md`). These are abuse vectors distinct from message content because they're broadcast, not addressed.
 
 Mitigations:
 - Client-side display-name profanity filter (configurable, on by default). Filtered names render as "[name hidden]" with a tap-to-reveal.
