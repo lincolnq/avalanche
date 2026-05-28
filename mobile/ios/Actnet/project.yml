@@ -21,7 +21,10 @@ targets:
         com.apple.developer.associated-domains:
           - webcredentials:theavalanche.net
           - applinks:go.theavalanche.net
-        aps-environment: development
+        # Substituted from the per-config APS_ENVIRONMENT build setting
+        # below. Debug → development (sandbox APNs, paired with Xcode runs);
+        # Release → production (used by TestFlight and App Store builds).
+        aps-environment: $(APS_ENVIRONMENT)
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
@@ -37,25 +40,19 @@ targets:
         INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "Avalanche needs camera access to scan invite QR codes."
-    info:
-      path: Info.plist
-      properties:
-        # ATS exception for Tailscale Magic DNS so we can reach a dev
-        # homeserver / project webview at e.g.
-        #   http://<host>.tailNNNNN.ts.net:3000
-        # The Tailscale tunnel provides WireGuard encryption end-to-end,
-        # so the plaintext HTTP between the iOS app and the dev machine
-        # never crosses the public internet in cleartext.
-        NSAppTransportSecurity:
-          NSExceptionDomains:
-            ts.net:
-              NSIncludesSubdomains: true
-              NSExceptionAllowsInsecureHTTPLoads: true
-        # Required so silent pushes (content-available: 1) wake the app
-        # in the background to fetch new messages.
-        UIBackgroundModes:
-          - remote-notification
-        # Push relay URL, baked into the build. Read at runtime by
-        # PushManager. Substituted from the RELAY_URL env var at
-        # xcodegen time (empty string if unset → push disabled).
+        # Substituted from .env at xcodegen time. Carried as a build setting
+        # so $(RELAY_URL) inside Info.{Debug,Release}.plist resolves at
+        # Xcode build time. Read at runtime by PushManager (empty → push
+        # disabled).
         RELAY_URL: ${RELAY_URL}
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+          # Debug uses an ATS exception for ts.net so a Tailscale-hosted
+          # dev homeserver is reachable over plain HTTP.
+          INFOPLIST_FILE: Info.Debug.plist
+        Release:
+          APS_ENVIRONMENT: production
+          # Release has no ATS exceptions — only HTTPS endpoints.
+          INFOPLIST_FILE: Info.Release.plist
+          SWIFT_OPTIMIZATION_LEVEL: "-O"

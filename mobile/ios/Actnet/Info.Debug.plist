@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Info.plist used by the Debug configuration. Apple-defined keys
+(CFBundleIdentifier, CFBundleVersion, etc.) are merged in at build time
+from GENERATE_INFOPLIST_FILE + INFOPLIST_KEY_* in project.yml; this file
+only contains the keys that aren't expressible via INFOPLIST_KEY_*.
+
+The ts.net ATS exception lets us reach a Tailscale-hosted dev homeserver
+or project webview over plain HTTP — the Tailscale tunnel provides
+WireGuard encryption end-to-end. Release uses Info.Release.plist which
+omits this block.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	<key>RELAY_URL</key>
+	<string>$(RELAY_URL)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>

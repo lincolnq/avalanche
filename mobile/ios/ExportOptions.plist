@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Options consumed by `xcodebuild -exportArchive` (see `make ipa`).
+
+method=app-store-connect produces an .ipa suitable for upload to App Store
+Connect (TestFlight and App Store both ingest the same .ipa). destination
+is "export" so we only produce the .ipa locally; uploading is a separate
+step (Xcode Organizer, Transporter.app, or `xcrun altool --upload-app`).
+
+Automatic signing uses whatever signing certificate + provisioning profile
+Xcode has cached for team 7FVK3RR3TV — make sure you've signed into Xcode
+with an Apple ID on the team at least once.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>teamID</key>
+    <string>7FVK3RR3TV</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>stripSwiftSymbols</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Info.plist used by the Release configuration (TestFlight / App Store).
+No ATS exceptions — every network endpoint must be HTTPS. If you need
+to point Release at a non-HTTPS dev server, switch the dev server to
+HTTPS (e.g. via `tailscale cert`) rather than re-adding the exception.
+
+See Info.Debug.plist for the corresponding debug-only file.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>RELAY_URL</key>
+	<string>$(RELAY_URL)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>
