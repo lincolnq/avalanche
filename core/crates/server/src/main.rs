@@ -46,7 +46,7 @@ async fn main() {
         }
         Some(other) => {
             eprintln!("unknown subcommand: {other}");
-            eprintln!("usage: actnet-server [migrate]");
+            eprintln!("usage: avalanche-server [migrate]");
             std::process::exit(2);
         }
         None => {}

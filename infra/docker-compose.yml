@@ -10,7 +10,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     # Migrations are embedded in the server binary and applied via
-    # `actnet-server migrate` (see `make migrate`) — not mounted as initdb
+    # `avalanche-server migrate` (see `make migrate`) — not mounted as initdb
     # scripts. This keeps dev exercising the same code path as prod.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U actnet"]
