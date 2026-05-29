@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		02D3B5CB514E83F202FCF801 /* NewAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A33BB9BDC1959B6580927C /* NewAccountView.swift */; };
 		038F7CD243E857170660F8CB /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AE2F220E680D0CE0A5810E /* MainTabView.swift */; };
-		11CA40A334432252F11A77C8 /* AppCoreFFI.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 6B7C0912B10EFE68A1C776BB /* AppCoreFFI.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC5E72995147ED8AD25E532 /* QRScannerView.swift */; };
 		1616C239BA7C0A5010AA5637 /* LogViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C977CCCEBCC89682DA83AC6 /* LogViewerView.swift */; };
 		1730155BC6BF8EFB66BF49D1 /* AccountAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B344D75428AFD0B731E724 /* AccountAvatar.swift */; };
@@ -56,20 +55,6 @@
 		FA8DF8441A2584B4F6FFFDFE /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32115C1BD46227602D3C5A71 /* RootView.swift */; };
 		FE24D043CB770E44A2F5F3EE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C83A54ACCB386940D8E4689 /* ConversationView.swift */; };
 /* End PBXBuildFile section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		322C1422AB8A67EB2239BDE2 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				11CA40A334432252F11A77C8 /* AppCoreFFI.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		02F784B4794651EB68CB3128 /* JoiningServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoiningServerView.swift; sourceTree = "<group>"; };
@@ -318,7 +303,6 @@
 				197B311640F4C3B5F00D58BC /* Sources */,
 				AB8A8B5F6123863EA1E3B0B4 /* Resources */,
 				34581F70DCB12E60BD3D3761 /* Frameworks */,
-				322C1422AB8A67EB2239BDE2 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -452,6 +436,8 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Avalanche needs camera access to scan invite QR codes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -605,6 +591,8 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Avalanche needs camera access to scan invite QR codes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

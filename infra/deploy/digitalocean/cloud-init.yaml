@@ -1,11 +1,17 @@
 #cloud-config
 #
 # ════════════════════════════════════════════════════════════════════════════
-#  Avalanche homeserver — one-shot DigitalOcean bootstrap
+#  Avalanche homeserver — one-shot DigitalOcean bootstrap (REFERENCE COPY)
 # ════════════════════════════════════════════════════════════════════════════
 #
-#  WHAT TO DO:
-#    1. Edit the THREE lines below marked  >>> EDIT <<<.
+#  Operators should NOT paste this file directly. Open
+#  `configure.html` (sibling file) in a browser — it has the same logic plus
+#  a form for SERVER_URL/SERVER_NAME and a first-invite QR. This YAML is the
+#  reference / dev artifact; the HTML is the canonical deploy path and is
+#  what stays in sync with the current release version.
+#
+#  WHAT TO DO IF YOU MUST USE THIS FILE DIRECTLY:
+#    1. Edit the lines below marked  >>> EDIT <<<.
 #    2. Create a DigitalOcean droplet:
 #         - Region: any
 #         - Image:  Ubuntu 24.04 LTS x64
@@ -143,7 +149,10 @@ write_files:
       systemctl stop avalanche
 
       echo "[update] running migrations against new binary"
-      if ! sudo -u avalanche "$NEW" migrate; then
+      # `sudo -u` does not load EnvironmentFile, so pull DATABASE_URL out of
+      # the same env file systemd uses.
+      set -a; . /etc/avalanche/avalanche.env; set +a
+      if ! sudo -u avalanche env DATABASE_URL="$DATABASE_URL" "$NEW" migrate; then
           echo "[update] migrate FAILED — restoring old binary and restarting"
           rm -f "$NEW"
           systemctl start avalanche
@@ -241,7 +250,9 @@ write_files:
       # ─── Firewall. ─────────────────────────────────────────────────────
       ufw default deny incoming
       ufw default allow outgoing
-      ufw allow 22/tcp 80/tcp 443/tcp
+      ufw allow 22/tcp
+      ufw allow 80/tcp
+      ufw allow 443/tcp
       ufw --force enable
 
       # ─── avalanche user + dirs. ───────────────────────────────────────────
@@ -280,18 +291,13 @@ write_files:
       chmod 640 /etc/avalanche/avalanche.env
 
       # ─── Server binary. ────────────────────────────────────────────────
-      # TODO(deploy): replace with the real GitHub Releases URL once
-      # avalanche-server-linux-x86_64 is published. The binary exposes a
-      # `migrate` subcommand (sqlx::migrate!() embedded) that is NEVER
-      # run by the systemd service — it must be invoked explicitly here
-      # on first boot, and by /usr/local/sbin/avalanche-update on every
-      # release upgrade. See docs/40-deployment.md § Updates.
-      if [ -n "${AVALANCHE_BINARY_URL:-}" ]; then
-          curl -fsSL -o /usr/local/lib/avalanche/avalanche-server "$AVALANCHE_BINARY_URL"
-          chmod +x /usr/local/lib/avalanche/avalanche-server
-      else
-          touch /usr/local/lib/avalanche/MISSING_BINARY
-      fi
+      # The binary exposes a `migrate` subcommand (sqlx::migrate!() embedded)
+      # that is NEVER run by the systemd service — it must be invoked
+      # explicitly here on first boot, and by /usr/local/sbin/avalanche-update
+      # on every release upgrade. See docs/40-deployment.md § Updates.
+      curl -fsSL -o /usr/local/lib/avalanche/avalanche-server \
+          https://github.com/lincolnq/actnet/releases/download/0.1.0/avalanche-server
+      chmod +x /usr/local/lib/avalanche/avalanche-server
 
       # ─── First-deploy migrations. ──────────────────────────────────────
       # Schema is applied once here, before the service ever starts.
@@ -299,10 +305,10 @@ write_files:
       # runs `migrate` after downloading a new binary but before restart.
       systemctl daemon-reload
       systemctl enable --now caddy
-      if [ -x /usr/local/lib/avalanche/avalanche-server ]; then
-          sudo -u avalanche /usr/local/lib/avalanche/avalanche-server migrate
-          systemctl enable --now avalanche
-      fi
+      # `sudo -u` does not load EnvironmentFile, so pass DATABASE_URL explicitly.
+      sudo -u avalanche env DATABASE_URL='postgresql:///avalanche?host=/var/run/postgresql' \
+          /usr/local/lib/avalanche/avalanche-server migrate
+      systemctl enable --now avalanche
 
       # ─── First invite (best-effort; binary may not exist yet). ─────────
       # TODO(deploy): when the avalanche-invite CLI ships, generate a one-shot

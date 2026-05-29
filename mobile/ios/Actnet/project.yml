@@ -14,7 +14,12 @@ targets:
       - path: ../Generated/app_core.swift
         group: Generated
     dependencies:
+      # AppCoreFFI.xcframework wraps static .a archives (libapp_core.a). They
+      # link into the main executable directly — embedding would copy a raw
+      # static library into Actnet.app/Frameworks/, which App Store Connect
+      # rejects (error 90171/90432).
       - framework: ../AppCoreFFI.xcframework
+        embed: false
     entitlements:
       path: Actnet.entitlements
       properties:
@@ -30,7 +35,7 @@ targets:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
         PRODUCT_BUNDLE_IDENTIFIER: net.theavalanche.app
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         SWIFT_VERSION: "6.0"
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -40,6 +45,10 @@ targets:
         INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "Avalanche needs camera access to scan invite QR codes."
+        # iPhone: portrait-only (Signal pattern). iPad: all four so the
+        # iPad-multitasking validator (error 90474) is satisfied.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         # Substituted from .env at xcodegen time. Carried as a build setting
         # so $(RELAY_URL) inside Info.{Debug,Release}.plist resolves at
         # Xcode build time. Read at runtime by PushManager (empty → push
