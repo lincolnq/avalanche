@@ -271,7 +271,8 @@ async fn get_group(
     Path(group_id_b64): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<GetGroupResponse>, ServerError> {
-    let (group, _actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let (group, _actor_emi) =
+        authorize_member_or_pending_invite(&state, &headers, &group_id_b64).await?;
     Ok(Json(GetGroupResponse {
         revision: group.current_revision,
         encrypted_state: b64_encode(&group.encrypted_state),
@@ -312,7 +313,8 @@ async fn get_changes(
     Query(query): Query<ChangesQuery>,
     headers: HeaderMap,
 ) -> Result<Json<ChangesResponse>, ServerError> {
-    let (group, _actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let (group, _actor_emi) =
+        authorize_member_or_pending_invite(&state, &headers, &group_id_b64).await?;
     let mut conn = state.db.acquire().await?;
     let rows = db::groups::get_changes_since(
         &mut conn,
@@ -572,8 +574,11 @@ async fn push_binding(
 /// encrypted_member_id is in `member_credentials` for this group. Returns
 /// `(Group, actor_encrypted_member_id)`.
 ///
-/// Used by GET endpoints (which are membership-gated per §3.4) and by
-/// push_binding (only existing members can rotate).
+/// Used by `push_binding` — only existing members can rotate their per-
+/// group push pseudonym. GET endpoints use the slightly looser
+/// `authorize_member_or_pending_invite` (see §3.4 / §3.10): pending
+/// invitees need to fetch state to construct an accurate
+/// `promote_pending_members` upload.
 async fn authorize_member(
     state: &AppState,
     headers: &HeaderMap,
@@ -588,6 +593,37 @@ async fn authorize_member(
         return Err(ServerError::not_found_or_forbidden());
     }
     Ok((group, actor_emi))
+}
+
+/// Like `authorize_member`, but also accepts actors currently in
+/// `members_pending` (admin-invited but not yet promoted). §3.10 step 3:
+/// "the client fetches the group state … and sees the invitee in the
+/// pending list" — so a pending invitee needs read access in order to
+/// build an accurate `new_encrypted_state` when they promote themselves.
+/// Pending-approval (link-join) requesters stay excluded: they don't
+/// graduate themselves (an admin does), so they don't need pre-approval
+/// state and exposing it would leak membership before approval.
+async fn authorize_member_or_pending_invite(
+    state: &AppState,
+    headers: &HeaderMap,
+    group_id_b64: &str,
+) -> Result<(db::groups::Group, EncryptedMemberId), ServerError> {
+    let (group, actor_emi) = authorize_presentation(state, headers, group_id_b64).await?;
+    let emi_bytes = actor_emi.to_bytes();
+    let mut conn = state.db.acquire().await?;
+    if db::groups::member_role(&mut conn, &group.group_id, &emi_bytes)
+        .await?
+        .is_some()
+    {
+        return Ok((group, actor_emi));
+    }
+    if db::groups::get_pending_invite(&mut conn, &group.group_id, &emi_bytes)
+        .await?
+        .is_some()
+    {
+        return Ok((group, actor_emi));
+    }
+    Err(ServerError::not_found_or_forbidden())
 }
 
 /// Like `authorize_member`, but also accepts actors found in `members_pending`
