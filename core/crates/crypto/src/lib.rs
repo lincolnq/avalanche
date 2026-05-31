@@ -24,6 +24,7 @@ pub mod error;
 pub mod groups;
 pub mod identity;
 pub mod prekeys;
+pub mod sealed_sender;
 pub mod sender_cert;
 pub mod sender_keys;
 pub mod session;
