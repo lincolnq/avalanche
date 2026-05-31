@@ -25,8 +25,10 @@ use prost::Message as _;
 use rand::TryRngCore as _;
 
 use crypto::groups::{
-    AuthCredentialDid, AuthCredentialDidResponse, GroupKey, RedemptionTime, ServerPublicParams,
+    did_to_uuid, AuthCredentialWithPniZkc, AuthCredentialWithPniZkcResponse, GroupKey,
+    RedemptionTime, ServerPublicParams,
 };
+use libsignal_core::{Aci, Pni};
 use crypto::sender_keys;
 use libsignal_protocol::{DeviceId, ProtocolAddress};
 use uuid::Uuid;
@@ -192,28 +194,34 @@ pub async fn ensure_server_params(
     Ok(ServerPublicParams::from_bytes(&fresh.params)?)
 }
 
-/// Fetch today's credential (or reuse a cached one).
+/// Fetch today's credential (or reuse a cached one). Uses stock
+/// `zkgroup::auth::AuthCredentialWithPniZkc` per §2.3; the carried
+/// identity is `Aci::from(UUID(did))`.
 pub async fn ensure_credential(
     store: &store::Store,
     client: &net::Client,
     server_url: &str,
     did: &str,
     public: &ServerPublicParams,
-) -> Result<AuthCredentialDid, AppError> {
+) -> Result<AuthCredentialWithPniZkc, AppError> {
     let today = day_aligned_now();
+    let uuid = did_to_uuid(did);
+    let aci = Aci::from(uuid);
+    let pni = Pni::from(uuid);
+    let redemption = RedemptionTime::from_epoch_seconds(today);
+
     if let Some(bytes) = store.load_group_credential(server_url, did, today).await? {
-        if let Ok(cred) = bincode::deserialize::<AuthCredentialDid>(&bytes) {
+        if let Ok(cred) = zkgroup::deserialize::<AuthCredentialWithPniZkc>(&bytes) {
             return Ok(cred);
         }
     }
     let issued = client.issue_group_credential(did, today).await?;
-    let response: AuthCredentialDidResponse = bincode::deserialize(&issued.bytes)
+    let response: AuthCredentialWithPniZkcResponse = zkgroup::deserialize(&issued.bytes)
         .map_err(|e| AppError::Protocol(format!("decode credential response: {e}")))?;
     let cred = response
-        .receive(did, RedemptionTime::from_unix_seconds(today), public)
-        .map_err(AppError::from)?;
-    let cred_bytes = bincode::serialize(&cred)
-        .map_err(|e| AppError::Protocol(format!("serialize credential: {e}")))?;
+        .receive(aci, pni, redemption, public.zkgroup())
+        .map_err(|_| AppError::Protocol("credential response verification failed".into()))?;
+    let cred_bytes = zkgroup::serialize(&cred);
     store
         .save_group_credential(server_url, did, today, &cred_bytes)
         .await?;
@@ -222,16 +230,15 @@ pub async fn ensure_credential(
     Ok(cred)
 }
 
-/// Build a fresh presentation for `(group_key, credential)`. Bincode-
+/// Build a fresh presentation for `(group_key, credential)`. zkgroup-
 /// serialized; the `net::Client` base64s it for the `X-Group-Auth` header.
 pub fn build_presentation_bytes(
     public: &ServerPublicParams,
-    credential: &AuthCredentialDid,
+    credential: &AuthCredentialWithPniZkc,
     group_key: &GroupKey,
 ) -> Result<Vec<u8>, AppError> {
-    let presentation = credential.present(public, group_key, fresh_randomness());
-    bincode::serialize(&presentation)
-        .map_err(|e| AppError::Protocol(format!("serialize presentation: {e}")))
+    let presentation = credential.present(public.zkgroup(), group_key.zkgroup_secret(), fresh_randomness());
+    Ok(zkgroup::serialize(&presentation))
 }
 
 fn policy_row_from_wire(policy: &GroupPolicyWire) -> Result<PolicyRow, AppError> {
@@ -345,7 +352,7 @@ pub async fn create_group(
     let group_id_bytes = group_key.group_id().0;
 
     let founder_emi = group_key.encrypt_member_id(founder_did);
-    let founder_emi_bytes = founder_emi.to_bytes();
+    let founder_emi_bytes = zkgroup::serialize(&founder_emi);
     let founder_pseudonym = fresh_pseudonym();
     let now_ms = Timestamp::now().as_millis();
 
@@ -524,7 +531,7 @@ pub async fn invite_member(
         group_id_b64_s,
         |state, group_key| {
             let emi = group_key.encrypt_member_id(recipient_did);
-            let emi_bytes = emi.to_bytes();
+            let emi_bytes = zkgroup::serialize(&emi);
             // Optimistic state update: append to pending_invites.
             state.pending_invites.push(gproto::PendingInvite {
                 encrypted_member_id: emi_bytes.clone(),
@@ -565,7 +572,7 @@ pub async fn accept_invite(
         did,
         group_id_b64_s,
         |state, group_key| {
-            let self_emi = group_key.encrypt_member_id(did).to_bytes();
+            let self_emi = zkgroup::serialize(&group_key.encrypt_member_id(did));
             // Optimistic: remove from pending_invites and append to members.
             let role = state
                 .pending_invites
@@ -609,7 +616,7 @@ pub async fn decline_invite(
         did,
         group_id_b64_s,
         |state, group_key| {
-            let emi = group_key.encrypt_member_id(did).to_bytes();
+            let emi = zkgroup::serialize(&group_key.encrypt_member_id(did));
             state
                 .pending_invites
                 .retain(|p| p.encrypted_member_id != emi);
@@ -685,7 +692,7 @@ pub async fn cancel_join_request(
         did,
         group_id_b64_s,
         |state, group_key| {
-            let emi = group_key.encrypt_member_id(did).to_bytes();
+            let emi = zkgroup::serialize(&group_key.encrypt_member_id(did));
             state
                 .pending_approvals
                 .retain(|p| p.encrypted_member_id != emi);

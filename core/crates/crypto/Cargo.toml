@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 types              = { workspace = true }
 libsignal-protocol = { workspace = true }
+libsignal-core     = { workspace = true }
 zkgroup            = { workspace = true }
 zkcredential       = { workspace = true }
 poksho             = { workspace = true }
@@ -17,6 +18,7 @@ rand               = { workspace = true }
 async-trait        = { workspace = true }
 thiserror          = { workspace = true }
 uuid               = { workspace = true }
+sha2               = { workspace = true }
 
 [dev-dependencies]
 test-utils = { path = "../test-utils" }

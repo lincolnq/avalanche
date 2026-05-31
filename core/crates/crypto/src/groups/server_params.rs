@@ -1,54 +1,39 @@
 //! Per-homeserver zkgroup signing material.
 //!
 //! Each homeserver holds exactly one [`ServerSecretParams`] — the signing
-//! material it uses to issue anonymous auth credentials and group send
-//! endorsements. The matching [`ServerPublicParams`] is published so clients
-//! can verify issuances and produce presentations. Persistence (DB storage,
-//! hot-reload on startup) is the server's job; this module only provides the
-//! crypto-level primitives.
+//! material it uses to issue anonymous auth credentials and (Stage 6 PR 2)
+//! group send endorsements. The matching [`ServerPublicParams`] is
+//! published so clients can verify issuances and produce presentations.
+//! Persistence (DB storage, hot-reload on startup) is the server's job;
+//! this module only provides the crypto-level primitives.
 //!
-//! What lives in here:
-//! - the libsignal `zkgroup::ServerSecretParams` — covers the endorsement
-//!   server root key pair we need for `GroupSendEndorsement` (group sends),
-//!   plus other libsignal-internal credential keys we carry along for
-//!   compatibility with the group send path;
-//! - a dedicated `CredentialKeyPair` used by `AuthCredentialDid` (see
-//!   `crypto::groups::credentials`). We need a separate one because
-//!   `zkgroup::ServerSecretParams::generic_credential_key_pair` is
-//!   `pub(crate)` to zkgroup with no public accessor.
+//! These are thin newtype wrappers around `zkgroup::ServerSecretParams` /
+//! `zkgroup::ServerPublicParams`. See `docs/03-groups.md` §2.3 / §2.4 for
+//! why we use stock zkgroup types rather than a parallel DID-shaped
+//! scheme: identities are carried as `Aci::from(UUID(did))`, so every
+//! zkgroup primitive works as designed.
 //!
-//! Wire format is a bincode-serialized pair of byte vectors:
-//! `(zkgroup-bytes, auth-cred-bytes)`. Stable for a given pinned libsignal
-//! commit. Changing it requires a migration; see
+//! Wire format is bincode-serialized zkgroup bytes. Stable for a given
+//! pinned libsignal commit. Changing it requires a migration; see
 //! `infra/migrations/009_zkgroup_server_params.sql`.
 
 use rand::TryRngCore;
-use serde::{Deserialize, Serialize};
-use zkcredential::credentials::{CredentialKeyPair, CredentialPublicKey};
 
 use crate::error::CryptoError;
 
-/// Server-side signing material. Holding this is equivalent to holding the
-/// homeserver's authority to issue auth credentials and group send
+/// Server-side signing material. Holding this is equivalent to holding
+/// the homeserver's authority to issue auth credentials and group send
 /// endorsements.
 #[derive(Clone)]
 pub struct ServerSecretParams {
-    zkgroup: zkgroup::ServerSecretParams,
-    auth_credential_key: CredentialKeyPair,
+    inner: zkgroup::ServerSecretParams,
 }
 
 /// Public counterpart published to clients so they can verify credential
 /// issuances and produce presentations.
 #[derive(Clone)]
 pub struct ServerPublicParams {
-    zkgroup: zkgroup::ServerPublicParams,
-    auth_credential_key: CredentialPublicKey,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Wire {
-    zkgroup: Vec<u8>,
-    auth_credential_key: Vec<u8>,
+    inner: zkgroup::ServerPublicParams,
 }
 
 fn fresh_randomness() -> [u8; zkgroup::RANDOMNESS_LEN] {
@@ -60,90 +45,49 @@ fn fresh_randomness() -> [u8; zkgroup::RANDOMNESS_LEN] {
 }
 
 impl ServerSecretParams {
-    /// Generate fresh material. Uses two independent draws from the OS RNG so
-    /// the auth credential key isn't correlated with the zkgroup material.
     pub fn generate() -> Self {
-        let zkgroup = zkgroup::ServerSecretParams::generate(fresh_randomness());
-        let auth_credential_key = CredentialKeyPair::generate(fresh_randomness());
         Self {
-            zkgroup,
-            auth_credential_key,
+            inner: zkgroup::ServerSecretParams::generate(fresh_randomness()),
         }
     }
 
     pub fn public_params(&self) -> ServerPublicParams {
         ServerPublicParams {
-            zkgroup: self.zkgroup.get_public_params(),
-            auth_credential_key: self.auth_credential_key.public_key().clone(),
+            inner: self.inner.get_public_params(),
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let wire = Wire {
-            zkgroup: zkgroup::serialize(&self.zkgroup),
-            auth_credential_key: bincode::serialize(&self.auth_credential_key)
-                .expect("serialize CredentialKeyPair"),
-        };
-        bincode::serialize(&wire).expect("serialize ServerSecretParams wire")
+        zkgroup::serialize(&self.inner)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let wire: Wire =
-            bincode::deserialize(bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        let zkgroup = zkgroup::deserialize::<zkgroup::ServerSecretParams>(&wire.zkgroup)
+        let inner = zkgroup::deserialize::<zkgroup::ServerSecretParams>(bytes)
             .map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        let auth_credential_key: CredentialKeyPair =
-            bincode::deserialize(&wire.auth_credential_key)
-                .map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        Ok(Self {
-            zkgroup,
-            auth_credential_key,
-        })
+        Ok(Self { inner })
     }
 
-    /// Accessor for the `AuthCredentialDid` issuance key. Crate-private so
-    /// callers outside `crypto::groups` stay scheme-agnostic.
-    pub(crate) fn auth_credential_key(&self) -> &CredentialKeyPair {
-        &self.auth_credential_key
-    }
-
-    #[allow(dead_code)] // used by group send endorsements, landing in a later step
-    pub(crate) fn zkgroup(&self) -> &zkgroup::ServerSecretParams {
-        &self.zkgroup
+    /// Borrow the underlying zkgroup secret. Used by credential
+    /// issuance and (Stage 6 PR 2) endorsement issuance, both of which
+    /// take `&zkgroup::ServerSecretParams`.
+    pub fn zkgroup(&self) -> &zkgroup::ServerSecretParams {
+        &self.inner
     }
 }
 
 impl ServerPublicParams {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let wire = Wire {
-            zkgroup: zkgroup::serialize(&self.zkgroup),
-            auth_credential_key: bincode::serialize(&self.auth_credential_key)
-                .expect("serialize CredentialPublicKey"),
-        };
-        bincode::serialize(&wire).expect("serialize ServerPublicParams wire")
+        zkgroup::serialize(&self.inner)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let wire: Wire =
-            bincode::deserialize(bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        let zkgroup = zkgroup::deserialize::<zkgroup::ServerPublicParams>(&wire.zkgroup)
+        let inner = zkgroup::deserialize::<zkgroup::ServerPublicParams>(bytes)
             .map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        let auth_credential_key: CredentialPublicKey =
-            bincode::deserialize(&wire.auth_credential_key)
-                .map_err(|_| CryptoError::ZkgroupDeserialize)?;
-        Ok(Self {
-            zkgroup,
-            auth_credential_key,
-        })
+        Ok(Self { inner })
     }
 
-    pub(crate) fn auth_credential_key(&self) -> &CredentialPublicKey {
-        &self.auth_credential_key
-    }
-
-    #[allow(dead_code)] // used by group send endorsements, landing in a later step
-    pub(crate) fn zkgroup(&self) -> &zkgroup::ServerPublicParams {
-        &self.zkgroup
+    pub fn zkgroup(&self) -> &zkgroup::ServerPublicParams {
+        &self.inner
     }
 }
 

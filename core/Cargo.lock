@@ -126,6 +126,7 @@ dependencies = [
  "bincode",
  "bs58",
  "crypto",
+ "libsignal-core",
  "libsignal-protocol",
  "net",
  "p256",
@@ -147,6 +148,7 @@ dependencies = [
  "uniffi",
  "uuid",
  "zkcredential",
+ "zkgroup",
 ]
 
 [[package]]
@@ -729,11 +731,13 @@ dependencies = [
  "async-trait",
  "bincode",
  "curve25519-dalek",
+ "libsignal-core",
  "libsignal-protocol",
  "partial-default",
  "poksho",
  "rand 0.9.4",
  "serde",
+ "sha2",
  "test-utils",
  "thiserror 2.0.18",
  "tokio",
@@ -3560,6 +3564,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "http-body-util",
+ "libsignal-core",
  "libsignal-protocol",
  "p256",
  "prost",
@@ -3581,6 +3586,7 @@ dependencies = [
  "types",
  "uuid",
  "zkcredential",
+ "zkgroup",
 ]
 
 [[package]]

@@ -8,8 +8,12 @@
 use sqlx::{PgConnection, Row};
 
 /// The version pinned for Stage 5. Schema allows multiple versions for
-/// future key rotation; today there is exactly one.
-pub const CURRENT_VERSION: i32 = 1;
+/// future key rotation. Bumped to 2 when the wire format changed during
+/// the §2.3-option-2 → §2.3-option-1 migration (see docs/03-groups.md
+/// §2.4): old bytes used a bundled `CredentialKeyPair` field that the
+/// new `ServerSecretParams` doesn't carry. Existing version-1 rows
+/// remain in the table but are never read.
+pub const CURRENT_VERSION: i32 = 2;
 
 /// Load the active version's serialized `ServerSecretParams`, or insert and
 /// return new params produced by `generate` if none exist yet.

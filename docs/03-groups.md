@@ -56,57 +56,83 @@ The public surface we care about:
 
 Options:
 
-1. **Pack DID into the ACI slot.** Hash the DID to 16 bytes, use that as a synthetic "ACI", leave PNI as a fixed zero or duplicate. Pro: works without forking. Con: hash collisions are catastrophic (a collision would let one DID present as another); 128 bits is borderline; we lose the ability to ever migrate to a real DID-shaped credential without breaking deployed groups.
-2. **Build our own credential on `zkcredential`.** `zkcredential::issuance` and `zkcredential::presentation` give us the generic anonymous-credential primitives. We define `AuthCredentialDid` with a single attribute (the DID, encoded as a fixed-length structure compatible with `UidStruct`'s curve-encoding requirements). Pro: clean, future-proof, no collision risk. Con: this *is* new crypto code — small, but security-sensitive. Estimate: ~200 lines mirroring `auth_credential_with_pni/zkc.rs`, plus tests.
-3. **Skip zkgroup, use a simpler scheme.** Signed credentials with blind signatures, or rotated bearer tokens per session. Strictly worse anonymity guarantees; not recommended.
+1. **Use a UUID derived from the DID.** Define `UUID(did) := SHA-256(b"actnet-did-to-uuid-v1" || did)[..16]`. All zkgroup machinery works as designed. For the second attribute we pass `Pni::from(UUID(did))` — same UUID bytes, distinct UidStruct because of the service-id-type tag. Clients still map EMI ↔ DID via the cleartext members list in the encrypted state blob (which we already need for display anyway).
+2. **Build our own credential on `zkcredential`.** Same generic anonymous-credential framework underneath zkgroup; mirror `auth_credential_with_pni/zkc.rs` with a DID-shaped attribute (`DidStruct` = DID hashed to two Ristretto points).
+3. **Skip zkgroup entirely, use a simpler scheme.** Signed credentials with blind signatures, or rotated bearer tokens. Strictly worse anonymity guarantees.
 
-**DECIDED:** Option 2. The amount of code is small, it mirrors a tested template, and option 1's collision risk is unacceptable for an organizing tool where impersonation is a named threat.
+**DECIDED:** Option 1. (See §2.4 for the full reasoning — option 2 was the original choice, implemented and shipped, then superseded after the same identity-attribute problem began to repeat for every zkgroup primitive we wanted to adopt.)
 
-This means the `crypto` crate gets a new submodule `crypto::groups::credentials` that defines `AuthCredentialDid` on top of `zkcredential`. The `groups` module's interface to the rest of the system stays scheme-agnostic, so a later MLS swap stays possible.
+The 128-bit collision space matches zkgroup's `Aci` and Signal's deployed assumption; the attack surface is restricted to DIDs that already exist in the system (not the full 2^128 space); the cleartext members list inside the encrypted state already lets a client cross-check `UUID(did) == claimed_did's hash`. Collision-via-pre-image gains an attacker no useful capability (they'd have to also control a DID with a colliding hash, and convince an admin to invite that DID).
 
-**One-way encoding.** Signal's credential carries a 16-byte UUID — short enough that the encoding it uses is reversible: given the group key, a client can decrypt a member ciphertext and read back the UUID. Our credential carries a DID, which is variable-length (typically 30+ bytes) and doesn't fit the same encoding. We chose the simplest workaround: hash the DID into a deterministic ciphertext shape, accepting that the result isn't directly reversible. So given a DID, anyone with the group key can compute `encrypt_member(did) → encrypted_member_id`; the other direction is not available.
+**Encoded as UidStruct + UidEncryptionDomain.** `encrypted_member_id` = stock `zkgroup::groups::UuidCiphertext` = `Ciphertext<UidEncryptionDomain>` over `Aci::from(UUID(did))`. Deterministic in `(did, group_key)`, opaque to the server, exactly the shape every zkgroup primitive expects.
 
-This is fine because nothing in the protocol needs to reverse it:
+### 2.4 History: why we switched from option 2 to option 1
 
-- **Server side:** the server stores `encrypted_member_id`s to enforce membership but never reverses them — it doesn't hold the group key, and §3.9 rule 2 prohibits any `(encrypted_member_id → did)` table. The membership-opacity property is structural, not a consequence of this encoding choice.
-- **Client side:** when a client needs to render "Alice removed Bob" after receiving an action that names `encrypted_member_id`s, it reads the encrypted state blob (§3.2), which contains the canonical `(did, encrypted_member_id, role, …)` table per member, and looks the DID up there.
+**Status:** the original §2.3 decision was option 2 (build a DID-shaped credential on `zkcredential`); that scheme shipped in step 5. While planning step 6 PR 2 the same identity-attribute problem began to surface for `GroupSendEndorsement`, prompting a re-evaluation. This section records the reasoning. The actual migration code lives in steps 2–3 of §5's implementation plan.
 
-If a future use case demands client-side reversibility, we can swap in a longer reversible encoding. It's a local change to `DidStruct` and doesn't affect the server.
+**The pattern §2.3 missed.** The DID-versus-UUID mismatch isn't specific to `AuthCredentialWithPniZkc`. Every zkgroup primitive that touches an identity attribute uses the UUID-shaped encryption domain (`UidEncryptionDomain`, `UidStruct`, `UuidCiphertext`): `AuthCredential`, `ProfileKeyCredential`, `GroupSendEndorsementsResponse`'s `issue` / `receive_with_service_ids`, and the `Aci`-typed fields on `SenderCertificate`'s peers. §2.3 chose option 2 ("build our own credential on `zkcredential`") for `AuthCredential`. Carrying that choice through means a parallel reimplementation of *every* zkgroup primitive we eventually use — endorsements being the next one.
 
-### 2.4 API surface for `crypto::groups`
+**The cost we accepted in §2.3.** A DID-shaped `crypto::groups::credentials` module on top of `zkcredential`. ~500 lines, all security-sensitive. Plus a custom `DidEncryptionDomain`, a custom `DidStruct`, custom one-way encoding for `EncryptedMemberId`.
 
-The Rust interface, scheme-agnostic at the boundary:
+**The cost we're about to accept for step 6 PR 2 if we keep going.** A parallel `crypto::groups::endorsements` module mirroring zkgroup's `GroupSendEndorsement`, on top of `zkcredential::endorsements`. Same shape, same risks. Then again for whatever the next zkgroup primitive turns out to be.
+
+**What the DID-shaped scheme actually buys us.** I claimed in §2.3 that it gives a tighter binding ("the credential cryptographically commits to the DID") and rules out hash-collision impersonation. Re-examining:
+
+- **Server opacity is unchanged.** The server stores `encrypted_member_id` = `encrypt_under_group_key(identity_attribute)`. Whether the inner thing is `DidStruct(did)` (two Ristretto points hashed from the DID) or `UUID(did) := SHA-256(did)[:16]` (16-byte hash), the server can't reverse it without the group key in either case. §3.9 rule 2 still holds; §3.4's 404-not-403 rule still holds.
+- **Cross-group linkability is unchanged.** Both schemes embed a deterministic per-DID quantity. `DidStruct::from_did(did)` produces the same two points every time; `UUID(did)` produces the same 16 bytes every time. A leak of either across groups gives the same linkage. The actual unlinkability property comes from the *per-group encryption key* (`did_enc_key_pair` in our scheme, `uid_enc_key_pair` in zkgroup's), and that's the same shape in both.
+- **Collision resistance.** §2.3 worried that hashing a DID to 16 bytes risks impersonation via collision. 128 bits of collision resistance against a chosen-prefix attack is borderline for a long-lived global identifier — but: zkgroup's own `Aci` is also 16 bytes, and Signal treats that as sufficient; the cleartext members list inside the encrypted state blob already lets a client cross-check `UUID(did) == claimed_did's hash`, so client-side detection is trivial; and the attacker would need to find a collision *within the closed set of DIDs already in the system*, not against the whole 2^128 space. The collision-resistance worry was overstated.
+- **The DID itself is still not on the server.** A `did` value appearing in a credential request (which is session-authenticated and identified, §3.11) is unchanged. The `UUID(did)` value is *derived from* the DID; it appears in EMIs and credentials but not in routing tables.
+
+**What we lose by switching.** One quantifiable thing: in our current scheme the credential's `verify` step cryptographically attests to the exact DID string (via the `DidStruct` points), so a server that has been compromised to issue fake credentials still has to commit to a specific DID at issuance time. With `UUID(did)`, the server commits to `UUID(did)` instead — to forge against a victim DID, the attacker would have to either (a) pre-image the hash (infeasible) or (b) find a colliding DID (1-in-2^128, and the new DID would have to be valid for some account in PLC). Practically identical security; theoretically a hair weaker.
+
+**What we gain by switching.** Stock zkgroup primitives work as designed. Step 6 PR 2 becomes "wire libsignal's `GroupSendEndorsements`" instead of "build a parallel endorsement scheme." We delete `crypto::groups::credentials`, `DidStruct`, `DidEncryptionDomain`, our custom `EncryptedMemberId`. Server-side, `zkgroup_server_params` swaps the `auth_credential_key` field for stock `zkgroup::ServerSecretParams` usage (which already covers auth credentials, endorsements, and profile credentials in one shot). Less custom crypto to audit and maintain; easier to track upstream libsignal changes.
+
+**Migration cost.** Schema: the `encrypted_member_id` byte shape changes (current: ~64-byte `Ciphertext<DidEncryptionDomain>` bincode; new: 32-byte `UuidCiphertext`). Either a rebuild migration (acceptable pre-launch — no production data) or version both shapes side-by-side during transition. Code: `crypto::groups::credentials` deletes (~500 lines), `crypto::groups::group_key` swaps `DidEncryptionDomain` for zkgroup's `uid_enc_key_pair` (~50 lines net), `server::routes::groups` swaps presentation verification to call zkgroup, `app-core::groups` swaps `GroupKey::encrypt_member_id(did)` to `encrypt_member_id(uuid_of(did))` with the same call sites. App-core gets a small new helper `did_to_uuid(did) -> Uuid := SHA-256(b"actnet-did-to-uuid-v1" || did)[..16]` (same domain-separated SHA-256 pattern we use for `distribution_id_for`). Clients re-fetch credentials on first request after the swap.
+
+**Outcome.** Switched. §2.3 now records option 1 as DECIDED, with this section as the rationale. The migration is enumerated in §5 (implementation plan), which marks the now-deleted `crypto::groups::credentials` work as superseded.
+
+### 2.5 API surface for `crypto::groups`
+
+Per §2.3, identities are carried as `Aci::from(UUID(did))` and the credential type is stock `zkgroup::auth::AuthCredentialWithPniZkc`. The Rust interface is mostly a thin wrapper / re-export of zkgroup types:
 
 ```rust
-pub struct GroupId(pub [u8; 32]); // = GroupPublicParams::get_group_identifier()
-
-pub struct GroupKey(GroupMasterKey); // wraps libsignal type
+// Newtype around zkgroup::GroupSecretParams / zkgroup::GroupPublicParams.
+pub struct GroupKey { ... }
 
 impl GroupKey {
     pub fn generate() -> Self;
     pub fn from_bytes(bytes: [u8; 32]) -> Self;
-    pub fn group_id(&self) -> GroupId;
+    pub fn to_bytes(&self) -> [u8; 32];
+    pub fn group_id(&self) -> GroupId;          // == GroupPublicParams::get_group_identifier()
     pub fn encrypt_state(&self, plaintext: &[u8]) -> Vec<u8>;
     pub fn decrypt_state(&self, ciphertext: &[u8]) -> Result<Vec<u8>>;
-    pub fn encrypt_member(&self, did: &Did) -> EncryptedMemberId;
-    // No `decrypt_member` today — clients recover DIDs from the encrypted
-    // state blob and re-run `encrypt_member` to match. If a use case emerges,
-    // adding one is a local change to the `DidStruct` encoding (§2.3); the
-    // server-side opacity property does not depend on its absence.
+    pub fn encrypt_member_id(&self, did: &str) -> UuidCiphertext;  // via Aci::from(UUID(did))
+    pub fn public_params(&self) -> GroupPublicParams;
 }
 
-pub struct AuthCredential(/* opaque */);
-pub struct AuthPresentation(/* opaque */);
+// 16-byte UUID derived from the DID; the value passed into zkgroup as Aci.
+// Lives in `crypto::groups` so server + client agree on the derivation.
+pub fn did_to_uuid(did: &str) -> uuid::Uuid;
+//     == SHA-256(b"actnet-did-to-uuid-v1" || did)[..16]
 
-impl AuthCredential {
-    pub fn from_response(/* server response */, did, redemption_time, server_pubkey) -> Result<Self>;
-    pub fn present(&self, server_pubkey: &ServerPublicKey, group_key: &GroupKey) -> AuthPresentation;
-}
+// Server params: thin wrapper around zkgroup::ServerSecretParams / ServerPublicParams.
+// No custom auth_credential_key any more — credentials use zkgroup's
+// generic_credential_key_pair via the public AuthCredentialWithPniZkcResponse API.
+pub struct ServerSecretParams(zkgroup::ServerSecretParams);
+pub struct ServerPublicParams(zkgroup::ServerPublicParams);
 
-// Server side, in the `server` crate, reaching into `crypto::groups::server`:
-pub fn issue_credential(server_secret: &ServerSecretParams, did: &Did, redemption_time: Timestamp) -> CredentialResponse;
-pub fn verify_presentation(server_secret: &ServerSecretParams, group_pubparams: &GroupPublicParams, p: &AuthPresentation, redemption_time: Timestamp) -> Result<()>;
+// Credentials are stock zkgroup types, re-exported:
+pub use zkgroup::auth::{
+    AuthCredentialWithPniZkc,
+    AuthCredentialWithPniZkcResponse,
+    AuthCredentialWithPniZkcPresentation,
+};
+pub use zkgroup::groups::UuidCiphertext as EncryptedMemberId;
 ```
+
+Server side, presentation verification uses `presentation.verify(&server_secret, redemption_time)` and reads `presentation.aci_ciphertext()` to get the `UuidCiphertext` for membership lookup.
+
+The `groups` module's interface to the rest of the system stays scheme-agnostic at the application layer (`encrypt_member_id` takes a `&str`, not an `Aci`), so a later MLS swap stays possible.
 
 `AuthCredentialDid` internals stay private to the module. `app-core` and `server` see only this scheme-agnostic API.
 
@@ -629,9 +655,9 @@ Tracked here for visibility; each needs an answer before Stage 5 is unblocked.
 
 Rough order, assuming the open questions above are answered:
 
-1. **[done]** Add `zkgroup` and `zkcredential` to the workspace; the workspace `[patch.crates-io]` rewrites `curve25519-dalek` 4.1.3 to Signal's fork (zkgroup requires it). `crypto::groups::ServerSecretParams` bundles `zkgroup::ServerSecretParams` *plus* a dedicated `zkcredential::credentials::CredentialKeyPair` for `AuthCredentialDid` — the latter is needed because zkgroup's internal `generic_credential_key_pair` is `pub(crate)` and inaccessible from outside the crate. Persisted on the homeserver via migration `010_groups.sql`'s prior `zkgroup_server_params` table, served at `GET /v1/groups/server-params`.
-2. **[done]** `crypto::groups::credentials` defines `DidStruct` (the DID-as-two-Ristretto-points attribute, see §2.3), `AuthCredentialDid`, `AuthCredentialDidResponse`, `AuthCredentialDidPresentation`, and `EncryptedMemberId`. Issue / receive / present / verify covered by unit tests including roundtrip, wrong-DID, wrong-redemption-time, non-day-aligned, wrong-group, wrong-server-key cases.
-3. **[done, partial]** `crypto::groups::GroupKey` wraps `GroupMasterKey`, derives `GroupSecretParams` and a `DidEncryptionDomain` key pair from the master key. Exposes `generate`/`from_bytes`/`to_bytes`/`group_id`/`encrypt_state`/`decrypt_state`/`public_params`/`encrypt_member_id(did)`. The DID-to-EMI mapping is one-way per §2.3 — `decrypt_member` is intentionally not exposed; clients resolve EMI → DID via the cleartext members list inside the encrypted state blob. `GroupPublicParams` (group_id + did_enc_public_key) is the public counterpart uploaded at create-group time and used server-side to verify presentations.
+1. **[done]** Add `zkgroup` and `zkcredential` to the workspace; the workspace `[patch.crates-io]` rewrites `curve25519-dalek` 4.1.3 to Signal's fork (zkgroup requires it). `crypto::groups::ServerSecretParams` / `ServerPublicParams` are thin newtypes around `zkgroup::ServerSecretParams` / `ServerPublicParams` — no custom credential key, since per §2.3 we use stock zkgroup auth credentials. Persisted on the homeserver via migration `010_groups.sql`'s `zkgroup_server_params` table, served at `GET /v1/groups/server-params`.
+2. **[done]** Auth credential issuance and verification use stock `zkgroup::auth::AuthCredentialWithPniZkc{Response, Presentation}`. The carried identity is `Aci::from(UUID(did))` for the primary attribute and `Pni::from(UUID(did))` for the secondary — same UUID bytes, distinct UidStructs because of the service-id-type tag. `crypto::groups::did_to_uuid(did) -> uuid::Uuid` provides the deterministic `SHA-256(b"actnet-did-to-uuid-v1" || did)[..16]` derivation; server and client agree on it. (History: an earlier `crypto::groups::credentials` module built a parallel DID-shaped scheme on `zkcredential` primitives; superseded by §2.3 option 1. See §2.4 for rationale.)
+3. **[done]** `crypto::groups::GroupKey` wraps `zkgroup::GroupSecretParams` directly. Exposes `generate`/`from_bytes`/`to_bytes`/`group_id`/`encrypt_state`/`decrypt_state`/`public_params`/`encrypt_member_id(did)`. `encrypt_member_id` returns a stock `zkgroup::groups::UuidCiphertext` (computed as `secret_params.encrypt_service_id(Aci::from(UUID(did)).into())`). `decrypt_member_id` is not exposed; clients resolve EMI → DID via the cleartext members list inside the encrypted state blob. `GroupPublicParams` is a thin wrapper around `zkgroup::GroupPublicParams` — the routing `group_id` plus uid-encryption public material, uploaded at create-group time and used server-side to verify presentations.
 4. **[done]** Server endpoints:
    - `GET /v1/groups/server-params` (public) — publish `ServerPublicParams`.
    - `POST /v1/groups` (session-auth) — founder uploads `GroupPublicParams`, initial encrypted state, their own admin row. 409 on duplicate `group_id`.

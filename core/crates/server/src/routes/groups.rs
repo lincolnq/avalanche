@@ -25,9 +25,10 @@ use axum::{
 };
 use base64::Engine as _;
 use crypto::groups::{
-    AuthCredentialDidPresentation, AuthCredentialDidResponse, EncryptedMemberId,
-    GroupPublicParams, RedemptionTime,
+    did_to_uuid, AuthCredentialWithPniZkcPresentation, AuthCredentialWithPniZkcResponse,
+    EncryptedMemberId, GroupPublicParams, RedemptionTime,
 };
+use libsignal_core::{Aci, Pni};
 use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +97,7 @@ async fn issue_credential(
     auth: AuthDevice,
     Json(body): Json<IssueCredentialRequest>,
 ) -> Result<Json<IssueCredentialResponse>, ServerError> {
-    let redemption = RedemptionTime::from_unix_seconds(body.redemption_time);
+    let redemption = RedemptionTime::from_epoch_seconds(body.redemption_time);
     if !redemption.is_day_aligned() {
         return Err(ServerError::BadRequest(
             "redemption_time must be day-aligned (multiple of 86400)".into(),
@@ -135,15 +136,15 @@ async fn issue_credential(
     }
 
     let randomness = fresh_randomness();
-    let response = AuthCredentialDidResponse::issue_credential(
-        &body.did,
+    let uuid = did_to_uuid(&body.did);
+    let response = AuthCredentialWithPniZkcResponse::issue_credential(
+        Aci::from(uuid),
+        Pni::from(uuid),
         redemption,
-        &state.zkgroup_secret,
+        state.zkgroup_secret.zkgroup(),
         randomness,
     );
-    let bytes = bincode::serialize(&response).map_err(|e| {
-        ServerError::Internal(format!("serialize AuthCredentialDidResponse: {e}"))
-    })?;
+    let bytes = zkgroup::serialize(&response);
     Ok(Json(IssueCredentialResponse {
         response: b64_encode(&bytes),
         redemption_time: body.redemption_time,
@@ -454,7 +455,7 @@ async fn submit_changes(
     drop(rate_conn);
 
     let (group, actor_emi) = authorize_member_or_pending(&state, &headers, &group_id_b64).await?;
-    let actor_emi_bytes = actor_emi.to_bytes();
+    let actor_emi_bytes = zkgroup::serialize(&actor_emi);
 
     let new_state = b64_decode(&body.new_encrypted_state, "new_encrypted_state")?;
     let action_classes = classify_actions(&body.actions)?;
@@ -558,7 +559,7 @@ async fn push_binding(
     let rotated = db::groups::rotate_member_pseudonym(
         &mut conn,
         &group.group_id,
-        &actor_emi.to_bytes(),
+        &zkgroup::serialize(&actor_emi),
         &new_pseudonym,
     )
     .await?;
@@ -586,8 +587,12 @@ async fn authorize_member(
 ) -> Result<(db::groups::Group, EncryptedMemberId), ServerError> {
     let (group, actor_emi) = authorize_presentation(state, headers, group_id_b64).await?;
     let mut conn = state.db.acquire().await?;
-    let role =
-        db::groups::member_role(&mut conn, &group.group_id, &actor_emi.to_bytes()).await?;
+    let role = db::groups::member_role(
+        &mut conn,
+        &group.group_id,
+        &zkgroup::serialize(&actor_emi),
+    )
+    .await?;
     if role.is_none() {
         // §3.4: fetch is membership-gated; presentation alone is not enough.
         return Err(ServerError::not_found_or_forbidden());
@@ -609,7 +614,7 @@ async fn authorize_member_or_pending_invite(
     group_id_b64: &str,
 ) -> Result<(db::groups::Group, EncryptedMemberId), ServerError> {
     let (group, actor_emi) = authorize_presentation(state, headers, group_id_b64).await?;
-    let emi_bytes = actor_emi.to_bytes();
+    let emi_bytes = zkgroup::serialize(&actor_emi);
     let mut conn = state.db.acquire().await?;
     if db::groups::member_role(&mut conn, &group.group_id, &emi_bytes)
         .await?
@@ -651,8 +656,8 @@ async fn authorize_presentation(
         .and_then(|v| v.to_str().ok())
         .ok_or(ServerError::Unauthorized)?;
     let pres_bytes = b64_decode(header, "X-Group-Auth")?;
-    let presentation: AuthCredentialDidPresentation = bincode::deserialize(&pres_bytes)
-        .map_err(|_| ServerError::Unauthorized)?;
+    let presentation: AuthCredentialWithPniZkcPresentation =
+        zkgroup::deserialize(&pres_bytes).map_err(|_| ServerError::Unauthorized)?;
 
     let mut conn = state.db.acquire().await?;
     let group = db::groups::get(&mut conn, &group_id)
@@ -663,10 +668,10 @@ async fn authorize_presentation(
 
     let today = day_aligned_now()?;
     presentation
-        .verify(&state.zkgroup_secret, &group_public, today)
+        .verify(state.zkgroup_secret.zkgroup(), group_public.zkgroup(), today)
         .map_err(|_| ServerError::Unauthorized)?;
 
-    Ok((group, presentation.encrypted_member_id()))
+    Ok((group, presentation.aci_ciphertext()))
 }
 
 // ── action-class classification and per-class eligibility ────────────────────
@@ -1005,7 +1010,7 @@ fn day_aligned_now() -> Result<RedemptionTime, ServerError> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ServerError::Internal("system time before epoch".into()))?
         .as_secs();
-    Ok(RedemptionTime::from_unix_seconds(now - (now % 86_400)))
+    Ok(RedemptionTime::from_epoch_seconds(now - (now % 86_400)))
 }
 
 fn validate_role_value(role: i16) -> Result<(), ServerError> {

@@ -23,6 +23,7 @@ store          = { path = "crates/store" }
 # Cryptography
 # Pinned to a specific commit for reproducible builds. Update deliberately.
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4c460615cdbe4ed53b23a5d1bf71493514bf2a80" }
+libsignal-core     = { git = "https://github.com/signalapp/libsignal", rev = "4c460615cdbe4ed53b23a5d1bf71493514bf2a80" }
 # zkgroup and zkcredential live in the same libsignal repo at the same pinned
 # commit; they're the anonymous-credential primitives used by action-bound
 # groups (see docs/03-groups.md).

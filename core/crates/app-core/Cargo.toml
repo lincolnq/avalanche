@@ -14,6 +14,8 @@ store              = { workspace = true }
 net                = { path = "../net" }
 base64             = { workspace = true }
 libsignal-protocol = { workspace = true }
+libsignal-core     = { workspace = true }
+zkgroup            = { workspace = true }
 rand               = { workspace = true }
 thiserror          = { workspace = true }
 uniffi             = { workspace = true, features = ["cli"] }
