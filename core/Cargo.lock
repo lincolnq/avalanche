@@ -3550,6 +3550,7 @@ dependencies = [
  "axum-extra",
  "base32",
  "base64 0.22.1",
+ "bincode",
  "bs58",
  "crypto",
  "dotenvy",
@@ -3575,6 +3576,7 @@ dependencies = [
  "tracing-subscriber",
  "types",
  "uuid",
+ "zkcredential",
 ]
 
 [[package]]

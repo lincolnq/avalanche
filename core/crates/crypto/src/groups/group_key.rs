@@ -139,11 +139,65 @@ impl GroupKey {
         &self.did_enc_key_pair
     }
 
-    /// The public half of the DID encryption key pair, used by the server to
-    /// verify presentations without learning member identities.
-    pub(crate) fn did_enc_public_key(&self) -> &DidEncryptionPublicKey {
-        &self.did_enc_key_pair.public_key
+    /// Bundle of the public values the server needs in order to verify
+    /// presentations against this group. Uploaded by the founder at
+    /// create-group time and stored server-side (see §3.2's
+    /// `group_public_params` column).
+    pub fn public_params(&self) -> GroupPublicParams {
+        GroupPublicParams {
+            group_id: self.group_id(),
+            did_enc_public_key: self.did_enc_key_pair.public_key,
+        }
     }
+}
+
+/// Server-visible public material for a group. Contains the routing
+/// `group_id` and the public half of the DID encryption key — everything
+/// needed to verify an `AuthCredentialDidPresentation` without learning any
+/// member's identity.
+#[derive(Clone)]
+pub struct GroupPublicParams {
+    group_id: GroupId,
+    did_enc_public_key: DidEncryptionPublicKey,
+}
+
+impl GroupPublicParams {
+    pub fn group_id(&self) -> GroupId {
+        self.group_id
+    }
+
+    pub(crate) fn did_enc_public_key(&self) -> &DidEncryptionPublicKey {
+        &self.did_enc_public_key
+    }
+
+    /// Encode for the wire — clients upload this at create-group time and
+    /// the server stores the bytes verbatim. Stable for a given pinned
+    /// libsignal commit.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let wire = GroupPublicParamsWire {
+            group_id: self.group_id.0,
+            did_enc_public_key: bincode::serialize(&self.did_enc_public_key)
+                .expect("serialize DidEncryptionPublicKey"),
+        };
+        bincode::serialize(&wire).expect("serialize GroupPublicParamsWire")
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        let wire: GroupPublicParamsWire =
+            bincode::deserialize(bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
+        let did_enc_public_key = bincode::deserialize(&wire.did_enc_public_key)
+            .map_err(|_| CryptoError::ZkgroupDeserialize)?;
+        Ok(Self {
+            group_id: GroupId(wire.group_id),
+            did_enc_public_key,
+        })
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GroupPublicParamsWire {
+    group_id: [u8; 32],
+    did_enc_public_key: Vec<u8>,
 }
 
 #[cfg(test)]

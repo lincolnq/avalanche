@@ -14,5 +14,5 @@ pub use credentials::{
     AuthCredentialDid, AuthCredentialDidPresentation, AuthCredentialDidResponse,
     EncryptedMemberId, RedemptionTime,
 };
-pub use group_key::{GroupId, GroupKey};
+pub use group_key::{GroupId, GroupKey, GroupPublicParams};
 pub use server_params::{ServerPublicParams, ServerSecretParams};

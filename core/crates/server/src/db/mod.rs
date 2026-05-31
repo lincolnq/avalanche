@@ -18,6 +18,7 @@ pub mod accounts;
 pub mod challenges;
 pub mod devices;
 pub mod did;
+pub mod groups;
 pub mod messages;
 pub mod prekeys;
 pub mod profiles;

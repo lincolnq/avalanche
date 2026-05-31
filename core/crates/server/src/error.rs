@@ -38,6 +38,9 @@ pub enum ServerError {
     #[error("rate limited")]
     RateLimited,
 
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 
@@ -66,6 +69,7 @@ impl IntoResponse for ServerError {
             ServerError::RateLimited => {
                 (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response()
             }
+            ServerError::Conflict(msg) => (StatusCode::CONFLICT, msg).into_response(),
             ServerError::Internal(msg) => {
                 tracing::error!("internal error: {msg}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()

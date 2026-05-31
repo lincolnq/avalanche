@@ -42,3 +42,33 @@ pub const LIMIT_AUTH_CHALLENGE: i32 = 60;
 pub const WINDOW_AUTH_CHALLENGE: i64 = 3600;
 pub const LIMIT_AUTH_TOKEN: i32 = 60;
 pub const WINDOW_AUTH_TOKEN: i64 = 3600;
+
+// ── Group endpoints ─────────────────────────────────────────────────────────
+
+// Per-account: group creation is cheap server-side but every legitimate user
+// only does it occasionally. Tight to deter abuse, loose enough that an
+// admin spinning up an event's worth of project subgroups isn't blocked.
+pub const ACTION_CREATE_GROUP: &str = "create_group";
+pub const LIMIT_CREATE_GROUP: i32 = 20;
+pub const WINDOW_CREATE_GROUP: i64 = 3600;
+
+// Per-account daily: credentials refresh once a day per account; the limit
+// has comfortable headroom for retries and multi-device. §3.9 rule 3
+// explicitly allows per-DID-per-day counters.
+pub const ACTION_ISSUE_GROUP_CREDENTIAL: &str = "issue_group_credential";
+pub const LIMIT_ISSUE_GROUP_CREDENTIAL: i32 = 20;
+pub const WINDOW_ISSUE_GROUP_CREDENTIAL: i64 = 86400;
+
+// Per-IP on the action-submission endpoint. Presentation-authenticated
+// actions don't bind to an account the server can rate-limit by — IP is the
+// only handle available. Generous because clients submit changes whenever
+// users edit groups, including rapid retry-on-conflict (§3.5).
+pub const ACTION_SUBMIT_GROUP_CHANGE: &str = "submit_group_change";
+pub const LIMIT_SUBMIT_GROUP_CHANGE: i32 = 240;
+pub const WINDOW_SUBMIT_GROUP_CHANGE: i64 = 60;
+
+// Per-IP on push-binding rotation. Clients call this on app launch / device
+// rotation, not in steady state.
+pub const ACTION_GROUP_PUSH_BINDING: &str = "group_push_binding";
+pub const LIMIT_GROUP_PUSH_BINDING: i32 = 60;
+pub const WINDOW_GROUP_PUSH_BINDING: i64 = 3600;

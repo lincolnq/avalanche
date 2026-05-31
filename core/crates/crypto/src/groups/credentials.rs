@@ -40,7 +40,7 @@ use zkcredential::presentation::{
 };
 
 use crate::error::CryptoError;
-use crate::groups::group_key::{DidEncryptionDomain, GroupKey};
+use crate::groups::group_key::{DidEncryptionDomain, GroupKey, GroupPublicParams};
 use crate::groups::server_params::{ServerPublicParams, ServerSecretParams};
 
 const CREDENTIAL_LABEL: &[u8] = b"Actnet_AuthCredentialDid_20260531";
@@ -281,23 +281,27 @@ impl AuthCredentialDidPresentation {
     pub fn verify(
         &self,
         params: &ServerSecretParams,
-        group: &GroupKey,
+        group_public: &GroupPublicParams,
         expected_redemption_time: RedemptionTime,
     ) -> Result<(), CryptoError> {
-        self.verify_for_key(params.auth_credential_key(), group, expected_redemption_time)
+        self.verify_for_key(
+            params.auth_credential_key(),
+            group_public,
+            expected_redemption_time,
+        )
     }
 
     fn verify_for_key(
         &self,
         key: &CredentialKeyPair,
-        group: &GroupKey,
+        group_public: &GroupPublicParams,
         expected_redemption_time: RedemptionTime,
     ) -> Result<(), CryptoError> {
         if self.redemption_time != expected_redemption_time {
             return Err(CryptoError::InvalidCiphertext);
         }
         PresentationProofVerifier::new(CREDENTIAL_LABEL)
-            .add_attribute(&self.member_id_ciphertext, group.did_enc_public_key())
+            .add_attribute(&self.member_id_ciphertext, group_public.did_enc_public_key())
             .add_public_attribute(&self.redemption_time)
             .verify(key, &self.proof)
             .map_err(|_| CryptoError::InvalidCiphertext)
@@ -339,7 +343,7 @@ mod tests {
             AuthCredentialDidResponse::issue_credential(did, t, &server, fixed_randomness(1));
         let credential = response.receive(did, t, &public).expect("receive ok");
         let presentation = credential.present(&public, &group, fixed_randomness(2));
-        presentation.verify(&server, &group, t).expect("verify ok");
+        presentation.verify(&server, &group.public_params(), t).expect("verify ok");
     }
 
     #[test]
@@ -459,7 +463,7 @@ mod tests {
             AuthCredentialDidResponse::issue_credential(did, t, &server, fixed_randomness(14));
         let cred = response.receive(did, t, &public).unwrap();
         let presentation = cred.present(&public, &g1, fixed_randomness(15));
-        assert!(presentation.verify(&server, &g2, t).is_err());
+        assert!(presentation.verify(&server, &g2.public_params(), t).is_err());
     }
 
     #[test]
@@ -475,7 +479,7 @@ mod tests {
         let cred = response.receive(did, t, &public).unwrap();
         let presentation = cred.present(&public, &group, fixed_randomness(17));
         // Server expected a different day → reject.
-        assert!(presentation.verify(&server, &group, day(20_001)).is_err());
+        assert!(presentation.verify(&server, &group.public_params(), day(20_001)).is_err());
     }
 
     #[test]
@@ -492,6 +496,6 @@ mod tests {
         let cred = response.receive(did, t, &public).unwrap();
         let presentation = cred.present(&public, &group, fixed_randomness(19));
         // A different server can't validate a credential issued by server_a.
-        assert!(presentation.verify(&server_b, &group, t).is_err());
+        assert!(presentation.verify(&server_b, &group.public_params(), t).is_err());
     }
 }

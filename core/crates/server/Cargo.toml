@@ -8,8 +8,10 @@ name = "avalanche-server"
 path = "src/main.rs"
 
 [dependencies]
-types    = { workspace = true }
-crypto   = { workspace = true }
+types        = { workspace = true }
+crypto       = { workspace = true }
+zkcredential = { workspace = true }
+bincode      = { workspace = true }
 
 axum        = { workspace = true }
 axum-extra  = { workspace = true }
@@ -41,6 +43,8 @@ protoc-bin-vendored = "3.0"
 
 [dev-dependencies]
 crypto               = { workspace = true }
+zkcredential         = { workspace = true }
+bincode              = { workspace = true }
 tokio                = { workspace = true }
 sqlx                 = { workspace = true }
 serde_json           = { workspace = true }
