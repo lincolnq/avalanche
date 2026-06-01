@@ -37,12 +37,16 @@ fn b64d(s: &str) -> Result<Vec<u8>, NetError> {
 pub struct GroupServerParams {
     pub version: i32,
     pub params: Vec<u8>,
+    /// Sender-cert chain trust-root public key — pinned by the client to
+    /// validate sender certs in the sealed-sender group flow.
+    pub sender_cert_trust_root: Vec<u8>,
 }
 
 #[derive(Deserialize)]
 struct GroupServerParamsRaw {
     version: i32,
     params: String,
+    sender_cert_trust_root: String,
 }
 
 // ── credentials ─────────────────────────────────────────────────────────
@@ -51,12 +55,33 @@ struct GroupServerParamsRaw {
 pub struct IssuedGroupCredential {
     pub bytes: Vec<u8>,
     pub redemption_time: u64,
+    /// Serialized libsignal `SenderCertificate` valid through
+    /// `sender_cert_expires_at_unix_millis`. Embedded in the sealed-sender
+    /// envelope on every outgoing group message.
+    pub sender_cert: Vec<u8>,
+    pub sender_cert_expires_at_unix_millis: u64,
 }
 
 #[derive(Deserialize)]
 struct IssueCredentialRaw {
     response: String,
     redemption_time: u64,
+    sender_cert: String,
+    sender_cert_expires_at: u64,
+}
+
+// ── endorsements ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GroupEndorsements {
+    pub response: Vec<u8>,
+    pub expiration_unix_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct GroupEndorsementsRaw {
+    response: String,
+    expiration_unix_seconds: u64,
 }
 
 // ── create group ────────────────────────────────────────────────────────
@@ -234,6 +259,7 @@ impl Client {
         Ok(GroupServerParams {
             version: raw.version,
             params: b64d(&raw.params)?,
+            sender_cert_trust_root: b64d(&raw.sender_cert_trust_root)?,
         })
     }
 
@@ -256,6 +282,31 @@ impl Client {
         Ok(IssuedGroupCredential {
             bytes: b64d(&raw.response)?,
             redemption_time: raw.redemption_time,
+            sender_cert: b64d(&raw.sender_cert)?,
+            sender_cert_expires_at_unix_millis: raw.sender_cert_expires_at,
+        })
+    }
+
+    /// Fetch the per-group endorsement bundle (one MAC over the whole
+    /// member set). Caller validates and per-member-slices it via
+    /// `crypto::groups::endorsements::receive_endorsements`.
+    pub async fn get_group_endorsements(
+        &self,
+        group_id_b64: &str,
+        presentation: &[u8],
+    ) -> Result<GroupEndorsements, NetError> {
+        let url = format!(
+            "{}/v1/groups/{}/endorsements",
+            self.server_url(),
+            group_id_b64,
+        );
+        let resp = self
+            .presentation_request(reqwest::Method::GET, &url, presentation, None)
+            .await?;
+        let raw: GroupEndorsementsRaw = check_json(resp).await?;
+        Ok(GroupEndorsements {
+            response: b64d(&raw.response)?,
+            expiration_unix_seconds: raw.expiration_unix_seconds,
         })
     }
 

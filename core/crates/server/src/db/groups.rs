@@ -273,6 +273,27 @@ pub async fn member_role(
     Ok(row.map(|r| r.get::<i16, _>("role")))
 }
 
+/// List every active member's encrypted_member_id for `group_id`. Used by
+/// the endorsement-issuance endpoint, which MACs the whole member set into
+/// the `GroupSendEndorsementsResponse`. Order is unspecified — zkgroup
+/// canonicalizes internally — but stable per call (sorted by EMI bytes).
+pub async fn list_member_encrypted_ids(
+    conn: &mut PgConnection,
+    group_id: &[u8],
+) -> Result<Vec<Vec<u8>>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT encrypted_member_id FROM member_credentials \
+         WHERE group_id = $1 ORDER BY encrypted_member_id",
+    )
+    .bind(group_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| r.get::<Vec<u8>, _>("encrypted_member_id"))
+        .collect())
+}
+
 /// Look up the active member's push pseudonym. Used by the websocket
 /// subscribe path and by group send fan-out.
 pub async fn member_pseudonym(

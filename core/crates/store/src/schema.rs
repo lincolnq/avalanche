@@ -160,21 +160,28 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         created_at                  INTEGER NOT NULL\
     )",
     // Cached daily zkgroup credential, one per (server_url, did,
-    // redemption_time). `bytes` is bincode-serialized `AuthCredentialDid`.
-    // Old rows can be pruned by redemption_time.
+    // redemption_time). `bytes` is the serialized `AuthCredentialWithPniZkc`.
+    // `sender_cert` is the libsignal SenderCertificate the server minted
+    // alongside the credential — same expiration class, so it lives in the
+    // same row. Old rows can be pruned by redemption_time.
     "CREATE TABLE IF NOT EXISTS group_credentials (\
-        server_url       TEXT    NOT NULL,\
-        did              TEXT    NOT NULL,\
-        redemption_time  INTEGER NOT NULL,\
-        bytes            BLOB    NOT NULL,\
+        server_url                       TEXT    NOT NULL,\
+        did                              TEXT    NOT NULL,\
+        redemption_time                  INTEGER NOT NULL,\
+        bytes                            BLOB    NOT NULL,\
+        sender_cert                      BLOB    NOT NULL,\
+        sender_cert_expires_at           INTEGER NOT NULL,\
         PRIMARY KEY (server_url, did, redemption_time)\
     )",
     // Cached server_params per homeserver. Populated lazily on first use.
+    // `sender_cert_trust_root` is the curve25519 pubkey we pin to validate
+    // sender certs in the sealed-sender group flow.
     "CREATE TABLE IF NOT EXISTS group_server_params (\
-        server_url   TEXT    PRIMARY KEY,\
-        version      INTEGER NOT NULL,\
-        bytes        BLOB    NOT NULL,\
-        fetched_at   INTEGER NOT NULL\
+        server_url              TEXT    PRIMARY KEY,\
+        version                 INTEGER NOT NULL,\
+        bytes                   BLOB    NOT NULL,\
+        sender_cert_trust_root  BLOB    NOT NULL,\
+        fetched_at              INTEGER NOT NULL\
     )",
     // libsignal SenderKeyStore. Each row holds one sender's SenderKeyRecord
     // for one (group-derived) distribution_id. `address` is the

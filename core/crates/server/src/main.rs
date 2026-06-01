@@ -13,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use crypto::groups::ServerSecretParams;
+use crypto::sender_cert::SenderCertChain;
 use server::{config::Config, db, routes, state::AppState, tasks};
 
 #[tokio::main]
@@ -64,22 +65,37 @@ async fn main() {
 
     tracing::info!(bind = %config.bind_addr, "starting server");
 
-    // Load (or generate-and-persist on first boot) the homeserver's zkgroup
-    // signing key. Failure here is fatal: without it we can't issue group
-    // credentials. See docs/03-groups.md §2.1.
-    let zkgroup_secret = {
+    // Load (or generate-and-persist on first boot) the homeserver's group
+    // crypto bundle (zkgroup signing key + sender-cert chain). Failure here
+    // is fatal: without it we can't issue group credentials or sign sender
+    // certs. See docs/03-groups.md §2.1.
+    let (zkgroup_secret, sender_cert_chain) = {
         let mut conn = pool.acquire().await.expect("failed to acquire db connection");
         let bytes = db::zkgroup_params::load_or_init(
             &mut conn,
             db::zkgroup_params::CURRENT_VERSION,
-            || ServerSecretParams::generate().to_bytes(),
+            || {
+                let bundle = db::zkgroup_params::GroupCryptoBundle {
+                    zkgroup_secret: ServerSecretParams::generate().to_bytes(),
+                    sender_cert_chain: SenderCertChain::generate()
+                        .expect("failed to generate sender cert chain")
+                        .to_bytes(),
+                };
+                bundle.to_bytes()
+            },
         )
         .await
-        .expect("failed to load zkgroup server params");
-        ServerSecretParams::from_bytes(&bytes).expect("stored zkgroup params are corrupt")
+        .expect("failed to load group crypto bundle");
+        let bundle = db::zkgroup_params::GroupCryptoBundle::from_bytes(&bytes)
+            .expect("stored group crypto bundle is corrupt");
+        let zk = ServerSecretParams::from_bytes(&bundle.zkgroup_secret)
+            .expect("stored zkgroup params are corrupt");
+        let chain = SenderCertChain::from_bytes(&bundle.sender_cert_chain)
+            .expect("stored sender cert chain is corrupt");
+        (zk, chain)
     };
 
-    let state = AppState::new(pool, config.clone(), zkgroup_secret);
+    let state = AppState::new(pool, config.clone(), zkgroup_secret, sender_cert_chain);
     tasks::spawn_all(state.clone());
     let app = routes::router()
         .with_state(state)

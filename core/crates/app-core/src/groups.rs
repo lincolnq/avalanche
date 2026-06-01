@@ -173,15 +173,16 @@ pub enum JoinResult {
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
-/// Fetch and cache the server's zkgroup public params, reusing the local
-/// cached copy if its `version` matches what the server advertises.
+/// Fetch and cache the server's zkgroup public params + sender-cert trust
+/// root, reusing the local cached copy if its `version` matches what the
+/// server advertises.
 pub async fn ensure_server_params(
     store: &store::Store,
     client: &net::Client,
     server_url: &str,
 ) -> Result<ServerPublicParams, AppError> {
     let fresh = client.get_group_server_params().await?;
-    if let Some((cached_version, cached_bytes)) =
+    if let Some((cached_version, cached_bytes, _trust_root)) =
         store.load_group_server_params(server_url).await?
     {
         if cached_version == fresh.version && cached_bytes == fresh.params {
@@ -189,9 +190,34 @@ pub async fn ensure_server_params(
         }
     }
     store
-        .save_group_server_params(server_url, fresh.version, &fresh.params)
+        .save_group_server_params(
+            server_url,
+            fresh.version,
+            &fresh.params,
+            &fresh.sender_cert_trust_root,
+        )
         .await?;
     Ok(ServerPublicParams::from_bytes(&fresh.params)?)
+}
+
+/// Load the pinned sender-cert trust-root public key for a given homeserver,
+/// populating the cache via [`ensure_server_params`] if it isn't there yet.
+/// Used by the sealed-sender group decrypt path to validate sender certs.
+pub async fn load_sender_cert_trust_root(
+    store: &store::Store,
+    client: &net::Client,
+    server_url: &str,
+) -> Result<Vec<u8>, AppError> {
+    if let Some((_v, _bytes, trust_root)) = store.load_group_server_params(server_url).await? {
+        return Ok(trust_root);
+    }
+    // Cold cache — populate it.
+    let _ = ensure_server_params(store, client, server_url).await?;
+    let (_v, _bytes, trust_root) = store
+        .load_group_server_params(server_url)
+        .await?
+        .expect("just populated cache");
+    Ok(trust_root)
 }
 
 /// Fetch today's credential (or reuse a cached one). Uses stock
@@ -210,7 +236,9 @@ pub async fn ensure_credential(
     let pni = Pni::from(uuid);
     let redemption = RedemptionTime::from_epoch_seconds(today);
 
-    if let Some(bytes) = store.load_group_credential(server_url, did, today).await? {
+    if let Some((bytes, _sender_cert, _exp)) =
+        store.load_group_credential(server_url, did, today).await?
+    {
         if let Ok(cred) = zkgroup::deserialize::<AuthCredentialWithPniZkc>(&bytes) {
             return Ok(cred);
         }
@@ -223,7 +251,14 @@ pub async fn ensure_credential(
         .map_err(|_| AppError::Protocol("credential response verification failed".into()))?;
     let cred_bytes = zkgroup::serialize(&cred);
     store
-        .save_group_credential(server_url, did, today, &cred_bytes)
+        .save_group_credential(
+            server_url,
+            did,
+            today,
+            &cred_bytes,
+            &issued.sender_cert,
+            issued.sender_cert_expires_at_unix_millis,
+        )
         .await?;
     // Drop yesterday's leftovers opportunistically.
     let _ = store.prune_group_credentials(today.saturating_sub(2 * DAY)).await;

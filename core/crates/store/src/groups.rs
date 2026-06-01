@@ -244,17 +244,27 @@ impl Store {
         did: &str,
         redemption_time: u64,
         bytes: &[u8],
+        sender_cert: &[u8],
+        sender_cert_expires_at_unix_millis: u64,
     ) -> Result<(), StoreError> {
         let server_url = server_url.to_string();
         let did = did.to_string();
         let bytes = bytes.to_vec();
+        let sender_cert = sender_cert.to_vec();
         self.conn
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO group_credentials \
-                       (server_url, did, redemption_time, bytes) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![server_url, did, redemption_time as i64, bytes],
+                       (server_url, did, redemption_time, bytes, sender_cert, sender_cert_expires_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        server_url,
+                        did,
+                        redemption_time as i64,
+                        bytes,
+                        sender_cert,
+                        sender_cert_expires_at_unix_millis as i64,
+                    ],
                 )?;
                 Ok(())
             })
@@ -262,21 +272,28 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+    /// Returns `(credential_bytes, sender_cert_bytes, sender_cert_expires_at_unix_millis)`.
     pub async fn load_group_credential(
         &self,
         server_url: &str,
         did: &str,
         redemption_time: u64,
-    ) -> Result<Option<Vec<u8>>, StoreError> {
+    ) -> Result<Option<(Vec<u8>, Vec<u8>, u64)>, StoreError> {
         let server_url = server_url.to_string();
         let did = did.to_string();
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT bytes FROM group_credentials \
+                    "SELECT bytes, sender_cert, sender_cert_expires_at FROM group_credentials \
                        WHERE server_url = ?1 AND did = ?2 AND redemption_time = ?3",
                     rusqlite::params![server_url, did, redemption_time as i64],
-                    |row| row.get::<_, Vec<u8>>(0),
+                    |row| {
+                        Ok((
+                            row.get::<_, Vec<u8>>(0)?,
+                            row.get::<_, Vec<u8>>(1)?,
+                            row.get::<_, i64>(2)? as u64,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(Into::into)
@@ -310,17 +327,19 @@ impl Store {
         server_url: &str,
         version: i32,
         bytes: &[u8],
+        sender_cert_trust_root: &[u8],
     ) -> Result<(), StoreError> {
         let server_url = server_url.to_string();
         let bytes = bytes.to_vec();
+        let trust_root = sender_cert_trust_root.to_vec();
         let fetched_at = Timestamp::now().as_millis();
         self.conn
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO group_server_params \
-                       (server_url, version, bytes, fetched_at) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![server_url, version, bytes, fetched_at],
+                       (server_url, version, bytes, sender_cert_trust_root, fetched_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![server_url, version, bytes, trust_root, fetched_at],
                 )?;
                 Ok(())
             })
@@ -331,14 +350,21 @@ impl Store {
     pub async fn load_group_server_params(
         &self,
         server_url: &str,
-    ) -> Result<Option<(i32, Vec<u8>)>, StoreError> {
+    ) -> Result<Option<(i32, Vec<u8>, Vec<u8>)>, StoreError> {
         let server_url = server_url.to_string();
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT version, bytes FROM group_server_params WHERE server_url = ?1",
+                    "SELECT version, bytes, sender_cert_trust_root FROM group_server_params \
+                     WHERE server_url = ?1",
                     rusqlite::params![server_url],
-                    |row| Ok((row.get::<_, i32>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, i32>(0)?,
+                            row.get::<_, Vec<u8>>(1)?,
+                            row.get::<_, Vec<u8>>(2)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(Into::into)

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
 use crypto::groups::ServerSecretParams;
+use crypto::sender_cert::SenderCertChain;
 
 use crate::config::Config;
 
@@ -61,15 +62,25 @@ pub struct AppState {
     /// in memory thereafter. Used to issue auth credentials and group send
     /// endorsements; never transmitted off the server.
     pub zkgroup_secret: Arc<ServerSecretParams>,
+    /// The homeserver's sender-cert chain, loaded once at startup. Used to
+    /// sign per-message `SenderCertificate`s in the sealed-sender group
+    /// flow. Trust root pubkey is published via `/v1/groups/server-params`.
+    pub sender_cert_chain: Arc<SenderCertChain>,
 }
 
 impl AppState {
-    pub fn new(db: sqlx::PgPool, config: Config, zkgroup_secret: ServerSecretParams) -> Self {
+    pub fn new(
+        db: sqlx::PgPool,
+        config: Config,
+        zkgroup_secret: ServerSecretParams,
+        sender_cert_chain: SenderCertChain,
+    ) -> Self {
         Self {
             db,
             config,
             ws_connections: Arc::new(RwLock::new(HashMap::new())),
             zkgroup_secret: Arc::new(zkgroup_secret),
+            sender_cert_chain: Arc::new(sender_cert_chain),
         }
     }
 }

@@ -25,8 +25,8 @@ use axum::{
 };
 use base64::Engine as _;
 use crypto::groups::{
-    did_to_uuid, AuthCredentialWithPniZkcPresentation, AuthCredentialWithPniZkcResponse,
-    EncryptedMemberId, GroupPublicParams, RedemptionTime,
+    did_to_uuid, endorsements as group_endorsements, AuthCredentialWithPniZkcPresentation,
+    AuthCredentialWithPniZkcResponse, EncryptedMemberId, GroupPublicParams, RedemptionTime,
 };
 use libsignal_core::{Aci, Pni};
 use rand::TryRngCore;
@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/groups/credentials", post(issue_credential))
         .route("/v1/groups", post(create_group))
         .route("/v1/groups/{group_id}", get(get_group))
+        .route("/v1/groups/{group_id}/endorsements", get(get_endorsements))
         .route("/v1/groups/{group_id}/changes", get(get_changes))
         .route("/v1/groups/{group_id}/changes", post(submit_changes))
         .route("/v1/groups/{group_id}/push_binding", post(push_binding))
@@ -55,14 +56,21 @@ pub fn routes() -> Router<AppState> {
 #[derive(Serialize)]
 struct ServerParamsResponse {
     version: i32,
+    /// URL-safe base64 of the zkgroup `ServerPublicParams`.
     params: String,
+    /// URL-safe base64 of the sender-cert chain trust-root public key,
+    /// pinned by clients to validate sender certs in the sealed-sender
+    /// group flow. See `crypto::sender_cert`.
+    sender_cert_trust_root: String,
 }
 
 async fn get_server_params(State(state): State<AppState>) -> Json<ServerParamsResponse> {
     let bytes = state.zkgroup_secret.public_params().to_bytes();
+    let trust_root = state.sender_cert_chain.trust_root_public_bytes();
     Json(ServerParamsResponse {
         version: db::zkgroup_params::CURRENT_VERSION,
         params: b64_encode(&bytes),
+        sender_cert_trust_root: b64_encode(&trust_root),
     })
 }
 
@@ -90,6 +98,13 @@ struct IssueCredentialRequest {
 struct IssueCredentialResponse {
     response: String,
     redemption_time: u64,
+    /// Per-device sender certificate, valid through the day after
+    /// `redemption_time`. Embedded in the sealed-sender envelope for any
+    /// group message the client sends during that window.
+    sender_cert: String,
+    /// Unix millis at which `sender_cert` expires. Clients refresh before
+    /// hitting this.
+    sender_cert_expires_at: u64,
 }
 
 async fn issue_credential(
@@ -145,9 +160,27 @@ async fn issue_credential(
         randomness,
     );
     let bytes = zkgroup::serialize(&response);
+
+    // Mint a sender certificate for this device, valid for ~2 days from
+    // `redemption_time` so clients have a comfortable refresh window. The
+    // device's identity_key (libsignal 33-byte serialization) was uploaded
+    // at registration time.
+    let sender_cert_expires_at_ms = (body.redemption_time + 2 * 86_400) * 1_000;
+    let sender_cert_bytes = state
+        .sender_cert_chain
+        .issue_sender_cert(
+            &body.did,
+            device.device_id as u32,
+            &device.identity_key,
+            sender_cert_expires_at_ms,
+        )
+        .map_err(|e| ServerError::Internal(format!("issue sender cert: {e}")))?;
+
     Ok(Json(IssueCredentialResponse {
         response: b64_encode(&bytes),
         redemption_time: body.redemption_time,
+        sender_cert: b64_encode(&sender_cert_bytes),
+        sender_cert_expires_at: sender_cert_expires_at_ms,
     }))
 }
 
@@ -279,6 +312,43 @@ async fn get_group(
         encrypted_state: b64_encode(&group.encrypted_state),
         group_public_params: b64_encode(&group.group_public_params),
         policy: policy_to_wire(&group.policy),
+    }))
+}
+
+// ── GET /v1/groups/{id}/endorsements (presentation-auth) ─────────────────────
+
+#[derive(Serialize)]
+struct EndorsementsResponse {
+    /// Serialized `GroupSendEndorsementsResponse` covering every active
+    /// member's EMI for this group; URL-safe base64.
+    response: String,
+    /// Day-aligned expiration in Unix seconds. Clients refresh before this.
+    expiration_unix_seconds: u64,
+}
+
+async fn get_endorsements(
+    State(state): State<AppState>,
+    Path(group_id_b64): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<EndorsementsResponse>, ServerError> {
+    // Pending-invites don't get endorsements — they can't send yet.
+    let (group, _actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let mut conn = state.db.acquire().await?;
+    let member_emis = db::groups::list_member_encrypted_ids(&mut conn, &group.group_id).await?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_secs();
+    let expiration = group_endorsements::default_expiration_unix_seconds(now);
+    let response_bytes = group_endorsements::issue_endorsements(
+        state.zkgroup_secret.as_ref(),
+        &member_emis,
+        expiration,
+    )
+    .map_err(|e| ServerError::Internal(format!("issue endorsements: {e}")))?;
+    Ok(Json(EndorsementsResponse {
+        response: b64_encode(&response_bytes),
+        expiration_unix_seconds: expiration,
     }))
 }
 
