@@ -130,6 +130,80 @@ pub use zkgroup::auth::{
 pub use zkgroup::groups::UuidCiphertext as EncryptedMemberId;
 ```
 
+Sealed-sender-related modules added in step 6 PR 2 (see §3.11 for the
+threat model and §5 step 6 for the full landed surface):
+
+```rust
+// Canonical libsignal ServiceId string for a DID — used everywhere we
+// need a `ProtocolAddress.name()`. Migration: identity + session store
+// are keyed on this string, not on the DID. The sealed-sender wire
+// format requires it (libsignal parses the name as a ServiceId).
+pub fn did_to_service_id_string(did: &str) -> String;
+//     == Aci::from(did_to_uuid(did)).service_id_string()
+
+// Server-side sender-certificate chain: trust_root + ServerCertificate
+// (single-key shape: trust_root == ServerCertificate leaf, key_id=1).
+// Generated once at first boot, persisted alongside ServerSecretParams
+// in the `GroupCryptoBundle` (version 3) row. Used by the homeserver to
+// mint per-(DID, day) SenderCertificates at credential-refresh time.
+pub mod sender_cert {
+    pub struct SenderCertChain { /* private */ }
+    impl SenderCertChain {
+        pub fn generate() -> Result<Self>;
+        pub fn to_bytes(&self) -> Vec<u8>;
+        pub fn from_bytes(b: &[u8]) -> Result<Self>;
+        pub fn trust_root_public_bytes(&self) -> Vec<u8>;
+        pub fn issue_sender_cert(
+            &self, did: &str, device_id: u32,
+            identity_key: &[u8], expiration_unix_millis: u64,
+        ) -> Result<Vec<u8>>;
+    }
+    pub struct SenderCertInfo {
+        pub sender_did: String, pub sender_device_id: u32,
+        pub identity_key_pub: Vec<u8>, pub expiration_unix_millis: u64,
+    }
+    pub fn validate_sender_cert(
+        cert_bytes: &[u8], trust_root_pub: &[u8],
+        validation_time_unix_millis: u64,
+    ) -> Result<SenderCertInfo>;
+}
+
+// SSv2 multi-recipient sealed-sender envelope wrappers.
+pub mod sealed_sender {
+    pub async fn encrypt_group_envelope<S: Store>(
+        store: &mut S, sender_cert_bytes: &[u8],
+        group_id: Option<Vec<u8>>, sender_key_ciphertext: &[u8],
+        destinations: &[ProtocolAddress],   // names = ServiceId strings
+    ) -> Result<Vec<u8>>;
+    pub fn parse_sent_message(bytes: &[u8]) -> Result<Vec<RecipientFanout>>;
+    pub async fn decrypt_envelope_to_usmc<S: Store>(
+        store: &mut S, envelope: &[u8],
+    ) -> Result<DecryptedEnvelope>;
+}
+
+// Group send endorsements (zkgroup::groups::GroupSend* wrappers).
+pub mod groups::endorsements {
+    pub fn default_expiration_unix_seconds(now_unix_seconds: u64) -> u64;
+    pub fn issue_endorsements(
+        server_secret: &ServerSecretParams,
+        member_ciphertext_bytes: &[Vec<u8>], expiration_unix_seconds: u64,
+    ) -> Result<Vec<u8>>;
+    pub fn receive_endorsements(
+        response_bytes: &[u8], member_dids: &[String],
+        group_key: &GroupKey, server_public: &ServerPublicParams,
+        now_unix_seconds: u64,
+    ) -> Result<Vec<Vec<u8>>>;
+    pub fn token_for_recipients(
+        endorsement_bytes: &[Vec<u8>], group_key: &GroupKey,
+        expiration_unix_seconds: u64,
+    ) -> Result<Vec<u8>>;
+    pub fn verify_token_for_service_ids(
+        token_bytes: &[u8], recipient_service_ids: &[ServiceId],
+        server_secret: &ServerSecretParams, now_unix_seconds: u64,
+    ) -> Result<()>;
+}
+```
+
 Server side, presentation verification uses `presentation.verify(&server_secret, redemption_time)` and reads `presentation.aci_ciphertext()` to get the `UuidCiphertext` for membership lookup.
 
 The `groups` module's interface to the rest of the system stays scheme-agnostic at the application layer (`encrypt_member_id` takes a `&str`, not an `Aci`), so a later MLS swap stays possible.
@@ -526,36 +600,48 @@ When Alice sends a message to a group, we want the server to validate "this is a
 The wire-level message is a **multi-recipient sealed-sender envelope** built with libsignal's `sealed_sender_multi_recipient_encrypt`. Construction:
 
 1. Sender encrypts the plaintext once with the group's **Sender Key** (see §6 for the Sender Keys mechanism — used both for casual cross-server groups and for action-bound groups' message content).
-2. Sender wraps the Sender Key ciphertext inside an `UnidentifiedSenderMessage` that contains a **sender certificate** (`SenderCertificate` from `rust/protocol/src/proto/sealed_sender.proto`). The cert is signed by the homeserver's `ServerSecretParams` and attests "this identity key has a valid account here, valid until day D."
-3. Sender calls `sealed_sender_multi_recipient_encrypt` with the recipient list. Output: a single packed envelope with one slot per recipient device. Each slot is encrypted to that device's identity key; only that device can decrypt to obtain the sender cert + Sender Key ciphertext inside.
+2. Sender wraps the Sender Key ciphertext inside an `UnidentifiedSenderMessage` that contains a **sender certificate** (libsignal's `SenderCertificate`). The cert is signed by the homeserver's **sender-cert chain** — a long-term trust-root keypair plus a self-signed `ServerCertificate` (single-key shape: `trust_root == ServerCertificate` leaf, `key_id = 1`) generated once at first boot and persisted alongside `ServerSecretParams` in the v3 `GroupCryptoBundle` row. The trust-root *public* half is published on `GET /v1/groups/server-params` (field `sender_cert_trust_root`), pinned by every client on first contact. Each cert binds `(did, device_id, identity_key, expiration)` and is minted at credential-refresh time (§3.11 "Daily credential refresh"); expiration is `redemption_time + 2 days`.
+3. Sender calls `sealed_sender_multi_recipient_encrypt` with one `ProtocolAddress` per (recipient, device). The `ProtocolAddress` name **must** be a parseable `ServiceId` string, so all identity + session-store entries are keyed on `Aci::from(did_to_uuid(did)).service_id_string()` rather than the raw DID — this is a project-wide convention enforced in app-core at every `DeviceAddress` / `ProtocolAddress` construction site. Output: a single packed envelope with one slot per recipient device. Each slot is encrypted to that device's identity key; only that device can decrypt to obtain the sender cert + Sender Key ciphertext inside.
 
-The server can route the envelope and apply per-slot delivery without ever decrypting it. Recipients verify the sender cert is signed by `ServerSecretParams` (proves the sender is a real account on the homeserver) and then decrypt the Sender Key ciphertext (proves the sender is a member of the group, because they hold the Sender Key).
+The server can route the envelope and apply per-slot delivery without ever decrypting it. Recipients verify the sender cert chains to the pinned trust root (`crypto::sender_cert::validate_sender_cert`), then `sender_keys::group_decrypt` the inner ciphertext (proves the sender is a member of the group, because they hold the Sender Key).
 
 #### Layer 2: the request endpoint
 
-Group sends use a **dedicated endpoint that does not accept session credentials**. The request authenticates with `GroupSendFullToken`s (zkgroup endorsements) — one per recipient — not with the user's session bearer:
+Group sends use a **dedicated endpoint that does not accept session credentials**. The request authenticates with a single `GroupSendFullToken` covering the entire recipient set (not one per recipient — combining endorsements via `endorsements::token_for_recipients` produces a single token over the sum) — not with the user's session bearer:
 
 ```
 POST /v1/groups/{group_id}/send
 Headers:
-  Content-Type: application/x-protobuf
+  Content-Type: application/json
   (no Authorization header)
-Body (proto):
-  envelope:    bytes                    // multi-recipient sealed-sender envelope from layer 1
-  recipients:  [{
-    encrypted_member_id: EncryptedMemberId,   // see §2.3, §3.2
-    send_token:          GroupSendFullToken,
+Body:
+  envelope:   base64                  // SSv2 SentMessage from layer 1
+  token:      base64                  // GroupSendFullToken over the recipient ServiceId set
+  recipients: [{
+    service_id_fixed_width: base64    // 17-byte fixed-width-binary, as embedded in `envelope`
+    encrypted_member_id:    base64    // sender computes from recipient DID + group key
   }, ...]
+  expiry_secs: int64 (optional)
 ```
 
 Server processing:
 
-1. For each recipient slot: verify `send_token` was issued by `ServerSecretParams` for this group, hasn't expired, and is bound to `encrypted_member_id`. Reject the slot (not the whole envelope) on failure.
-2. For each accepted slot: look up `encrypted_member_id → group_push_pseudonym` in `member_credentials`. Enqueue the slot for that recipient device.
-3. Deliver each enqueued slot per §3.7's delivery rules: WebSocket push to currently-subscribed recipients, relay wakeup (APNs/FCM) for everyone else.
-4. **Discard request metadata.** Do not log source IP, TLS session ID, or any other connection identifier beyond what's needed for the request's own processing. The endpoint's access log records only the group ID, recipient count, and response status — never anything that could identify the sender.
+1. **Parse the envelope** with `SealedSenderV2SentMessage::parse` (via `crypto::sealed_sender::parse_sent_message`) into per-recipient fanout slices keyed by ServiceId.
+2. **Resolve recipients.** For each entry in `recipients`: confirm the supplied `service_id_fixed_width` matches a fanout in the envelope, then look up `encrypted_member_id → group_push_pseudonym` in `member_credentials` for this group. A wrong EMI produces an undeliverable envelope (recipient's keys won't match the ServiceId in the slot) — no security risk, just dropped delivery. EMI not in the group's `member_credentials` ⇒ 400.
+3. **Verify the token.** Call `endorsements::verify_token_for_service_ids` against the collected ServiceId set. Note: the server never sees DIDs at this step — verification works on ServiceIds throughout. Failure ⇒ 401.
+4. **Enqueue per recipient** into `group_message_queue` (a dedicated table, schema in `migrations/011_group_messages.sql`; separate from the DM `message_queue` because routing semantics, auth model, and wire envelope all differ). The row carries `(recipient_group_pseudonym, group_id, ciphertext, expires_at)`. Live-push immediately to any subscribed pseudonym (§3.11 "Delivery channel" below); otherwise the row waits for either WS subscribe-time drain or HTTP offline pickup.
+5. **Discard request metadata.** Do not log source IP, TLS session ID, or any other connection identifier beyond what's needed for the request's own processing. The endpoint's access log records only the group ID, recipient count, and response status — never anything that could identify the sender. Rate limiting is per-IP only (`rate_limit::ACTION_GROUP_SEND`); IPs are kept in a transient counter, never linked to a sender identity.
 
 The user's authenticated WebSocket (if any) is **not used** for this endpoint — the send goes over a separate HTTP POST. The handler never sees the sender.
+
+#### Delivery channel
+
+Two-stage delivery, both keyed on the recipient's per-(group, member) `group_push_pseudonym`:
+
+- **Live WS push.** Devices on the homeserver's authenticated WebSocket send a `SubscribeGroupPseudonyms` frame at connect time carrying the full active set of pseudonyms they want pushes for (one per group they're in). The server maintains a `pseudonym → ws sender` map (`AppState::group_subscriptions`); on subscribe it replaces any prior subscriptions for that socket and **drains queued rows for newly-added pseudonyms**. Outbound `GroupDeliverRequest` frames carry `(message_id, group_id, ciphertext, recipient_group_pseudonym, enqueued_at)`; clients reply with `GroupDeliverAck` and the server deletes the row. Server-tracked acks distinguish DM-vs-group via a small `PendingAck` sum so the right queue row is freed.
+- **HTTP offline pickup.** `GET /v1/groups/{id}/messages` and `DELETE /v1/groups/{id}/messages` (both presentation-auth, member-only) let a device drain whatever queued up while it was offline. Pseudonym is resolved server-side from the presentation's `EncryptedMemberId` via `member_credentials`, so the device never has to claim a pseudonym it doesn't own.
+
+A background sweeper (`tasks::group_message_expiry`) deletes rows past `expires_at`.
 
 #### Layer 3: the network layer (out of scope)
 
@@ -563,29 +649,34 @@ Source-IP correlation between this send POST and the user's other authenticated 
 
 #### Daily credential refresh
 
-To send sealed-sender group messages anonymously, the client needs three credential artifacts ahead of time. Eventually these will be bundled into a single daily refresh:
+To send sealed-sender group messages anonymously, the client needs three credential artifacts. The shape split across **two identified endpoints** (one identity-level, one per-group):
 
 ```
-POST /v1/groups/credentials/refresh        // future shape (Stage 5 step 6+)
-Headers: Authorization: <session bearer>     // identified — server knows who's refreshing
-Body: { redemption_time, groups: [group_id, ...] }
+// Identity-level: auth credential + per-device sender cert.
+POST /v1/groups/credentials
+Headers: Authorization: <session bearer>     // identified — server knows the DID
+Body:   { did, redemption_time }             // server verifies `did` matches the session's account
 Response: {
-  auth_credential:        AuthCredentialDidResponse,           // for state operations (§3.3)
-  sender_certificate:     SenderCertificate,                   // for the sealed-sender envelope
-  endorsements_per_group: { group_id → GroupSendEndorsementsResponse }  // for the send-tokens
+  response:                 base64,          // zkgroup AuthCredentialWithPniZkcResponse
+  redemption_time:          u64,
+  sender_cert:              base64,          // libsignal SenderCertificate, signed by the trust-root chain
+  sender_cert_expires_at:   u64,             // unix millis; `redemption_time + 2 days`
 }
 ```
 
-The shape that exists today after Stage 5 step 4 returns only the auth credential — the sealed-sender envelope and endorsements come in with step 6 (group sends):
-
 ```
-POST /v1/groups/credentials
-Headers: Authorization: <session bearer>
-Body: { did, redemption_time }   // server verifies `did` matches the session's account
-Response: { response, redemption_time }   // bincode-serialized AuthCredentialDidResponse
+// Per-group: endorsement bundle covering every active member.
+GET /v1/groups/{group_id}/endorsements
+Headers: X-Group-Auth: <presentation>        // member-only; pending-invitees rejected
+Response: {
+  response:                base64,           // zkgroup GroupSendEndorsementsResponse
+  expiration_unix_seconds: u64,              // day-aligned (~25–49h ahead per zkgroup's default)
+}
 ```
 
-The refresh is identifiable (server knows which DID is fetching credentials at which time). Anonymity kicks in at *send time*, not at *refresh time*. This is the same trade Signal makes: daily credential issuance is identified, daily send activity is anonymous within the issuance window.
+Why split: the auth credential + sender cert are identity-scoped (one per DID per day) and require the session bearer. The endorsement bundle is group-scoped (one per group per day, MAC'd over every member's EMI) and uses presentation auth so the server doesn't see DIDs at this step. Both refresh independently. Client-side caching: `store::groups` carries the credential and sender cert in the same `group_credentials` row (same expiration class); endorsements are fetched fresh per send for now (caching them locally is a future optimization, gated on profiling).
+
+The refresh is identifiable on the identity-level endpoint (server knows which DID is fetching credentials at which time). Anonymity kicks in at *send time*, not at *refresh time*. This is the same trade Signal makes: daily credential issuance is identified, daily send activity is anonymous within the issuance window.
 
 The client stores the credentials locally and uses them throughout the day. On day rollover (or just before, with some clock skew margin), the client refreshes again. If the client misses a refresh window, sends from that point require either (a) a fresh refresh — which is identifiable — or (b) waiting until the next window. The typical case is a background refresh on app launch / periodically while online.
 
@@ -678,7 +769,40 @@ Rough order, assuming the open questions above are answered:
    E2E test in `core/crates/app-core/tests/e2e_groups.rs` covers create → invite (with GroupContext DM) → fetch → accept → re-fetch. Compiles; needs a running homeserver (`make test-e2e`).
 6. Group send. Split into two PRs.
    - **[done] PR 1: Sender Keys content-encryption over the existing DM transport.** `store::Store` implements libsignal's `SenderKeyStore` against a new `sender_keys` table. `crypto::sender_keys` wraps `create_skdm` / `process_skdm` / `group_encrypt` / `group_decrypt`. Two new `ContentMessage` body variants — `SenderKeyDistribution` and `GroupMessage` — carry SKDMs and Sender-Keys-encrypted content respectively. `app-core::groups`: deterministic `distribution_id_for(master_key)` (UUIDv5 under a fixed namespace), `seed_own_sender_key` at create / accept, automatic SKDM exchange piggybacked on the invite (admin→invitee) and broadcast on accept (invitee→all current members). FFI `send_group_message(group_id, plaintext)` encrypts under our Sender Key and fans out as DMs to every other member, including the same `proto::GroupMessage` body. Inbound `SenderKeyDistribution` installs the sender's key; inbound `GroupMessage` decrypts and surfaces as a normal message event with `sender_did` from the envelope. e2e test verifies the full create→invite→accept→send→reply roundtrip.
-   - **PR 2 (not started): sealed-sender + dedicated send endpoint.** Wrap each group message in `sealed_sender_multi_recipient_encrypt` so the server doesn't see the sender, on a dedicated endpoint `POST /v1/groups/{id}/send` authenticated with `GroupSendFullToken`s (not session credentials). Server signs `SenderCertificate`s and issues `GroupSendEndorsementsResponse` per group per day via an extended credential-refresh endpoint. See §3.11 for the three-layer requirement and the IP-correlation caveat. Server fan-out by `(encrypted_member_id, group_push_pseudonym)` from `member_credentials`.
+   - **[done] PR 2: sealed-sender + dedicated send endpoint.** Group messages are now wrapped in `sealed_sender_multi_recipient_encrypt` on a dedicated endpoint `POST /v1/groups/{id}/send` authenticated with a `GroupSendFullToken` over the full recipient ServiceId set (not session credentials). See §3.11 for the protocol-level description; landed surface:
+
+     **Crypto wrappers** (`core/crates/crypto/src/`):
+     - `sender_cert.rs` — `SenderCertChain::generate / to_bytes / from_bytes / trust_root_public_bytes / issue_sender_cert` and `validate_sender_cert` (single-key trust-root chain, `key_id=1`).
+     - `sealed_sender.rs` — `encrypt_group_envelope`, server-side `parse_sent_message`, recipient-side `decrypt_envelope_to_usmc`.
+     - `groups/endorsements.rs` — `default_expiration_unix_seconds`, `issue_endorsements`, `receive_endorsements`, `token_for_recipients`, `verify_token` / `verify_token_for_service_ids`.
+
+     **ServiceId migration.** Identity + session-store entries are keyed on `Aci::from(did_to_uuid(did)).service_id_string()` — required by SSv2 (libsignal parses `ProtocolAddress.name()` as a `ServiceId`). New helper `crypto::groups::did_to_service_id_string`; every `DeviceAddress` / `ProtocolAddress` construction site in `app-core` now uses it. DM tests still pass; pre-launch DBs can be wiped.
+
+     **Server**:
+     - `GroupCryptoBundle` (zkgroup secret + sender-cert chain) persisted in `zkgroup_server_params` row; `CURRENT_VERSION` bumped to 3.
+     - `GET /v1/groups/server-params` now publishes `sender_cert_trust_root`.
+     - `POST /v1/groups/credentials` response carries a per-device `sender_cert` (+ `sender_cert_expires_at`). The `devices.identity_key` uploaded at registration is the signing input.
+     - `GET /v1/groups/{id}/endorsements` (presentation-auth, member-only) returns the daily `GroupSendEndorsementsResponse`.
+     - `POST /v1/groups/{id}/send` (no auth header) — parses the envelope, resolves each `(encrypted_member_id → group_push_pseudonym)` via `member_credentials`, verifies the token against the envelope's ServiceIds, enqueues per recipient. IP rate-limited only.
+     - `GET` / `DELETE /v1/groups/{id}/messages` (presentation-auth, member-only) — HTTP offline pickup; pseudonym resolved server-side from the presentation's EMI.
+     - WS: new `SubscribeGroupPseudonyms` / `GroupDeliverRequest` / `GroupDeliverAck` frames (`ws.proto`); `AppState::group_subscriptions` map (`pseudonym → ws sender`); per-socket subscription tracking; drain-on-subscribe; `PendingAck` sum distinguishes DM vs group acks.
+     - Schema: `migrations/011_group_messages.sql` (`group_message_queue` table — kept separate from the DM queue because auth model, wire envelope, and routing semantics all differ).
+     - Background sweeper task `group_message_expiry`.
+
+     **Client** (`net::Client` + `app-core::groups`):
+     - `net::Client::send_group_message / fetch_group_messages / ack_group_messages / get_group_endorsements`.
+     - `groups::send_group_message` free function (also wired into the existing FFI `send_group_message` and `send_group_message_async`): loads cached credential + sender cert, fetches endorsements, builds SSv2 envelope + recipient mapping (each entry carries `service_id_fixed_width` and the EMI we compute from recipient DID + group key), POSTs.
+     - `groups::fetch_group_messages` (+ `fetch_group_messages_async`): drains via HTTP, runs each envelope through `decrypt_envelope_to_usmc → validate_sender_cert → group_decrypt`, returns `ReceivedGroupMessage { message_id, group_id_b64, sender_did, sender_device_id, plaintext }` and acks server-side.
+
+     **e2e tests** (`core/crates/app-core/tests/e2e_groups.rs`):
+     - `create_invite_accept_promote_remove_roundtrip` — 2-member group, exercises the sealed-sender round-trip.
+     - `three_member_fanout_roundtrip` — 3-member group; one send fans out to two recipients (exercises SSv2 multi-recipient parsing and per-recipient routing); bob and carol decrypt the same plaintext from alice, then carol's reply fans out to alice and bob. Both green; full `make test-e2e` still passes.
+
+     **Not yet wired up:**
+     - **WS push on the client side.** `net::ws::WsConnection` exposes `subscribe_group_pseudonyms / next_group_message / group_ack`, but no app-core code drives them yet — the e2e uses HTTP fetch. Production receive path needs to wire WS subscribe at connect and dispatch `GroupDeliverRequest` through the same `process_decrypted` pipeline as DMs.
+     - **Sync FFI receive surface.** Only the `_async` flavor exists.
+     - **Endorsement caching.** Fetched fresh per send; trivial to cache if profiling shows it matters.
+     - **Coverage gaps in e2e.** No tests for expired sender cert, mismatched token, or recipient-not-in-group rejection paths (these are server-side branches with zero coverage).
 7. Push: per-group pseudonym registration at join via the existing `register_push_with_relay` (`core/crates/net/src/lib.rs:519`) — **no new relay endpoint needed**, the relay's `/v1/register` is reused. Wakeups on new revisions and new messages forwarded to relay by group pseudonym.
 8. Mobile UI: create group, list members, simple roles, expiry timer setting, send/receive.
 9. Multi-client integration test (20 clients) per Stage 5's existing test plan.

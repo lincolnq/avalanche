@@ -118,3 +118,112 @@ async fn create_invite_accept_promote_remove_roundtrip() {
     assert_eq!(alice_msgs[0].plaintext, reply);
     assert_eq!(alice_msgs[0].sender_did, bob.did_async().await);
 }
+
+/// Three-member group: alice sends one sealed-sender message that fans out
+/// to both bob and carol via the SSv2 multi-recipient envelope. Exercises
+/// the multi-recipient parsing and routing paths that the 2-member test
+/// doesn't actually cover (one envelope → one recipient slice).
+#[tokio::test]
+async fn three_member_fanout_roundtrip() {
+    let url = server_url();
+
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+        .await
+        .unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+        .await
+        .unwrap();
+    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true)
+        .await
+        .unwrap();
+
+    let bob_did = bob.did_async().await;
+    let carol_did = carol.did_async().await;
+    let alice_did = alice.did_async().await;
+
+    // Alice creates the group and invites both bob and carol.
+    let created = alice
+        .create_group_async("Trio", "fanout e2e", 0)
+        .await
+        .unwrap();
+    alice
+        .invite_member_async(&created.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    alice
+        .invite_member_async(&created.group_id, &carol_did, 0)
+        .await
+        .unwrap();
+
+    // Both invitees ingest their GroupContext DM, fetch state to populate
+    // the local cache (accept requires it), then accept. Carol re-fetches
+    // between bob's accept and her own — bob's accept bumped the revision,
+    // so carol's local cache would otherwise be stale.
+    let _ = bob.receive_messages_async().await.unwrap();
+    let _ = carol.receive_messages_async().await.unwrap();
+    let _ = bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    bob.accept_invite_async(&created.group_id).await.unwrap();
+    let _ = carol
+        .fetch_group_state_async(&created.group_id)
+        .await
+        .unwrap();
+    carol.accept_invite_async(&created.group_id).await.unwrap();
+
+    // Alice drains the SKDMs both invitees emitted on accept, so her
+    // SenderKeyStore carries bob's and carol's distributions.
+    let _ = alice.receive_messages_async().await.unwrap();
+    // Bob & carol ingest each other's accept-time SKDM as well, so they
+    // can later decrypt each other's group messages.
+    let _ = bob.receive_messages_async().await.unwrap();
+    let _ = carol.receive_messages_async().await.unwrap();
+
+    // Confirm membership is 3 from alice's POV.
+    let alice_state = alice
+        .fetch_group_state_async(&created.group_id)
+        .await
+        .unwrap();
+    assert_eq!(alice_state.members.len(), 3);
+
+    // Alice sends one group message; it fans out to bob and carol.
+    let plaintext = b"hello bob and carol";
+    alice
+        .send_group_message_async(&created.group_id, plaintext)
+        .await
+        .unwrap();
+
+    let bob_msgs = bob
+        .fetch_group_messages_async(&created.group_id)
+        .await
+        .unwrap();
+    let carol_msgs = carol
+        .fetch_group_messages_async(&created.group_id)
+        .await
+        .unwrap();
+    assert_eq!(bob_msgs.len(), 1, "bob should receive one group message");
+    assert_eq!(carol_msgs.len(), 1, "carol should receive one group message");
+    assert_eq!(bob_msgs[0].plaintext, plaintext);
+    assert_eq!(carol_msgs[0].plaintext, plaintext);
+    assert_eq!(bob_msgs[0].sender_did, alice_did);
+    assert_eq!(carol_msgs[0].sender_did, alice_did);
+
+    // Carol replies; both alice and bob drain.
+    let reply = b"hi alice and bob, carol here";
+    carol
+        .send_group_message_async(&created.group_id, reply)
+        .await
+        .unwrap();
+    let alice_msgs = alice
+        .fetch_group_messages_async(&created.group_id)
+        .await
+        .unwrap();
+    let bob_msgs2 = bob
+        .fetch_group_messages_async(&created.group_id)
+        .await
+        .unwrap();
+    assert_eq!(alice_msgs.len(), 1);
+    assert_eq!(bob_msgs2.len(), 1);
+    assert_eq!(alice_msgs[0].plaintext, reply);
+    assert_eq!(bob_msgs2[0].plaintext, reply);
+    assert_eq!(alice_msgs[0].sender_did, carol_did);
+    assert_eq!(bob_msgs2[0].sender_did, carol_did);
+}
