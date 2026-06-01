@@ -37,12 +37,27 @@ pub struct PendingDelivery {
     pub enqueued_at: Option<String>,
 }
 
+/// A pending group-message delivery to push to a subscribed pseudonym.
+/// Carries the per-recipient SSv2 ReceivedMessage slice produced server-
+/// side by parsing the sender's multi-recipient envelope.
+#[derive(Debug, Clone)]
+pub struct PendingGroupDelivery {
+    pub message_id: i64,
+    pub group_id: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+    pub recipient_group_pseudonym: Vec<u8>,
+    pub enqueued_at: Option<String>,
+}
+
 /// Server-initiated WebSocket push. Variants correspond to the
 /// non-response frame types in `proto/ws.proto`.
 #[derive(Debug, Clone)]
 pub enum WsPush {
-    /// An incoming message ciphertext to deliver to the device.
+    /// An incoming 1:1 message ciphertext to deliver to the device.
     Delivery(PendingDelivery),
+    /// An incoming sealed-sender group message slice to deliver to a
+    /// subscribed `recipient_group_pseudonym`.
+    GroupDelivery(PendingGroupDelivery),
     /// The device's prekey pools are below threshold; client should refill.
     PrekeyLow {
         one_time_remaining: i64,
@@ -58,6 +73,12 @@ pub struct AppState {
     pub config: Config,
     /// Connected WebSocket devices: internal device PK -> sender channel.
     pub ws_connections: Arc<RwLock<HashMap<i64, mpsc::UnboundedSender<WsPush>>>>,
+    /// Group-message subscriptions: `recipient_group_pseudonym` (raw bytes)
+    /// -> the sender channel of the device that subscribed. A device with
+    /// memberships in N groups carries N entries here. Population is
+    /// driven by the WS `SubscribeGroupPseudonyms` frame; entries are
+    /// dropped when the socket closes.
+    pub group_subscriptions: Arc<RwLock<HashMap<Vec<u8>, mpsc::UnboundedSender<WsPush>>>>,
     /// The homeserver's zkgroup signing key, loaded once at startup and held
     /// in memory thereafter. Used to issue auth credentials and group send
     /// endorsements; never transmitted off the server.
@@ -79,6 +100,7 @@ impl AppState {
             db,
             config,
             ws_connections: Arc::new(RwLock::new(HashMap::new())),
+            group_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             zkgroup_secret: Arc::new(zkgroup_secret),
             sender_cert_chain: Arc::new(sender_cert_chain),
         }

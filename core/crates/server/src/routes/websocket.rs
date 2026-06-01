@@ -35,7 +35,7 @@
 //! - HTTP `POST /v1/messages` remains live as a fallback for clients that
 //!   can't keep a WS open.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
@@ -54,7 +54,8 @@ use crate::{
     db,
     error::ServerError,
     proto::{
-        ws_frame::Body, DeliverRequest, Keepalive, PrekeyLowNotification, SendResponse, WsFrame,
+        ws_frame::Body, DeliverRequest, GroupDeliverRequest, Keepalive, PrekeyLowNotification,
+        SendResponse, WsFrame,
     },
     routes::messages::{send_messages, SendInput},
     state::{AppState, WsPush},
@@ -82,17 +83,27 @@ async fn ws_upgrade(
     Ok(ws.on_upgrade(move |socket| handle_ws(socket, state, device_pk)))
 }
 
-/// Outstanding server-initiated `DeliverRequest`s awaiting a `DeliverAck`.
-/// Maps `frame.id` (chosen by the server when pushing) → queued message PK.
-type PendingAcks = Arc<Mutex<HashMap<u64, i64>>>;
+/// Outstanding server-initiated pushes awaiting an ack. Tracks both
+/// 1:1 (`DeliverRequest`/`DeliverAck`) and group
+/// (`GroupDeliverRequest`/`GroupDeliverAck`) deliveries so the ack
+/// handler knows which queue row to free.
+enum PendingAck {
+    Dm { message_id: i64 },
+    Group { message_id: i64, pseudonym: Vec<u8> },
+}
+type PendingAcks = Arc<Mutex<HashMap<u64, PendingAck>>>;
 
 async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsPush>();
 
-    state.ws_connections.write().await.insert(device_pk, tx);
+    state.ws_connections.write().await.insert(device_pk, tx.clone());
 
     let pending: PendingAcks = Arc::new(Mutex::new(HashMap::new()));
+    // Pseudonyms this socket has subscribed to. Owned here so we can drop
+    // them from `state.group_subscriptions` on disconnect even if the
+    // client never sends an unsubscribe frame.
+    let mut subscribed_pseudonyms: HashSet<Vec<u8>> = HashSet::new();
     // Server-allocated frame ids for its own outbound requests. Distinct id
     // space from client-originated ids; collisions across directions are
     // not possible because each side only ever interprets responses keyed
@@ -105,7 +116,10 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
             for msg in queued {
                 let frame_id = next_server_id;
                 next_server_id += 1;
-                pending.lock().await.insert(frame_id, msg.id);
+                pending
+                    .lock()
+                    .await
+                    .insert(frame_id, PendingAck::Dm { message_id: msg.id });
 
                 let frame = WsFrame {
                     id: frame_id,
@@ -135,7 +149,10 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
                     WsPush::Delivery(pd) => {
                         let frame_id = next_server_id;
                         next_server_id += 1;
-                        pending.lock().await.insert(frame_id, pd.message_id);
+                        pending
+                            .lock()
+                            .await
+                            .insert(frame_id, PendingAck::Dm { message_id: pd.message_id });
                         WsFrame {
                             id: frame_id,
                             body: Some(Body::DeliverRequest(DeliverRequest {
@@ -145,6 +162,27 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
                                 sender_did: pd.sender_did,
                                 sender_device_id: pd.sender_device_id,
                                 enqueued_at: pd.enqueued_at,
+                            })),
+                        }
+                    }
+                    WsPush::GroupDelivery(pgd) => {
+                        let frame_id = next_server_id;
+                        next_server_id += 1;
+                        pending.lock().await.insert(
+                            frame_id,
+                            PendingAck::Group {
+                                message_id: pgd.message_id,
+                                pseudonym: pgd.recipient_group_pseudonym.clone(),
+                            },
+                        );
+                        WsFrame {
+                            id: frame_id,
+                            body: Some(Body::GroupDeliverRequest(GroupDeliverRequest {
+                                message_id: pgd.message_id,
+                                group_id: pgd.group_id,
+                                ciphertext: pgd.ciphertext,
+                                recipient_group_pseudonym: pgd.recipient_group_pseudonym,
+                                enqueued_at: pgd.enqueued_at,
                             })),
                         }
                     }
@@ -171,7 +209,16 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
                             tracing::debug!(device_pk, "ws: failed to decode frame; ignoring");
                             continue;
                         };
-                        if let Some(reply) = handle_frame(&state, device_pk, &pending, frame).await {
+                        if let Some(reply) = handle_frame(
+                            &state,
+                            device_pk,
+                            &pending,
+                            &tx,
+                            &mut subscribed_pseudonyms,
+                            frame,
+                        )
+                        .await
+                        {
                             if sink.send(Message::Binary(encode(&reply).into())).await.is_err() {
                                 break;
                             }
@@ -189,6 +236,18 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
     }
 
     state.ws_connections.write().await.remove(&device_pk);
+    if !subscribed_pseudonyms.is_empty() {
+        let mut subs = state.group_subscriptions.write().await;
+        for p in &subscribed_pseudonyms {
+            // Only remove the entry if it's still ours (a later connect for
+            // the same pseudonym may have overwritten it).
+            if let Some(existing) = subs.get(p) {
+                if existing.same_channel(&tx) {
+                    subs.remove(p);
+                }
+            }
+        }
+    }
 }
 
 /// Decode and dispatch a single client-originated frame. Returns the response
@@ -198,6 +257,8 @@ async fn handle_frame(
     state: &AppState,
     device_pk: i64,
     pending: &PendingAcks,
+    tx: &mpsc::UnboundedSender<WsPush>,
+    subscribed_pseudonyms: &mut HashSet<Vec<u8>>,
     frame: WsFrame,
 ) -> Option<WsFrame> {
     let frame_id = frame.id;
@@ -242,10 +303,82 @@ async fn handle_frame(
             })
         }
         Body::DeliverAck(_) => {
-            let msg_id = pending.lock().await.remove(&frame_id);
-            if let Some(msg_id) = msg_id {
+            let entry = pending.lock().await.remove(&frame_id);
+            if let Some(PendingAck::Dm { message_id }) = entry {
                 if let Ok(mut conn) = state.db.acquire().await {
-                    let _ = db::messages::acknowledge(&mut conn, device_pk, &[msg_id]).await;
+                    let _ = db::messages::acknowledge(&mut conn, device_pk, &[message_id]).await;
+                }
+            }
+            None
+        }
+        Body::GroupDeliverAck(_) => {
+            let entry = pending.lock().await.remove(&frame_id);
+            if let Some(PendingAck::Group { message_id, pseudonym }) = entry {
+                if let Ok(mut conn) = state.db.acquire().await {
+                    let _ = db::group_messages::acknowledge(
+                        &mut conn,
+                        &pseudonym,
+                        &[message_id],
+                    )
+                    .await;
+                }
+            }
+            None
+        }
+        Body::SubscribeGroupPseudonyms(req) => {
+            // Replace this socket's prior subscriptions. The request carries
+            // the *full* desired set; anything we previously had that isn't
+            // in the new list is dropped from both local tracking and the
+            // server-wide subscription map.
+            let new_set: HashSet<Vec<u8>> = req.pseudonyms.into_iter().collect();
+            {
+                let mut subs = state.group_subscriptions.write().await;
+                // Drop any pseudonyms we previously held that aren't in the
+                // new set (and that still point at this socket).
+                for old in subscribed_pseudonyms.iter() {
+                    if new_set.contains(old) {
+                        continue;
+                    }
+                    if let Some(existing) = subs.get(old) {
+                        if existing.same_channel(tx) {
+                            subs.remove(old);
+                        }
+                    }
+                }
+                // Install the new set, overwriting any other connection
+                // that previously held the same pseudonym (last writer
+                // wins — same policy as `ws_connections`).
+                for p in &new_set {
+                    subs.insert(p.clone(), tx.clone());
+                }
+            }
+            // Drain pending group messages for newly-subscribed pseudonyms
+            // (anything in `new_set` that wasn't in `subscribed_pseudonyms`).
+            let newly_added: Vec<Vec<u8>> = new_set
+                .iter()
+                .filter(|p| !subscribed_pseudonyms.contains(*p))
+                .cloned()
+                .collect();
+            *subscribed_pseudonyms = new_set;
+            if !newly_added.is_empty() {
+                if let Ok(mut conn) = state.db.acquire().await {
+                    for p in &newly_added {
+                        if let Ok(queued) =
+                            db::group_messages::fetch_for_pseudonym(&mut conn, p).await
+                        {
+                            for msg in queued {
+                                let _ = tx.send(WsPush::GroupDelivery(
+                                    crate::state::PendingGroupDelivery {
+                                        message_id: msg.id,
+                                        group_id: msg.group_id,
+                                        ciphertext: msg.ciphertext,
+                                        recipient_group_pseudonym: p.clone(),
+                                        enqueued_at: Some(msg.enqueued_at.to_string()),
+                                    },
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             None
@@ -256,7 +389,10 @@ async fn handle_frame(
         }),
         // Variants the server should not receive from the client. Silently
         // ignore; never reflect server-only frames back.
-        Body::SendResponse(_) | Body::DeliverRequest(_) | Body::PrekeyLow(_) => None,
+        Body::SendResponse(_)
+        | Body::DeliverRequest(_)
+        | Body::GroupDeliverRequest(_)
+        | Body::PrekeyLow(_) => None,
     }
 }
 

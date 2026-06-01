@@ -72,3 +72,9 @@ pub const WINDOW_SUBMIT_GROUP_CHANGE: i64 = 60;
 pub const ACTION_GROUP_PUSH_BINDING: &str = "group_push_binding";
 pub const LIMIT_GROUP_PUSH_BINDING: i32 = 60;
 pub const WINDOW_GROUP_PUSH_BINDING: i64 = 3600;
+
+// Per-IP on sealed-sender group send. Sender identity is hidden so the only
+// rate-limit handle is the originating IP.
+pub const ACTION_GROUP_SEND: &str = "group_send";
+pub const LIMIT_GROUP_SEND: i32 = 600;
+pub const WINDOW_GROUP_SEND: i64 = 60;

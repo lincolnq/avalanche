@@ -22,14 +22,17 @@ message WsFrame {
   uint64 id = 1;
 
   oneof body {
-    SendRequest         send_request         = 2;
-    SendResponse        send_response        = 3;
-    DeliverRequest      deliver_request      = 4;
-    DeliverAck          deliver_ack          = 5;
-    Keepalive           keepalive            = 6;
-    PrekeyLowNotification prekey_low         = 7;
+    SendRequest             send_request                  = 2;
+    SendResponse            send_response                 = 3;
+    DeliverRequest          deliver_request               = 4;
+    DeliverAck              deliver_ack                   = 5;
+    Keepalive               keepalive                     = 6;
+    PrekeyLowNotification   prekey_low                    = 7;
+    SubscribeGroupPseudonyms subscribe_group_pseudonyms   = 8;
+    GroupDeliverRequest     group_deliver_request         = 9;
+    GroupDeliverAck         group_deliver_ack             = 10;
   }
-  reserved 8 to 20;
+  reserved 11 to 20;
 }
 
 // Client → server: send one or more encrypted messages.
@@ -99,4 +102,34 @@ message PrekeyLowNotification {
   int64 one_time_remaining = 1;
   int64 kyber_remaining    = 2;
   reserved 3 to 10;
+}
+
+// Client → server: tell the server which `recipient_group_pseudonym`s
+// to push group-message deliveries for over this WebSocket. Sent at
+// connect time (and any time the device's group membership changes).
+// `pseudonyms` is the full active set — server replaces any prior
+// subscriptions for this socket. Fire-and-forget; no response.
+message SubscribeGroupPseudonyms {
+  repeated bytes pseudonyms = 1;
+  reserved 2 to 10;
+}
+
+// Server → client: an incoming sealed-sender group-message slice for
+// one of the device's subscribed pseudonyms. Like DeliverRequest, the
+// client must reply with a GroupDeliverAck carrying the same frame.id
+// before the server will delete the queued row.
+message GroupDeliverRequest {
+  int64 message_id   = 1;
+  bytes group_id     = 2;
+  bytes ciphertext   = 3;
+  // Which pseudonym this delivery is addressed to. Lets the client route
+  // it to the correct group when subscribed to multiple pseudonyms over
+  // one socket.
+  bytes recipient_group_pseudonym = 4;
+  optional string enqueued_at     = 5; // ISO 8601 / RFC 3339 string
+  reserved 6 to 14;
+}
+
+message GroupDeliverAck {
+  reserved 1 to 10;
 }

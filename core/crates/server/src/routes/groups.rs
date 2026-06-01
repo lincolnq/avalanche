@@ -49,6 +49,12 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/groups/{group_id}/changes", get(get_changes))
         .route("/v1/groups/{group_id}/changes", post(submit_changes))
         .route("/v1/groups/{group_id}/push_binding", post(push_binding))
+        .route("/v1/groups/{group_id}/send", post(send_group_message))
+        .route("/v1/groups/{group_id}/messages", get(fetch_group_messages))
+        .route(
+            "/v1/groups/{group_id}/messages",
+            axum::routing::delete(ack_group_messages),
+        )
 }
 
 // ── /v1/groups/server-params (public) ────────────────────────────────────────
@@ -636,6 +642,226 @@ async fn push_binding(
     if !rotated {
         return Err(ServerError::NotFound);
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── POST /v1/groups/{id}/send (sealed-sender) ────────────────────────────────
+//
+// No bearer token. The sealed-sender envelope embeds the SenderCertificate
+// itself; sender identity is hidden from the server. Authorization is the
+// `GroupSendFullToken`, which proves the sender is a member of this group
+// and is endorsed to send to the listed recipient ServiceIds.
+
+#[derive(Deserialize)]
+struct SendGroupMessageRequest {
+    /// URL-safe base64 of the SSv2 SentMessage produced by
+    /// `crypto::sealed_sender::encrypt_group_envelope`.
+    envelope: String,
+    /// URL-safe base64 of the `GroupSendFullToken` covering the recipient set.
+    token: String,
+    /// Sender-supplied mapping: each recipient's 17-byte fixed-width-binary
+    /// ServiceId (as embedded in the envelope) paired with the
+    /// `recipient_group_pseudonym` to route the per-recipient slice to.
+    recipients: Vec<SendRecipientWire>,
+    /// Per-message expiry override in seconds. Server clamps to its
+    /// configured min/max bounds. Absent = server default.
+    #[serde(default)]
+    expiry_secs: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SendRecipientWire {
+    service_id_fixed_width: String,
+    recipient_group_pseudonym: String,
+}
+
+#[derive(Serialize)]
+struct SendGroupMessageResponse {
+    /// Server-assigned IDs of the enqueued rows, in recipient-input order.
+    message_ids: Vec<i64>,
+}
+
+async fn send_group_message(
+    State(state): State<AppState>,
+    Path(group_id_b64): Path<String>,
+    ClientIp(ip): ClientIp,
+    Json(body): Json<SendGroupMessageRequest>,
+) -> Result<Json<SendGroupMessageResponse>, ServerError> {
+    // IP-level rate limit — no per-account counter available here since
+    // sealed sender hides the sender from us.
+    {
+        let mut rate_conn = state.db.acquire().await?;
+        if !db::ip_rate_limits::check_and_increment(
+            &mut rate_conn,
+            &ip,
+            rate_limit::ACTION_GROUP_SEND,
+            rate_limit::LIMIT_GROUP_SEND,
+            rate_limit::WINDOW_GROUP_SEND,
+        )
+        .await?
+        {
+            return Err(ServerError::RateLimited);
+        }
+    }
+
+    let group_id = b64_decode(&group_id_b64, "group_id")?;
+    let envelope = b64_decode(&body.envelope, "envelope")?;
+    let token = b64_decode(&body.token, "token")?;
+
+    // Confirm the group exists. Token verification proves group membership;
+    // this gives a clean 404 if the path doesn't match.
+    {
+        let mut conn = state.db.acquire().await?;
+        if db::groups::get(&mut conn, &group_id).await?.is_none() {
+            return Err(ServerError::NotFound);
+        }
+    }
+
+    // Parse the SSv2 envelope and pull out per-recipient fanouts indexed by
+    // their fixed-width-binary ServiceId.
+    let fanouts = crypto::sealed_sender::parse_sent_message(&envelope)
+        .map_err(|e| ServerError::BadRequest(format!("invalid envelope: {e}")))?;
+    let mut fanout_by_sid: std::collections::HashMap<[u8; 17], &crypto::sealed_sender::RecipientFanout> =
+        std::collections::HashMap::with_capacity(fanouts.len());
+    for f in &fanouts {
+        fanout_by_sid.insert(f.service_id_fixed_width, f);
+    }
+
+    // Build the recipient ServiceId set for token verification.
+    let mut recipient_service_ids: Vec<libsignal_core::ServiceId> =
+        Vec::with_capacity(body.recipients.len());
+    let mut recipient_targets: Vec<(Vec<u8>, &crypto::sealed_sender::RecipientFanout)> =
+        Vec::with_capacity(body.recipients.len());
+    for r in &body.recipients {
+        let sid_bytes = b64_decode(&r.service_id_fixed_width, "service_id_fixed_width")?;
+        let sid_arr: [u8; 17] = sid_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| ServerError::BadRequest("service_id_fixed_width must be 17 bytes".into()))?;
+        let sid = libsignal_core::ServiceId::parse_from_service_id_fixed_width_binary(&sid_arr)
+            .ok_or_else(|| ServerError::BadRequest("invalid service_id".into()))?;
+        let fanout = *fanout_by_sid
+            .get(&sid_arr)
+            .ok_or_else(|| ServerError::BadRequest("recipient not in envelope".into()))?;
+        let pseudonym = b64_decode(&r.recipient_group_pseudonym, "recipient_group_pseudonym")?;
+        recipient_service_ids.push(sid);
+        recipient_targets.push((pseudonym, fanout));
+    }
+
+    // Verify the endorsement token authorizes this exact recipient set.
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_secs();
+    crypto::groups::endorsements::verify_token_for_service_ids(
+        &token,
+        &recipient_service_ids,
+        state.zkgroup_secret.as_ref(),
+        now_secs,
+    )
+    .map_err(|_| ServerError::Unauthorized)?;
+
+    // Enqueue per recipient. Push immediately if a subscriber is live.
+    let expiry_secs = clamp_group_expiry(&state.config, body.expiry_secs);
+    let mut message_ids = Vec::with_capacity(recipient_targets.len());
+    let mut conn = state.db.acquire().await?;
+    for (pseudonym, fanout) in &recipient_targets {
+        let id = db::group_messages::enqueue(
+            &mut conn,
+            pseudonym,
+            &group_id,
+            &fanout.received_message,
+            expiry_secs,
+        )
+        .await?;
+        message_ids.push(id);
+
+        // Live push if subscribed.
+        let subs = state.group_subscriptions.read().await;
+        if let Some(tx) = subs.get(pseudonym.as_slice()) {
+            let _ = tx.send(crate::state::WsPush::GroupDelivery(
+                crate::state::PendingGroupDelivery {
+                    message_id: id,
+                    group_id: group_id.clone(),
+                    ciphertext: fanout.received_message.clone(),
+                    recipient_group_pseudonym: pseudonym.clone(),
+                    enqueued_at: None,
+                },
+            ));
+        }
+    }
+
+    Ok(Json(SendGroupMessageResponse { message_ids }))
+}
+
+fn clamp_group_expiry(config: &crate::config::Config, requested: Option<i64>) -> i64 {
+    requested.unwrap_or(config.message_expiry_secs)
+}
+
+// ── GET /v1/groups/{id}/messages (presentation-auth) ─────────────────────────
+
+#[derive(Serialize)]
+struct FetchGroupMessagesResponse {
+    messages: Vec<QueuedGroupMessageWire>,
+}
+
+#[derive(Serialize)]
+struct QueuedGroupMessageWire {
+    id: i64,
+    ciphertext: String,
+    enqueued_at: String,
+}
+
+async fn fetch_group_messages(
+    State(state): State<AppState>,
+    Path(group_id_b64): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<FetchGroupMessagesResponse>, ServerError> {
+    let (group, actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let mut conn = state.db.acquire().await?;
+    let pseudonym = db::groups::member_pseudonym(
+        &mut conn,
+        &group.group_id,
+        &zkgroup::serialize(&actor_emi),
+    )
+    .await?
+    .ok_or(ServerError::NotFound)?;
+    let queued = db::group_messages::fetch_for_pseudonym(&mut conn, &pseudonym).await?;
+    Ok(Json(FetchGroupMessagesResponse {
+        messages: queued
+            .into_iter()
+            .map(|m| QueuedGroupMessageWire {
+                id: m.id,
+                ciphertext: b64_encode(&m.ciphertext),
+                enqueued_at: m.enqueued_at.to_string(),
+            })
+            .collect(),
+    }))
+}
+
+// ── DELETE /v1/groups/{id}/messages (presentation-auth) ──────────────────────
+
+#[derive(Deserialize)]
+struct AckGroupMessagesRequest {
+    message_ids: Vec<i64>,
+}
+
+async fn ack_group_messages(
+    State(state): State<AppState>,
+    Path(group_id_b64): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AckGroupMessagesRequest>,
+) -> Result<StatusCode, ServerError> {
+    let (group, actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let mut conn = state.db.acquire().await?;
+    let pseudonym = db::groups::member_pseudonym(
+        &mut conn,
+        &group.group_id,
+        &zkgroup::serialize(&actor_emi),
+    )
+    .await?
+    .ok_or(ServerError::NotFound)?;
+    let _ = db::group_messages::acknowledge(&mut conn, &pseudonym, &body.message_ids).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

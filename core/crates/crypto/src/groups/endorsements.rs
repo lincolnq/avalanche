@@ -142,19 +142,31 @@ pub fn verify_token(
     server_secret: &ServerSecretParams,
     now_unix_seconds: u64,
 ) -> Result<(), CryptoError> {
+    let service_ids: Vec<libsignal_core::ServiceId> = recipient_dids
+        .iter()
+        .map(|did| Aci::from(did_to_uuid(did)).into())
+        .collect();
+    verify_token_for_service_ids(token_bytes, &service_ids, server_secret, now_unix_seconds)
+}
+
+/// Same as [`verify_token`] but takes `ServiceId`s directly — used by the
+/// `/v1/groups/{id}/send` endpoint, which extracts them from the sealed-
+/// sender envelope's recipient fanout. The server never has DIDs there.
+pub fn verify_token_for_service_ids(
+    token_bytes: &[u8],
+    recipient_service_ids: &[libsignal_core::ServiceId],
+    server_secret: &ServerSecretParams,
+    now_unix_seconds: u64,
+) -> Result<(), CryptoError> {
     let token: zkgroup::groups::GroupSendFullToken =
         zkgroup::deserialize(token_bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
     let key_pair = zkgroup::groups::GroupSendDerivedKeyPair::for_expiration(
         token.expiration(),
         server_secret.zkgroup(),
     );
-    let service_ids: Vec<libsignal_core::ServiceId> = recipient_dids
-        .iter()
-        .map(|did| Aci::from(did_to_uuid(did)).into())
-        .collect();
     let now = ZkTimestamp::from_epoch_seconds(now_unix_seconds);
     token
-        .verify(service_ids, now, &key_pair)
+        .verify(recipient_service_ids.iter().copied(), now, &key_pair)
         .map_err(|_| CryptoError::InvalidCiphertext)
 }
 

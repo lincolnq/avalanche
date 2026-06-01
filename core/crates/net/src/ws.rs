@@ -31,7 +31,8 @@ use tokio_tungstenite::tungstenite;
 
 use crate::error::NetError;
 use crate::proto::{
-    ws_frame::Body, DeliverAck, Keepalive, OutboundMessage, SendRequest, SendResponse, WsFrame,
+    ws_frame::Body, DeliverAck, GroupDeliverAck, Keepalive, OutboundMessage, SendRequest,
+    SendResponse, SubscribeGroupPseudonyms, WsFrame,
 };
 use crate::types::InboundMessage;
 
@@ -43,6 +44,21 @@ type WsStream =
 pub struct InboundDelivery {
     pub message: InboundMessage,
     /// Opaque correlation token. Pass unchanged to [`WsConnection::ack`].
+    pub ack_token: u64,
+}
+
+/// A delivered sealed-sender group-message slice for one of this device's
+/// subscribed pseudonyms. Caller validates the embedded sender cert and
+/// runs `crypto::sealed_sender::decrypt_envelope_to_usmc` →
+/// `crypto::sender_keys::group_decrypt`. Acked via
+/// [`WsConnection::group_ack`].
+pub struct InboundGroupDelivery {
+    pub message_id: i64,
+    pub group_id: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+    pub recipient_group_pseudonym: Vec<u8>,
+    pub enqueued_at: String,
+    /// Opaque correlation token. Pass to [`WsConnection::group_ack`].
     pub ack_token: u64,
 }
 
@@ -58,6 +74,8 @@ struct Inner {
     outbound: mpsc::UnboundedSender<Vec<u8>>,
     /// Incoming `DeliverRequest`s, drained by `next_message`.
     deliveries: Mutex<mpsc::UnboundedReceiver<InboundDelivery>>,
+    /// Incoming `GroupDeliverRequest`s, drained by `next_group_message`.
+    group_deliveries: Mutex<mpsc::UnboundedReceiver<InboundGroupDelivery>>,
     /// Pending `SendRequest`s awaiting a response, keyed by frame.id.
     correlations: Mutex<HashMap<u64, oneshot::Sender<SendResponse>>>,
     /// Client-side correlation id counter. Starts at 1; 0 is reserved for
@@ -81,16 +99,25 @@ impl WsConnection {
         let (sink, stream) = ws.split();
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (delivery_tx, delivery_rx) = mpsc::unbounded_channel::<InboundDelivery>();
+        let (group_delivery_tx, group_delivery_rx) =
+            mpsc::unbounded_channel::<InboundGroupDelivery>();
 
         let inner = Arc::new(Inner {
             outbound: outbound_tx.clone(),
             deliveries: Mutex::new(delivery_rx),
+            group_deliveries: Mutex::new(group_delivery_rx),
             correlations: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         });
 
         spawn_writer(sink, outbound_rx);
-        spawn_reader(stream, outbound_tx, delivery_tx, inner.clone());
+        spawn_reader(
+            stream,
+            outbound_tx,
+            delivery_tx,
+            group_delivery_tx,
+            inner.clone(),
+        );
 
         Ok(Self { inner })
     }
@@ -108,6 +135,33 @@ impl WsConnection {
         let frame = WsFrame {
             id: ack_token,
             body: Some(Body::DeliverAck(DeliverAck {})),
+        };
+        send_frame(&self.inner.outbound, &frame)
+    }
+
+    /// Wait for the next inbound sealed-sender group message. Returns
+    /// `Ok(None)` once the connection has closed.
+    pub async fn next_group_message(&self) -> Result<Option<InboundGroupDelivery>, NetError> {
+        Ok(self.inner.group_deliveries.lock().await.recv().await)
+    }
+
+    pub async fn group_ack(&self, ack_token: u64) -> Result<(), NetError> {
+        let frame = WsFrame {
+            id: ack_token,
+            body: Some(Body::GroupDeliverAck(GroupDeliverAck {})),
+        };
+        send_frame(&self.inner.outbound, &frame)
+    }
+
+    /// Send the full `recipient_group_pseudonym` set this device wants
+    /// pushes for. Server replaces any prior subscription tied to this
+    /// connection. Fire-and-forget.
+    pub fn subscribe_group_pseudonyms(&self, pseudonyms: Vec<Vec<u8>>) -> Result<(), NetError> {
+        let frame = WsFrame {
+            id: 0,
+            body: Some(Body::SubscribeGroupPseudonyms(SubscribeGroupPseudonyms {
+                pseudonyms,
+            })),
         };
         send_frame(&self.inner.outbound, &frame)
     }
@@ -184,6 +238,7 @@ fn spawn_reader(
     mut stream: futures_util::stream::SplitStream<WsStream>,
     outbound: mpsc::UnboundedSender<Vec<u8>>,
     delivery_tx: mpsc::UnboundedSender<InboundDelivery>,
+    group_delivery_tx: mpsc::UnboundedSender<InboundGroupDelivery>,
     state: Arc<Inner>,
 ) {
     tokio::spawn(async move {
@@ -227,18 +282,32 @@ fn spawn_reader(
                     };
                     let _ = send_frame(&outbound, &reply);
                 }
+                Body::GroupDeliverRequest(g) => {
+                    let _ = group_delivery_tx.send(InboundGroupDelivery {
+                        message_id: g.message_id,
+                        group_id: g.group_id,
+                        ciphertext: g.ciphertext,
+                        recipient_group_pseudonym: g.recipient_group_pseudonym,
+                        enqueued_at: g.enqueued_at.unwrap_or_default(),
+                        ack_token: id,
+                    });
+                }
                 // Server-side notifications without a response. Surface to
                 // the delivery channel later if we add a typed event API;
                 // ignored for now since no client consumer exists.
                 Body::PrekeyLow(_) => {}
                 // Variants the client should never receive from the server.
-                Body::SendRequest(_) | Body::DeliverAck(_) => {}
+                Body::SendRequest(_)
+                | Body::DeliverAck(_)
+                | Body::GroupDeliverAck(_)
+                | Body::SubscribeGroupPseudonyms(_) => {}
             }
         }
 
-        // Connection closed: drop the delivery sender so next_message returns
-        // None, and fail any pending correlations.
+        // Connection closed: drop the delivery senders so next_message /
+        // next_group_message return None, and fail any pending correlations.
         drop(delivery_tx);
+        drop(group_delivery_tx);
         let mut map = state.correlations.lock().await;
         for (_, tx) in map.drain() {
             drop(tx);
