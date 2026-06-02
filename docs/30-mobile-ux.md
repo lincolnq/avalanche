@@ -83,6 +83,20 @@ Projects open as full-screen views. Group chats managed by a Project appear in t
 
 ## Compose
 
+> **Status: partially implemented.** The core slice is live in
+> `mobile/ios/Actnet/Sources/Views/Chats/ComposeMessageView.swift`: chip
+> field, autocomplete sectioned into People / Other from the local
+> contacts table, direct `did:`-prefix entry, dedupe, group-name
+> auto-default, and dispatch (1 chip → DM in existing thread, 2+ chips
+> → `create_group` + `invite_members` fan-out + first message).
+>
+> Not yet implemented: From pill with "Send as" sheet, server pinning,
+> yellow / red chips for cross-server / unreachable recipients, paste
+> as multi-recipient, profile preview on chip tap, partial-failure
+> banner on group create, custom group icon at creation time.
+> Group-name override (user editing the placeholder) is also not yet
+> wired — the auto-default is what's sent.
+
 A single compose flow creates both DMs and groups. Like iMessage, the *number of recipients* decides at send time; there is no separate "New Group" menu item.
 
 **Entrypoint.** A bottom-right floating action button (pencil icon) on the Chats tab. Top-right works on iPad in split-view layouts. No multi-step "choose new DM vs new group" prompt — that's a Signal pattern this app intentionally drops.

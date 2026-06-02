@@ -1419,6 +1419,13 @@ impl AppCore {
             )
             .await?;
 
+            // Inviting someone counts as a deliberate gesture — they
+            // belong in the People list now (docs/35 §"What changes a row").
+            let _ = inner
+                .store
+                .touch_contact(&recipient_did, true, Timestamp::now())
+                .await;
+
             // Generate (or refresh) our own SKDM for this group, so we
             // can ship it alongside the GroupContext.
             let skdm = seed_own_sender_key(&mut inner.store, &did, device_id, &mk).await?;

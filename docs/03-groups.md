@@ -804,7 +804,40 @@ Rough order, assuming the open questions above are answered:
      - **Endorsement caching.** Fetched fresh per send; trivial to cache if profiling shows it matters.
      - **Coverage gaps in e2e.** No tests for expired sender cert, mismatched token, or recipient-not-in-group rejection paths (these are server-side branches with zero coverage).
 7. Push: per-group pseudonym registration at join via the existing `register_push_with_relay` (`core/crates/net/src/lib.rs:519`) — **no new relay endpoint needed**, the relay's `/v1/register` is reused. Wakeups on new revisions and new messages forwarded to relay by group pseudonym.
-8. Mobile UI: create group, list members, simple roles, expiry timer setting, send/receive.
+8. **[partial]** Mobile UI: create group, list members, simple roles, expiry timer setting, send/receive.
+
+   **[done]**:
+   - Compose 2+ recipients fans out `create_group` + per-recipient
+     `invite_members` and tail-sends the first message
+     (`AppState.createGroupAndOpen` in `mobile/ios/Actnet/Sources/App/AppState.swift`).
+   - `Conversation` model carries `groupId` and an `isGroup` flag;
+     `groupConversationId(_:)` derives the persistence key (prefix
+     `group-<groupIdB64>`).
+   - `ConversationView` dispatches `sendGroupMessage` for group threads
+     and exposes a toolbar link to a new `GroupDetailView`.
+   - `GroupDetailView` (`mobile/ios/Actnet/Sources/Views/Chats/GroupDetailView.swift`)
+     renders title, description, revision, member list with admin badge,
+     pending-invite count, and a `Leave group` action that calls
+     `remove_member` on the current user's `encrypted_member_id`.
+   - Inbound `proto::GroupMessage` carries the `group_id` (newly added
+     `Option<String>` field on `DecryptedMessage`) so the iOS event loop
+     routes group messages into the right thread instead of inferring
+     from sender DID.
+   - Lazy title refresh: `AppState.refreshGroupTitle` runs on conversation
+     open and on first inbound group message; cached titles survive an
+     app restart via `groupTitleCache`.
+
+   **Not yet implemented**:
+   - Admin actions in the detail screen (add member, change role, remove
+     other members, edit title/description/expiry, invite-link toggle,
+     announcement-only).
+   - Per-member tap to view profile / block / report.
+   - Pending-approval UI for `RequestToJoin` groups (approve / deny).
+   - Render the sender's display name above a message bubble in a group
+     thread (currently bubbles render without an author label).
+   - Group icon mosaic (placeholder icon only).
+   - WS push receive path for group messages on the client — the e2e
+     uses HTTP fetch (matches the gap recorded in step 6 PR 2).
 9. Multi-client integration test (20 clients) per Stage 5's existing test plan.
 
 ## 6. Cross-server casual groups (Stage 9): not in this doc

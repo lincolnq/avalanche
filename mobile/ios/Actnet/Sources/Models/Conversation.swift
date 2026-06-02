@@ -12,7 +12,16 @@ struct Conversation: Identifiable, Hashable {
     let accountId: String  // which DID this conversation belongs to
     let serverUrl: String
     var recipientDid: String?  // for DMs: the other party's DID
+    /// URL-safe-no-pad base64 group id when this is a group conversation.
+    var groupId: String?
     var lastMessage: String?
     var lastMessageDate: Date?
     var isGroup: Bool = false
+}
+
+/// Build a stable conversation id from a server-visible group id (URL-safe
+/// base64). Used for both the in-memory list and the persisted
+/// `message_history.conversation_id` column.
+func groupConversationId(_ groupId: String) -> String {
+    "group-\(groupId)"
 }

@@ -1,6 +1,20 @@
 # Contacts and profiles
 
-> **Status: design only.** Some profile-cache scaffolding exists in the client; the contact row described here, message-request gating, blocking, nicknames/notes/favorites, learned-route storage, and the federated profile-fetch model are not implemented. Treat this as a target.
+> **Status: partially implemented.** A minimal slice of the contact row is in
+> place: a local `contacts` table (`core/crates/store/src/contacts.rs`) with
+> `did`, `is_curated`, `last_interaction_at`; `list_contacts` /
+> `touch_contact` FFI on `AppCore`; auto-population on send-DM (curating),
+> group invite (curating), inbound DM and inbound group message
+> (non-curating); People / Other sectioning wired into the iOS compose
+> autocomplete (`ComposeMessageView.swift`). The existing
+> `contact_profiles` table still owns cached display names and profile
+> keys; this doc's `contact row` is the union of the two until they merge.
+>
+> Not yet implemented: `profile_version` push-style liveness,
+> conversation-open dormancy fetch, message-request gating, blocking,
+> nicknames / notes / favorites / `photo_override`, `preferred_identity`,
+> `learned_route_server`, `safety_number_verified_at`, contact backup,
+> federated profile proxying. Treat the rest of this document as a target.
 
 Goal: Users have sole and persistent ownership of their "contact book": their contact roll, nicknames, and personal notes about people they talk to on Avalanche:
 
@@ -258,19 +272,19 @@ The architectural point: substrate profiles and Project profiles are separate sy
 
 Build:
 
-- Profile key generation at account creation
-- Encrypted profile blob (display name only) upload at registration
-- Profile upload/fetch endpoints
-- Profile key included in outgoing messages
-- Profile key in invite tokens
-- The contact row with the fields and predicates described above (no state enum)
-- Row creation wired into receive, send, group co-membership, profile-key receipt
-- Migration of `blocked_dids` callers to `is_blocked`
-- `profile_version` counter on outbound profile updates and in the `ContentMessage` envelope; fetch + decrypt on version mismatch; conversation-open dormancy fetch (~1 week threshold); local cache on the contact row
-- Edit display name in iOS settings
-- Show cached names in conversation list and message bubbles
-- Nicknames, notes, favorites — the user-edit gestures are headline goals; ship the editing UX with the contact row
-- People list surface (rows where `is_curated`) and search across all known rows with "People" / "Other" sectioning
+- [done] Profile key generation at account creation
+- [done] Encrypted profile blob (display name only) upload at registration
+- [done] Profile upload/fetch endpoints
+- [done] Profile key included in outgoing messages
+- [done] Profile key in invite tokens
+- [partial] The contact row with the fields and predicates described above (no state enum) — minimal slice: `did`, `is_curated`, `last_interaction_at` in `core/crates/store/src/contacts.rs`. `nickname`, `notes`, `photo_override`, `preferred_identity`, `learned_route_server`, `safety_number_verified_at`, `has_pending_request`, `is_blocked`, `is_favorite`, `removed_at`, `first_sent_at`, `cached_profile_version` not yet added.
+- [partial] Row creation wired into receive, send, group co-membership, profile-key receipt — DM send / inbound DM / inbound group message / group invite all touch the row; profile-key receipt still only writes to `contact_profiles` (not `contacts`), and group co-membership doesn't yet auto-create rows on `fetch_group_state`.
+- [not started] Migration of `blocked_dids` callers to `is_blocked` (no blocking table exists yet)
+- [not started] `profile_version` counter on outbound profile updates and in the `ContentMessage` envelope; fetch + decrypt on version mismatch; conversation-open dormancy fetch (~1 week threshold); local cache on the contact row
+- [done] Edit display name in iOS settings
+- [done] Show cached names in conversation list and message bubbles
+- [not started] Nicknames, notes, favorites — the user-edit gestures are headline goals; ship the editing UX with the contact row
+- [partial] People list surface (rows where `is_curated`) and search across all known rows with "People" / "Other" sectioning — sectioning is implemented in the compose autocomplete; standalone People list surface is not yet built.
 
 Defer:
 

@@ -198,7 +198,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             senderDid: senderDid,
             senderDeviceId: 1,
             plaintext: Data(text.utf8),
-            sentAtMs: now
+            sentAtMs: now,
+            groupId: nil
         )
         nextMessageId += 1
         pendingMessages.append(msg)

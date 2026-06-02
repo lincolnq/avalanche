@@ -76,6 +76,17 @@ struct ConversationView: View {
         .background(Color.avPaper)
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if conversation.isGroup, let groupId = conversation.groupId {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        GroupDetailView(groupId: groupId, accountId: conversation.accountId)
+                    } label: {
+                        Image(systemName: "person.2")
+                    }
+                }
+            }
+        }
         .onAppear {
             appState.currentConversationId = conversation.id
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
@@ -84,6 +95,9 @@ struct ConversationView: View {
             // display name if it changed. Primary change-detection path.
             if let recipientDid = conversation.recipientDid {
                 appState.refreshContactProfile(did: recipientDid, accountId: conversation.accountId)
+            }
+            if let groupId = conversation.groupId {
+                appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
             }
         }
         .onDisappear {
@@ -134,18 +148,27 @@ struct ConversationView: View {
 
         Task {
             do {
-                guard let recipientDid = conversation.recipientDid else {
-                    errorMessage = "Cannot send: no recipient"
-                    return
+                if conversation.isGroup {
+                    try await appState.sendGroupMessage(
+                        conversation: conversation,
+                        text: text,
+                        messageId: messageId,
+                        sentAtMs: nowMs
+                    )
+                } else {
+                    guard let recipientDid = conversation.recipientDid else {
+                        errorMessage = "Cannot send: no recipient"
+                        return
+                    }
+                    try await appState.sendMessage(
+                        conversationId: conversation.id,
+                        text: text,
+                        recipientDid: recipientDid,
+                        senderAccountId: conversation.accountId,
+                        messageId: messageId,
+                        sentAtMs: nowMs
+                    )
                 }
-                try await appState.sendMessage(
-                    conversationId: conversation.id,
-                    text: text,
-                    recipientDid: recipientDid,
-                    senderAccountId: conversation.accountId,
-                    messageId: messageId,
-                    sentAtMs: nowMs
-                )
             } catch {
                 errorMessage = "Failed to send: \(error.localizedDescription)"
             }

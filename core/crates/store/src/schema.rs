@@ -194,4 +194,16 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         record           BLOB NOT NULL,\
         PRIMARY KEY (address, distribution_id)\
     )",
+    // Minimal contact table from docs/35-contacts-and-profiles.md.
+    // `is_curated` flips true on any deliberate gesture (sending a DM,
+    // inviting to a group, etc.) and is the single source of truth for
+    // the People list. `last_interaction_at` drives recency sort.
+    // Display name lookups still go through `contact_profiles`.
+    "CREATE TABLE IF NOT EXISTS contacts (\
+        did                  TEXT    PRIMARY KEY,\
+        is_curated           INTEGER NOT NULL DEFAULT 0,\
+        last_interaction_at  INTEGER NOT NULL DEFAULT 0\
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_contacts_recency \
+        ON contacts (last_interaction_at DESC)",
 ];

@@ -26,6 +26,8 @@ extension AppCoreProtocol {
     func contactDisplayName(did: String) throws -> String { "" }
     func refreshContactProfile(did: String) throws -> Bool { false }
     func primeContactProfile(did: String, displayName: String, profileKey: Data) throws {}
+    func listContacts() throws -> [ContactRowFfi] { [] }
+    func touchContact(did: String, curated: Bool) throws {}
 
     func hasRecovery() -> Bool { false }
     func updateRecoveryBlob(recoveryKey: Data, servers: [String]) throws {}

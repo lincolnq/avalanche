@@ -354,6 +354,7 @@ impl AppCoreInner {
                                 Ok(plaintext) => {
                                     decrypted.push(DecryptedMessage {
                                         plaintext,
+                                        group_id: Some(groups::b64(&gm.group_id)),
                                         ..raw
                                     });
                                 }
@@ -427,6 +428,7 @@ impl AppCoreInner {
             sender_device_id,
             plaintext,
             sent_at_ms: None,
+            group_id: None,
         })
     }
 }
@@ -491,6 +493,16 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             } else {
                 None
             };
+
+            // Touch the contact row on inbound traffic — non-curating, just
+            // a recency bump so the People/Other autocomplete sorting works.
+            {
+                let inner = core.inner.lock().await;
+                let _ = inner
+                    .store
+                    .touch_contact(&decrypted.sender_did, false, Timestamp::now())
+                    .await;
+            }
 
             // Auto-send delivery receipt to the sender.
             if let Some(ts) = sent_at {
@@ -565,8 +577,14 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             .await
             {
                 Ok(plaintext) => {
+                    // Group co-member traffic is a non-curating contact touch.
+                    let _ = inner
+                        .store
+                        .touch_contact(&decrypted.sender_did, false, Timestamp::now())
+                        .await;
                     let out = DecryptedMessage {
                         plaintext,
+                        group_id: Some(groups::b64(&gm.group_id)),
                         ..decrypted
                     };
                     let _ = core.event_tx.send(IncomingEvent::Message { msg: out });

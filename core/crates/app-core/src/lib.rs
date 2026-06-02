@@ -96,6 +96,9 @@ pub struct DecryptedMessage {
     pub plaintext: Vec<u8>,
     /// Sender's sent_at timestamp (from envelope). None for legacy messages.
     pub sent_at_ms: Option<i64>,
+    /// URL-safe-no-pad base64 of the group_id when this message arrived as a
+    /// `proto::GroupMessage` body. `None` for plain DMs.
+    pub group_id: Option<String>,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -218,6 +221,17 @@ fn summary_to_ffi(s: groups::GroupSummary) -> GroupSummaryFfi {
             })
             .collect(),
     }
+}
+
+/// Minimal contact-list row backing the compose autocomplete and the People
+/// list. `display_name` is the cached profile display name (empty if no
+/// profile has been fetched yet — callers fall back to the DID).
+#[derive(uniffi::Record, Debug, Clone)]
+pub struct ContactRowFfi {
+    pub did: String,
+    pub display_name: String,
+    pub is_curated: bool,
+    pub last_interaction_at_ms: i64,
 }
 
 /// Public metadata for an account: display name and bot flag.
@@ -843,7 +857,13 @@ impl AppCore {
                 timestamp_ms: sent_at_ms as u64,
                 profile_key,
             };
-            inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await
+            inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await?;
+            // Sending a DM is a deliberate gesture (docs/35 §"What changes a row").
+            let _ = inner
+                .store
+                .touch_contact(&recipient_did, true, Timestamp::now())
+                .await;
+            Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
 
@@ -1276,6 +1296,58 @@ impl AppCore {
             }).await.map_err(AppError::from)?;
             Ok(changed)
         }).map_err(AppErrorFfi::from)
+    }
+
+    /// Enumerate every known contact, newest interaction first. Each row
+    /// joins the curation flag from the `contacts` table with the cached
+    /// display name from `contact_profiles` when available. The compose
+    /// autocomplete shows `is_curated == true` rows under "People" and
+    /// the rest under "Other".
+    pub fn list_contacts(&self) -> Result<Vec<ContactRowFfi>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let rows = inner.store.list_contacts().await.map_err(AppError::from)?;
+            let own_did = inner.did.clone();
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                // Don't show ourselves in our own contact list.
+                if row.did == own_did {
+                    continue;
+                }
+                let display_name = inner
+                    .store
+                    .load_contact_profile(&row.did)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|p| p.display_name)
+                    .unwrap_or_default();
+                out.push(ContactRowFfi {
+                    did: row.did,
+                    display_name,
+                    is_curated: row.is_curated,
+                    last_interaction_at_ms: row.last_interaction_at.as_millis(),
+                });
+            }
+            Ok::<_, AppError>(out)
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
+    /// Touch a contact row, creating it if missing. `curated` flips
+    /// `is_curated` to true (sticky); pass `false` to record an interaction
+    /// without curating. The caller is responsible for tracking what's a
+    /// deliberate gesture versus an automatic event.
+    pub fn touch_contact(&self, did: String, curated: bool) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner
+                .store
+                .touch_contact(&did, curated, Timestamp::now())
+                .await
+                .map_err(AppError::from)
+        })
+        .map_err(AppErrorFfi::from)
     }
 
     /// Check whether this account has a recovery blob set up (has rotation key in store).

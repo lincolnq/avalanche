@@ -61,6 +61,10 @@ final class AppState: ObservableObject {
     private var displayNameCache: [String: String] = [:]
     /// DIDs currently being fetched (to avoid duplicate requests).
     private var displayNameInFlight: Set<String> = []
+    /// Cached group titles, keyed by URL-safe-no-pad base64 group_id.
+    /// Populated by `fetchGroupTitle` and consumed by the conversation
+    /// list / `Conversation.title`.
+    private var groupTitleCache: [String: String] = [:]
     private var _service: any ActnetService
 
     var service: any ActnetService { _service }
@@ -432,6 +436,12 @@ final class AppState: ObservableObject {
         Array(cores.values)
     }
 
+    /// Look up the AppCore bound to a given account DID. Used by per-account
+    /// views (group detail, etc.) that need to call FFI directly.
+    func core(accountId: String) -> (any AppCoreProtocol)? {
+        cores[accountId]
+    }
+
     func joinServer(serverUrl: String, serverName: String, existingAccountId: String) async throws {
         if let idx = accounts.firstIndex(where: { $0.id == existingAccountId }) {
             accounts[idx].servers.append(
@@ -655,6 +665,22 @@ final class AppState: ObservableObject {
         for (accountId, summaries) in summariesPerAccount {
             let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
             for s in summaries {
+                let date = Date(timeIntervalSince1970: TimeInterval(s.lastMessage.sentAtMs) / 1000.0)
+                if let groupId = Self.groupId(from: s.conversationId) {
+                    let title = groupTitleCache[groupId] ?? "Group"
+                    newConvs.append(Conversation(
+                        id: s.conversationId,
+                        title: title,
+                        accountId: accountId,
+                        serverUrl: serverUrl,
+                        recipientDid: nil,
+                        groupId: groupId,
+                        lastMessage: s.lastMessage.body,
+                        lastMessageDate: date,
+                        isGroup: true
+                    ))
+                    continue
+                }
                 let recipientDid = Self.recipientDid(from: s.conversationId, accountId: accountId)
                 let title = recipientDid.flatMap { displayNameCache[$0] } ?? recipientDid ?? s.conversationId
                 newConvs.append(Conversation(
@@ -664,7 +690,7 @@ final class AppState: ObservableObject {
                     serverUrl: serverUrl,
                     recipientDid: recipientDid,
                     lastMessage: s.lastMessage.body,
-                    lastMessageDate: Date(timeIntervalSince1970: TimeInterval(s.lastMessage.sentAtMs) / 1000.0),
+                    lastMessageDate: date,
                     isGroup: false
                 ))
             }
@@ -685,6 +711,14 @@ final class AppState: ObservableObject {
     /// `dm-<accountDid>-<recipientDid>`. Returns nil for non-DM IDs.
     private static func recipientDid(from conversationId: String, accountId: String) -> String? {
         let prefix = "dm-\(accountId)-"
+        guard conversationId.hasPrefix(prefix) else { return nil }
+        return String(conversationId.dropFirst(prefix.count))
+    }
+
+    /// Parse the group_id out of a conversation ID of the form
+    /// `group-<groupIdB64>`. Returns nil for non-group IDs.
+    private static func groupId(from conversationId: String) -> String? {
+        let prefix = "group-"
         guard conversationId.hasPrefix(prefix) else { return nil }
         return String(conversationId.dropFirst(prefix.count))
     }
@@ -736,6 +770,175 @@ final class AppState: ObservableObject {
         )
         conversations.append(conv)
         return conv
+    }
+
+    /// Find or create a group conversation. `title` is used if the
+    /// conversation row is being created for the first time; existing rows
+    /// keep their cached title until `refreshGroupTitle` overwrites it.
+    func findOrCreateGroupConversation(
+        groupId: String,
+        title: String,
+        accountId: String,
+        serverUrl: String
+    ) -> Conversation {
+        let convId = groupConversationId(groupId)
+        if let existing = conversations.first(where: { $0.id == convId }) {
+            return existing
+        }
+        let conv = Conversation(
+            id: convId,
+            title: title,
+            accountId: accountId,
+            serverUrl: serverUrl,
+            recipientDid: nil,
+            groupId: groupId,
+            isGroup: true
+        )
+        conversations.append(conv)
+        groupTitleCache[groupId] = title
+        return conv
+    }
+
+    /// Refresh the cached title for a group from `fetchGroupState`. Updates
+    /// any in-memory `Conversation` row with the new title.
+    func refreshGroupTitle(groupId: String, accountId: String) {
+        guard let core = cores[accountId] else { return }
+        Task.detached { [weak self] in
+            guard let summary = try? core.fetchGroupState(groupId: groupId) else { return }
+            let title = summary.title.isEmpty ? "Group" : summary.title
+            await MainActor.run {
+                guard let self else { return }
+                self.groupTitleCache[groupId] = title
+                let convId = groupConversationId(groupId)
+                if let idx = self.conversations.firstIndex(where: { $0.id == convId }) {
+                    self.conversations[idx].title = title
+                }
+            }
+        }
+    }
+
+    /// Compose entry point: create a new group with the given recipients,
+    /// invite each member, and (optionally) send the first message. Returns
+    /// the new conversation once `create_group` succeeds. Invites and the
+    /// first send happen asynchronously; failures surface via banners on
+    /// the returned thread (TODO: wire partial-failure banner per docs/30).
+    func createGroupAndOpen(
+        accountId: String,
+        serverUrl: String,
+        title: String,
+        recipientDids: [String],
+        firstMessage: String?
+    ) async throws -> Conversation {
+        guard let core = cores[accountId] else {
+            throw NSError(domain: "AppState", code: 1, userInfo: [NSLocalizedDescriptionKey: "No core for account"])
+        }
+        let titleForCreate = title
+        let created = try await Task.detached {
+            try core.createGroup(title: titleForCreate, description: "", expirySeconds: 0)
+        }.value
+        let groupId = created.groupId
+
+        // Fan out invites. Best-effort — one failure doesn't abort the rest.
+        let invitees = recipientDids
+        Task.detached {
+            for did in invitees {
+                do {
+                    try core.inviteMember(groupId: groupId, recipientDid: did, role: 0)
+                } catch {
+                    AppLog.warn("compose", "invite \(did) to \(groupId) failed: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        let conv = findOrCreateGroupConversation(
+            groupId: groupId,
+            title: titleForCreate.isEmpty ? "Group" : titleForCreate,
+            accountId: accountId,
+            serverUrl: serverUrl
+        )
+
+        if let body = firstMessage, !body.isEmpty {
+            let messageId = UUID().uuidString
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let optimistic = Message(
+                id: messageId,
+                conversationId: conv.id,
+                senderAccountId: accountId,
+                body: body,
+                sentAtMs: nowMs,
+                readAtMs: nowMs,
+                deliveryStatus: .sending
+            )
+            messagesByConversation[conv.id, default: []].append(optimistic)
+            try await sendGroupMessage(
+                conversation: conv,
+                text: body,
+                messageId: messageId,
+                sentAtMs: nowMs
+            )
+        }
+        return conv
+    }
+
+    /// Send a message into a group conversation. Mirrors `sendMessage` for
+    /// DMs: persist as `sending`, dispatch over FFI, update status on
+    /// success / failure.
+    func sendGroupMessage(
+        conversation: Conversation,
+        text: String,
+        messageId: String,
+        sentAtMs: Int64
+    ) async throws {
+        guard let groupId = conversation.groupId else { return }
+        guard let core = cores[conversation.accountId] else { return }
+        let plaintext = Data(text.utf8)
+
+        let pending = StoredMessageFfi(
+            id: messageId,
+            conversationId: conversation.id,
+            senderDid: conversation.accountId,
+            body: text,
+            sentAtMs: sentAtMs,
+            editedAtMs: nil,
+            readAtMs: sentAtMs,
+            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue)
+        )
+        try await Task.detached { try core.saveMessage(msg: pending) }.value
+
+        do {
+            try await Task.detached {
+                try core.sendGroupMessage(groupId: groupId, plaintext: plaintext)
+            }.value
+            updateMessageStatus(messageId: messageId, conversationId: conversation.id, newStatus: .sent)
+            let sent = StoredMessageFfi(
+                id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
+                body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue)
+            )
+            Task.detached { try? core.saveMessage(msg: sent) }
+        } catch {
+            AppLog.error("send", "group send to \(groupId) failed: \(error.localizedDescription)")
+            updateMessageStatus(messageId: messageId, conversationId: conversation.id, newStatus: .failed)
+            let failed = StoredMessageFfi(
+                id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
+                body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue)
+            )
+            Task.detached { try? core.saveMessage(msg: failed) }
+            throw error
+        }
+    }
+
+    // MARK: - Contacts (docs/35-contacts-and-profiles.md)
+
+    /// Snapshot of the contact list for the given account, joined with
+    /// cached display names. The compose autocomplete is built directly
+    /// from this.
+    func listContacts(accountId: String) async -> [ContactRowFfi] {
+        guard let core = cores[accountId] else { return [] }
+        return await Task.detached {
+            (try? core.listContacts()) ?? []
+        }.value
     }
 
     func pollMessages(for accountId: String) async throws -> [DecryptedMessage] {
@@ -901,8 +1104,26 @@ final class AppState: ObservableObject {
 
         var convId: String
 
-        // Find existing conversation with this sender.
-        if let idx = conversations.firstIndex(where: {
+        if let groupId = msg.groupId {
+            // Group message: route to the group thread, creating one on the
+            // fly if a GroupContext DM hasn't surfaced yet. The Conversation
+            // row's title is filled in lazily by `refreshGroupTitle`.
+            let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
+            let title = groupTitleCache[groupId] ?? "Group"
+            let conv = findOrCreateGroupConversation(
+                groupId: groupId,
+                title: title,
+                accountId: accountId,
+                serverUrl: serverUrl
+            )
+            convId = conv.id
+            if let idx = conversations.firstIndex(where: { $0.id == convId }) {
+                conversations[idx].lastMessage = text
+                conversations[idx].lastMessageDate = Date()
+            }
+            // Ensure we render the right title once state has been fetched.
+            refreshGroupTitle(groupId: groupId, accountId: accountId)
+        } else if let idx = conversations.firstIndex(where: {
             $0.accountId == accountId && $0.recipientDid == senderDid
         }) {
             convId = conversations[idx].id
