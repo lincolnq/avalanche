@@ -63,6 +63,12 @@ pub enum WsPush {
         one_time_remaining: i64,
         kyber_remaining: i64,
     },
+    /// A new account just registered on this server. Only pushed to the
+    /// adminbot session (see [`AppState::adminbot_session`]).
+    AccountJoined {
+        did: String,
+        joined_at_ms: i64,
+    },
 }
 
 /// Shared application state, available to all request handlers via Axum's
@@ -87,6 +93,13 @@ pub struct AppState {
     /// sign per-message `SenderCertificate`s in the sealed-sender group
     /// flow. Trust root pubkey is published via `/v1/groups/server-params`.
     pub sender_cert_chain: Arc<SenderCertChain>,
+    /// Single slot holding the push channel of the currently-connected
+    /// adminbot WebSocket session (if any). Set by the WS handler when a
+    /// session whose authed DID matches `config.adminbot_did` connects;
+    /// cleared on disconnect. Server-pushed admin events (e.g.
+    /// `AccountJoinedEvent`) route through this slot; if it's `None`, the
+    /// event is dropped (v1 — no catch-up).
+    pub adminbot_session: Arc<RwLock<Option<mpsc::UnboundedSender<WsPush>>>>,
 }
 
 impl AppState {
@@ -103,6 +116,7 @@ impl AppState {
             group_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             zkgroup_secret: Arc::new(zkgroup_secret),
             sender_cert_chain: Arc::new(sender_cert_chain),
+            adminbot_session: Arc::new(RwLock::new(None)),
         }
     }
 }

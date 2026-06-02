@@ -270,6 +270,10 @@ pub enum IncomingEvent {
     Message { msg: DecryptedMessage },
     /// A delivery status update from a read receipt.
     ReceiptUpdate { update: DeliveryStatusUpdate },
+    /// A new account just registered on this homeserver. Only delivered to
+    /// bot accounts whose authed DID matches the server's pinned
+    /// `ADMINBOT_DID` — for any other session the channel stays empty.
+    AccountJoined { did: String, joined_at_ms: i64 },
 }
 
 /// Implementation of `net::Signer` backed by the device's libsignal identity
@@ -457,6 +461,41 @@ impl AppCore {
             core.start_reconnect_task();
             Ok(core)
         }
+    }
+
+    /// Create a new bot account on the server.
+    ///
+    /// Bot accounts skip the PLC directory and receive a `did:local:...` DID
+    /// assigned by the server. `display_name` is sent plaintext (server stores
+    /// it directly for bot-name lookup); humans use [`Self::create_account`]
+    /// instead, which encrypts the display name into a profile blob.
+    ///
+    /// No recovery blob is uploaded — bots are operator-managed and don't use
+    /// the passkey recovery flow.
+    ///
+    /// Call from a background thread — this blocks until complete.
+    #[uniffi::constructor]
+    pub fn create_bot_account(
+        server_url: String,
+        db_path: String,
+        db_key: String,
+        display_name: String,
+    ) -> Result<Arc<Self>, AppErrorFfi> {
+        let rt = ffi_runtime();
+
+        let store = rt.block_on(store::Store::open(
+            Path::new(&db_path),
+            &store::DatabaseKey::from_passphrase(db_key),
+        )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
+
+        let prepared = PreparedAccountState::prepare(server_url, false)
+            .map_err(AppErrorFfi::from)?;
+        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), true, None))
+            .map_err(AppErrorFfi::from)?;
+
+        let core = Arc::new(Self::build(inner));
+        core.start_reconnect_task();
+        Ok(core)
     }
 
     /// Finalize account registration using a previously prepared identity.

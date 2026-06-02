@@ -19,6 +19,7 @@ use axum::{
     extract::FromRequestParts,
     http::request::Parts,
 };
+use sqlx::Row;
 
 use crate::{db, error::ServerError, state::AppState};
 
@@ -45,6 +46,57 @@ where
             .ok_or(ServerError::Unauthorized)?;
 
         Ok(AuthDevice { device_pk })
+    }
+}
+
+/// Extractor for `/v1/admin/*` endpoints. Validates the session token (same
+/// as [`AuthDevice`]), then resolves the device to an account DID and
+/// rejects unless that DID matches the server's pinned `ADMINBOT_DID`.
+///
+/// If `ADMINBOT_DID` is unset, every caller is rejected — adminbot's
+/// bootstrap requires the operator to set the pin before any privileged
+/// endpoint accepts a caller.
+pub struct AuthAdminbot {
+    pub device_pk: i64,
+    pub did: String,
+}
+
+impl<S> FromRequestParts<S> for AuthAdminbot
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = ServerError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let app_state = AppState::from_ref(state);
+        let pinned = app_state
+            .config
+            .adminbot_did
+            .as_deref()
+            .ok_or(ServerError::Unauthorized)?;
+
+        let token = extract_bearer_token(parts)?;
+        let mut conn = app_state.db.acquire().await.map_err(ServerError::Db)?;
+        let device_pk = db::sessions::validate(&mut conn, &token)
+            .await?
+            .ok_or(ServerError::Unauthorized)?;
+
+        let did: String = sqlx::query(
+            "SELECT a.did FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
+        )
+        .bind(device_pk)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(ServerError::Db)?
+        .ok_or(ServerError::Unauthorized)?
+        .get("did");
+
+        if did != pinned {
+            return Err(ServerError::Unauthorized);
+        }
+
+        Ok(AuthAdminbot { device_pk, did })
     }
 }
 

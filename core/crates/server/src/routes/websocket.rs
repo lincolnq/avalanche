@@ -54,8 +54,8 @@ use crate::{
     db,
     error::ServerError,
     proto::{
-        ws_frame::Body, DeliverRequest, GroupDeliverRequest, Keepalive, PrekeyLowNotification,
-        SendResponse, WsFrame,
+        ws_frame::Body, AccountJoinedEvent, DeliverRequest, GroupDeliverRequest, Keepalive,
+        PrekeyLowNotification, SendResponse, WsFrame,
     },
     routes::messages::{send_messages, SendInput},
     state::{AppState, WsPush},
@@ -80,7 +80,22 @@ async fn ws_upgrade(
         .await?
         .ok_or(ServerError::Unauthorized)?;
 
-    Ok(ws.on_upgrade(move |socket| handle_ws(socket, state, device_pk)))
+    // Resolve the device's account DID once at upgrade time so the loop can
+    // check whether this is the pinned adminbot session without touching the
+    // DB on every frame.
+    let did: Option<String> = sqlx::query_scalar(
+        "SELECT a.did FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
+    )
+    .bind(device_pk)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(ServerError::Db)?;
+    let is_adminbot = matches!(
+        (&did, state.config.adminbot_did.as_deref()),
+        (Some(d), Some(pin)) if d == pin
+    );
+
+    Ok(ws.on_upgrade(move |socket| handle_ws(socket, state, device_pk, is_adminbot)))
 }
 
 /// Outstanding server-initiated pushes awaiting an ack. Tracks both
@@ -93,11 +108,15 @@ enum PendingAck {
 }
 type PendingAcks = Arc<Mutex<HashMap<u64, PendingAck>>>;
 
-async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
+async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64, is_adminbot: bool) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsPush>();
 
     state.ws_connections.write().await.insert(device_pk, tx.clone());
+    if is_adminbot {
+        *state.adminbot_session.write().await = Some(tx.clone());
+        tracing::info!(device_pk, "ws: adminbot session connected");
+    }
 
     let pending: PendingAcks = Arc::new(Mutex::new(HashMap::new()));
     // Pseudonyms this socket has subscribed to. Owned here so we can drop
@@ -195,6 +214,15 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
                             })),
                         }
                     }
+                    WsPush::AccountJoined { did, joined_at_ms } => {
+                        WsFrame {
+                            id: 0,
+                            body: Some(Body::AccountJoined(AccountJoinedEvent {
+                                did,
+                                joined_at_ms,
+                            })),
+                        }
+                    }
                 };
                 if sink.send(Message::Binary(encode(&frame).into())).await.is_err() {
                     break;
@@ -236,6 +264,15 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64) {
     }
 
     state.ws_connections.write().await.remove(&device_pk);
+    if is_adminbot {
+        let mut slot = state.adminbot_session.write().await;
+        if let Some(existing) = slot.as_ref() {
+            if existing.same_channel(&tx) {
+                *slot = None;
+                tracing::info!(device_pk, "ws: adminbot session disconnected");
+            }
+        }
+    }
     if !subscribed_pseudonyms.is_empty() {
         let mut subs = state.group_subscriptions.write().await;
         for p in &subscribed_pseudonyms {
@@ -392,7 +429,8 @@ async fn handle_frame(
         Body::SendResponse(_)
         | Body::DeliverRequest(_)
         | Body::GroupDeliverRequest(_)
-        | Body::PrekeyLow(_) => None,
+        | Body::PrekeyLow(_)
+        | Body::AccountJoined(_) => None,
     }
 }
 

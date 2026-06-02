@@ -7,7 +7,7 @@
 use types::Timestamp;
 
 use crate::messaging::process_decrypted;
-use crate::{AppCore, AppError, ConnectionState};
+use crate::{AppCore, AppError, ConnectionState, IncomingEvent};
 
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
@@ -88,45 +88,69 @@ async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppErro
     Ok(ws)
 }
 
-/// Pull messages off an open WebSocket until it errors or closes. Each
-/// decrypted message + extracted receipt update is pushed to `event_tx`.
+/// Pull events off an open WebSocket until it errors or closes. Fans in
+/// `DeliverRequest`s (1:1 messages, decrypted + emitted via
+/// `process_decrypted`) and `AccountJoinedEvent`s (admin push surfaced
+/// directly as `IncomingEvent::AccountJoined`).
 async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
     loop {
-        let delivery = match ws.next_message().await {
-            Ok(Some(d)) => d,
-            Ok(None) => {
-                tracing::debug!("[ws] connection closed cleanly");
-                return;
-            }
-            Err(e) => {
-                tracing::debug!("[ws] receive error: {e}");
-                return;
-            }
-        };
+        tokio::select! {
+            delivery = ws.next_message() => {
+                let delivery = match delivery {
+                    Ok(Some(d)) => d,
+                    Ok(None) => {
+                        tracing::debug!("[ws] connection closed cleanly");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::debug!("[ws] receive error: {e}");
+                        return;
+                    }
+                };
 
-        // Decrypt under the inner lock; release before any further work.
-        let decrypted = {
-            let mut inner = core.inner.lock().await;
-            match inner.decrypt_inbound(&delivery.message).await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!(
-                        "[ws] failed to decrypt message {} from {:?}: {}, acking to skip",
-                        delivery.message.id,
-                        delivery.message.sender_did,
-                        e
-                    );
-                    drop(inner);
-                    let _ = ws.ack(delivery.ack_token).await;
-                    continue;
+                // Decrypt under the inner lock; release before any further work.
+                let decrypted = {
+                    let mut inner = core.inner.lock().await;
+                    match inner.decrypt_inbound(&delivery.message).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!(
+                                "[ws] failed to decrypt message {} from {:?}: {}, acking to skip",
+                                delivery.message.id,
+                                delivery.message.sender_did,
+                                e
+                            );
+                            drop(inner);
+                            let _ = ws.ack(delivery.ack_token).await;
+                            continue;
+                        }
+                    }
+                };
+
+                // Ack on the wire so the server stops re-delivering it.
+                let _ = ws.ack(delivery.ack_token).await;
+
+                // Parse the content envelope and emit appropriate IncomingEvents.
+                process_decrypted(core, decrypted).await;
+            }
+            joined = ws.next_account_joined() => {
+                match joined {
+                    Ok(Some(e)) => {
+                        let _ = core.event_tx.send(IncomingEvent::AccountJoined {
+                            did: e.did,
+                            joined_at_ms: e.joined_at_ms,
+                        });
+                    }
+                    Ok(None) => {
+                        tracing::debug!("[ws] connection closed cleanly (account_joined)");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::debug!("[ws] receive error (account_joined): {e}");
+                        return;
+                    }
                 }
             }
-        };
-
-        // Ack on the wire so the server stops re-delivering it.
-        let _ = ws.ack(delivery.ack_token).await;
-
-        // Parse the content envelope and emit appropriate IncomingEvents.
-        process_decrypted(core, decrypted).await;
+        }
     }
 }

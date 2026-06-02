@@ -199,6 +199,22 @@ async fn register(
         db::sessions::create(&mut conn, &token, device_pk, state.config.token_lifetime_secs)
             .await?;
 
+    // Notify adminbot (if connected and not registering itself) so it can
+    // act on the new account. Best-effort: a disconnected adminbot misses
+    // the event in v1.
+    if state.config.adminbot_did.as_deref() != Some(did.as_str()) {
+        if let Some(tx) = state.adminbot_session.read().await.as_ref() {
+            let joined_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let _ = tx.send(crate::state::WsPush::AccountJoined {
+                did: did.clone(),
+                joined_at_ms,
+            });
+        }
+    }
+
     Ok((
         axum::http::StatusCode::CREATED,
         Json(RegisterResponse {

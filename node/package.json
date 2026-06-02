@@ -1,44 +1,13 @@
 {
-  "name": "@actnet/app-core",
-  "version": "0.1.0",
-  "description": "Node.js bindings for actnet's app-core (encrypted messaging client).",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "name": "actnet-node-workspace",
   "private": true,
-  "license": "AGPL-3.0",
-  "files": [
-    "dist/",
-    "native/index.js",
-    "native/index.d.ts",
-    "native/*.node"
+  "workspaces": [
+    "packages/*"
   ],
-  "napi": {
-    "name": "app-core",
-    "triples": {
-      "defaults": false,
-      "additional": [
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu"
-      ]
-    }
-  },
   "scripts": {
-    "build:native": "napi build --platform --release --cargo-cwd ../core/crates/app-core-node native",
-    "build:native:debug": "napi build --platform --cargo-cwd ../core/crates/app-core-node native",
-    "build:ts": "tsc",
-    "build": "npm run build:native && npm run build:ts",
-    "build:debug": "npm run build:native:debug && npm run build:ts",
-    "docs": "typedoc",
-    "smoke": "node smoke.mjs"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "^2.18.4",
-    "@types/node": "^22.19.19",
-    "temporal-spec": "^0.3.1",
-    "typedoc": "^0.28.19",
-    "typescript": "^5.9.3"
+    "build": "npm run build -w @actnet/app-core",
+    "build:debug": "npm run build:debug -w @actnet/app-core",
+    "docs": "npm run docs -w @actnet/app-core"
   },
   "engines": {
     "node": ">=26"

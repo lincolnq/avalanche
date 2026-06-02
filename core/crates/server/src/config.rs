@@ -46,6 +46,10 @@ pub struct Config {
     pub server_name: String,
     /// Domain used for deep link URLs in invite redirects (default: go.theavalanche.net).
     pub invite_domain: String,
+    /// Pinned DID of the adminbot account. When set, `/v1/admin/*` endpoints
+    /// only accept the caller whose authed account DID matches this. Set after
+    /// adminbot bootstrap; unset means privileged endpoints reject everyone.
+    pub adminbot_did: Option<String>,
 }
 
 impl Config {
@@ -94,6 +98,7 @@ impl Config {
                 .unwrap_or_else(|_| "Avalanche Server".to_string()),
             invite_domain: std::env::var("INVITE_DOMAIN")
                 .unwrap_or_else(|_| "go.theavalanche.net".to_string()),
+            adminbot_did: std::env::var("ADMINBOT_DID").ok().filter(|s| !s.is_empty()),
         }
     }
 

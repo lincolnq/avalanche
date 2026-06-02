@@ -1,0 +1,26 @@
+{
+  "name": "@actnet/adminbot",
+  "version": "0.1.0",
+  "description": "actnet's first-party adminbot — handles new-user onboarding and the #admins chat console.",
+  "private": true,
+  "license": "AGPL-3.0",
+  "type": "module",
+  "bin": {
+    "adminbot": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@actnet/app-core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}

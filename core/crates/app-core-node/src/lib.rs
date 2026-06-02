@@ -307,13 +307,22 @@ impl ConnectionStateJs {
     }
 }
 
-/// A single event from the receive loop. `kind` is `"message" | "receipt"`.
-/// Exactly one of `message` / `receipt` is set.
+/// A single event from the receive loop. `kind` is one of `"message"`,
+/// `"receipt"`, or `"accountJoined"`. Exactly one of `message` / `receipt`
+/// / `accountJoined` is set, matching `kind`.
 #[napi(object)]
 pub struct IncomingEventJs {
     pub kind: String,
     pub message: Option<DecryptedMessageJs>,
     pub receipt: Option<DeliveryStatusUpdateJs>,
+    pub account_joined: Option<AccountJoinedJs>,
+}
+
+/// Adminbot-only push: a new account just registered on the homeserver.
+#[napi(object)]
+pub struct AccountJoinedJs {
+    pub did: String,
+    pub joined_at_ms: i64,
 }
 
 impl From<IncomingEvent> for IncomingEventJs {
@@ -323,11 +332,19 @@ impl From<IncomingEvent> for IncomingEventJs {
                 kind: "message".into(),
                 message: Some(msg.into()),
                 receipt: None,
+                account_joined: None,
             },
             IncomingEvent::ReceiptUpdate { update } => Self {
                 kind: "receipt".into(),
                 message: None,
                 receipt: Some(update.into()),
+                account_joined: None,
+            },
+            IncomingEvent::AccountJoined { did, joined_at_ms } => Self {
+                kind: "accountJoined".into(),
+                message: None,
+                receipt: None,
+                account_joined: Some(AccountJoinedJs { did, joined_at_ms }),
             },
         }
     }
@@ -396,6 +413,26 @@ impl AppCore {
         let rk = recovery_key.to_vec();
         let inner = tokio::task::spawn_blocking(move || {
             core::AppCore::create_account(server_url, db_path, db_key, rk, display_name)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)?;
+        Ok(AppCore { inner })
+    }
+
+    /// Register a new bot account on the server. Bot accounts skip the
+    /// PLC directory and receive a `did:local:...` DID. `displayName` is
+    /// stored as plaintext on the server (bot names aren't encrypted into
+    /// profile blobs). No recovery blob is uploaded.
+    #[napi]
+    pub async fn create_bot_account(
+        server_url: String,
+        db_path: String,
+        db_key: String,
+        display_name: String,
+    ) -> napi::Result<AppCore> {
+        let inner = tokio::task::spawn_blocking(move || {
+            core::AppCore::create_bot_account(server_url, db_path, db_key, display_name)
         })
         .await
         .map_err(join_err)?

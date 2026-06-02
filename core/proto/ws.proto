@@ -31,8 +31,9 @@ message WsFrame {
     SubscribeGroupPseudonyms subscribe_group_pseudonyms   = 8;
     GroupDeliverRequest     group_deliver_request         = 9;
     GroupDeliverAck         group_deliver_ack             = 10;
+    AccountJoinedEvent      account_joined                = 11;
   }
-  reserved 11 to 20;
+  reserved 12 to 20;
 }
 
 // Client → server: send one or more encrypted messages.
@@ -132,4 +133,14 @@ message GroupDeliverRequest {
 
 message GroupDeliverAck {
   reserved 1 to 10;
+}
+
+// Server → bot: a new account was registered on this server. Pushed only
+// to the WebSocket session whose authed DID matches the server's pinned
+// `ADMINBOT_DID`. Fire-and-forget; no ack frame. If no adminbot session
+// is connected at the moment of registration, the event is dropped (v1).
+message AccountJoinedEvent {
+  string did          = 1;
+  int64  joined_at_ms = 2;
+  reserved 3 to 10;
 }

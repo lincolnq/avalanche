@@ -101,7 +101,23 @@ export type ConnectionState =
  */
 export type IncomingEvent =
   | { kind: "message"; message: DecryptedMessage }
-  | { kind: "receipt"; receipt: DeliveryStatusUpdate };
+  | { kind: "receipt"; receipt: DeliveryStatusUpdate }
+  | { kind: "accountJoined"; accountJoined: AccountJoined };
+
+/**
+ * Adminbot-only event: a new account just registered on this homeserver.
+ * Pushed only to bot sessions whose authed DID matches the server's
+ * pinned `ADMINBOT_DID`. If this session isn't adminbot, this event
+ * never fires.
+ *
+ * @category Types
+ */
+export interface AccountJoined {
+  /** DID of the newly-registered account. */
+  did: string;
+  /** Server-side timestamp at the moment of registration. */
+  joinedAt: Temporal.Instant;
+}
 
 /**
  * Public metadata about a Project (server-side bot or webview tool)
@@ -447,6 +463,15 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
   if (e.kind === "receipt" && e.receipt) {
     return { kind: "receipt", receipt: deliveryStatusUpdateFromNative(e.receipt) };
   }
+  if (e.kind === "accountJoined" && e.accountJoined) {
+    return {
+      kind: "accountJoined",
+      accountJoined: {
+        did: e.accountJoined.did,
+        joinedAt: instantFromMs(e.accountJoined.joinedAtMs),
+      },
+    };
+  }
   throw new Error(`malformed incoming event: ${JSON.stringify(e)}`);
 };
 
@@ -558,6 +583,30 @@ export class AppCore {
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.createAccount(serverUrl, dbPath, dbKey, asBuf(recoveryKey), displayName),
+    );
+  }
+
+  /**
+   * Register a brand-new **bot** account on the homeserver.
+   *
+   * Bot accounts skip the PLC directory and receive a `did:local:...` DID
+   * assigned by the server. `displayName` is stored plaintext on the server
+   * (so bots can be looked up by name); humans use {@link createAccount}
+   * which encrypts the display name into a profile blob instead.
+   *
+   * No recovery blob is uploaded — bots are operator-managed and don't use
+   * the passkey recovery flow.
+   *
+   * @category Constructors
+   */
+  static async createBotAccount(
+    serverUrl: string,
+    dbPath: string,
+    dbKey: string,
+    displayName: string,
+  ): Promise<AppCore> {
+    return new AppCore(
+      await native.AppCore.createBotAccount(serverUrl, dbPath, dbKey, displayName),
     );
   }
 

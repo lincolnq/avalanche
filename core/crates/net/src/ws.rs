@@ -36,6 +36,14 @@ use crate::proto::{
 };
 use crate::types::InboundMessage;
 
+/// A server-pushed `AccountJoinedEvent`. Surfaced to bots whose authed
+/// session is pinned as the homeserver's adminbot. Fire-and-forget; no
+/// ack required.
+pub struct InboundAccountJoined {
+    pub did: String,
+    pub joined_at_ms: i64,
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -76,6 +84,8 @@ struct Inner {
     deliveries: Mutex<mpsc::UnboundedReceiver<InboundDelivery>>,
     /// Incoming `GroupDeliverRequest`s, drained by `next_group_message`.
     group_deliveries: Mutex<mpsc::UnboundedReceiver<InboundGroupDelivery>>,
+    /// Incoming `AccountJoinedEvent`s, drained by `next_account_joined`.
+    account_joined: Mutex<mpsc::UnboundedReceiver<InboundAccountJoined>>,
     /// Pending `SendRequest`s awaiting a response, keyed by frame.id.
     correlations: Mutex<HashMap<u64, oneshot::Sender<SendResponse>>>,
     /// Client-side correlation id counter. Starts at 1; 0 is reserved for
@@ -101,11 +111,14 @@ impl WsConnection {
         let (delivery_tx, delivery_rx) = mpsc::unbounded_channel::<InboundDelivery>();
         let (group_delivery_tx, group_delivery_rx) =
             mpsc::unbounded_channel::<InboundGroupDelivery>();
+        let (account_joined_tx, account_joined_rx) =
+            mpsc::unbounded_channel::<InboundAccountJoined>();
 
         let inner = Arc::new(Inner {
             outbound: outbound_tx.clone(),
             deliveries: Mutex::new(delivery_rx),
             group_deliveries: Mutex::new(group_delivery_rx),
+            account_joined: Mutex::new(account_joined_rx),
             correlations: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         });
@@ -116,6 +129,7 @@ impl WsConnection {
             outbound_tx,
             delivery_tx,
             group_delivery_tx,
+            account_joined_tx,
             inner.clone(),
         );
 
@@ -143,6 +157,13 @@ impl WsConnection {
     /// `Ok(None)` once the connection has closed.
     pub async fn next_group_message(&self) -> Result<Option<InboundGroupDelivery>, NetError> {
         Ok(self.inner.group_deliveries.lock().await.recv().await)
+    }
+
+    /// Wait for the next inbound `AccountJoinedEvent`. Returns `Ok(None)`
+    /// once the connection has closed. Only sessions authed as the server's
+    /// pinned `ADMINBOT_DID` will ever receive these.
+    pub async fn next_account_joined(&self) -> Result<Option<InboundAccountJoined>, NetError> {
+        Ok(self.inner.account_joined.lock().await.recv().await)
     }
 
     pub async fn group_ack(&self, ack_token: u64) -> Result<(), NetError> {
@@ -239,6 +260,7 @@ fn spawn_reader(
     outbound: mpsc::UnboundedSender<Vec<u8>>,
     delivery_tx: mpsc::UnboundedSender<InboundDelivery>,
     group_delivery_tx: mpsc::UnboundedSender<InboundGroupDelivery>,
+    account_joined_tx: mpsc::UnboundedSender<InboundAccountJoined>,
     state: Arc<Inner>,
 ) {
     tokio::spawn(async move {
@@ -292,6 +314,12 @@ fn spawn_reader(
                         ack_token: id,
                     });
                 }
+                Body::AccountJoined(e) => {
+                    let _ = account_joined_tx.send(InboundAccountJoined {
+                        did: e.did,
+                        joined_at_ms: e.joined_at_ms,
+                    });
+                }
                 // Server-side notifications without a response. Surface to
                 // the delivery channel later if we add a typed event API;
                 // ignored for now since no client consumer exists.
@@ -305,9 +333,11 @@ fn spawn_reader(
         }
 
         // Connection closed: drop the delivery senders so next_message /
-        // next_group_message return None, and fail any pending correlations.
+        // next_group_message / next_account_joined return None, and fail
+        // any pending correlations.
         drop(delivery_tx);
         drop(group_delivery_tx);
+        drop(account_joined_tx);
         let mut map = state.correlations.lock().await;
         for (_, tx) in map.drain() {
             drop(tx);
