@@ -50,7 +50,19 @@ SWIFT_BINDING := mobile/ios/Generated/app_core.swift
 XCFRAMEWORK_STAMP := mobile/ios/AppCoreFFI.xcframework/Info.plist
 XCODE_PROJ_FILE := mobile/ios/Actnet/Actnet.xcodeproj/project.pbxproj
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev testbot relay relay-release server-release dev-all
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev testbot relay relay-release server-release dev-all node node-debug
+
+# ----------------------------------------------------------------------------
+# Node bindings (napi-rs)
+# ----------------------------------------------------------------------------
+
+node:
+	cd node && [ -d node_modules ] || npm install
+	cd node && npm run build
+
+node-debug:
+	cd node && [ -d node_modules ] || npm install
+	cd node && npm run build:debug
 
 # ----------------------------------------------------------------------------
 # Rust

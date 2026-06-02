@@ -11,6 +11,7 @@ members = [
     "crates/project-sdk",
     "crates/test-utils",
     "crates/testbot",
+    "crates/app-core-node",
 ]
 resolver = "2"
 

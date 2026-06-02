@@ -1,0 +1,22 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs",
+  "name": "@actnet/app-core",
+  "readme": "README.md",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "sort": ["source-order"],
+  "groupOrder": ["Classes", "Functions", "Interfaces", "Type Aliases", "*"],
+  "categorizeByGroup": true,
+  "navigation": {
+    "includeCategories": false,
+    "includeGroups": true,
+    "includeFolders": false
+  },
+  "navigationLinks": {
+    "Repo": "https://github.com/civitech/actnet"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+docs/
+native/index.js
+native/index.d.ts
+native/*.node
