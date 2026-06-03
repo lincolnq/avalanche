@@ -1089,9 +1089,6 @@ final class AppState: ObservableObject {
                 switch ev {
                 case .message(let msg): messages.append(msg)
                 case .receiptUpdate(let upd): receiptUpdates.append(upd)
-                case .accountJoined:
-                    // Adminbot-only event; ignored in the regular client.
-                    break
                 }
             }
             for msg in messages {

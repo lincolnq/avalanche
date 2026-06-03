@@ -348,7 +348,6 @@ async fn bot_message_loop(
             .filter_map(|e| match e {
                 app_core::IncomingEvent::Message { msg } => Some(msg),
                 app_core::IncomingEvent::ReceiptUpdate { .. } => None,
-                app_core::IncomingEvent::AccountJoined { .. } => None,
             })
             .collect();
 

@@ -17,7 +17,8 @@ use app_core::error::AppErrorFfi;
 use app_core::{
     self as core, AccountInfoFfi, ConnectionState, ContactRowFfi, ConversationSummaryFfi,
     CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate, GroupMemberFfi, GroupPendingFfi,
-    GroupSummaryFfi, IncomingEvent, InviteInfo, JoinResultFfi, ProjectInfoFfi, StoredMessageFfi,
+    AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo, JoinResultFfi, ProjectInfoFfi,
+    StoredMessageFfi,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -307,15 +308,13 @@ impl ConnectionStateJs {
     }
 }
 
-/// A single event from the receive loop. `kind` is one of `"message"`,
-/// `"receipt"`, or `"accountJoined"`. Exactly one of `message` / `receipt`
-/// / `accountJoined` is set, matching `kind`.
+/// A single event from the receive loop. `kind` is one of `"message"` or
+/// `"receipt"`. Exactly one of `message` / `receipt` is set, matching `kind`.
 #[napi(object)]
 pub struct IncomingEventJs {
     pub kind: String,
     pub message: Option<DecryptedMessageJs>,
     pub receipt: Option<DeliveryStatusUpdateJs>,
-    pub account_joined: Option<AccountJoinedJs>,
 }
 
 /// Adminbot-only push: a new account just registered on the homeserver.
@@ -332,18 +331,30 @@ impl From<IncomingEvent> for IncomingEventJs {
                 kind: "message".into(),
                 message: Some(msg.into()),
                 receipt: None,
-                account_joined: None,
             },
             IncomingEvent::ReceiptUpdate { update } => Self {
                 kind: "receipt".into(),
                 message: None,
                 receipt: Some(update.into()),
-                account_joined: None,
             },
-            IncomingEvent::AccountJoined { did, joined_at_ms } => Self {
+        }
+    }
+}
+
+/// An admin-only event from the receive loop, drained via
+/// `nextAdminEvents`. `kind` is currently always `"accountJoined"`; future
+/// variants (e.g. server build events) will land here.
+#[napi(object)]
+pub struct AdminEventJs {
+    pub kind: String,
+    pub account_joined: Option<AccountJoinedJs>,
+}
+
+impl From<AdminEvent> for AdminEventJs {
+    fn from(e: AdminEvent) -> Self {
+        match e {
+            AdminEvent::AccountJoined { did, joined_at_ms } => Self {
                 kind: "accountJoined".into(),
-                message: None,
-                receipt: None,
                 account_joined: Some(AccountJoinedJs { did, joined_at_ms }),
             },
         }
@@ -573,6 +584,19 @@ impl AppCore {
             .await
             .map_err(join_err)?
             .map_err(to_napi)?;
+        Ok(events.into_iter().map(Into::into).collect())
+    }
+
+    /// Block until at least one admin event is available; drain the admin
+    /// queue and return the batch. Only adminbot sessions ever receive
+    /// admin events — for any other session this future pends indefinitely.
+    #[napi]
+    pub async fn next_admin_events(&self) -> napi::Result<Vec<AdminEventJs>> {
+        let core = self.inner.clone();
+        let events = core
+            .next_admin_events_async()
+            .await
+            .map_err(|e| to_napi(AppErrorFfi::from(e)))?;
         Ok(events.into_iter().map(Into::into).collect())
     }
 

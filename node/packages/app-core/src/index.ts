@@ -101,8 +101,19 @@ export type ConnectionState =
  */
 export type IncomingEvent =
   | { kind: "message"; message: DecryptedMessage }
-  | { kind: "receipt"; receipt: DeliveryStatusUpdate }
-  | { kind: "accountJoined"; accountJoined: AccountJoined };
+  | { kind: "receipt"; receipt: DeliveryStatusUpdate };
+
+/**
+ * Admin-only events surfaced via {@link AppCore.adminEvents} /
+ * {@link AppCore.nextAdminEvents}. Only adminbot sessions ever receive
+ * these — for any other session the queue stays empty.
+ *
+ * Discriminated by `kind`; currently only `"accountJoined"`, but kept
+ * extensible for future admin pushes.
+ *
+ * @category Types
+ */
+export type AdminEvent = { kind: "accountJoined"; accountJoined: AccountJoined };
 
 /**
  * Adminbot-only event: a new account just registered on this homeserver.
@@ -463,6 +474,10 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
   if (e.kind === "receipt" && e.receipt) {
     return { kind: "receipt", receipt: deliveryStatusUpdateFromNative(e.receipt) };
   }
+  throw new Error(`malformed incoming event: ${JSON.stringify(e)}`);
+};
+
+const adminEventFromNative = (e: native.AdminEventJs): AdminEvent => {
   if (e.kind === "accountJoined" && e.accountJoined) {
     return {
       kind: "accountJoined",
@@ -472,7 +487,7 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
       },
     };
   }
-  throw new Error(`malformed incoming event: ${JSON.stringify(e)}`);
+  throw new Error(`malformed admin event: ${JSON.stringify(e)}`);
 };
 
 const groupMemberFromNative = (m: native.GroupMemberJs): GroupMember => ({
@@ -806,6 +821,46 @@ export class AppCore {
   async nextEvents(): Promise<IncomingEvent[]> {
     const events = await this._native.nextEvents();
     return events.map(incomingEventFromNative);
+  }
+
+  /**
+   * Async iterator over admin-only events from the homeserver. Mirrors
+   * {@link events} but for the parallel admin queue. Only adminbot sessions
+   * ever receive admin events; for any other session this iterator hangs
+   * forever waiting on an empty queue.
+   *
+   * ```ts
+   * for await (const e of core.adminEvents()) {
+   *   if (e.kind === "accountJoined") await invite(e.accountJoined.did);
+   * }
+   * ```
+   *
+   * Single-consumer: run from exactly one async loop. Drive it concurrently
+   * with {@link events} via `Promise.all`.
+   *
+   * @category Connection
+   */
+  async *adminEvents(): AsyncGenerator<AdminEvent, void, void> {
+    while (true) {
+      let batch: native.AdminEventJs[];
+      try {
+        batch = await this._native.nextAdminEvents();
+      } catch {
+        return;
+      }
+      for (const e of batch) yield adminEventFromNative(e);
+    }
+  }
+
+  /**
+   * Lower-level variant of {@link adminEvents}: block until at least one
+   * admin event is available, then drain and return the whole batch.
+   *
+   * @category Connection
+   */
+  async nextAdminEvents(): Promise<AdminEvent[]> {
+    const events = await this._native.nextAdminEvents();
+    return events.map(adminEventFromNative);
   }
 
   // ── projects ────────────────────────────────────────────────────────────

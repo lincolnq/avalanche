@@ -20,6 +20,7 @@ import { join } from "node:path";
 import {
   AppCore,
   initLogging,
+  type AdminEvent,
   type IncomingEvent,
 } from "@actnet/app-core";
 
@@ -125,11 +126,21 @@ async function inviteInitialAdmins(
   saveState(env.statePath, state);
 }
 
-async function handleEvent(
+async function handleMessage(
+  core: AppCore,
+  groupId: string,
+  event: IncomingEvent,
+): Promise<void> {
+  if (event.kind === "message" && event.message.groupId === groupId) {
+    await handleCommand(core, groupId, event.message.senderDid, event.message.body.trim());
+  }
+}
+
+async function handleAdminEvent(
   core: AppCore,
   state: AdminbotState,
   groupId: string,
-  event: IncomingEvent,
+  event: AdminEvent,
 ): Promise<void> {
   if (event.kind === "accountJoined") {
     const { did } = event.accountJoined;
@@ -140,11 +151,6 @@ async function handleEvent(
     } catch (e) {
       console.error(`adminbot: invite of ${did} failed: ${(e as Error).message}`);
     }
-    return;
-  }
-
-  if (event.kind === "message" && event.message.groupId === groupId) {
-    await handleCommand(core, groupId, event.message.senderDid, event.message.body.trim());
   }
 }
 
@@ -193,11 +199,24 @@ async function run(): Promise<void> {
   await inviteInitialAdmins(core, env, state, groupId);
 
   console.log(`adminbot: listening for events on ${groupId}`);
-  for await (const event of core.events()) {
-    handleEvent(core, state, groupId, event).catch((e) => {
-      console.error(`adminbot: handler error: ${(e as Error).message}`);
-    });
-  }
+
+  const messagesLoop = (async () => {
+    for await (const event of core.events()) {
+      handleMessage(core, groupId, event).catch((e) => {
+        console.error(`adminbot: message handler error: ${(e as Error).message}`);
+      });
+    }
+  })();
+
+  const adminLoop = (async () => {
+    for await (const event of core.adminEvents()) {
+      handleAdminEvent(core, state, groupId, event).catch((e) => {
+        console.error(`adminbot: admin handler error: ${(e as Error).message}`);
+      });
+    }
+  })();
+
+  await Promise.all([messagesLoop, adminLoop]);
 }
 
 run().catch((e) => {

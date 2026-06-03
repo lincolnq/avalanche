@@ -7,7 +7,7 @@
 use types::Timestamp;
 
 use crate::messaging::process_decrypted;
-use crate::{AppCore, AppError, ConnectionState, IncomingEvent};
+use crate::{AdminEvent, AppCore, AppError, ConnectionState};
 
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
@@ -90,8 +90,8 @@ async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppErro
 
 /// Pull events off an open WebSocket until it errors or closes. Fans in
 /// `DeliverRequest`s (1:1 messages, decrypted + emitted via
-/// `process_decrypted`) and `AccountJoinedEvent`s (admin push surfaced
-/// directly as `IncomingEvent::AccountJoined`).
+/// `process_decrypted`) and `AccountJoinedEvent`s (admin push surfaced on
+/// the separate admin queue as `AdminEvent::AccountJoined`).
 async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
     loop {
         tokio::select! {
@@ -136,7 +136,7 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
             joined = ws.next_account_joined() => {
                 match joined {
                     Ok(Some(e)) => {
-                        let _ = core.event_tx.send(IncomingEvent::AccountJoined {
+                        let _ = core.admin_event_tx.send(AdminEvent::AccountJoined {
                             did: e.did,
                             joined_at_ms: e.joined_at_ms,
                         });

@@ -270,6 +270,17 @@ pub enum IncomingEvent {
     Message { msg: DecryptedMessage },
     /// A delivery status update from a read receipt.
     ReceiptUpdate { update: DeliveryStatusUpdate },
+}
+
+/// Admin-only events surfaced to a separate queue, drained by
+/// `next_admin_events_async()`. NOT exported to UniFFI — mobile clients
+/// never see these. Consumed exclusively by admin Projects (today: the
+/// adminbot, via the napi binding).
+///
+/// Future variants (e.g. `ServerBuildEvent`) will land here so admin pushes
+/// can grow without breaking the consumer-facing `IncomingEvent` enum.
+#[derive(Debug, Clone)]
+pub enum AdminEvent {
     /// A new account just registered on this homeserver. Only delivered to
     /// bot accounts whose authed DID matches the server's pinned
     /// `ADMINBOT_DID` — for any other session the channel stays empty.
@@ -338,6 +349,11 @@ pub struct AppCore {
     /// Single-consumer event receiver. Wrapped in a tokio Mutex because
     /// `recv().await` is held across an await.
     pub(crate) event_rx: Mutex<tokio::sync::mpsc::UnboundedReceiver<IncomingEvent>>,
+    /// Sender side of the admin-event queue. Parallel to `event_tx`; not
+    /// FFI-exported. Drained via `next_admin_events_async`.
+    pub(crate) admin_event_tx: tokio::sync::mpsc::UnboundedSender<AdminEvent>,
+    /// Single-consumer admin-event receiver.
+    pub(crate) admin_event_rx: Mutex<tokio::sync::mpsc::UnboundedReceiver<AdminEvent>>,
     /// Handle to the background reconnect task. Held so it doesn't get
     /// detached; the task self-exits when the last `Arc<AppCore>` drops.
     pub(crate) reconnect_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -363,11 +379,14 @@ impl AppCore {
     fn build(inner: AppCoreInner) -> Self {
         let (state_tx, _) = tokio::sync::watch::channel(ConnectionState::Disconnected);
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (admin_event_tx, admin_event_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             inner: Mutex::new(inner),
             state_tx,
             event_tx,
             event_rx: Mutex::new(event_rx),
+            admin_event_tx,
+            admin_event_rx: Mutex::new(admin_event_rx),
             reconnect_task: std::sync::Mutex::new(None),
             ws: std::sync::Mutex::new(None),
         }
@@ -2150,6 +2169,25 @@ impl AppCore {
             .recv()
             .await
             .ok_or_else(|| AppError::Protocol("event channel closed".into()))?;
+        let mut batch = vec![first];
+        while let Ok(more) = rx.try_recv() {
+            batch.push(more);
+        }
+        Ok(batch)
+    }
+
+    /// Block on the next batch of admin events. Mirror of `next_events_async`
+    /// but for the admin-only `AdminEvent` queue. Not FFI-exported — used by
+    /// the napi binding and (via that) admin Projects like the adminbot.
+    ///
+    /// For non-adminbot sessions the queue stays empty and this future
+    /// pends forever; callers should only drive it on bot sessions.
+    pub async fn next_admin_events_async(&self) -> Result<Vec<AdminEvent>, AppError> {
+        let mut rx = self.admin_event_rx.lock().await;
+        let first = rx
+            .recv()
+            .await
+            .ok_or_else(|| AppError::Protocol("admin event channel closed".into()))?;
         let mut batch = vec![first];
         while let Ok(more) = rx.try_recv() {
             batch.push(more);
