@@ -50,7 +50,7 @@ SWIFT_BINDING := mobile/ios/Generated/app_core.swift
 XCFRAMEWORK_STAMP := mobile/ios/AppCoreFFI.xcframework/Info.plist
 XCODE_PROJ_FILE := mobile/ios/Actnet/Actnet.xcodeproj/project.pbxproj
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev testbot relay relay-release server-release dev-all node node-debug adminbot adminbot-bootstrap
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev testbot relay relay-release server-release dev-all node node-debug adminbot adminbot-build
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -68,13 +68,9 @@ node-debug:
 # Adminbot (Node)
 # ----------------------------------------------------------------------------
 #
-# Two-step bootstrap when first wiring adminbot onto a server:
-#
-#   1. `make adminbot-bootstrap` → registers, persists ~/.adminbot/state.json,
-#      prints the assigned `did:local:...` DID, and exits.
-#   2. Set ADMINBOT_DID=<that DID> in your server env (or .env) and restart
-#      the homeserver. Now /v1/admin/ping accepts adminbot.
-#   3. `make adminbot` → runs the bot continuously.
+# The adminbot registers under the reserved DID `did:local:adminbot`, which
+# is the server's default value of ADMINBOT_DID. No two-step bootstrap is
+# required — first launch registers, subsequent launches re-login.
 #
 # Required env: ADMINBOT_SERVER_URL. Optional: ADMINBOT_INITIAL_ADMINS,
 # ADMINBOT_STATE_DIR (default ./adminbot-state), ADMINBOT_DB_KEY,
@@ -83,12 +79,16 @@ node-debug:
 # Build the adminbot binary (and its dependency, @actnet/app-core if needed).
 adminbot-build:
 	cd node && [ -d node_modules ] || npm install
-	cd node && [ -f packages/app-core/dist/index.js ] || npm run build -w @actnet/app-core
+	# Always rebuild the napi binary so changes to the Rust crate
+	# regenerate native/index.d.ts (cargo's incremental keeps this cheap).
+	# Then rebuild TS (also cheap) so signature changes propagate.
+	cd node && npm run build:native -w @actnet/app-core
+	cd node && npm run build:ts -w @actnet/app-core
 	cd node && npm run build -w @actnet/adminbot
 
-# Bootstrap or continue an already-bootstrapped adminbot process. Behavior is
-# the same target either way — adminbot detects via the state.json sidecar.
-adminbot adminbot-bootstrap: adminbot-build
+# Run the adminbot. Idempotent — first run registers the reserved DID, later
+# runs re-login against the existing SQLCipher store.
+adminbot: adminbot-build
 	cd node && ADMINBOT_SERVER_URL=$${ADMINBOT_SERVER_URL:-http://localhost:3000} \
 		node packages/adminbot/dist/index.js
 

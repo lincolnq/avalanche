@@ -53,6 +53,7 @@ struct AccountsView: View {
                     }
                 }
             }
+            
             .scrollContentBackground(.hidden)
             .background(Color.avPaper)
             .navigationTitle("Accounts")

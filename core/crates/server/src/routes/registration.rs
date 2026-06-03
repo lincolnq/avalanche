@@ -214,15 +214,29 @@ async fn register(
     // act on the new account. Best-effort: a disconnected adminbot misses
     // the event in v1.
     if did != state.config.adminbot_did {
-        if let Some(tx) = state.adminbot_session.read().await.as_ref() {
-            let joined_at_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            let _ = tx.send(crate::state::WsPush::AccountJoined {
-                did: did.clone(),
-                joined_at_ms,
-            });
+        let slot = state.adminbot_session.read().await;
+        match slot.as_ref() {
+            Some(tx) => {
+                let joined_at_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                match tx.send(crate::state::WsPush::AccountJoined {
+                    did: did.clone(),
+                    joined_at_ms,
+                }) {
+                    Ok(()) => tracing::info!(%did, "adminbot AccountJoined pushed"),
+                    Err(_) => tracing::warn!(
+                        %did,
+                        "adminbot AccountJoined send failed (receiver dropped)"
+                    ),
+                }
+            }
+            None => tracing::warn!(
+                %did,
+                adminbot_did = %state.config.adminbot_did,
+                "adminbot AccountJoined dropped: no adminbot WS session connected"
+            ),
         }
     }
 

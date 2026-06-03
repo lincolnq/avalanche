@@ -80,16 +80,24 @@ function adminsTitle(serverUrl: string): string {
 }
 
 async function registerOrLogin(env: Env): Promise<AppCore> {
-  // Local DB already initialised? Just log in.
+  // Try login first. A SQLCipher file existing on disk doesn't mean it
+  // contains a registered account (createBotAccount opens the store before
+  // it talks to the server, so a failed registration can leave an empty
+  // DB behind).
   if (existsSync(env.dbPath)) {
-    const core = await AppCore.login(env.dbPath, env.dbKey);
-    if (core.did() !== ADMINBOT_DID) {
-      throw new Error(
-        `local store DID (${core.did()}) is not the reserved adminbot DID ` +
-          `(${ADMINBOT_DID}). This state dir belongs to a different bot.`,
-      );
+    try {
+      const core = await AppCore.login(env.dbPath, env.dbKey);
+      if (core.did() !== ADMINBOT_DID) {
+        throw new Error(
+          `local store DID (${core.did()}) is not the reserved adminbot DID ` +
+            `(${ADMINBOT_DID}). This state dir belongs to a different bot.`,
+        );
+      }
+      return core;
+    } catch (e) {
+      if (!/no account found in local store/.test((e as Error).message)) throw e;
+      // Empty store from a previous failed registration — fall through.
     }
-    return core;
   }
   console.log(`adminbot: registering reserved DID ${ADMINBOT_DID} on ${env.serverUrl}`);
   const core = await AppCore.createBotAccount(
@@ -176,6 +184,19 @@ async function handleAdminEvent(
       await core.inviteMember(groupId, did, "member");
     } catch (e) {
       console.error(`adminbot: invite of ${did} failed: ${(e as Error).message}`);
+      return;
+    }
+    // Send a 1:1 welcome DM. Goes over the same sealed-sender channel the
+    // GroupContext invite already opened, so it works regardless of whether
+    // the recipient has accepted the group invite yet.
+    try {
+      await core.sendDm(
+        did,
+        "Welcome! You've been added to #admins. Type /help to see what I can do.",
+      );
+      console.log(`adminbot: sent welcome DM to ${did}`);
+    } catch (e) {
+      console.error(`adminbot: welcome DM to ${did} failed: ${(e as Error).message}`);
     }
   }
 }

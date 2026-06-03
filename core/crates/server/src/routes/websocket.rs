@@ -212,6 +212,12 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64, is_adminb
                         }
                     }
                     WsPush::AccountJoined { did, joined_at_ms } => {
+                        tracing::info!(
+                            device_pk,
+                            is_adminbot,
+                            new_did = %did,
+                            "ws: forwarding AccountJoined to client"
+                        );
                         WsFrame {
                             id: 0,
                             body: Some(Body::AccountJoined(AccountJoinedEvent {

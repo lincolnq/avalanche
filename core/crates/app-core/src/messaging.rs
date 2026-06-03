@@ -11,7 +11,7 @@ use types::{AccountId, DeviceId, Timestamp};
 use crate::groups;
 use crate::profile;
 use crate::proto::{
-    content_message::Body, receipt_message, ContentMessage, ReceiptMessage,
+    self, content_message::Body, receipt_message, ContentMessage, ReceiptMessage,
 };
 use crate::{
     AppCore, AppCoreInner, AppError, DecryptedMessage, DeliveryStatusUpdate, IncomingEvent,
@@ -71,6 +71,57 @@ impl AppCoreInner {
             .flatten()
             .map(|p| p.profile_key)
             .unwrap_or_default()
+    }
+
+    /// Finalize joining a group after the master key has been persisted:
+    /// fetch+cache the current group state, submit the `accept` action,
+    /// then seed our local Sender Key state and DM the resulting SKDM to
+    /// every existing member so they can decrypt our future group
+    /// messages. Used by both the FFI `accept_invite` and the auto-accept
+    /// path on incoming `GroupContext`.
+    pub(crate) async fn complete_join_group(
+        &mut self,
+        ws: Option<&net::ws::WsConnection>,
+        hosting_server_url: &str,
+        group_id_b64: &str,
+    ) -> Result<(), AppError> {
+        let did = self.did.clone();
+        let device_id = self.device_id;
+
+        // `accept_invite` works against the cached group state, which the
+        // master-key-only persistence path doesn't populate.
+        groups::fetch_group_state(
+            &self.store,
+            &self.client,
+            hosting_server_url,
+            &did,
+            group_id_b64,
+        )
+        .await?;
+        groups::accept_invite(&self.store, &self.client, &did, group_id_b64).await?;
+
+        let mk = groups::master_key_for(&self.store, group_id_b64).await?;
+        let skdm = groups::seed_own_sender_key(&mut self.store, &did, device_id, &mk).await?;
+        let group_id_bytes = groups::b64d(group_id_b64)?;
+        let recipients = groups::other_member_dids(&self.store, group_id_b64, &did).await?;
+        for rdid in recipients {
+            let skdm_msg = ContentMessage {
+                body: Some(Body::SenderKeyDistribution(proto::SenderKeyDistribution {
+                    group_id: group_id_bytes.clone(),
+                    distribution_id: groups::distribution_id_for(&mk).as_bytes().to_vec(),
+                    skdm: skdm.clone(),
+                })),
+                timestamp_ms: Timestamp::now().as_millis() as u64,
+                profile_key: Vec::new(),
+            };
+            if let Err(e) = self
+                .send_dm(ws, &rdid, &skdm_msg.encode_to_vec(), None)
+                .await
+            {
+                tracing::warn!("[groups] SKDM DM to {rdid} failed: {e}");
+            }
+        }
+        Ok(())
     }
 
     /// Send raw bytes (already enveloped) as an encrypted DM.
@@ -530,23 +581,50 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             let _ = core.event_tx.send(IncomingEvent::Message { msg: out });
         }
         Some(Body::GroupContext(ctx)) => {
-            // Persist the group master key locally; UI surfaces a "you've
-            // been invited" affordance, and a follow-up
-            // `fetch_group_state` pulls the membership list. Errors are
-            // swallowed because we still want to emit the envelope to the
-            // app (mirrors the pattern for malformed `Text` bodies).
-            let inner = core.inner.lock().await;
-            if let Err(e) = groups::store_inbound_group_context(
+            // Persist the group master key locally so `fetch_group_state`
+            // works. Surface a typed `GroupInvite` event for the UI to
+            // refresh its conversation list — do NOT surface a `Message`
+            // event (the envelope plaintext isn't user-facing text; iOS
+            // would render it as "(binary)"). Mirrors the SKDM handler
+            // below: cryptographic plumbing, not content.
+            let ws = core.ws.lock().expect("ws mutex poisoned").clone();
+            let mut inner = core.inner.lock().await;
+            let result = groups::store_inbound_group_context(
                 &inner.store,
                 &ctx.group_master_key,
                 &ctx.hosting_server_url,
             )
-            .await
-            {
-                tracing::warn!("[groups] failed to store inbound GroupContext: {e}");
+            .await;
+            match result {
+                Ok(group_id) => {
+                    // Auto-accept the invite. We don't expose an explicit
+                    // "accept" affordance — receiving the master key is
+                    // already an out-of-band trust signal from the inviter
+                    // (matches Signal's group UX). `complete_join_group`
+                    // fetches state, submits the accept action, seeds our
+                    // own Sender Key, and DMs the SKDM to every existing
+                    // member — without it, our first `send_group_message`
+                    // fails with "missing sender key state for distribution ID".
+                    if let Err(e) = inner
+                        .complete_join_group(ws.as_ref(), &ctx.hosting_server_url, &group_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            "[groups] auto-accept of invite for {group_id} failed: {e}"
+                        );
+                    }
+                    drop(inner);
+                    let _ = core.event_tx.send(IncomingEvent::GroupInvite {
+                        group_id,
+                        hosting_server_url: ctx.hosting_server_url.clone(),
+                        inviter_did: decrypted.sender_did.clone(),
+                    });
+                }
+                Err(e) => {
+                    drop(inner);
+                    tracing::warn!("[groups] failed to store inbound GroupContext: {e}");
+                }
             }
-            drop(inner);
-            let _ = core.event_tx.send(IncomingEvent::Message { msg: decrypted });
         }
         Some(Body::SenderKeyDistribution(skdm_msg)) => {
             // Install the sender's group key locally so future

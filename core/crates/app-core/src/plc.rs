@@ -116,8 +116,8 @@ pub fn build_genesis_op(rotation_key_pub: &[u8], server_url: &str) -> PlcOperati
 /// - `rotation_key_pub`: must match the genesis rotation key
 /// - `identity_key_pub`: Ed25519 public key bytes (32 bytes, from libsignal)
 /// - `server_url`: must match the genesis service endpoint
-/// - `prev_cid`: the CID of the genesis operation (base32-encoded SHA-256
-///   of the signed CBOR encoding, per PLC spec)
+/// - `prev_cid`: the CIDv1 of the signed genesis operation (see
+///   [`plc_op_cid`])
 pub fn build_identity_update_op(
     rotation_key_pub: &[u8],
     identity_key_pub: &[u8],
@@ -151,16 +151,24 @@ pub fn build_identity_update_op(
 }
 
 /// Compute the CID for a signed PLC operation, used as the `prev` reference
-/// in the next op in the chain. Per PLC spec: base32(sha256(CBOR(signed_op))),
-/// no padding, lowercase.
+/// in the next op in the chain. Per PLC spec this is a CIDv1 with dag-cbor
+/// codec (0x71) and sha2-256 multihash (0x12), multibase-encoded as base32
+/// lowercase no-pad with the 'b' prefix — e.g. `bafyrei...`. Note this is
+/// *not* the same encoding used to derive the DID itself, which strips the
+/// CID framing and truncates the hash.
 pub fn plc_op_cid(signed_op: &PlcOperation) -> Result<String, AppError> {
     let cbor_bytes = serde_ipld_dagcbor::to_vec(signed_op)
         .map_err(|e| AppError::Protocol(format!("DAG-CBOR encode failed: {e}")))?;
     let hash = Sha256::digest(&cbor_bytes);
-    Ok(base32::encode(
+    // CIDv1 = [version=0x01, codec=0x71 (dag-cbor), multihash=0x12 0x20 (sha2-256, 32 bytes), ...hash]
+    let mut cid_bytes = Vec::with_capacity(4 + hash.len());
+    cid_bytes.extend_from_slice(&[0x01, 0x71, 0x12, 0x20]);
+    cid_bytes.extend_from_slice(&hash);
+    let encoded = base32::encode(
         base32::Alphabet::Rfc4648Lower { padding: false },
-        &hash,
-    ))
+        &cid_bytes,
+    );
+    Ok(format!("b{encoded}"))
 }
 
 /// Sign a PLC operation with the rotation key.
@@ -215,9 +223,96 @@ pub fn derive_did(signed_op: &PlcOperation) -> Result<String, AppError> {
 /// Submit a signed PLC operation (genesis or update) to the PLC directory.
 ///
 /// POST `https://plc.directory/{did}` with the signed operation as JSON body.
+/// Always POSTs — no idempotency check; for that, use [`ensure_op_submitted`].
 pub async fn submit_op(did: &str, signed_op: &PlcOperation) -> Result<(), AppError> {
-    let url = format!("{PLC_DIRECTORY_URL}/{did}");
+    submit_op_inner(&reqwest::Client::new(), did, signed_op).await
+}
+
+/// Outcome of [`ensure_op_submitted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitOutcome {
+    /// Op was POSTed and accepted.
+    Submitted,
+    /// Op was already on the chain at `expected_index` byte-for-byte; no POST made.
+    AlreadyApplied,
+}
+
+/// Submit `signed_op` idempotently: if the DID's existing op chain at
+/// `expected_index` already equals `signed_op` (CBOR-identical), do nothing
+/// and return [`SubmitOutcome::AlreadyApplied`]. Otherwise POST it.
+///
+/// `expected_index` is the 0-based position this op is expected to occupy
+/// in the op log: 0 for genesis, 1 for the first update, etc.
+///
+/// This makes signup resumable after a partial failure: the rotation key is
+/// deterministic from the passkey PRF + signup server URL, so a byte-match
+/// against the directory's existing op proves we already submitted it and
+/// it's safe to skip.
+pub async fn ensure_op_submitted(
+    did: &str,
+    signed_op: &PlcOperation,
+    expected_index: usize,
+) -> Result<SubmitOutcome, AppError> {
     let client = reqwest::Client::new();
+
+    if let Some(existing) = fetch_log(&client, did).await {
+        if let Some(at_index) = existing.get(expected_index) {
+            // Something is already at the slot we want to occupy.
+            if op_cbor_equals(at_index, signed_op)? {
+                // Byte-identical — we previously submitted this exact op. Skip.
+                return Ok(SubmitOutcome::AlreadyApplied);
+            }
+            // Different content. The chain has moved past where we tried to
+            // insert and we can't overwrite. This is the "passkey already
+            // owns a fully-registered identity, but local store is empty"
+            // case (e.g. reinstall after a successful signup).
+            return Err(AppError::Protocol(format!(
+                "DID {did} already has op at index {expected_index} that differs from \
+                 the one we're trying to submit; this passkey is already registered \
+                 (chain length {len}). Use recovery to restore the identity instead \
+                 of registering again.",
+                len = existing.len(),
+            )));
+        }
+        // Chain exists but is shorter than expected_index — we're extending it.
+        // Defensive sanity-check: refuse to write into a gap.
+        if existing.len() < expected_index {
+            return Err(AppError::Protocol(format!(
+                "DID {did} chain length is {len}, can't submit op at index {expected_index} \
+                 (would leave a gap)",
+                len = existing.len(),
+            )));
+        }
+    }
+
+    submit_op_inner(&client, did, signed_op).await?;
+    Ok(SubmitOutcome::Submitted)
+}
+
+/// Compare two ops by their canonical DAG-CBOR encoding.
+fn op_cbor_equals(a: &PlcOperation, b: &PlcOperation) -> Result<bool, AppError> {
+    let ab = serde_ipld_dagcbor::to_vec(a)
+        .map_err(|e| AppError::Protocol(format!("DAG-CBOR encode failed: {e}")))?;
+    let bb = serde_ipld_dagcbor::to_vec(b)
+        .map_err(|e| AppError::Protocol(format!("DAG-CBOR encode failed: {e}")))?;
+    Ok(ab == bb)
+}
+
+async fn fetch_log(client: &reqwest::Client, did: &str) -> Option<Vec<PlcOperation>> {
+    let url = format!("{PLC_DIRECTORY_URL}/{did}/log");
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json().await.ok()
+}
+
+async fn submit_op_inner(
+    client: &reqwest::Client,
+    did: &str,
+    signed_op: &PlcOperation,
+) -> Result<(), AppError> {
+    let url = format!("{PLC_DIRECTORY_URL}/{did}");
     let resp = client
         .post(&url)
         .json(signed_op)
@@ -226,13 +321,47 @@ pub async fn submit_op(did: &str, signed_op: &PlcOperation) -> Result<(), AppErr
         .map_err(|e| AppError::Protocol(format!("PLC directory request failed: {e}")))?;
 
     if resp.status().is_success() {
-        Ok(())
-    } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        Err(AppError::Protocol(format!(
-            "PLC directory rejected op: {status} — {body}"
-        )))
+        return Ok(());
+    }
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    let prev_summary = signed_op.prev.as_deref().unwrap_or("null");
+    let existing = describe_existing(client, did).await;
+    Err(AppError::Protocol(format!(
+        "PLC directory rejected op: {status} — {body} \
+         (did={did}, op.prev={prev_summary}, {existing})"
+    )))
+}
+
+/// Best-effort probe of plc.directory to describe whether `did` already
+/// exists and, if so, what its current tip CID is. Used only for error
+/// messages — any failure here is swallowed into a short string.
+async fn describe_existing(client: &reqwest::Client, did: &str) -> String {
+    let log_url = format!("{PLC_DIRECTORY_URL}/{did}/log");
+    let resp = match client.get(&log_url).send().await {
+        Ok(r) => r,
+        Err(e) => return format!("probe failed: {e}"),
+    };
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return "did not yet registered".into();
+    }
+    if !resp.status().is_success() {
+        return format!("probe status: {}", resp.status());
+    }
+    // The /log endpoint returns an array of signed ops; the last one's CID
+    // is the tip that a new op must chain from.
+    let ops: Vec<PlcOperation> = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return format!("probe parse failed: {e}"),
+    };
+    let tip = match ops.last() {
+        None => return "did exists but log is empty".into(),
+        Some(op) => op,
+    };
+    match plc_op_cid(tip) {
+        Ok(cid) => format!("did already exists, op_count={}, tip_cid={cid}", ops.len()),
+        Err(e) => format!("did already exists, op_count={}, tip cid err: {e}", ops.len()),
     }
 }
 
@@ -392,6 +521,9 @@ mod tests {
 
         let update = build_identity_update_op(&pub_key, &identity_key, server, &cid);
         assert_eq!(update.prev.as_deref(), Some(cid.as_str()));
+        // CIDv1 dag-cbor + sha2-256 always encodes to a `bafyrei…` string.
+        assert!(cid.starts_with("bafyrei"), "expected CIDv1 prefix, got {cid}");
+        assert_eq!(cid.len(), 59);
         assert_eq!(update.verification_methods.len(), 1);
         // Rotation keys and services carry over unchanged.
         assert_eq!(update.rotation_keys, signed_genesis.rotation_keys);

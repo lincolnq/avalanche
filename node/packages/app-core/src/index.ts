@@ -101,7 +101,21 @@ export type ConnectionState =
  */
 export type IncomingEvent =
   | { kind: "message"; message: DecryptedMessage }
-  | { kind: "receipt"; receipt: DeliveryStatusUpdate };
+  | { kind: "receipt"; receipt: DeliveryStatusUpdate }
+  | { kind: "groupInvite"; groupInvite: GroupInvite };
+
+/**
+ * A `GroupContext` DM was received for `groupId` — the master key has been
+ * persisted by app-core, so the group is now visible via
+ * {@link AppCore.loadConversations}. Use this event to refresh the chat list.
+ *
+ * @category Types
+ */
+export interface GroupInvite {
+  groupId: string;
+  hostingServerUrl: string;
+  inviterDid: string;
+}
 
 /**
  * Admin-only events surfaced via {@link AppCore.adminEvents} /
@@ -218,8 +232,10 @@ export interface StoredMessage {
 export interface ConversationSummary {
   /** Same key as {@link StoredMessage.conversationId}. */
   conversationId: string;
-  /** Most recent message in the conversation. */
-  lastMessage: StoredMessage;
+  /** Most recent message in the conversation. `undefined` for conversations
+   *  we know about (e.g. groups we've been invited to) that don't yet have
+   *  any persisted messages. */
+  lastMessage?: StoredMessage;
 }
 
 /**
@@ -458,7 +474,7 @@ const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
 
 const conversationSummaryFromNative = (c: native.ConversationSummaryJs): ConversationSummary => ({
   conversationId: c.conversationId,
-  lastMessage: storedMessageFromNative(c.lastMessage),
+  lastMessage: c.lastMessage ? storedMessageFromNative(c.lastMessage) : undefined,
 });
 
 const deliveryStatusUpdateFromNative = (u: native.DeliveryStatusUpdateJs): DeliveryStatusUpdate => ({
@@ -473,6 +489,16 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
   }
   if (e.kind === "receipt" && e.receipt) {
     return { kind: "receipt", receipt: deliveryStatusUpdateFromNative(e.receipt) };
+  }
+  if (e.kind === "groupInvite" && e.groupInvite) {
+    return {
+      kind: "groupInvite",
+      groupInvite: {
+        groupId: e.groupInvite.groupId,
+        hostingServerUrl: e.groupInvite.hostingServerUrl,
+        inviterDid: e.groupInvite.inviterDid,
+      },
+    };
   }
   throw new Error(`malformed incoming event: ${JSON.stringify(e)}`);
 };
@@ -648,12 +674,11 @@ export class AppCore {
     prepared: PreparedAccount,
     dbPath: string,
     dbKey: string,
-    recoveryKey: Uint8Array,
     displayName: string,
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.finalizeAccount(
-        prepared._native, dbPath, dbKey, asBuf(recoveryKey), displayName,
+        prepared._native, dbPath, dbKey, displayName,
       ),
     );
   }
@@ -1272,8 +1297,13 @@ export class PreparedAccount {
    * Generate identity + rotation keys and derive a `did:plc:...` locally.
    * Does not contact the homeserver.
    */
-  static async create(serverUrl: string): Promise<PreparedAccount> {
-    return new PreparedAccount(await native.PreparedAccount.create(serverUrl));
+  static async create(
+    serverUrl: string,
+    prfOutput: Uint8Array,
+  ): Promise<PreparedAccount> {
+    return new PreparedAccount(
+      await native.PreparedAccount.create(serverUrl, asBuf(prfOutput)),
+    );
   }
 
   /**

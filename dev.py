@@ -49,10 +49,25 @@ PROJECTS = [
     },
 ]
 
-CORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
-INFRA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "infra")
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+CORE_DIR = os.path.join(REPO_DIR, "core")
+NODE_DIR = os.path.join(REPO_DIR, "node")
+INFRA_DIR = os.path.join(REPO_DIR, "infra")
 INFRA_COMPOSE = os.path.join(INFRA_DIR, "docker-compose.yml")
 DB_URL = "postgresql://actnet:actnet-dev@localhost:5432/actnet"
+ADMINBOT_STATE_DIR = os.path.join(REPO_DIR, "dev-state", "adminbot")
+
+
+def node_cmd(args):
+    """Build a `node ...` argv that runs under the version pinned in
+    node/.node-version. We launch subprocesses directly (no shell), so the
+    user's shell-side fnm activation doesn't apply — we have to invoke
+    `fnm exec` explicitly. Fails loud if the pinned version isn't installed
+    so we don't silently fall through to a system node."""
+    version_file = os.path.join(NODE_DIR, ".node-version")
+    with open(version_file) as f:
+        version = f.read().strip()
+    return ["fnm", "exec", f"--using={version}", "node", *args]
 
 
 def start_postgres():
@@ -91,6 +106,12 @@ def run_migrations():
     )
 
 
+def build_adminbot():
+    """Build the Node adminbot package (and its native @actnet/app-core dep)."""
+    print("Building adminbot...")
+    subprocess.run(["make", "adminbot-build"], cwd=REPO_DIR, check=True)
+
+
 def main():
     start_postgres()
 
@@ -99,6 +120,7 @@ def main():
     subprocess.run(["cargo", "build", "-p", "server"] +
                    [f"-p{p['package']}" for p in PROJECTS],
                    cwd=CORE_DIR, check=True)
+    build_adminbot()
 
     wait_for_postgres()
     run_migrations()
@@ -143,6 +165,30 @@ def main():
             cwd=CORE_DIR,
             env={**os.environ, project["bind_env"]: f"0.0.0.0:{port}", "RUST_LOG": project["rust_log"]},
         ))
+
+    # Adminbot — auto-registers as did:local:adminbot on first launch (matches
+    # the server's default ADMINBOT_DID). Retries connect against the
+    # homeserver internally, so the launch order with the server is not
+    # load-bearing.
+    pathlib.Path(ADMINBOT_STATE_DIR).mkdir(parents=True, exist_ok=True)
+    adminbot_log_path = os.path.join(ADMINBOT_STATE_DIR, "adminbot.log")
+    adminbot_log = open(adminbot_log_path, "a", buffering=1)
+    print(f"  Adminbot -> state {ADMINBOT_STATE_DIR} (log: {adminbot_log_path})")
+    processes.append(subprocess.Popen(
+        node_cmd(["packages/adminbot/dist/index.js"]),
+        cwd=NODE_DIR,
+        stdout=adminbot_log,
+        stderr=subprocess.STDOUT,
+        env={
+            **os.environ,
+            "ADMINBOT_SERVER_URL": os.environ.get(
+                "ADMINBOT_SERVER_URL", "http://localhost:3000"
+            ),
+            "ADMINBOT_STATE_DIR": ADMINBOT_STATE_DIR,
+            "ADMINBOT_DB_KEY": os.environ.get("ADMINBOT_DB_KEY", "dev-adminbot-key"),
+            "ADMINBOT_LOG": os.environ.get("ADMINBOT_LOG", "info"),
+        },
+    ))
 
     # Wait for all processes; kill them all on Ctrl-C or if any exits
     def cleanup(*_args):

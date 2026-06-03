@@ -114,12 +114,15 @@ impl From<StoredMessageJs> for StoredMessageFfi {
 #[napi(object)]
 pub struct ConversationSummaryJs {
     pub conversation_id: String,
-    pub last_message: StoredMessageJs,
+    pub last_message: Option<StoredMessageJs>,
 }
 
 impl From<ConversationSummaryFfi> for ConversationSummaryJs {
     fn from(c: ConversationSummaryFfi) -> Self {
-        Self { conversation_id: c.conversation_id, last_message: c.last_message.into() }
+        Self {
+            conversation_id: c.conversation_id,
+            last_message: c.last_message.map(Into::into),
+        }
     }
 }
 
@@ -308,13 +311,24 @@ impl ConnectionStateJs {
     }
 }
 
-/// A single event from the receive loop. `kind` is one of `"message"` or
-/// `"receipt"`. Exactly one of `message` / `receipt` is set, matching `kind`.
+/// A single event from the receive loop. `kind` is one of `"message"`,
+/// `"receipt"`, or `"groupInvite"`. Exactly one of `message` / `receipt` /
+/// `groupInvite` is set, matching `kind`.
 #[napi(object)]
 pub struct IncomingEventJs {
     pub kind: String,
     pub message: Option<DecryptedMessageJs>,
     pub receipt: Option<DeliveryStatusUpdateJs>,
+    pub group_invite: Option<GroupInviteJs>,
+}
+
+/// A `groupInvite` payload: we received a `GroupContext` DM for `group_id`
+/// (master key already persisted locally). UI should refresh its chat list.
+#[napi(object)]
+pub struct GroupInviteJs {
+    pub group_id: String,
+    pub hosting_server_url: String,
+    pub inviter_did: String,
 }
 
 /// Adminbot-only push: a new account just registered on the homeserver.
@@ -331,11 +345,27 @@ impl From<IncomingEvent> for IncomingEventJs {
                 kind: "message".into(),
                 message: Some(msg.into()),
                 receipt: None,
+                group_invite: None,
             },
             IncomingEvent::ReceiptUpdate { update } => Self {
                 kind: "receipt".into(),
                 message: None,
                 receipt: Some(update.into()),
+                group_invite: None,
+            },
+            IncomingEvent::GroupInvite {
+                group_id,
+                hosting_server_url,
+                inviter_did,
+            } => Self {
+                kind: "groupInvite".into(),
+                message: None,
+                receipt: None,
+                group_invite: Some(GroupInviteJs {
+                    group_id,
+                    hosting_server_url,
+                    inviter_did,
+                }),
             },
         }
     }

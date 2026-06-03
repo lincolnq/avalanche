@@ -71,7 +71,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             guard let last = msgs.max(by: { $0.sentAtMs < $1.sentAtMs }) else { return nil }
             return ConversationSummaryFfi(conversationId: convId, lastMessage: last)
         }
-        .sorted { $0.lastMessage.sentAtMs > $1.lastMessage.sentAtMs }
+        .sorted { ($0.lastMessage?.sentAtMs ?? 0) > ($1.lastMessage?.sentAtMs ?? 0) }
     }
 
     func markMessagesRead(conversationId: String, upToSentAtMs: Int64) throws -> UInt64 {

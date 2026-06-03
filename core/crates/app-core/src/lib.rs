@@ -117,12 +117,14 @@ pub struct StoredMessageFfi {
 }
 
 /// A conversation summary used to build the chat list on startup: one row
-/// per conversation that has at least one persisted message, with the most
-/// recent message attached.
+/// per conversation, with the most recent message attached if any. A
+/// `None` `last_message` is a known conversation (e.g. a group you've been
+/// invited to) that hasn't seen any messages yet — the UI typically renders
+/// it with a placeholder preview.
 #[derive(uniffi::Record)]
 pub struct ConversationSummaryFfi {
     pub conversation_id: String,
-    pub last_message: StoredMessageFfi,
+    pub last_message: Option<StoredMessageFfi>,
 }
 
 /// A delivery status update for an outgoing message (e.g. read receipt received).
@@ -270,6 +272,14 @@ pub enum IncomingEvent {
     Message { msg: DecryptedMessage },
     /// A delivery status update from a read receipt.
     ReceiptUpdate { update: DeliveryStatusUpdate },
+    /// Received a `GroupContext` DM — we've been invited to a group. The
+    /// master key has already been persisted; the UI should refresh its
+    /// conversation list so the group appears.
+    GroupInvite {
+        group_id: String,
+        hosting_server_url: String,
+        inviter_did: String,
+    },
 }
 
 /// Admin-only events surfaced to a separate queue, drained by
@@ -1058,16 +1068,16 @@ impl AppCore {
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(rows.into_iter().map(|c| ConversationSummaryFfi {
                 conversation_id: c.conversation_id,
-                last_message: StoredMessageFfi {
-                    id: c.last_message.id,
-                    conversation_id: c.last_message.conversation_id,
-                    sender_did: c.last_message.sender_did,
-                    body: c.last_message.body,
-                    sent_at_ms: c.last_message.sent_at.as_millis(),
-                    edited_at_ms: c.last_message.edited_at.map(|t| t.as_millis()),
-                    read_at_ms: c.last_message.read_at.map(|t| t.as_millis()),
-                    delivery_status: c.last_message.delivery_status,
-                },
+                last_message: c.last_message.map(|m| StoredMessageFfi {
+                    id: m.id,
+                    conversation_id: m.conversation_id,
+                    sender_did: m.sender_did,
+                    body: m.body,
+                    sent_at_ms: m.sent_at.as_millis(),
+                    edited_at_ms: m.edited_at.map(|t| t.as_millis()),
+                    read_at_ms: m.read_at.map(|t| t.as_millis()),
+                    delivery_status: m.delivery_status,
+                }),
             }).collect())
         }).map_err(AppErrorFfi::from)
     }
@@ -1710,10 +1720,18 @@ impl AppCore {
 
         // Submit the deferred PLC ops (if any). Genesis fixes the DID; the
         // identity-key update immediately adds our device verification method.
+        //
+        // The genesis submission is made idempotent: if the DID is already
+        // registered with byte-identical genesis (e.g. a previous signup
+        // attempt got this far before failing on the identity update), we
+        // skip the genesis POST and proceed. The rotation key is purely
+        // derived from the passkey PRF + signup server URL, so an existing
+        // matching genesis proves we own the DID. Identity update similarly
+        // skipped if the current tip already matches it.
         if let (Some(signed_op), Some(did)) = (signed_genesis.as_ref(), client_did.as_ref()) {
-            plc::submit_op(did, signed_op).await?;
+            plc::ensure_op_submitted(did, signed_op, 0).await?;
             if let Some(update_op) = signed_identity_update.as_ref() {
-                plc::submit_op(did, update_op).await?;
+                plc::ensure_op_submitted(did, update_op, 1).await?;
             }
         }
 
@@ -1893,7 +1911,7 @@ impl AppCore {
         is_bot: bool,
     ) -> Result<Self, AppError> {
         let prepared = PreparedAccountState::prepare(server_url.to_string(), &[], false)?;
-        let inner = Self::create_inner(prepared, store, display_name, is_bot).await?;
+        let inner = Self::create_inner(prepared, store, display_name, is_bot, None).await?;
         Ok(Self::build(inner))
     }
 

@@ -79,7 +79,7 @@ final class AppState: ObservableObject {
                let m = ServiceMode(rawValue: saved) {
                 return m
             }
-            return .mock
+            return .devServer
         }()
         self.serviceMode = resolved
         self._service = Self.makeService(mode: resolved)
@@ -669,7 +669,10 @@ final class AppState: ObservableObject {
         for (accountId, summaries) in summariesPerAccount {
             let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
             for s in summaries {
-                let date = Date(timeIntervalSince1970: TimeInterval(s.lastMessage.sentAtMs) / 1000.0)
+                let date = s.lastMessage.map {
+                    Date(timeIntervalSince1970: TimeInterval($0.sentAtMs) / 1000.0)
+                }
+                let preview = s.lastMessage?.body
                 if let groupId = Self.groupId(from: s.conversationId) {
                     let title = groupTitleCache[groupId] ?? "Group"
                     newConvs.append(Conversation(
@@ -679,7 +682,7 @@ final class AppState: ObservableObject {
                         serverUrl: serverUrl,
                         recipientDid: nil,
                         groupId: groupId,
-                        lastMessage: s.lastMessage.body,
+                        lastMessage: preview,
                         lastMessageDate: date,
                         isGroup: true
                     ))
@@ -693,7 +696,7 @@ final class AppState: ObservableObject {
                     accountId: accountId,
                     serverUrl: serverUrl,
                     recipientDid: recipientDid,
-                    lastMessage: s.lastMessage.body,
+                    lastMessage: preview,
                     lastMessageDate: date,
                     isGroup: false
                 ))
@@ -1085,10 +1088,15 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled else { break }
             var messages: [DecryptedMessage] = []
             var receiptUpdates: [DeliveryStatusUpdate] = []
+            var sawGroupInvite = false
             for ev in events {
                 switch ev {
                 case .message(let msg): messages.append(msg)
                 case .receiptUpdate(let upd): receiptUpdates.append(upd)
+                case .groupInvite:
+                    // Master key already persisted by app-core; just refresh
+                    // the chat list so the new group becomes visible.
+                    sawGroupInvite = true
                 }
             }
             for msg in messages {
@@ -1096,6 +1104,9 @@ final class AppState: ObservableObject {
             }
             if !receiptUpdates.isEmpty {
                 applyDeliveryStatusUpdates(receiptUpdates)
+            }
+            if sawGroupInvite {
+                await loadConversationsFromStore()
             }
         }
         eventTasks.removeValue(forKey: accountId)

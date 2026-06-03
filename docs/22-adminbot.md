@@ -13,15 +13,15 @@ The doc is split into a **v1** section describing what's being built today and a
 
 ## v1 scope (what's being built today)
 
-A demo where the operator runs `make dev-all`, the homeserver and a separate adminbot process come up, the first human registers, adminbot invites them to `#admins`, and the human types `/whoami` in `#admins` and gets a reply. Nothing more.
+A demo where the operator runs `make dev-all`, the homeserver and a separate adminbot process come up together, the first human registers, adminbot invites them to `#admins`, and the human types `/whoami` in `#admins` and gets a reply. Nothing more.
 
 Concretely:
 
-1. **Adminbot is a separate process** — its own binary in `core/crates/adminbot/`. It talks to the server over HTTP+WS like any other client, using `app-core`. The server and adminbot are coupled only by the `ADMINBOT_DID` config pin.
-2. **One-time bootstrap.** On first run: register an account (a normal registration; the server assigns a `did:local:{24-char-base32}` DID for non-PLC bot accounts via the existing path in `routes/registration.rs::generate_local_did`). Persist the DID + identity keys to a local state file. On subsequent runs: load and reconnect.
-3. **Operator pins the DID.** Operator copies the DID adminbot printed at bootstrap into the server's `ADMINBOT_DID` env var (or config file) and restarts the server. The single privileged endpoint (`GET /v1/admin/ping`) accepts only that DID. That's the entire "superuser" surface for v1 — proof that the pin works.
+1. **Adminbot is a separate process** — a Node/TypeScript package at `node/packages/adminbot/`, talking to the server over HTTP+WS via `@actnet/app-core`. The server and adminbot are coupled only by the well-known DID `did:local:adminbot`.
+2. **Reserved DID, no two-phase bootstrap.** The server defaults `ADMINBOT_DID` to `did:local:adminbot` and validates registration requests for this DID. The adminbot registers under it on first run (passing `did_suffix: "adminbot"`); the server's accounts table TOFU-claims the identity key for that DID forever after. Subsequent adminbot runs re-login against the local SQLCipher store.
+3. **Single privileged endpoint.** `GET /v1/admin/ping` accepts only the caller whose authed DID equals the pinned `ADMINBOT_DID`. That's the entire "superuser" surface for v1 — proof that the pin works.
 4. **`#admins` group.** Adminbot creates the group titled `#admins @ {hostname}` at bootstrap, joins as the sole member with Admin role.
-5. **New-user detection via WS event push.** When a new account registers, the server pushes an `AccountJoinedEvent` frame over the WebSocket of whichever session is currently authenticated as `ADMINBOT_DID`. Adminbot receives it and calls `invite_member(#admins, that_did)`. If adminbot is disconnected at the moment of registration, the event is lost — v1 accepts that limitation (the demo path keeps adminbot running). A catch-up HTTP endpoint is future work.
+5. **New-user detection via WS event push.** When a new account registers, the server pushes an `AccountJoinedEvent` frame over the WebSocket of whichever session is currently authenticated as `ADMINBOT_DID`. Adminbot receives it and calls `invite_member(#admins, that_did)`. If adminbot is disconnected at the moment of registration, the event is lost — v1 accepts that limitation. A catch-up HTTP endpoint is future work.
 6. **Manual invite acceptance.** No auto-accept; the human accepts the `#admins` invite from the normal invite UI like any other group.
 7. **Two chat commands.** `/whoami` (echoes caller's DID) and `/help` (lists commands). Authority check: any current member of `#admins` is allowed to issue commands. Adminbot itself knows the member list because it's in the group.
 
@@ -29,36 +29,35 @@ Anything not on this list is **not in v1**. See `## Future` below for what's def
 
 ## Adminbot's DID (v1)
 
-Adminbot registers via the existing bot-account path in `routes/registration.rs`, which assigns a `did:local:{24-char-base32}` DID. `did:local:` is already wired through the server, app-core, and prekey flows (see `routes/devices.rs` and `app-core/src/lib.rs` for the existing handling of non-PLC accounts). The operator copies the resulting DID into `ADMINBOT_DID` and that's the pin.
+Adminbot's DID is fixed at `did:local:adminbot`. The server defaults `ADMINBOT_DID` to this value and treats `adminbot` as a permitted suffix on the bot-account registration path (otherwise the suffix is a random 24-char base32). `did:local:` is server-scoped — `did:local:adminbot` on different homeservers refers to different identities, so there's no collision concern.
 
-(The current `did:local:` format is a random suffix, not a human-readable `{hostname}:adminbot`. A more readable scheme is in `## Future` but not blocking v1 — the operator pins whatever DID was assigned.)
+The operator overrides `ADMINBOT_DID` only in the rare case they want a non-default identity (e.g. a parallel staging adminbot on the same DB). The default just works.
+
+Race window caveat: between server boot and the moment adminbot first registers, an external attacker who already knows the server URL could theoretically claim `did:local:adminbot` themselves. In practice the window is sub-second when both processes are launched together (`make dev-all`, or a systemd unit ordered after the homeserver in production), and the operator notices immediately on the next adminbot run (DID mismatch, registration fails). Documented and accepted; revisit if a real threat surfaces.
 
 ## Bootstrap (v1)
 
-1. Operator deploys the homeserver. Operator runs `adminbot` against it (no `ADMINBOT_DID` set yet — privileged endpoints reject everyone).
-2. Adminbot has no state file → first-run path: register a new account on the homeserver via the existing bot-account registration path. Server assigns `did:local:{...}`. Persist `(did, identity_keypair, signed_prekey, …)` to `~/.adminbot/state.db` (a small SQLCipher DB; mirrors how mobile clients persist).
-3. Adminbot prints its DID to stdout: `Adminbot DID: did:local:abc123… — set ADMINBOT_DID and restart the server.`
-4. Operator sets `ADMINBOT_DID`, restarts the server. Now `/v1/admin/ping` accepts adminbot, and the WS handler will deliver `AccountJoinedEvent` frames to adminbot's session.
-5. Adminbot creates the `#admins @ {hostname}` group via the normal action-bound group creation flow, becoming its sole Admin member.
-6. Adminbot opens its WebSocket and waits for `AccountJoinedEvent` pushes.
-7. First human registers. Server pushes `AccountJoinedEvent` to adminbot's WS. Adminbot calls `invite_member(#admins, that_did)`. Human accepts via normal invite UI, lands in `#admins`.
-8. Human types `/whoami` → adminbot replies with their DID.
+1. Operator runs `make dev-all` (or, in prod, starts the homeserver + adminbot systemd units). The server is up with `ADMINBOT_DID=did:local:adminbot`.
+2. Adminbot has no local SQLCipher store → first-run path: register the reserved DID on the homeserver (the wrapper retries until the server is reachable; ordering is not load-bearing). Persist identity keys + session to `ADMINBOT_STATE_DIR/store.db`.
+3. Adminbot creates the `#admins @ {hostname}` group via the normal action-bound group creation flow, becoming its sole Admin member. State sidecar at `ADMINBOT_STATE_DIR/state.json` records the group id and (if set) the `ADMINBOT_INITIAL_ADMINS` DIDs already invited.
+4. Adminbot opens its WebSocket and waits for `AccountJoinedEvent` pushes.
+5. First human registers. Server pushes `AccountJoinedEvent` to adminbot's WS. Adminbot calls `invite_member(#admins, that_did)`. Human accepts via normal invite UI, lands in `#admins`.
+6. Human types `/whoami` → adminbot replies with their DID.
 
-Restart behavior: on every subsequent boot, adminbot loads its state from `~/.adminbot/state.db` and resumes its WebSocket. No re-bootstrap unless the state file is lost. Events that arrived while adminbot was down are missed in v1 (future: a catch-up endpoint).
+Restart behavior: on every subsequent boot, adminbot loads its store and resumes its WebSocket. Events that arrived while adminbot was down are missed in v1 (future: a catch-up endpoint).
 
 ## Retrofit onto an existing server
 
-The fresh-deploy flow assumes "first human to register gets auto-added to `#admins`" — which doesn't fire on a server that already has users. One extra config knob handles this: `ADMINBOT_INITIAL_ADMINS` (comma-separated DIDs) on the adminbot process. On bootstrap, after creating `#admins`, adminbot issues an `invite_member` for each listed DID. Those humans accept via their normal invite UI and they're in.
+For a server that already has users when adminbot is first installed, the new-user-join hook doesn't fire for them. The `ADMINBOT_INITIAL_ADMINS` env var (comma-separated DIDs) seeds the initial admin set: on bootstrap, after creating `#admins`, adminbot issues an `invite_member` for each listed DID. Those humans accept via their normal invite UI and they're in.
 
 End-to-end for an existing deployment:
 
-1. Operator deploys adminbot pointing at the live server.
-2. Adminbot registers, prints its `did:local:...` DID.
-3. Operator sets `ADMINBOT_DID=<that>` on the server, sets `ADMINBOT_INITIAL_ADMINS=<their own DID>` on adminbot, restarts both.
-4. Adminbot creates `#admins`, invites the listed DIDs.
-5. Operator accepts the invite in their existing client, types `/whoami`, demo works.
+1. Operator deploys adminbot pointing at the live server. (Server already defaults `ADMINBOT_DID` to `did:local:adminbot`; no env change needed unless overriding.)
+2. Operator sets `ADMINBOT_INITIAL_ADMINS=<their own DID>` on the adminbot process.
+3. Adminbot registers under `did:local:adminbot`, creates `#admins`, invites the listed DIDs.
+4. Operator accepts the invite in their existing client, types `/whoami`, demo works.
 
-Existing user sessions and data are undisturbed by the install — the server restart drops their WS connections but they reconnect normally, and no user-facing endpoints change behavior.
+Existing user sessions and data are undisturbed by the install — no server restart required, no user-facing endpoints change behavior.
 
 Edge cases (flagged, not solved in v1):
 - If `#admins` already exists from a prior aborted install, adminbot should detect and reuse it rather than create a duplicate. A `state.db` flag is enough.
@@ -113,17 +112,18 @@ The auth check is the same equality test against `ADMINBOT_DID` — no capabilit
 
 | Key | Where | Purpose |
 | --- | --- | --- |
-| `ADMINBOT_DID` | server env / config | Pinned superuser identity. Set after adminbot's first run; read by `/v1/admin/*` middleware. |
-| `ADMINBOT_STATE_DB` | adminbot env (default `~/.adminbot/state.db`) | Local SQLCipher DB where adminbot persists its account state. |
+| `ADMINBOT_DID` | server env / config | Pinned superuser identity. Defaults to `did:local:adminbot`; override only for non-default deployments. Read by `/v1/admin/*` middleware. |
+| `ADMINBOT_STATE_DIR` | adminbot env (default `./adminbot-state`) | Directory holding the SQLCipher store and the `state.json` sidecar (group id, invited initial admins). |
 | `ADMINBOT_SERVER_URL` | adminbot env | The homeserver adminbot connects to. |
+| `ADMINBOT_DB_KEY` | adminbot env | Passphrase for the SQLCipher store. |
 | `ADMINBOT_INITIAL_ADMINS` | adminbot env (optional) | Comma-separated DIDs to invite to `#admins` at bootstrap. Used when retrofitting onto a server that already has users; unused for fresh deploys (the first registrant gets invited automatically). |
 
 No TOML rule file in v1 — the "invite everyone to `#admins`" rule is hardcoded.
 
 ## Recovery (v1)
 
-1. **Adminbot down temporarily.** Restart the process. State loads from the local DB; bot resumes its loop.
-2. **Adminbot state lost.** Bootstrap again with a fresh DID; operator must update `ADMINBOT_DID` and restart the server. Old `#admins` group is orphaned — easiest path for v1 is to delete it; a polished recovery flow is future work.
+1. **Adminbot down temporarily.** Restart the process. State loads from `ADMINBOT_STATE_DIR`; bot resumes its loop.
+2. **Adminbot state lost.** The reserved DID is already TOFU-claimed by the original identity key, so re-registration fails. Recovery requires releasing the claim server-side — for v1, delete the `did:local:adminbot` row from the accounts table (and its cascaded rows) before restarting adminbot. A `make adminbot-reset` target wrapping the SQL is good follow-up. Old `#admins` group is orphaned; easiest path is to delete it.
 3. **Server restart.** Adminbot reconnects via its existing WS reconnect logic (same as any client).
 
 ## Non-goals

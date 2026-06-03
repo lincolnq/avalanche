@@ -162,14 +162,22 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
-    /// Enumerate every conversation that has at least one message, with that
-    /// conversation's most recent message attached. One row per
-    /// `conversation_id`, sorted newest-first. This is the single source of
-    /// truth for the chat list — the mobile layer derives its conversation
-    /// list from this rather than keeping a parallel store.
+    /// Enumerate every known conversation, with the most recent message
+    /// attached if any. One row per `conversation_id`, sorted newest-first
+    /// (conversations with no messages sort to the end by `created_at` of
+    /// the underlying group). The chat list is built directly from these
+    /// rows — the mobile layer keeps no parallel store.
+    ///
+    /// Includes:
+    /// - Every conversation that has at least one persisted message
+    ///   (DM peers and groups alike).
+    /// - Every group we know about (master key persisted via
+    ///   `store_inbound_group_context` or `create_group`), even if no
+    ///   messages have arrived yet, so a fresh invite is visible.
     pub async fn load_conversations(&self) -> Result<Vec<ConversationSummary>, StoreError> {
         self.conn
             .call(|conn| {
+                // 1. Latest message per conversation that has any messages.
                 let mut stmt = conn.prepare(
                     "SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
                             m.edited_at, m.read_at, m.delivery_status
@@ -183,22 +191,50 @@ impl Store {
                       AND m.sent_at = latest.max_sent
                      ORDER BY m.sent_at DESC",
                 )?;
-                let rows = stmt.query_map([], |row| {
-                    Ok(ConversationSummary {
-                        conversation_id: row.get(0)?,
-                        last_message: HistoryMessage {
-                            id: row.get(1)?,
+                let with_msgs: Vec<ConversationSummary> = stmt
+                    .query_map([], |row| {
+                        Ok(ConversationSummary {
                             conversation_id: row.get(0)?,
-                            sender_did: row.get(2)?,
-                            body: row.get(3)?,
-                            sent_at: Timestamp(row.get(4)?),
-                            edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
-                            read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
-                            delivery_status: row.get::<_, i64>(7)? as u8,
-                        },
+                            last_message: Some(HistoryMessage {
+                                id: row.get(1)?,
+                                conversation_id: row.get(0)?,
+                                sender_did: row.get(2)?,
+                                body: row.get(3)?,
+                                sent_at: Timestamp(row.get(4)?),
+                                edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
+                                read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
+                                delivery_status: row.get::<_, i64>(7)? as u8,
+                            }),
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // 2. Groups that exist locally but aren't yet represented in
+                //    message_history. The conversation_id for a group is
+                //    `group-<groupId>` — the same prefix the mobile layer
+                //    uses when it writes group messages into history (see
+                //    `groupConversationId` in the iOS sources), so a row
+                //    here lines up with what arrives once any message
+                //    lands.
+                let known: std::collections::HashSet<String> =
+                    with_msgs.iter().map(|c| c.conversation_id.clone()).collect();
+                let mut group_stmt = conn.prepare(
+                    "SELECT group_id FROM groups ORDER BY created_at ASC",
+                )?;
+                let empty_groups: Vec<ConversationSummary> = group_stmt
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .filter_map(|r| r.ok())
+                    .map(|gid| format!("group-{gid}"))
+                    .filter(|cid| !known.contains(cid))
+                    .map(|cid| ConversationSummary {
+                        conversation_id: cid,
+                        last_message: None,
                     })
-                })?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+                    .collect();
+
+                let mut out = with_msgs;
+                out.extend(empty_groups);
+                Ok(out)
             })
             .await
             .map_err(StoreError::Db)
@@ -322,13 +358,15 @@ impl Store {
     }
 }
 
-/// One row per conversation that has at least one message: the conversation
-/// identifier plus the most recent message in it. The chat list is built
-/// directly from these rows.
+/// One row per conversation: the conversation identifier plus the most
+/// recent message in it, if any. `last_message: None` rows are conversations
+/// known to the local store (e.g. groups we've been invited to) that don't
+/// yet have any persisted messages. The chat list is built directly from
+/// these rows.
 #[derive(Debug, Clone)]
 pub struct ConversationSummary {
     pub conversation_id: String,
-    pub last_message: HistoryMessage,
+    pub last_message: Option<HistoryMessage>,
 }
 
 /// A decrypted message stored in the local history.

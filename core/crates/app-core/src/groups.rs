@@ -1479,36 +1479,18 @@ impl AppCore {
         ffi_runtime().block_on(async {
             let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
-            let did = inner.did.clone();
-            let device_id = inner.device_id;
-            accept_invite(&inner.store, &inner.client, &did, &group_id).await?;
-
-            // Now that we're a full member, generate our own sender key
-            // and distribute it to every existing member so they can
-            // decrypt our future group messages.
-            let mk = master_key_for(&inner.store, &group_id).await?;
-            let skdm = seed_own_sender_key(&mut inner.store, &did, device_id, &mk).await?;
-            let group_id_bytes = b64d(&group_id)?;
-            let recipients = other_member_dids(&inner.store, &group_id, &did).await?;
-            for rdid in recipients {
-                let skdm_msg = ContentMessage {
-                    body: Some(Body::SenderKeyDistribution(
-                        proto::SenderKeyDistribution {
-                            group_id: group_id_bytes.clone(),
-                            distribution_id: distribution_id_for(&mk).as_bytes().to_vec(),
-                            skdm: skdm.clone(),
-                        },
-                    )),
-                    timestamp_ms: Timestamp::now().as_millis() as u64,
-                    profile_key: Vec::new(),
-                };
-                if let Err(e) = inner
-                    .send_dm(ws.as_ref(), &rdid, &skdm_msg.encode_to_vec(), None)
-                    .await
-                {
-                    tracing::warn!("[groups] SKDM DM to {rdid} failed: {e}");
-                }
-            }
+            // The hosting server is recorded on the group row at invite
+            // receipt; pull it back out so we don't need a caller-provided
+            // URL here.
+            let hosting_server_url = inner
+                .store
+                .load_group(&group_id)
+                .await?
+                .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?
+                .hosting_server_url;
+            inner
+                .complete_join_group(ws.as_ref(), &hosting_server_url, &group_id)
+                .await?;
             Ok::<_, AppError>(())
         })
         .map_err(AppErrorFfi::from)
