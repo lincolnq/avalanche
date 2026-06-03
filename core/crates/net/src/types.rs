@@ -27,6 +27,9 @@ pub struct RegisterRequest {
     /// Plaintext display name — bot accounts only. Human accounts should pass `None`.
     pub display_name: Option<String>,
     pub is_bot: bool,
+    /// Reserved suffix for the server-generated `did:local:` DID. Bot accounts
+    /// only. When `Some("adminbot")` the server returns `did:local:adminbot`.
+    pub did_suffix: Option<String>,
     /// Encrypted recovery blob (opaque ciphertext). Optional.
     pub recovery_blob: Option<Vec<u8>>,
     /// Encrypted profile blob (AES-256-GCM under the user's profile key). Optional.

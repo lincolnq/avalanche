@@ -619,9 +619,16 @@ export class AppCore {
     dbPath: string,
     dbKey: string,
     displayName: string,
+    didSuffix?: string,
   ): Promise<AppCore> {
     return new AppCore(
-      await native.AppCore.createBotAccount(serverUrl, dbPath, dbKey, displayName),
+      await native.AppCore.createBotAccount(
+        serverUrl,
+        dbPath,
+        dbKey,
+        displayName,
+        didSuffix,
+      ),
     );
   }
 

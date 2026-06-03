@@ -466,7 +466,7 @@ impl AppCore {
 
         let prepared = PreparedAccountState::prepare(server_url, &prf_output, true)
             .map_err(AppErrorFfi::from)?;
-        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), false))
+        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), false, None))
             .map_err(AppErrorFfi::from)?;
 
         {
@@ -493,6 +493,7 @@ impl AppCore {
         db_path: String,
         db_key: String,
         display_name: String,
+        did_suffix: Option<String>,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -503,7 +504,7 @@ impl AppCore {
 
         let prepared = PreparedAccountState::prepare(server_url, &[], false)
             .map_err(AppErrorFfi::from)?;
-        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), true))
+        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), true, did_suffix))
             .map_err(AppErrorFfi::from)?;
 
         let core = Arc::new(Self::build(inner));
@@ -542,7 +543,7 @@ impl AppCore {
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
 
-        let inner = rt.block_on(Self::create_inner(state, store, Some(display_name), false))
+        let inner = rt.block_on(Self::create_inner(state, store, Some(display_name), false, None))
             .map_err(AppErrorFfi::from)?;
 
         {
@@ -1683,6 +1684,7 @@ impl AppCore {
         store: store::Store,
         display_name: Option<String>,
         is_bot: bool,
+        did_suffix: Option<String>,
     ) -> Result<AppCoreInner, AppError> {
         let PreparedAccountState {
             server_url,
@@ -1780,6 +1782,7 @@ impl AppCore {
             // server-side display_name.
             display_name: if is_bot { display_name } else { None },
             is_bot,
+            did_suffix: did_suffix.clone(),
             recovery_blob,
             encrypted_profile: encrypted_profile.clone(),
             identity_key_signature,

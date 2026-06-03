@@ -445,9 +445,10 @@ impl AppCore {
         db_path: String,
         db_key: String,
         display_name: String,
+        did_suffix: Option<String>,
     ) -> napi::Result<AppCore> {
         let inner = tokio::task::spawn_blocking(move || {
-            core::AppCore::create_bot_account(server_url, db_path, db_key, display_name)
+            core::AppCore::create_bot_account(server_url, db_path, db_key, display_name, did_suffix)
         })
         .await
         .map_err(join_err)?

@@ -44,6 +44,12 @@ struct RegisterRequest {
     display_name: Option<String>,
     #[serde(default)]
     is_bot: bool,
+    /// Optional reserved suffix for the server-generated `did:local:` DID.
+    /// Bot accounts only. When set, the resulting DID is `did:local:{did_suffix}`
+    /// instead of a random hash. Used by first-party bots (e.g. the adminbot)
+    /// that need a well-known identity. Suffix must be lowercase ASCII
+    /// alphanumeric, 3–32 chars.
+    did_suffix: Option<String>,
     /// Encrypted recovery blob (opaque ciphertext). Contains rotation key +
     /// identity key + server list, encrypted with the user's passkey-derived
     /// symmetric key. Optional — if absent, no recovery is possible.
@@ -120,7 +126,12 @@ async fn register(
         verify_identity_key_signature(client_did, &state.config.server_url, &identity_key, &req.identity_key_signature)?;
         client_did.clone()
     } else if req.is_bot {
-        generate_local_did(&identity_key, &state.config.server_url)
+        if let Some(suffix) = &req.did_suffix {
+            validate_reserved_suffix(suffix)?;
+            format!("did:local:{suffix}")
+        } else {
+            generate_local_did(&identity_key, &state.config.server_url)
+        }
     } else {
         return Err(ServerError::BadRequest(
             "did is required for non-bot accounts".into(),
@@ -202,7 +213,7 @@ async fn register(
     // Notify adminbot (if connected and not registering itself) so it can
     // act on the new account. Best-effort: a disconnected adminbot misses
     // the event in v1.
-    if state.config.adminbot_did.as_deref() != Some(did.as_str()) {
+    if did != state.config.adminbot_did {
         if let Some(tx) = state.adminbot_session.read().await.as_ref() {
             let joined_at_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -404,6 +415,19 @@ fn generate_local_did(identity_key: &[u8], server_url: &str) -> String {
     let hash = hasher.finalize();
     let encoded = base32::encode(base32::Alphabet::Rfc4648Lower { padding: false }, &hash);
     format!("did:local:{}", &encoded[..24])
+}
+
+fn validate_reserved_suffix(suffix: &str) -> Result<(), ServerError> {
+    if !(3..=32).contains(&suffix.len())
+        || !suffix
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    {
+        return Err(ServerError::BadRequest(
+            "did_suffix must be 3–32 lowercase alphanumeric chars".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn generate_token() -> String {

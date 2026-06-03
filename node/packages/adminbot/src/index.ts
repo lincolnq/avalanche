@@ -1,8 +1,8 @@
 // actnet adminbot — the canonical first-party bot.
 //
 // v1 responsibilities (per docs/22-adminbot.md):
-//   - Register a `did:local:` bot account, print the DID for the operator
-//     to pin as ADMINBOT_DID on the server.
+//   - Register a bot account at the reserved DID `did:local:adminbot`
+//     (server-side default; override via ADMINBOT_DID on the server).
 //   - Create the `#admins @ {hostname}` group, invite the DIDs listed in
 //     ADMINBOT_INITIAL_ADMINS at bootstrap.
 //   - Auto-invite every new account (AccountJoinedEvent WS push) to
@@ -12,7 +12,7 @@
 // Persistent state:
 //   - SQLCipher DB at ADMINBOT_STATE_DIR/store.db — owned by app-core.
 //   - JSON sidecar at ADMINBOT_STATE_DIR/state.json — adminbot's own
-//     bookkeeping (group id, master key, already-invited initial admins).
+//     bookkeeping (group id, already-invited initial admins).
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -24,8 +24,12 @@ import {
   type IncomingEvent,
 } from "@actnet/app-core";
 
+// Reserved well-known suffix for the canonical adminbot account on every
+// homeserver. Server-side this is the default value of ADMINBOT_DID.
+const ADMINBOT_DID_SUFFIX = "adminbot";
+const ADMINBOT_DID = `did:local:${ADMINBOT_DID_SUFFIX}`;
+
 interface AdminbotState {
-  adminbotDid: string;
   adminsGroupId?: string;
   invitedInitialAdmins?: string[];
 }
@@ -75,21 +79,44 @@ function adminsTitle(serverUrl: string): string {
   return `#admins @ ${new URL(serverUrl).hostname}`;
 }
 
-async function bootstrap(env: Env): Promise<void> {
-  console.log(`adminbot: first run — registering with ${env.serverUrl}`);
-  const core = await AppCore.createBotAccount(env.serverUrl, env.dbPath, env.dbKey, "Adminbot");
-  const did = core.did();
-  saveState(env.statePath, { adminbotDid: did });
-  console.log("");
-  console.log("─────────────────────────────────────────────────────────────");
-  console.log(`  Adminbot DID: ${did}`);
-  console.log("");
-  console.log("  Bootstrap step 2 of 2:");
-  console.log(`    1. Set ADMINBOT_DID=${did} on the homeserver process.`);
-  console.log("    2. Restart the homeserver.");
-  console.log("    3. Re-run adminbot.");
-  console.log("─────────────────────────────────────────────────────────────");
-  console.log("");
+async function registerOrLogin(env: Env): Promise<AppCore> {
+  // Local DB already initialised? Just log in.
+  if (existsSync(env.dbPath)) {
+    const core = await AppCore.login(env.dbPath, env.dbKey);
+    if (core.did() !== ADMINBOT_DID) {
+      throw new Error(
+        `local store DID (${core.did()}) is not the reserved adminbot DID ` +
+          `(${ADMINBOT_DID}). This state dir belongs to a different bot.`,
+      );
+    }
+    return core;
+  }
+  console.log(`adminbot: registering reserved DID ${ADMINBOT_DID} on ${env.serverUrl}`);
+  const core = await AppCore.createBotAccount(
+    env.serverUrl,
+    env.dbPath,
+    env.dbKey,
+    "Adminbot",
+    ADMINBOT_DID_SUFFIX,
+  );
+  if (core.did() !== ADMINBOT_DID) {
+    throw new Error(`server returned unexpected DID ${core.did()}; expected ${ADMINBOT_DID}`);
+  }
+  return core;
+}
+
+async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  // Race against server startup in dev-all and against transient errors.
+  let delayMs = 500;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (e) {
+      console.error(`adminbot: ${label} failed: ${(e as Error).message}; retrying in ${delayMs}ms`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      delayMs = Math.min(delayMs * 2, 30_000);
+    }
+  }
 }
 
 async function ensureAdminsGroup(core: AppCore, env: Env, state: AdminbotState): Promise<string> {
@@ -112,7 +139,7 @@ async function inviteInitialAdmins(
   const already = new Set(state.invitedInitialAdmins ?? []);
   for (const did of env.initialAdmins) {
     if (already.has(did)) continue;
-    if (did === state.adminbotDid) continue;
+    if (did === ADMINBOT_DID) continue;
     try {
       console.log(`adminbot: inviting initial admin ${did}`);
       await core.inviteMember(groupId, did, "admin");
@@ -138,13 +165,12 @@ async function handleMessage(
 
 async function handleAdminEvent(
   core: AppCore,
-  state: AdminbotState,
   groupId: string,
   event: AdminEvent,
 ): Promise<void> {
   if (event.kind === "accountJoined") {
     const { did } = event.accountJoined;
-    if (did === state.adminbotDid) return;
+    if (did === ADMINBOT_DID) return;
     console.log(`adminbot: new account ${did} — inviting to #admins`);
     try {
       await core.inviteMember(groupId, did, "member");
@@ -181,21 +207,13 @@ async function run(): Promise<void> {
   const env = readEnv();
   initLogging(env.logLevel);
 
-  let state = loadState(env.statePath);
-  if (!state) {
-    await bootstrap(env);
-    return;
-  }
+  const state: AdminbotState = loadState(env.statePath) ?? {};
+  const core = await withRetry("register/login", () => registerOrLogin(env));
+  console.log(`adminbot: started (did=${core.did()})`);
 
-  console.log(`adminbot: starting (did=${state.adminbotDid})`);
-  const core = await AppCore.login(env.dbPath, env.dbKey);
-  if (core.did() !== state.adminbotDid) {
-    throw new Error(
-      `state.json DID (${state.adminbotDid}) does not match local store DID (${core.did()})`,
-    );
-  }
-
-  const groupId = await ensureAdminsGroup(core, env, state);
+  const groupId = await withRetry("ensure #admins group", () =>
+    ensureAdminsGroup(core, env, state),
+  );
   await inviteInitialAdmins(core, env, state, groupId);
 
   console.log(`adminbot: listening for events on ${groupId}`);
@@ -210,7 +228,7 @@ async function run(): Promise<void> {
 
   const adminLoop = (async () => {
     for await (const event of core.adminEvents()) {
-      handleAdminEvent(core, state, groupId, event).catch((e) => {
+      handleAdminEvent(core, groupId, event).catch((e) => {
         console.error(`adminbot: admin handler error: ${(e as Error).message}`);
       });
     }

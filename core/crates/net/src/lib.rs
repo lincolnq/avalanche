@@ -214,6 +214,7 @@ impl Client {
             },
             "display_name": req.display_name,
             "is_bot": req.is_bot,
+            "did_suffix": req.did_suffix,
             "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "encrypted_profile": req.encrypted_profile.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "identity_key_signature": req.identity_key_signature,

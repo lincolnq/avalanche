@@ -70,11 +70,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let pinned = app_state
-            .config
-            .adminbot_did
-            .as_deref()
-            .ok_or(ServerError::Unauthorized)?;
+        let pinned = app_state.config.adminbot_did.as_str();
 
         let token = extract_bearer_token(parts)?;
         let mut conn = app_state.db.acquire().await.map_err(ServerError::Db)?;

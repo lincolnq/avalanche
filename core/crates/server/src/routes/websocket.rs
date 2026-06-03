@@ -90,10 +90,7 @@ async fn ws_upgrade(
     .fetch_optional(&mut *conn)
     .await
     .map_err(ServerError::Db)?;
-    let is_adminbot = matches!(
-        (&did, state.config.adminbot_did.as_deref()),
-        (Some(d), Some(pin)) if d == pin
-    );
+    let is_adminbot = did.as_deref() == Some(state.config.adminbot_did.as_str());
 
     Ok(ws.on_upgrade(move |socket| handle_ws(socket, state, device_pk, is_adminbot)))
 }
