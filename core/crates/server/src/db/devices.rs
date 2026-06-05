@@ -147,6 +147,39 @@ pub async fn delete(conn: &mut PgConnection, device_pk: i64) -> Result<(), sqlx:
     Ok(())
 }
 
+/// Update the identity key for a device.
+pub async fn update_identity_key(
+    conn: &mut PgConnection,
+    device_pk: i64,
+    new_key: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE devices SET identity_key = $1 WHERE id = $2")
+        .bind(new_key)
+        .bind(device_pk)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Insert a row into the key rotation audit log.
+pub async fn log_key_rotation(
+    conn: &mut PgConnection,
+    account_id: i64,
+    old_key: Option<&[u8]>,
+    new_key: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO key_rotation_log (account_id, old_identity_key, new_identity_key)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(account_id)
+    .bind(old_key)
+    .bind(new_key)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// List all devices for an account (by DID).
 pub async fn list_by_did(conn: &mut PgConnection, did: &str) -> Result<Vec<Device>, sqlx::Error> {
     let rows = sqlx::query(

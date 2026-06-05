@@ -20,6 +20,7 @@ mod did;
 mod groups;
 mod health;
 mod invites;
+mod key_rotation;
 pub(crate) mod messages;
 mod prekeys;
 mod profile;
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
         .merge(recovery::routes())
         .merge(devices::routes())
         .merge(invites::routes())
+        .merge(key_rotation::routes())
         .merge(profile::routes())
         .merge(groups::routes())
         .merge(health::routes())
