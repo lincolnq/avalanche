@@ -51,6 +51,12 @@ pub struct Config {
     /// reserved well-known DID `did:local:adminbot`; operators can override
     /// via the `ADMINBOT_DID` env var if they need a non-default identity.
     pub adminbot_did: String,
+    /// Allow human (non-bot) accounts to register without a `did:plc:` DID.
+    /// When `true`, humans may supply a `did:local:` or omit the DID entirely
+    /// (in which case the server generates one via [`generate_local_did`]).
+    /// Defaults to `false` to preserve the standard PLC-directory requirement.
+    /// Set `ALLOW_LOCAL_DIDS=1` to enable for small or offline deployments.
+    pub allow_local_dids: bool,
 }
 
 impl Config {
@@ -103,6 +109,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "did:local:adminbot".to_string()),
+            allow_local_dids: std::env::var("ALLOW_LOCAL_DIDS").ok().as_deref() == Some("1"),
         }
     }
 

@@ -1,17 +1,29 @@
 //! Account registration: `POST /v1/accounts`.
 //!
-//! Creates a new account with a `did:plc` identifier, registers the first
+//! Creates a new account with a DID identifier, registers the first
 //! device, stores the device's prekey bundle, and returns a session token.
 //! This is the only unauthenticated write endpoint (no token exists yet).
+//!
+//! # DID resolution
+//!
+//! Three DID schemes are accepted:
+//!
+//! - **`did:plc:`** — standard PLC-directory DID (always accepted for humans).
+//!   The server verifies the DID document against the PLC directory and checks
+//!   the client's identity-key signature.
+//! - **`did:local:`** — local-only DID (no PLC entry). Accepted for bots
+//!   unconditionally. Also accepted for human accounts when the server is
+//!   configured with `ALLOW_LOCAL_DIDS=1`, enabling small or offline
+//!   deployments that don't publish to the global directory. The client must
+//!   still provide a valid identity-key signature.
+//! - **No DID provided** — the server generates a `did:local:` stub.
+//!   Always available for bots; available for humans only when
+//!   `ALLOW_LOCAL_DIDS=1` is set on the server.
 //!
 //! # Security notes
 //!
 //! - **No authentication on registration.** Anyone can create an account.
 //!   Rate limiting by IP (not yet implemented) is the primary abuse control.
-//! - **DID verification.** When the client provides a DID, the server
-//!   verifies it against the PLC directory: the DID must exist and the
-//!   `avalanche` verification method must match the client's identity key.
-//!   If no DID is provided (tests/bots), the server generates a local stub.
 //! - **Prekeys are public material.** The server stores and serves public
 //!   key halves; private halves never leave the client.
 
@@ -45,9 +57,12 @@ struct RegisterRequest {
     #[serde(default)]
     is_bot: bool,
     /// Optional reserved suffix for the server-generated `did:local:` DID.
-    /// Bot accounts only. When set, the resulting DID is `did:local:{did_suffix}`
-    /// instead of a random hash. Used by first-party bots (e.g. the adminbot)
-    /// that need a well-known identity. Suffix must be lowercase ASCII
+    /// When set, the resulting DID is `did:local:{did_suffix}` instead of a
+    /// random hash. Used by first-party bots (e.g. the adminbot) that need a
+    /// well-known identity, and by humans on local-DID servers that want a
+    /// memorable identifier. Only applies when the server is generating the
+    /// DID (i.e. `did` is absent); accounts that supply their own `did:local:`
+    /// choose their identifier directly. Suffix must be lowercase ASCII
     /// alphanumeric, 3–32 chars.
     did_suffix: Option<String>,
     /// Encrypted recovery blob (opaque ciphertext). Contains rotation key +
@@ -115,17 +130,42 @@ async fn register(
         .decode(&req.identity_key)
         .map_err(|_| ServerError::BadRequest("invalid base64 identity_key".into()))?;
 
-    // Human accounts must provide a DID verified against the PLC directory,
-    // plus a signature proving possession of the identity key.
-    // Bot accounts may omit both.
+    // Resolve the DID for this account.
+    //
+    // Accepted cases:
+    //   1. Client provides did:plc:  — verify against PLC directory + check signature.
+    //   2. Client provides did:local: — skip PLC lookup (no entry exists by design),
+    //      but still verify the identity-key signature. Allowed for bots always;
+    //      allowed for humans only when allow_local_dids is configured.
+    //   3. No DID + is_bot — generate did:local: server-side (existing behavior).
+    //   4. No DID + !is_bot + allow_local_dids — generate did:local: server-side.
+    //   5. No DID + !is_bot + !allow_local_dids — reject (PLC DID required).
     let did = if let Some(client_did) = &req.did {
-        if !client_did.starts_with("did:plc:") {
-            return Err(ServerError::BadRequest("DID must start with did:plc:".into()));
+        if client_did.starts_with("did:plc:") {
+            verify_did_plc(client_did, &identity_key).await?;
+            verify_identity_key_signature(client_did, &state.config.server_url, &identity_key, &req.identity_key_signature)?;
+            client_did.clone()
+        } else if client_did.starts_with("did:local:") {
+            if !req.is_bot && !state.config.allow_local_dids {
+                return Err(ServerError::BadRequest(
+                    "did:local: DIDs are not enabled for human accounts on this server".into(),
+                ));
+            }
+            verify_identity_key_signature(client_did, &state.config.server_url, &identity_key, &req.identity_key_signature)?;
+            client_did.clone()
+        } else {
+            return Err(ServerError::BadRequest(
+                "DID must start with did:plc: or did:local:".into(),
+            ));
         }
-        verify_did_plc(client_did, &identity_key).await?;
-        verify_identity_key_signature(client_did, &state.config.server_url, &identity_key, &req.identity_key_signature)?;
-        client_did.clone()
     } else if req.is_bot {
+        if let Some(suffix) = &req.did_suffix {
+            validate_reserved_suffix(suffix)?;
+            format!("did:local:{suffix}")
+        } else {
+            generate_local_did(&identity_key, &state.config.server_url)
+        }
+    } else if state.config.allow_local_dids {
         if let Some(suffix) = &req.did_suffix {
             validate_reserved_suffix(suffix)?;
             format!("did:local:{suffix}")
