@@ -25,7 +25,6 @@
 ## Crypto / protocol
 
 ## Server
-- Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
 
 ## Project-wide
 - Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`
