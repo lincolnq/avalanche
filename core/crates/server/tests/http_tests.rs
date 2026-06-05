@@ -454,7 +454,7 @@ async fn get_groups_server_params_returns_decodable_public_params() {
 
     assert_eq!(body["version"], db::zkgroup_params::CURRENT_VERSION);
     let encoded = body["params"].as_str().expect("params field");
-    let decoded = BASE64_STANDARD.decode(encoded).expect("base64 decode");
+    let decoded = BASE64_URL_SAFE_NO_PAD.decode(encoded).expect("base64 decode");
 
     // Bytes must decode as ServerPublicParams and match what the loaded
     // ServerSecretParams derives — i.e. the endpoint isn't returning stale
