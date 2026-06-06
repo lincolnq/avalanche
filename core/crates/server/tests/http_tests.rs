@@ -61,6 +61,43 @@ async fn test_state() -> AppState {
         server_name: "Test".into(),
         invite_domain: "go.example.test".into(),
         adminbot_did: String::new(),
+        allow_local_dids: false,
+    };
+    let mut conn = pool.acquire().await.expect("acquire");
+    let bytes = db::zkgroup_params::load_or_init(
+        &mut conn,
+        db::zkgroup_params::CURRENT_VERSION,
+        || ServerSecretParams::generate().to_bytes(),
+    )
+    .await
+    .expect("load zkgroup params");
+    drop(conn);
+    let zkgroup_secret = ServerSecretParams::from_bytes(&bytes).expect("decode params");
+    let sender_cert_chain = SenderCertChain::generate().expect("sender cert chain");
+    AppState::new(pool, config, zkgroup_secret, sender_cert_chain)
+}
+
+async fn test_state_with_local_dids() -> AppState {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be set to run server tests");
+    ensure_setup(&url).await;
+    let pool = PgPool::connect(&url).await.expect("failed to connect to test database");
+    let config = Config {
+        database_url: url,
+        bind_addr: "0.0.0.0:0".into(),
+        server_url: "http://localhost:3000".into(),
+        token_lifetime_secs: 86400,
+        message_expiry_secs: 30 * 86400,
+        message_expiry_min_secs: 300,
+        message_expiry_max_secs: 30 * 86400,
+        prekey_low_threshold: 10,
+        project_token_lifetime_secs: 3600,
+        projects_json: "[]".into(),
+        relay_url: None,
+        server_name: "Test".into(),
+        invite_domain: "go.example.test".into(),
+        adminbot_did: String::new(),
+        allow_local_dids: true,
     };
     let mut conn = pool.acquire().await.expect("acquire");
     let bytes = db::zkgroup_params::load_or_init(
@@ -537,4 +574,192 @@ async fn get_groups_server_params_returns_decodable_public_params() {
     let public = crypto::groups::ServerPublicParams::from_bytes(&decoded)
         .expect("decode ServerPublicParams");
     assert_eq!(public.to_bytes(), state.zkgroup_secret.public_params().to_bytes());
+}
+
+// ── did:local: human registration tests ──────────────────────────────────────
+
+fn dummy_prekey_body(identity_key_b64: &str, is_bot: bool) -> Value {
+    serde_json::json!({
+        "identity_key":     identity_key_b64,
+        "registration_id":  1,
+        "device_id":        1,
+        "signed_prekey":    { "id": 1, "public_key": BASE64_STANDARD.encode([2u8; 32]), "signature": BASE64_STANDARD.encode([3u8; 64]) },
+        "one_time_prekeys": [{ "id": 1, "public_key": BASE64_STANDARD.encode([4u8; 32]) }],
+        "kyber_prekey":     { "id": 1, "public_key": BASE64_STANDARD.encode([5u8; 32]), "signature": BASE64_STANDARD.encode([6u8; 64]) },
+        "is_bot": is_bot,
+    })
+}
+
+/// Register a non-bot with a client-provided did:local: DID.
+/// Returns (did, identity_key_b64, signature_b64url).
+fn make_local_did_request(did: &str, server_url: &str) -> (Value, String) {
+    use libsignal_protocol as signal;
+    use rand::TryRngCore as _;
+
+    let keypair = signal::IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+    let identity_key_b64 = BASE64_STANDARD.encode(keypair.identity_key().serialize());
+
+    let payload = format!("register:{did}:{server_url}");
+    let sig = keypair
+        .private_key()
+        .calculate_signature(payload.as_bytes(), &mut rand::rngs::OsRng.unwrap_err())
+        .expect("sign");
+    let sig_b64url = BASE64_URL_SAFE_NO_PAD.encode(&sig);
+
+    let mut body = dummy_prekey_body(&identity_key_b64, false);
+    body["did"] = Value::String(did.to_string());
+    body["identity_key_signature"] = Value::String(sig_b64url.clone());
+    (body, sig_b64url)
+}
+
+/// Non-bot with no DID and flag off → 400.
+#[tokio::test]
+async fn local_did_human_requires_did_when_flag_off() {
+    let app = routes::router().with_state(test_state().await);
+    use rand::TryRngCore as _;
+    let mut ik = [0u8; 32];
+    rand::rngs::OsRng.unwrap_err().try_fill_bytes(&mut ik).unwrap();
+    let body = dummy_prekey_body(&BASE64_STANDARD.encode(ik), false);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Non-bot with a client-provided did:local: and flag off → 400.
+#[tokio::test]
+async fn local_did_human_client_did_rejected_when_flag_off() {
+    let app = routes::router().with_state(test_state().await);
+    let (body, _) = make_local_did_request("did:local:flagofftest", "http://localhost:3000");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Non-bot with no DID and flag on → 201, generated DID starts with "did:local:".
+#[tokio::test]
+async fn local_did_human_generated_when_flag_on() {
+    let app = routes::router().with_state(test_state_with_local_dids().await);
+    use rand::TryRngCore as _;
+    let mut ik = [0u8; 32];
+    rand::rngs::OsRng.unwrap_err().try_fill_bytes(&mut ik).unwrap();
+    let body = dummy_prekey_body(&BASE64_STANDARD.encode(ik), false);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let reg: Value = serde_json::from_slice(&bytes).unwrap();
+    let did = reg["did"].as_str().unwrap();
+    assert!(did.starts_with("did:local:"), "expected did:local:, got {did}");
+}
+
+/// Non-bot with a client-provided did:local: + valid key signature and flag on → 201.
+#[tokio::test]
+async fn local_did_human_client_provided_accepted_when_flag_on() {
+    use rand::TryRngCore as _;
+    // Use random suffix so parallel test runs don't collide on the same DID.
+    let mut suffix_bytes = [0u8; 6];
+    rand::rngs::OsRng.unwrap_err().try_fill_bytes(&mut suffix_bytes).unwrap();
+    let suffix: String = suffix_bytes.iter().map(|b| (b'a' + (b % 26)) as char).collect();
+    let did = format!("did:local:{suffix}");
+
+    let app = routes::router().with_state(test_state_with_local_dids().await);
+    let (body, _) = make_local_did_request(&did, "http://localhost:3000");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let reg: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(reg["did"].as_str().unwrap(), did);
+}
+
+/// Non-bot with did:local: + wrong key signature and flag on → 400.
+#[tokio::test]
+async fn local_did_human_client_provided_wrong_sig_rejected() {
+    let app = routes::router().with_state(test_state_with_local_dids().await);
+    let (mut body, _) = make_local_did_request("did:local:wrongsigtest", "http://localhost:3000");
+    body["identity_key_signature"] = Value::String(BASE64_URL_SAFE_NO_PAD.encode([0u8; 64]));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+/// Non-bot with did:local: and no identity_key_signature and flag on → 400.
+#[tokio::test]
+async fn local_did_human_client_provided_no_sig_rejected() {
+    let app = routes::router().with_state(test_state_with_local_dids().await);
+    use rand::TryRngCore as _;
+    let mut ik = [0u8; 32];
+    rand::rngs::OsRng.unwrap_err().try_fill_bytes(&mut ik).unwrap();
+    let mut body = dummy_prekey_body(&BASE64_STANDARD.encode(ik), false);
+    body["did"] = Value::String("did:local:nosigtest".into());
+    // identity_key_signature intentionally absent
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
