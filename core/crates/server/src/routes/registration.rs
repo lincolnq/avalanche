@@ -184,6 +184,9 @@ async fn register(
     .await?;
 
     // Store DID document.
+    // The service endpoint is intentionally omitted: including the homeserver URL
+    // would allow anyone resolving the DID to learn which server a user is on.
+    // Discovery relies on out-of-band mechanisms (invite links, contact exchange).
     let did_doc = serde_json::json!({
         "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,
@@ -192,11 +195,6 @@ async fn register(
             "type": "Ed25519VerificationKey2020",
             "controller": did,
             "publicKeyBase64": req.identity_key,
-        }],
-        "service": [{
-            "id": format!("{did}#avalanche"),
-            "type": "AvalancheHomeserver",
-            "serviceEndpoint": state.config.server_url,
         }],
     });
     db::did::upsert_document(&mut conn, account_id, &did_doc).await?;

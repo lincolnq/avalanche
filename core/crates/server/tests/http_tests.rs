@@ -149,8 +149,30 @@ async fn resolve_did_returns_document() {
 
     assert_eq!(doc["id"], did);
     assert_eq!(doc["verificationMethod"][0]["controller"], did);
-    assert_eq!(doc["service"][0]["type"], "AvalancheHomeserver");
-    assert_eq!(doc["service"][0]["serviceEndpoint"], "http://localhost:3000");
+    assert!(doc.get("service").is_none(), "DID document must not expose a service endpoint");
+}
+
+#[tokio::test]
+async fn did_document_has_no_service_endpoint() {
+    let app = routes::router().with_state(test_state().await);
+    let reg = register_dummy(&app).await;
+    let did = reg["did"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/.well-known/did/{did}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let doc: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(doc.get("service").is_none(), "DID doc must not include a service endpoint");
+    assert!(doc["verificationMethod"].is_array(), "DID doc must still have verificationMethod");
 }
 
 #[tokio::test]
