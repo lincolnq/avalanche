@@ -54,7 +54,6 @@ See `docs/32-bitchat-fallback.md` for the full design. BLE mesh transport as a f
 - Age rating: aim for 12+ (matching Signal), set via honest answers to the App Store Connect rating questionnaire — acknowledge UGC exists but no shipped objectionable content, no gambling, no unrestricted web. Don't use "Kids" or "Children" anywhere in metadata (2.3.8).
 
 
-
 ## Push Notifications
 
 ### 4. Testing & privacy

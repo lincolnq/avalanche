@@ -2,13 +2,18 @@
 //! Account self-deletion: `DELETE /v1/accounts`.
 //!
 //! Returns the public metadata for an account — display name and bot flag,
-//! and the list of active device_ids. Both endpoints require authentication
+//! and the list of active device_ids. Both GET endpoints require authentication
 //! so they cannot be used for unauthenticated account enumeration.
 //!
 //! **Note:** `display_name` is only populated for bot accounts. Human display
 //! names are exchanged via encrypted profile bundles (client-to-client) and
 //! are never stored on the server. Clients should use this endpoint to look up
 //! bot names, not human names.
+//!
+//! `DELETE /v1/accounts` permanently deletes the calling account and all its
+//! data (devices, prekeys, session tokens, message queue, DID document, push
+//! pseudonyms, profile, and rate-limit counters) in a single transaction.
+//! Returns 204 No Content on success. Required by App Store guideline 5.1.1(v).
 
 use axum::{extract::{Path, State}, http::StatusCode, routing::{delete, get}, Json, Router};
 use serde::Serialize;
