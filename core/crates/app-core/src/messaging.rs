@@ -73,6 +73,58 @@ impl AppCoreInner {
             .unwrap_or_default()
     }
 
+    /// Decrypt a `GroupDeliverRequest` arriving over the WebSocket, surface
+    /// it as `IncomingEvent::Message` with `group_id` populated, and ack.
+    /// Mirrors the per-message handling in `fetch_group_messages` so the
+    /// WS push path and the explicit poll path produce identical events.
+    pub(crate) async fn process_inbound_group_delivery(
+        &mut self,
+        delivery: &net::ws::InboundGroupDelivery,
+    ) -> Result<DecryptedMessage, AppError> {
+        let group_id_b64 = groups::b64(&delivery.group_id);
+        let group_row = self
+            .store
+            .load_group(&group_id_b64)
+            .await?
+            .ok_or_else(|| {
+                AppError::Protocol(format!(
+                    "group {group_id_b64} not in local store; cannot process push"
+                ))
+            })?;
+        let trust_root = groups::load_sender_cert_trust_root(
+            &mut self.store,
+            &self.client,
+            &group_row.hosting_server_url,
+        )
+        .await?;
+        let env =
+            crypto::sealed_sender::decrypt_envelope_to_usmc(&mut self.store, &delivery.ciphertext)
+                .await
+                .map_err(|e| AppError::Protocol(format!("sealed_sender decrypt: {e}")))?;
+        let now_ms = Timestamp::now().as_millis() as u64;
+        let info = crypto::sender_cert::validate_sender_cert(
+            &env.sender_cert_bytes,
+            &trust_root,
+            now_ms,
+        )
+        .map_err(|e| AppError::Protocol(format!("sender_cert validate: {e}")))?;
+        let plaintext = groups::decrypt_group_content(
+            &mut self.store,
+            &info.sender_did,
+            info.sender_device_id,
+            &env.contents,
+        )
+        .await?;
+        Ok(DecryptedMessage {
+            server_id: delivery.message_id,
+            sender_did: info.sender_did,
+            sender_device_id: info.sender_device_id,
+            group_id: Some(group_id_b64),
+            plaintext,
+            sent_at_ms: None,
+        })
+    }
+
     /// Finalize joining a group after the master key has been persisted:
     /// fetch+cache the current group state, submit the `accept` action,
     /// then seed our local Sender Key state and DM the resulting SKDM to
@@ -99,6 +151,27 @@ impl AppCoreInner {
         )
         .await?;
         groups::accept_invite(&self.store, &self.client, &did, group_id_b64).await?;
+
+        // `accept_invite` registered a fresh `group_push_pseudonym`. Tell
+        // the server to push future fan-outs for it on this WS so we
+        // don't have to poll `fetch_group_messages` to see new messages.
+        // Best-effort: a missing WS or send error is non-fatal — the
+        // reconnect-time subscription handles steady-state.
+        if let (Some(ws), Some(pseudonym)) = (
+            ws,
+            self.store
+                .load_group(group_id_b64)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|g| g.group_push_pseudonym),
+        ) {
+            if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
+                tracing::warn!(
+                    "[groups] subscribe to new group pseudonym for {group_id_b64} failed: {e}"
+                );
+            }
+        }
 
         let mk = groups::master_key_for(&self.store, group_id_b64).await?;
         let skdm = groups::seed_own_sender_key(&mut self.store, &did, device_id, &mk).await?;

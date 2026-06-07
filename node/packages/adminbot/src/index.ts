@@ -166,9 +166,21 @@ async function handleMessage(
   groupId: string,
   event: IncomingEvent,
 ): Promise<void> {
-  if (event.kind === "message" && event.message.groupId === groupId) {
-    await handleCommand(core, groupId, event.message.senderDid, event.message.body.trim());
-  }
+  if (event.kind !== "message") return;
+  const msg = event.message;
+  if (msg.senderDid === ADMINBOT_DID) return;
+  // Slash commands are accepted in #admins and in 1:1 DMs with the bot.
+  // Replies always go back through the same channel (group → group send,
+  // DM → DM).
+  const inAdminsGroup = msg.groupId === groupId;
+  const isDm = msg.groupId == null;
+  if (!inAdminsGroup && !isDm) return;
+  await handleCommand(
+    core,
+    inAdminsGroup ? { kind: "group", groupId } : { kind: "dm", recipientDid: msg.senderDid },
+    msg.senderDid,
+    msg.body.trim(),
+  );
 }
 
 async function handleAdminEvent(
@@ -201,9 +213,21 @@ async function handleAdminEvent(
   }
 }
 
+type ReplyChannel =
+  | { kind: "group"; groupId: string }
+  | { kind: "dm"; recipientDid: string };
+
+async function reply(core: AppCore, channel: ReplyChannel, body: string): Promise<void> {
+  if (channel.kind === "group") {
+    await core.sendGroupMessage(channel.groupId, body);
+  } else {
+    await core.sendDm(channel.recipientDid, body);
+  }
+}
+
 async function handleCommand(
   core: AppCore,
-  groupId: string,
+  channel: ReplyChannel,
   senderDid: string,
   body: string,
 ): Promise<void> {
@@ -211,16 +235,17 @@ async function handleCommand(
   const [cmd] = body.split(/\s+/, 1);
   switch (cmd) {
     case "/whoami":
-      await core.sendGroupMessage(groupId, `${senderDid} (admin)`);
+      await reply(core, channel, `${senderDid} (admin)`);
       break;
     case "/help":
-      await core.sendGroupMessage(
-        groupId,
+      await reply(
+        core,
+        channel,
         ["Available commands:", "  /whoami    echo your DID", "  /help      show this help"].join("\n"),
       );
       break;
     default:
-      await core.sendGroupMessage(groupId, `unknown command: ${cmd}. Try /help.`);
+      await reply(core, channel, `unknown command: ${cmd}. Try /help.`);
   }
 }
 

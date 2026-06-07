@@ -28,6 +28,16 @@ async fn test_store() -> store::Store {
     store
 }
 
+/// Filter to messages from `sender_did`. The dev homeserver runs adminbot,
+/// which welcomes every new account; without filtering, every receive_messages
+/// call surfaces those welcome DMs alongside the test traffic.
+fn only_from(
+    msgs: &[app_core::DecryptedMessage],
+    sender_did: &str,
+) -> Vec<app_core::DecryptedMessage> {
+    msgs.iter().filter(|m| m.sender_did == sender_did).cloned().collect()
+}
+
 #[tokio::test]
 async fn alice_sends_dm_to_bob() {
     let url = server_url();
@@ -41,12 +51,16 @@ async fn alice_sends_dm_to_bob() {
     alice.send_dm_async(&bob_did, plaintext, now_ms()).await.unwrap();
 
     let messages = bob.receive_messages_async().await.unwrap();
+    let messages = only_from(&messages, &alice.did_async().await);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].plaintext, plaintext);
     assert_eq!(messages[0].sender_did, alice.did_async().await);
     assert_eq!(messages[0].sender_device_id, alice.device_id_async().await);
 
-    let messages2 = bob.receive_messages_async().await.unwrap();
+    let messages2 = only_from(
+        &bob.receive_messages_async().await.unwrap(),
+        &alice.did_async().await,
+    );
     assert!(messages2.is_empty());
 }
 
@@ -62,25 +76,25 @@ async fn bidirectional_conversation() {
 
     // Alice → Bob (PreKey message, establishes session).
     alice.send_dm_async(&bob_did, b"Hey Bob", now_ms()).await.unwrap();
-    let msgs = bob.receive_messages_async().await.unwrap();
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Bob");
 
     // Bob → Alice (Bob's first message back, also a PreKey message).
     bob.send_dm_async(&alice_did, b"Hey Alice", now_ms()).await.unwrap();
-    let msgs = alice.receive_messages_async().await.unwrap();
+    let msgs = only_from(&alice.receive_messages_async().await.unwrap(), &bob_did);
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Hey Alice");
 
     // Alice → Bob (Whisper message, session established).
     alice.send_dm_async(&bob_did, b"How are you?", now_ms()).await.unwrap();
-    let msgs = bob.receive_messages_async().await.unwrap();
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"How are you?");
 
     // Bob → Alice (Whisper message).
     bob.send_dm_async(&alice_did, b"Doing great!", now_ms()).await.unwrap();
-    let msgs = alice.receive_messages_async().await.unwrap();
+    let msgs = only_from(&alice.receive_messages_async().await.unwrap(), &bob_did);
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].plaintext, b"Doing great!");
 }
@@ -92,6 +106,7 @@ async fn multiple_messages_in_one_fetch() {
     let alice = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
     let bob = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
 
+    let alice_did = alice.did_async().await;
     let bob_did = bob.did_async().await;
 
     // Alice sends 3 messages before Bob fetches.
@@ -99,7 +114,7 @@ async fn multiple_messages_in_one_fetch() {
     alice.send_dm_async(&bob_did, b"msg2", now_ms()).await.unwrap();
     alice.send_dm_async(&bob_did, b"msg3", now_ms()).await.unwrap();
 
-    let msgs = bob.receive_messages_async().await.unwrap();
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
     assert_eq!(msgs.len(), 3);
     assert_eq!(msgs[0].plaintext, b"msg1");
     assert_eq!(msgs[1].plaintext, b"msg2");

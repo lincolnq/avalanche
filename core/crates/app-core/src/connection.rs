@@ -7,7 +7,7 @@
 use types::Timestamp;
 
 use crate::messaging::process_decrypted;
-use crate::{AdminEvent, AppCore, AppError, ConnectionState};
+use crate::{AdminEvent, AppCore, AppError, ConnectionState, IncomingEvent};
 
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
@@ -26,6 +26,14 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
                 core.publish_state(ConnectionState::Connected);
                 *core.ws.lock().expect("ws mutex poisoned") = Some(ws.clone());
                 let connected_at = std::time::Instant::now();
+                // Subscribe to all known group push pseudonyms so the
+                // server pushes group fan-outs live (no group/v1/fetch
+                // poll required). Without this, group sends sit in the
+                // server queue and recipients only see them on an
+                // explicit `fetch_group_messages` call.
+                if let Err(e) = subscribe_group_pseudonyms(&core, &ws).await {
+                    tracing::warn!("[ws] group-pseudonym subscribe failed: {e}");
+                }
                 run_receive_loop(&core, &ws).await;
                 *core.ws.lock().expect("ws mutex poisoned") = None;
                 // Only reset backoff if the connection was actually usable.
@@ -59,6 +67,30 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
         tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
         backoff_sec = (backoff_sec * 2).min(30);
     }
+}
+
+/// Send a `SubscribeGroupPseudonyms` frame listing every
+/// `group_push_pseudonym` we've registered (one per group we belong to).
+/// Each entry is the pseudonym bytes the server uses to look up where to
+/// push group fan-outs.
+async fn subscribe_group_pseudonyms(
+    core: &AppCore,
+    ws: &net::ws::WsConnection,
+) -> Result<(), AppError> {
+    let groups = {
+        let inner = core.inner.lock().await;
+        inner.store.list_groups().await?
+    };
+    let pseudonyms: Vec<Vec<u8>> = groups
+        .into_iter()
+        .filter_map(|g| g.group_push_pseudonym)
+        .collect();
+    if pseudonyms.is_empty() {
+        return Ok(());
+    }
+    ws.subscribe_group_pseudonyms(pseudonyms)
+        .map_err(|e| AppError::Protocol(format!("subscribe group pseudonyms: {e}")))?;
+    Ok(())
 }
 
 /// Open a fresh WebSocket connection. Triggers lazy challenge/response on
@@ -149,6 +181,42 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                         tracing::debug!("[ws] receive error (account_joined): {e}");
                         return;
                     }
+                }
+            }
+            group_delivery = ws.next_group_message() => {
+                let delivery = match group_delivery {
+                    Ok(Some(d)) => d,
+                    Ok(None) => {
+                        tracing::debug!("[ws] connection closed cleanly (group)");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::debug!("[ws] receive error (group): {e}");
+                        return;
+                    }
+                };
+
+                let decrypted = {
+                    let mut inner = core.inner.lock().await;
+                    match inner.process_inbound_group_delivery(&delivery).await {
+                        Ok(d) => Some(d),
+                        Err(e) => {
+                            tracing::warn!(
+                                "[ws] failed to process group delivery msg_id={}: {e}, acking to skip",
+                                delivery.message_id
+                            );
+                            None
+                        }
+                    }
+                };
+
+                // Always ack so the server stops re-pushing — even on
+                // decrypt failure, the message is unrecoverable for this
+                // session.
+                let _ = ws.group_ack(delivery.ack_token).await;
+
+                if let Some(msg) = decrypted {
+                    let _ = core.event_tx.send(IncomingEvent::Message { msg });
                 }
             }
         }

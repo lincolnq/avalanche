@@ -501,53 +501,85 @@ async fn submit_actions(
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
-    apply_to_state: impl FnOnce(&mut gproto::GroupState, &GroupKey) -> Result<GroupActionsWire, AppError>,
+    apply_to_state: impl Fn(&mut gproto::GroupState, &GroupKey) -> Result<GroupActionsWire, AppError>,
 ) -> Result<net::groups::SubmitChangeResponse, AppError> {
-    let row = store
-        .load_group(group_id_b64_s)
-        .await?
-        .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?;
-    let group_key = GroupKey::from_bytes(
-        row.master_key
-            .clone()
-            .try_into()
-            .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
-    );
+    // We retry once on stale-revision (HTTP 409). The cached revision can
+    // lag the server's whenever another party submits a change (e.g. a
+    // new member accepts an invite while we're inviting somebody else).
+    // After the retry, if we still race, the second 409 is propagated and
+    // the caller can re-invoke.
+    let mut attempt = 0;
+    loop {
+        let row = store
+            .load_group(group_id_b64_s)
+            .await?
+            .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?;
+        let group_key = GroupKey::from_bytes(
+            row.master_key
+                .clone()
+                .try_into()
+                .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
+        );
 
-    let public = ensure_server_params(store, client, &row.hosting_server_url).await?;
-    let credential =
-        ensure_credential(store, client, &row.hosting_server_url, did, &public).await?;
-    let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
+        let public = ensure_server_params(store, client, &row.hosting_server_url).await?;
+        let credential =
+            ensure_credential(store, client, &row.hosting_server_url, did, &public).await?;
+        let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
 
-    // Compute optimistic new state from the cached plaintext.
-    let mut state = if row.encrypted_state_plaintext.is_empty() {
-        return Err(AppError::Protocol(
-            "no cached group state; call fetch_group_state first".into(),
-        ));
-    } else {
-        gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
-            .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?
-    };
-    let actions = apply_to_state(&mut state, &group_key)?;
-    state.revision = (row.revision as u64) + 1;
-    let new_plaintext = state.encode_to_vec();
-    let new_encrypted_state = group_key.encrypt_state(&new_plaintext);
+        // Compute optimistic new state from the cached plaintext.
+        let mut state = if row.encrypted_state_plaintext.is_empty() {
+            return Err(AppError::Protocol(
+                "no cached group state; call fetch_group_state first".into(),
+            ));
+        } else {
+            gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?
+        };
+        let actions = apply_to_state(&mut state, &group_key)?;
+        state.revision = (row.revision as u64) + 1;
+        let new_plaintext = state.encode_to_vec();
+        let new_encrypted_state = group_key.encrypt_state(&new_plaintext);
 
-    let req = SubmitChangeRequest {
-        revision: row.revision + 1,
-        new_encrypted_state: b64(&new_encrypted_state),
-        actions,
-    };
-    let resp = client
-        .submit_group_changes(group_id_b64_s, &req, &presentation)
-        .await?;
+        let req = SubmitChangeRequest {
+            revision: row.revision + 1,
+            new_encrypted_state: b64(&new_encrypted_state),
+            actions,
+        };
+        let resp = client
+            .submit_group_changes(group_id_b64_s, &req, &presentation)
+            .await;
 
-    // Persist the optimistic state on success.
-    store
-        .update_group_state(group_id_b64_s, resp.revision, new_plaintext, row.policy)
-        .await?;
-
-    Ok(resp)
+        match resp {
+            Ok(resp) => {
+                store
+                    .update_group_state(
+                        group_id_b64_s,
+                        resp.revision,
+                        new_plaintext,
+                        row.policy,
+                    )
+                    .await?;
+                return Ok(resp);
+            }
+            Err(net::error::NetError::Server(409, ref body)) if attempt == 0 => {
+                attempt += 1;
+                tracing::info!(
+                    "[groups] stale revision on submit (body={body}); \
+                     refreshing state and retrying once"
+                );
+                fetch_group_state(
+                    store,
+                    client,
+                    &row.hosting_server_url,
+                    did,
+                    group_id_b64_s,
+                )
+                .await?;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 // ── invite / accept / decline ────────────────────────────────────────────
@@ -697,7 +729,7 @@ pub async fn join_via_link(
                 join_via_link: Some(JoinViaLinkWire {
                     encrypted_profile_key: b64(&own_profile_key),
                     group_push_pseudonym: b64(&pseudonym_for_state),
-                    invite_link_password: pw_b64,
+                    invite_link_password: pw_b64.clone(),
                 }),
                 ..Default::default()
             })
@@ -1329,6 +1361,7 @@ impl AppCore {
         expiry_seconds: u32,
     ) -> Result<CreatedGroupFfi, AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
             let did = inner.did.clone();
             let device_id = inner.device_id;
@@ -1343,6 +1376,25 @@ impl AppCore {
                 expiry_seconds,
             )
             .await?;
+            // Subscribe to the new group's push pseudonym so reply messages
+            // (e.g. from invitees) get pushed live without a fetch poll.
+            if let (Some(ws), Some(pseudonym)) = (
+                ws.as_ref(),
+                inner
+                    .store
+                    .load_group(&created.group_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|g| g.group_push_pseudonym),
+            ) {
+                if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
+                    tracing::warn!(
+                        "[groups] subscribe to new group pseudonym for {} failed: {e}",
+                        created.group_id
+                    );
+                }
+            }
             // Seed our own sender key for this group locally. No other
             // members exist yet, so there's no SKDM to ship — the
             // recipients of future invites will receive it as part of

@@ -2001,6 +2001,7 @@ impl AppCore {
         description: &str,
         expiry_seconds: u32,
     ) -> Result<groups::CreatedGroup, AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
         let did = inner.did.clone();
         let device_id = inner.device_id;
@@ -2021,6 +2022,25 @@ impl AppCore {
             .try_into()
             .map_err(|_| AppError::Protocol("master_key length != 32".into()))?;
         let _ = groups::seed_own_sender_key(&mut inner.store, &did, device_id, &mk).await?;
+        // Subscribe to the founder's group_push_pseudonym so replies from
+        // invitees push live. Mirrors the FFI `create_group` wiring.
+        if let (Some(ws), Some(pseudonym)) = (
+            ws.as_ref(),
+            inner
+                .store
+                .load_group(&created.group_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|g| g.group_push_pseudonym),
+        ) {
+            if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
+                tracing::warn!(
+                    "[groups] subscribe to new group pseudonym for {} failed: {e}",
+                    created.group_id
+                );
+            }
+        }
         Ok(created)
     }
 
