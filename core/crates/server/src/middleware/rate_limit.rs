@@ -6,6 +6,7 @@ pub const ACTION_UPLOAD_PREKEYS: &str = "upload_prekeys";
 pub const ACTION_FETCH_BUNDLE: &str = "fetch_bundle";
 pub const ACTION_UPDATE_RECOVERY: &str = "update_recovery";
 pub const ACTION_UPDATE_PROFILE: &str = "update_profile";
+pub const ACTION_ROTATE_KEY: &str = "rotate_key";
 
 // Maximum requests per window.
 pub const LIMIT_SEND_MESSAGE: i32 = 100;
@@ -13,6 +14,7 @@ pub const LIMIT_UPLOAD_PREKEYS: i32 = 10;
 pub const LIMIT_FETCH_BUNDLE: i32 = 100;
 pub const LIMIT_UPDATE_RECOVERY: i32 = 10;
 pub const LIMIT_UPDATE_PROFILE: i32 = 20;
+pub const LIMIT_ROTATE_KEY: i32 = 5;
 
 // Window sizes in seconds.
 pub const WINDOW_SEND_MESSAGE: i64 = 60;
@@ -20,6 +22,7 @@ pub const WINDOW_UPLOAD_PREKEYS: i64 = 3600;
 pub const WINDOW_FETCH_BUNDLE: i64 = 3600;
 pub const WINDOW_UPDATE_RECOVERY: i64 = 3600;
 pub const WINDOW_UPDATE_PROFILE: i64 = 3600;
+pub const WINDOW_ROTATE_KEY: i64 = 3600;
 
 // ── Per-IP rate limits (unauthenticated endpoints) ──────────────────────────
 
