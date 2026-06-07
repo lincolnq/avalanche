@@ -59,6 +59,7 @@ async fn test_state() -> AppState {
         server_name: "Test".into(),
         invite_domain: "go.example.test".into(),
         adminbot_did: String::new(),
+        privacy_policy_url: None,
     };
     let mut conn = pool.acquire().await.expect("acquire");
     let bytes = db::zkgroup_params::load_or_init(

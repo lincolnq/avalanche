@@ -51,6 +51,9 @@ pub struct Config {
     /// reserved well-known DID `did:local:adminbot`; operators can override
     /// via the `ADMINBOT_DID` env var if they need a non-default identity.
     pub adminbot_did: String,
+    /// Operator's privacy policy URL shown to users during signup.
+    /// Set via PRIVACY_POLICY_URL env var. Optional.
+    pub privacy_policy_url: Option<String>,
 }
 
 impl Config {
@@ -103,6 +106,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "did:local:adminbot".to_string()),
+            privacy_policy_url: std::env::var("PRIVACY_POLICY_URL").ok().filter(|s| !s.is_empty()),
         }
     }
 

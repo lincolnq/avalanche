@@ -25,6 +25,8 @@ struct InviteResponse {
     server_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     post_onboarding_redirect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    privacy_policy_url: Option<String>,
 }
 
 async fn validate_invite(
@@ -51,5 +53,6 @@ async fn validate_invite(
     Ok(Json(InviteResponse {
         server_name: state.config.server_name.clone(),
         post_onboarding_redirect,
+        privacy_policy_url: state.config.privacy_policy_url.clone(),
     }))
 }

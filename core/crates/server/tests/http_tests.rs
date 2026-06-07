@@ -61,6 +61,7 @@ async fn test_state() -> AppState {
         server_name: "Test".into(),
         invite_domain: "go.example.test".into(),
         adminbot_did: String::new(),
+        privacy_policy_url: None,
     };
     let mut conn = pool.acquire().await.expect("acquire");
     let bytes = db::zkgroup_params::load_or_init(
@@ -559,4 +560,61 @@ async fn get_groups_server_params_returns_decodable_public_params() {
     let public = crypto::groups::ServerPublicParams::from_bytes(&decoded)
         .expect("decode ServerPublicParams");
     assert_eq!(public.to_bytes(), state.zkgroup_secret.public_params().to_bytes());
+}
+
+// ── Invite endpoint tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn invite_response_includes_privacy_policy_url_when_set() {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be set to run server tests");
+    ensure_setup(&url).await;
+    let pool = PgPool::connect(&url).await.expect("connect");
+    let config = Config {
+        database_url: url,
+        bind_addr: "0.0.0.0:0".into(),
+        server_url: "http://localhost:3000".into(),
+        token_lifetime_secs: 86400,
+        message_expiry_secs: 30 * 86400,
+        message_expiry_min_secs: 300,
+        message_expiry_max_secs: 30 * 86400,
+        prekey_low_threshold: 10,
+        project_token_lifetime_secs: 3600,
+        projects_json: "[]".into(),
+        relay_url: None,
+        server_name: "Test".into(),
+        invite_domain: "go.example.test".into(),
+        adminbot_did: String::new(),
+        privacy_policy_url: Some("https://example.com/privacy".into()),
+    };
+    let mut conn = pool.acquire().await.expect("acquire");
+    let bytes = db::zkgroup_params::load_or_init(
+        &mut conn,
+        db::zkgroup_params::CURRENT_VERSION,
+        || ServerSecretParams::generate().to_bytes(),
+    )
+    .await
+    .expect("load zkgroup params");
+    drop(conn);
+    let zkgroup_secret = ServerSecretParams::from_bytes(&bytes).expect("decode params");
+    let sender_cert_chain = SenderCertChain::generate().expect("sender cert chain");
+    let state = AppState::new(pool, config, zkgroup_secret, sender_cert_chain);
+
+    let token = BASE64_URL_SAFE_NO_PAD.encode(r#"{"server_url":"http://localhost:3000"}"#);
+    let app = routes::router().with_state(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/invites/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["server_name"], "Test");
+    assert_eq!(body["privacy_policy_url"], "https://example.com/privacy");
 }
