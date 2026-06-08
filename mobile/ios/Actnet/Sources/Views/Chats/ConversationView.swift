@@ -77,12 +77,19 @@ struct ConversationView: View {
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // For groups, the centered title + avatar is a tappable link into
+            // the group detail screen. (DMs keep the plain navigationTitle.)
             if conversation.isGroup, let groupId = conversation.groupId {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
                     NavigationLink {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
-                        Image(systemName: "person.2")
+                        HStack(spacing: 8) {
+                            ContactAvatar(name: conversation.title, size: 28)
+                            Text(conversation.title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                        }
                     }
                 }
             }
@@ -175,3 +182,78 @@ struct ConversationView: View {
         }
     }
 }
+
+#if DEBUG
+/// Wraps `ConversationView` in a preview-ready environment: one account, a
+/// canned contact for name resolution, and pre-seeded messages (which survive
+/// `loadMessagesFromStore`, since it only loads when the cache is empty).
+@MainActor
+private func conversationPreview(_ conversation: Conversation, _ messages: [Message]) -> some View {
+    let me = Account(
+        id: "did:plc:me",
+        displayName: "Me",
+        avatarData: nil,
+        servers: [ServerInfo(
+            id: "https://server.example",
+            name: "Example",
+            url: URL(string: "https://server.example")!
+        )]
+    )
+    let state = AppState.preview(
+        accounts: [me],
+        contacts: [
+            ContactRowFfi(did: "did:plc:bob", displayName: "Bob Chena", isCurated: true, lastInteractionAtMs: 0),
+        ]
+    )
+    state.conversations = [conversation]
+    state.messagesByConversation[conversation.id] = messages
+    return NavigationStack {
+        ConversationView(conversation: conversation)
+            .environmentObject(state)
+    }
+}
+
+#Preview("DM") {
+    let conv = Conversation(
+        id: "dm-bob",
+        title: "Bob Chena",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: "did:plc:bob",
+        groupId: nil,
+        lastMessage: nil,
+        lastMessageDate: nil
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:bob",
+                body: "Are we still meeting at noon?", sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: 1_700_000_001_000, deliveryStatus: .delivered),
+        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:me",
+                body: "Yes — I'll be at the front entrance.", sentAtMs: 1_700_000_060_000,
+                editedAtMs: nil, readAtMs: 1_700_000_061_000, deliveryStatus: .read),
+    ])
+}
+
+#Preview("Group") {
+    let gid = "grp1"
+    let conv = Conversation(
+        id: groupConversationId(gid),
+        title: "March Logistics",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: nil,
+        groupId: gid,
+        lastMessage: nil,
+        lastMessageDate: nil,
+        isGroup: true
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:bob",
+                body: "Crew — check in when you arrive.", sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: 1_700_000_001_000, deliveryStatus: .delivered),
+        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:me",
+                body: "On site 👍", sentAtMs: 1_700_000_060_000,
+                editedAtMs: nil, readAtMs: 1_700_000_061_000, deliveryStatus: .read),
+    ])
+}
+#endif

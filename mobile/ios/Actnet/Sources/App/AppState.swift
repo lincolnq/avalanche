@@ -467,6 +467,13 @@ final class AppState: ObservableObject {
     /// rendering a name to the user should call `resolvedName(for:)`, which
     /// never yields a DID.
     func displayName(for did: String, accountId: String) -> String {
+        // Own accounts: the name lives in the `Account` model, not the contact
+        // cache or the server record (humans publish no plaintext name
+        // server-side), so the async resolver would never find it. This is why
+        // self showed as "Unknown" in groups you create.
+        if let account = accounts.first(where: { $0.id == did }) {
+            return account.displayName
+        }
         if let name = displayNameCache[did] { return name }
         resolveDisplayName(did: did, accountId: accountId)
         return did
@@ -1308,13 +1315,14 @@ extension AppState {
     static func preview(
         accounts: [Account],
         contacts: [ContactRowFfi] = [],
-        botNames: [String: String] = [:]
+        botNames: [String: String] = [:],
+        groups: [String: GroupSummaryFfi] = [:]
     ) -> AppState {
         let state = AppState(mode: .mock)
         state.accounts = accounts
         for account in accounts {
             state.cores[account.id] = PreviewAppCore(
-                did: account.id, contacts: contacts, botNames: botNames
+                did: account.id, contacts: contacts, botNames: botNames, groups: groups
             )
         }
         return state
@@ -1328,11 +1336,18 @@ final class PreviewAppCore: AppCoreProtocol, @unchecked Sendable {
     private let mockDid: String
     private let contacts: [ContactRowFfi]
     private let botNames: [String: String]
+    private let groups: [String: GroupSummaryFfi]
 
-    init(did: String, contacts: [ContactRowFfi], botNames: [String: String]) {
+    init(
+        did: String,
+        contacts: [ContactRowFfi],
+        botNames: [String: String],
+        groups: [String: GroupSummaryFfi] = [:]
+    ) {
         self.mockDid = did
         self.contacts = contacts
         self.botNames = botNames
+        self.groups = groups
     }
 
     func did() -> String { mockDid }
@@ -1343,6 +1358,20 @@ final class PreviewAppCore: AppCoreProtocol, @unchecked Sendable {
             return AccountInfoFfi(did: did, displayName: name, isBot: true)
         }
         return AccountInfoFfi(did: did, displayName: nil, isBot: false)
+    }
+
+    /// Resolve human member names in previews from the canned contact rows
+    /// (the real core reads its local `contact_profiles` cache here).
+    func contactDisplayName(did: String) throws -> String {
+        contacts.first(where: { $0.did == did })?.displayName ?? ""
+    }
+
+    func fetchGroupState(groupId: String) throws -> GroupSummaryFfi {
+        groups[groupId] ?? GroupSummaryFfi(
+            groupId: groupId, masterKey: Data(count: 32), revision: 0,
+            title: "Group", description: "", expirySeconds: 0,
+            members: [], pendingInvites: [], pendingApprovals: []
+        )
     }
 }
 #endif

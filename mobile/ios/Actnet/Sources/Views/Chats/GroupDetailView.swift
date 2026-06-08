@@ -28,10 +28,10 @@ struct GroupDetailView: View {
                         }
                     }
                     Section("Members (\(s.members.count))") {
-                        ForEach(s.members, id: \.encryptedMemberId) { member in
+                        ForEach(orderedMembers(s.members), id: \.encryptedMemberId) { member in
                             HStack(spacing: 10) {
-                                ContactAvatar(name: appState.resolvedName(for: member.did, accountId: accountId), size: 32)
-                                Text(appState.resolvedName(for: member.did, accountId: accountId))
+                                ContactAvatar(name: memberName(member), size: 32)
+                                Text(memberName(member))
                                     .lineLimit(1)
                                 Spacer()
                                 if member.role == 1 {
@@ -76,6 +76,18 @@ struct GroupDetailView: View {
         .task { await load() }
     }
 
+    /// The current user sorts first; everyone else keeps server order.
+    private func orderedMembers(_ members: [GroupMemberFfi]) -> [GroupMemberFfi] {
+        members.sorted { a, _ in a.did == accountId }
+    }
+
+    /// Member's display name, or "You" for the current user.
+    private func memberName(_ member: GroupMemberFfi) -> String {
+        member.did == accountId
+            ? "You"
+            : appState.resolvedName(for: member.did, accountId: accountId)
+    }
+
     private func load() async {
         loading = true
         defer { loading = false }
@@ -113,3 +125,48 @@ struct GroupDetailView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    let me = Account(
+        id: "did:plc:me",
+        displayName: "Me",
+        avatarData: nil,
+        servers: [ServerInfo(
+            id: "https://server.example",
+            name: "Example",
+            url: URL(string: "https://server.example")!
+        )]
+    )
+    let contacts: [ContactRowFfi] = [
+        ContactRowFfi(did: "did:plc:bob", displayName: "Bob Chena", isCurated: true, lastInteractionAtMs: 0),
+        ContactRowFfi(did: "did:plc:carol", displayName: "Carol X", isCurated: true, lastInteractionAtMs: 0),
+    ]
+    let summary = GroupSummaryFfi(
+        groupId: "grp1",
+        masterKey: Data(count: 32),
+        revision: 3,
+        title: "March Logistics",
+        description: "Planning crew for the day-of action.",
+        expirySeconds: 0,
+        // Self listed last on the wire — the view sorts "You" to the top.
+        members: [
+            GroupMemberFfi(did: "did:plc:bob", encryptedMemberId: "emi-bob", role: 0, joinedAtMs: 0),
+            GroupMemberFfi(did: "did:plc:carol", encryptedMemberId: "emi-carol", role: 1, joinedAtMs: 0),
+            GroupMemberFfi(did: "did:plc:me", encryptedMemberId: "emi-me", role: 1, joinedAtMs: 0),
+        ],
+        pendingInvites: [
+            GroupPendingFfi(encryptedMemberId: "emi-dave", timestampMs: 0),
+        ],
+        pendingApprovals: []
+    )
+    return NavigationStack {
+        GroupDetailView(groupId: "grp1", accountId: "did:plc:me")
+            .environmentObject(AppState.preview(
+                accounts: [me],
+                contacts: contacts,
+                groups: ["grp1": summary]
+            ))
+    }
+}
+#endif
