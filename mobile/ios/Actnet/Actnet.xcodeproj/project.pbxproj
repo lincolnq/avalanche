@@ -31,6 +31,7 @@
 		6C9898720C9563E270D15E23 /* RecoveryExplainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27783892A8D4D88BE570F79C /* RecoveryExplainerView.swift */; };
 		766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */; };
 		784454627F0BB442850E2F3A /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93902C84CDE9256ABD4CC50 /* ContactAvatar.swift */; };
+		7DDC6BBA08823F4AE108F858 /* RecipientTokenField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F73DF560719B0774C43444C /* RecipientTokenField.swift */; };
 		806102B5C1375970718F64DA /* NetworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDB23D99F22D6A488DD61F19 /* NetworkView.swift */; };
 		835054B2BD1DA05A5F04B452 /* Base64URL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E8624C86E5A8D3876B5189E /* Base64URL.swift */; };
 		8507FF41B757A3F39D78BA55 /* PasskeyExplainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3B02F10A6C2E1DFFB655B9 /* PasskeyExplainerView.swift */; };
@@ -87,6 +88,7 @@
 		6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCameraView.swift; sourceTree = "<group>"; };
 		7313225243535C7C945AD8D7 /* AccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsView.swift; sourceTree = "<group>"; };
 		77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeMessageView.swift; sourceTree = "<group>"; };
+		7F73DF560719B0774C43444C /* RecipientTokenField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientTokenField.swift; sourceTree = "<group>"; };
 		7FEE393F3CBD5B0C5D48ACDC /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		81668B961AEA3548EB74341C /* IdentityDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityDetailView.swift; sourceTree = "<group>"; };
 		8A8F652C3B8F59F3A47CB029 /* AppCoreProtocol+Defaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoreProtocol+Defaults.swift"; sourceTree = "<group>"; };
@@ -197,6 +199,7 @@
 				2C83A54ACCB386940D8E4689 /* ConversationView.swift */,
 				6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */,
 				1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */,
+				7F73DF560719B0774C43444C /* RecipientTokenField.swift */,
 				8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */,
 			);
 			path = Chats;
@@ -421,6 +424,7 @@
 				A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */,
 				ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */,
 				13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */,
+				7DDC6BBA08823F4AE108F858 /* RecipientTokenField.swift in Sources */,
 				99FD87ED3F4EB328193828FF /* RecoveryConsoleView.swift in Sources */,
 				6C9898720C9563E270D15E23 /* RecoveryExplainerView.swift in Sources */,
 				5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */,

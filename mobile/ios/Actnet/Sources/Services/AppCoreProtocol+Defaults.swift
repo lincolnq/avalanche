@@ -30,7 +30,7 @@ extension AppCoreProtocol {
     func touchContact(did: String, curated: Bool) throws {}
 
     func hasRecovery() -> Bool { false }
-    func updateRecoveryBlob(recoveryKey: Data, servers: [String]) throws {}
+    func updateRecoveryBlob(prfOutput: Data, servers: [String]) throws {}
 
     // MARK: - Messaging
 

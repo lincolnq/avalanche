@@ -1297,3 +1297,52 @@ final class AppState: ObservableObject {
     }
 
 }
+
+#if DEBUG
+extension AppState {
+    /// Build an `AppState` wired for SwiftUI previews: mock service, the given
+    /// accounts, and an in-memory core per account that serves the supplied
+    /// contact rows. No network, no DB. `botNames` maps a DID to a server-side
+    /// name so previews can exercise the bot resolution path (`resolvedName`),
+    /// just like the real app.
+    static func preview(
+        accounts: [Account],
+        contacts: [ContactRowFfi] = [],
+        botNames: [String: String] = [:]
+    ) -> AppState {
+        let state = AppState(mode: .mock)
+        state.accounts = accounts
+        for account in accounts {
+            state.cores[account.id] = PreviewAppCore(
+                did: account.id, contacts: contacts, botNames: botNames
+            )
+        }
+        return state
+    }
+}
+
+/// Minimal `AppCoreProtocol` for previews: serves canned contacts and resolves
+/// bot names server-side. Everything else falls through to the protocol
+/// defaults in `AppCoreProtocol+Defaults.swift`.
+final class PreviewAppCore: AppCoreProtocol, @unchecked Sendable {
+    private let mockDid: String
+    private let contacts: [ContactRowFfi]
+    private let botNames: [String: String]
+
+    init(did: String, contacts: [ContactRowFfi], botNames: [String: String]) {
+        self.mockDid = did
+        self.contacts = contacts
+        self.botNames = botNames
+    }
+
+    func did() -> String { mockDid }
+    func listContacts() throws -> [ContactRowFfi] { contacts }
+
+    func getAccountInfo(did: String) throws -> AccountInfoFfi {
+        if let name = botNames[did] {
+            return AccountInfoFfi(did: did, displayName: name, isBot: true)
+        }
+        return AccountInfoFfi(did: did, displayName: nil, isBot: false)
+    }
+}
+#endif

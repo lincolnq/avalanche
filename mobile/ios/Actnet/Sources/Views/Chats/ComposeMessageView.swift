@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// New-message composer. Single flow for DMs (1 recipient) and groups (2+
 /// recipients), per `docs/30-mobile-ux.md` §Compose. This is the "core" slice
@@ -16,14 +17,24 @@ struct ComposeMessageView: View {
     @State private var allContacts: [ContactRowFfi] = []
     @State private var sending: Bool = false
     @State private var errorMessage: String?
+    /// Lets the autocomplete / DID-submit paths push a chip into the
+    /// `UITextView`-backed recipient field, which owns the chip content.
+    @StateObject private var fieldHandle = RecipientFieldHandle()
 
     /// A confirmed recipient. `displayName` may be empty when the user typed
-    /// a raw DID we haven't seen before; the chip falls back to a truncated
+    /// a raw DID we haven't seen before; `label` falls back to a truncated
     /// DID in that case.
     struct Chip: Identifiable, Hashable {
         let id: String  // == did
         let did: String
         let displayName: String
+
+        /// User-visible text for the chip. Never a raw full DID.
+        var label: String { displayName.isEmpty ? shortenDid(did) : displayName }
+    }
+
+    init(initialChips: [Chip] = []) {
+        _chips = State(initialValue: initialChips)
     }
 
     private var accounts: [Account] { appState.accounts }
@@ -65,7 +76,7 @@ struct ComposeMessageView: View {
     }
 
     private var groupNameAutoDefault: String {
-        let names = chips.map { $0.displayName.isEmpty ? shortDid($0.did) : $0.displayName }
+        let names = chips.map(\.label)
         switch names.count {
         case 0: return ""
         case 1: return names[0]
@@ -126,30 +137,16 @@ struct ComposeMessageView: View {
 
     private var recipientField: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("To:").font(.caption).foregroundStyle(.secondary)
-            FlowLayout(spacing: 6) {
-                ForEach(chips) { chip in
-                    HStack(spacing: 4) {
-                        Text(chip.displayName.isEmpty ? shortDid(chip.did) : chip.displayName)
-                            .lineLimit(1)
-                        Button {
-                            chips.removeAll { $0.id == chip.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(Capsule())
-                }
-                TextField(chips.isEmpty ? "Type a name or DID" : "", text: $query)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .frame(minWidth: 120)
-                    .onSubmit { commitQueryAsChip() }
-            }
+            RecipientTokenField(
+                chips: $chips,
+                query: $query,
+                prefix: "To:",
+                placeholder: "Type a name",
+                handle: fieldHandle,
+                onSubmit: commitQueryAsChip
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             if chips.count >= 2 {
                 HStack {
                     Text("Group:").font(.caption).foregroundStyle(.secondary)
@@ -158,6 +155,7 @@ struct ComposeMessageView: View {
                 .padding(.top, 2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.vertical, 10)
     }
@@ -265,13 +263,11 @@ struct ComposeMessageView: View {
         }
     }
 
+    /// Add a recipient. The token field owns the chip content (dedup, clearing
+    /// the typed query, selection), then mirrors the result back into `chips` /
+    /// `query`.
     private func addChip(did: String, displayName: String) {
-        guard !chips.contains(where: { $0.did == did }) else {
-            query = ""
-            return
-        }
-        chips.append(Chip(id: did, did: did, displayName: displayName))
-        query = ""
+        fieldHandle.addChip(Chip(id: did, did: did, displayName: displayName))
     }
 
     private func commitQueryAsChip() {
@@ -341,51 +337,52 @@ struct ComposeMessageView: View {
         }
     }
 
-    private func shortDid(_ did: String) -> String {
-        if did.count > 18 { return String(did.prefix(12)) + "…" + String(did.suffix(4)) }
-        return did
-    }
 }
 
-/// Minimal iOS-16+ flow layout (rows of chips). SwiftUI doesn't ship one
-/// out of the box; this is a tiny custom Layout that wraps children onto
-/// new lines as horizontal space runs out.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
-        let width = proposal.width ?? .infinity
-        return layout(subviews: subviews, in: width).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
-        let placements = layout(subviews: subviews, in: bounds.width).placements
-        for (idx, p) in placements.enumerated() {
-            subviews[idx].place(
-                at: CGPoint(x: bounds.minX + p.x, y: bounds.minY + p.y),
-                proposal: ProposedViewSize(width: p.w, height: p.h)
-            )
-        }
-    }
-
-    private func layout(subviews: Subviews, in width: CGFloat) -> (size: CGSize, placements: [(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat)]) {
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var maxX: CGFloat = 0
-        var placements: [(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat)] = []
-        for sv in subviews {
-            let size = sv.sizeThatFits(.unspecified)
-            if x + size.width > width && x > 0 {
-                x = 0
-                y += lineHeight + spacing
-                lineHeight = 0
-            }
-            placements.append((x: x, y: y, w: size.width, h: size.height))
-            x += size.width + spacing
-            maxX = max(maxX, x - spacing)
-            lineHeight = max(lineHeight, size.height)
-        }
-        return (CGSize(width: maxX, height: y + lineHeight), placements)
-    }
+#if DEBUG
+/// Shared preview environment: one account plus a spread of contact cases —
+/// curated humans, a human whose profile hasn't resolved yet (→ "Unknown"), and
+/// a bot whose name lives server-side and resolves through the same path as
+/// humans (the normalization this view relies on).
+@MainActor
+private func composePreviewState() -> AppState {
+    let me = Account(
+        id: "did:plc:me",
+        displayName: "Me",
+        avatarData: nil,
+        servers: [ServerInfo(
+            id: "https://server.example",
+            name: "Example",
+            url: URL(string: "https://server.example")!
+        )]
+    )
+    let contacts: [ContactRowFfi] = [
+        ContactRowFfi(did: "did:plc:alice", displayName: "Alice Rivera", isCurated: true, lastInteractionAtMs: 0),
+        ContactRowFfi(did: "did:plc:bob", displayName: "Bob Chena", isCurated: true, lastInteractionAtMs: 0),
+        ContactRowFfi(did: "did:plc:carol", displayName: "Carol X", isCurated: false, lastInteractionAtMs: 0),
+        ContactRowFfi(did: "did:local:adminbot", displayName: "AdminBot", isCurated: false, lastInteractionAtMs: 0),
+    ]
+    return AppState.preview(
+        accounts: [me],
+        contacts: contacts,
+        botNames: ["did:local:adminbot": "Adminbot"]
+    )
 }
+
+#Preview("Empty") {
+    ComposeMessageView()
+        .environmentObject(composePreviewState())
+}
+
+#Preview("One recipient") {
+    ComposeMessageView(initialChips: [
+        ComposeMessageView.Chip(id: "did:plc:alice", did: "did:plc:alice", displayName: "Alice Rivera"),
+        ComposeMessageView.Chip(id: "did:plc:alice2", did: "did:plc:alice", displayName: "Alice Rivera Two"),
+        ComposeMessageView.Chip(id: "did:plc:alice3", did: "did:plc:alice", displayName: "Alice Rivera Three"),
+        ComposeMessageView.Chip(id: "did:plc:alice4", did: "did:plc:alice", displayName: "Alice Rivera Four")
+
+
+    ])
+    .environmentObject(composePreviewState())
+}
+#endif
