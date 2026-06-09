@@ -11,7 +11,7 @@ Docs are numbered by category. First digit = area, second digit = sequence withi
 | `0x` | Core design | [`00`](00-design.md) this doc · [`01`](01-technical-implementation.md) technical implementation · [`02`](02-todos-deferred.md) deferred TODOs / backlog · [`03`](03-groups.md) groups |
 | `1x` | Server & protocol | [`10`](10-server-implementation.md) server implementation · [`11`](11-core-api-sketch.md) core API sketch · [`12`](12-abuse-handling.md) abuse handling · [`13`](13-federation.md) federation · [`14`](14-bitchat-fallback.md) bitchat fallback |
 | `2x` | Projects | [`20`](20-project-security.md) project security · [`21`](21-chatbot-project.md) chatbot project · [`22`](22-adminbot.md) adminbot |
-| `3x` | Messaging & conversation UX | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-threading.md) threading · [`33`](33-reactions.md) reactions · [`34`](34-connection-state.md) connection state |
+| `3x` | Messaging & conversation UX | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-threading.md) threading · [`33`](33-reactions.md) reactions · [`34`](34-connection-state.md) connection state · [`35`](35-attachments.md) attachments |
 | `4x` | Deployment & infra | [`40`](40-deployment.md) deployment · [`41`](41-relay-deployment.md) relay deployment |
 | `5x` | Identity, accounts & contacts | [`50`](50-identity-auth-recovery.md) identity / auth / recovery · [`51`](51-invite-tokens.md) invite tokens · [`52`](52-contacts-and-profiles.md) contacts and profiles · [`53`](53-multi-account-ux.md) multi-account UX |
 
