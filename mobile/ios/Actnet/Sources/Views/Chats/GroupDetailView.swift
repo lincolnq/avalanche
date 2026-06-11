@@ -30,7 +30,7 @@ struct GroupDetailView: View {
                     Section("Members (\(s.members.count))") {
                         ForEach(orderedMembers(s.members), id: \.encryptedMemberId) { member in
                             HStack(spacing: 10) {
-                                ContactAvatar(name: memberName(member), size: 32)
+                                ContactAvatar(name: memberName(member), isBot: isBot(member), size: 32)
                                 Text(memberName(member))
                                     .lineLimit(1)
                                 Spacer()
@@ -86,6 +86,12 @@ struct GroupDetailView: View {
         member.did == accountId
             ? "You"
             : appState.resolvedName(for: member.did, accountId: accountId)
+    }
+
+    /// Whether a member is a bot, for the hexagon avatar frame
+    /// (docs/54-bot-presentation.md). The local user is never a bot.
+    private func isBot(_ member: GroupMemberFfi) -> Bool {
+        member.did != accountId && appState.isBot(member.did, accountId: accountId)
     }
 
     private func load() async {

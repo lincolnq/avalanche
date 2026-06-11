@@ -61,6 +61,11 @@ final class AppState: ObservableObject {
     private var displayNameCache: [String: String] = [:]
     /// DIDs currently being fetched (to avoid duplicate requests).
     private var displayNameInFlight: Set<String> = []
+    /// Cached bot status for remote DIDs, keyed by DID. Populated as a
+    /// side-effect of name resolution (same server account record), and read
+    /// by avatar rendering to pick the bot frame + badge
+    /// (docs/54-bot-presentation.md). A missing entry renders as a person.
+    private var isBotCache: [String: Bool] = [:]
     /// Cached group titles, keyed by URL-safe-no-pad base64 group_id.
     /// Populated by `fetchGroupTitle` and consumed by the conversation
     /// list / `Conversation.title`.
@@ -243,6 +248,7 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
     }
@@ -261,6 +267,7 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
     }
@@ -489,6 +496,19 @@ final class AppState: ObservableObject {
         return name == did ? "Unknown" : name
     }
 
+    /// Whether a DID is a bot account, for avatar/badge presentation
+    /// (docs/54-bot-presentation.md). Sourced from the same server account
+    /// record `resolveDisplayName` consults, cached alongside the name, so it
+    /// adds no extra round-trips for any DID already being named. Returns
+    /// `false` while unresolved or for humans/own accounts — the absence of a
+    /// positive bot signal renders as a person, per the spec.
+    func isBot(_ did: String, accountId: String) -> Bool {
+        if accounts.contains(where: { $0.id == did }) { return false }
+        if let known = isBotCache[did] { return known }
+        resolveDisplayName(did: did, accountId: accountId)
+        return false
+    }
+
     /// Seed the name cache with a name a caller already holds (e.g. the
     /// contact-list FFI rows carry the cached profile name), so the async
     /// resolver doesn't re-fetch it. No-op if empty or already cached.
@@ -512,14 +532,18 @@ final class AppState: ObservableObject {
             // Local contact_profiles first — fast, no network.
             let localName = (try? core.contactDisplayName(did: targetDid)) ?? ""
             // Fall back to server lookup (bots) only if the local cache is empty.
-            let serverName: String? = localName.isEmpty
-                ? (try? core.getAccountInfo(did: targetDid))?.displayName
-                : nil
-            let resolved = !localName.isEmpty ? localName : (serverName ?? "")
+            // The same record carries `isBot`, so we learn bot status here too
+            // (docs/54-bot-presentation.md) without a separate round-trip.
+            let serverInfo = localName.isEmpty ? try? core.getAccountInfo(did: targetDid) : nil
+            let resolved = !localName.isEmpty ? localName : (serverInfo?.displayName ?? "")
+            // A resolved local name means a human contact; only the server
+            // record marks bots. Absent info → not a bot.
+            let isBot = serverInfo?.isBot ?? false
 
             await MainActor.run {
                 guard let self else { return }
                 self.displayNameInFlight.remove(targetDid)
+                self.isBotCache[targetDid] = isBot
                 guard !resolved.isEmpty else { return }
                 self.applyResolvedDisplayName(did: targetDid, name: resolved)
             }

@@ -131,6 +131,7 @@ struct ComposeMessageView: View {
                 contacts: allContacts,
                 excludedDids: Set(chips.map(\.did)),
                 nameFor: contactName,
+                isBotFor: isBot,
                 onSelect: { c in addChip(did: c.did, displayName: contactName(c)) },
                 onScanLink: handleContactLink
             )
@@ -230,12 +231,20 @@ struct ComposeMessageView: View {
             addChip(did: c.did, displayName: contactName(c))
         } label: {
             HStack(spacing: 10) {
-                ContactAvatar(name: contactName(c), size: 32)
+                ContactAvatar(name: contactName(c), isBot: isBot(c), size: 32)
                 Text(contactName(c))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
         }
+    }
+
+    /// Whether a contact is a bot, for the hexagon avatar frame
+    /// (docs/54-bot-presentation.md). Resolves through the same shared
+    /// `AppState` path as the name.
+    private func isBot(_ c: ContactRowFfi) -> Bool {
+        guard let id = activeAccountId else { return false }
+        return appState.isBot(c.did, accountId: id)
     }
 
     /// The name to show for a contact. Resolves through the shared
@@ -410,6 +419,7 @@ private struct ContactPickerSheet: View {
     let contacts: [ContactRowFfi]
     let excludedDids: Set<String>
     let nameFor: (ContactRowFfi) -> String
+    let isBotFor: (ContactRowFfi) -> Bool
     let onSelect: (ContactRowFfi) -> Void
     /// Adds the recipient encoded in a scanned/pasted contact link; returns
     /// false if the payload isn't a recognizable Avalanche contact link.
@@ -511,7 +521,7 @@ private struct ContactPickerSheet: View {
             dismiss()
         } label: {
             HStack(spacing: 10) {
-                ContactAvatar(name: nameFor(c), size: 32)
+                ContactAvatar(name: nameFor(c), isBot: isBotFor(c), size: 32)
                 Text(nameFor(c))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -541,7 +551,10 @@ private func composePreviewState() -> AppState {
         ContactRowFfi(did: "did:plc:alice", displayName: "Alice Rivera", isCurated: true, lastInteractionAtMs: 0),
         ContactRowFfi(did: "did:plc:bob", displayName: "Bob Chena", isCurated: true, lastInteractionAtMs: 0),
         ContactRowFfi(did: "did:plc:carol", displayName: "Carol X", isCurated: false, lastInteractionAtMs: 0),
-        ContactRowFfi(did: "did:local:adminbot", displayName: "AdminBot", isCurated: false, lastInteractionAtMs: 0),
+        // Empty local name: a bot resolves its name server-side (via
+        // `getAccountInfo`), which is also where `isBot` comes from — so this
+        // row exercises the bot avatar chrome (docs/54-bot-presentation.md).
+        ContactRowFfi(did: "did:local:adminbot", displayName: "", isCurated: false, lastInteractionAtMs: 0),
     ]
     return AppState.preview(
         accounts: [me],

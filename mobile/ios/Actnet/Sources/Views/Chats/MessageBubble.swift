@@ -3,6 +3,9 @@ import SwiftUI
 struct MessageBubble: View {
     let message: Message
     let isMe: Bool
+    /// Sender is a bot: the bubble gets cut (octagon-ish) corners instead of
+    /// rounded ones, echoing the hexagon avatar (docs/54-bot-presentation.md).
+    var isBot: Bool = false
 
     var body: some View {
         HStack {
@@ -14,7 +17,7 @@ struct MessageBubble: View {
                     .padding(.vertical, 8)
                     .background(isMe ? Color.avOutgoingBubble : Color.avIncomingBubble)
                     .foregroundStyle(isMe ? Color.sand100 : .primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(bubbleShape)
 
                 HStack(spacing: 4) {
                     Text(message.sentAt, style: .time)
@@ -31,6 +34,11 @@ struct MessageBubble: View {
 
             if !isMe { Spacer(minLength: 60) }
         }
+    }
+
+    /// Cut-corner (octagon-ish) bubble for bots, rounded for people.
+    private var bubbleShape: AnyShape {
+        isBot ? AnyShape(CutCornerRectangle(cut: 12)) : AnyShape(RoundedRectangle(cornerRadius: 16))
     }
 
     @ViewBuilder

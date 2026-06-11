@@ -85,6 +85,18 @@ Concretely: **people render in a circle; bots render in a hexagon.** The ✓ bad
 distinguishes tier 1 from tier 2; tier 2 may instead carry a small hollow/grey
 "unverified" mark so the two are never confused.
 
+**The same geometric language extends to message bubbles.** A bot's bubbles
+render with cut, octagon-ish corners; people's stay rounded. It's the same
+client-applied-chrome principle — the bubble shape is decided by the client from
+the sender's bot signal, not anything in the message — so a reader scanning a
+group thread can see which messages came from an automated participant without
+checking each avatar. A *literal* regular octagon can't hold a text bubble
+(it would crop the text or waste space on long messages), so the realization is
+a rectangle with chamfered corners: an octagon when square, a beveled rectangle
+at bubble proportions. (Implemented; the avatar-frame badge tiers above are not
+yet — today every bot renders the hexagon frame and octagon bubbles, with no
+badge, until the attestation tier lands.)
+
 ## On the constrained-avatar-palette idea
 
 A tempting alternative: make bots pick their avatar from a limited platform
@@ -147,8 +159,11 @@ No new transport: both ride the profile/attestation paths that already exist.
 The tier and its chrome travel with the avatar, so they appear wherever an
 avatar or name does:
 
-- **Conversation list & message bubbles** — bot frame + badge on the avatar;
+- **Conversation list** — the DM row's avatar takes the bot frame (hexagon);
   for a 1:1 with a verified bot, the header may add "Official bot · {server}".
+- **Message bubbles** — a bot sender's bubbles get cut (octagon-ish) corners
+  instead of rounded ones, so bot messages are distinguishable inline in a
+  mixed group thread, not just by the avatar.
 - **Contact card / profile** — the full hedged or attributed line ("Official
   bot, run by {server}" / "Automated account · not verified"), plus the bot's
   `purpose` string when attested.

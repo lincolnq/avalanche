@@ -13,6 +13,13 @@ struct ConversationView: View {
         appState.messagesByConversation[conversation.id] ?? []
     }
 
+    /// Whether an incoming message's sender is a bot, for the octagon-ish
+    /// bubble shape (docs/54-bot-presentation.md). Own messages are never bots.
+    private func isBotSender(_ message: Message) -> Bool {
+        message.senderAccountId != conversation.accountId
+            && appState.isBot(message.senderAccountId, accountId: conversation.accountId)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -20,7 +27,8 @@ struct ConversationView: View {
                     ForEach(messages) { message in
                         MessageBubble(
                             message: message,
-                            isMe: message.senderAccountId == conversation.accountId
+                            isMe: message.senderAccountId == conversation.accountId,
+                            isBot: isBotSender(message)
                         )
                         .id(message.sentAtMs)
                     }
