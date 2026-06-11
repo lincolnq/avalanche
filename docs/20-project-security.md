@@ -184,7 +184,7 @@ The Project's web page runs in a `WKWebView` (iOS) / `WebView` (Android). Standa
 **Cannot:**
 - Access the device filesystem.
 - Access the native app's data (SQLCipher DB, keys, conversations).
-- Call native APIs (no JS bridge exists).
+- Call native APIs (no JS bridge — through Stage 6 the design stays bridgeless: URL params in, deeplinks out; see `23-messaging-extensions.md`).
 - Access other Projects' webview storage (origin isolation).
 
 ### Risks and mitigations
@@ -199,14 +199,27 @@ The Project's web page runs in a `WKWebView` (iOS) / `WebView` (Android). Standa
 
 ### No JS bridge (for now)
 
-The web page has no bridge to the native app. All actions go through the Project's own HTTP backend, which then operates through bot accounts.
+The web page has no bridge to the native app. All actions go through the Project's own HTTP backend, which then operates through bot accounts. The way the web page gets the user back to the app is by opening a deep link for navigation in the app.
 
-This is a deliberate security choice. A JS bridge that lets the web page trigger native actions (send messages, read conversations) would dramatically expand the attack surface. A malicious or compromised Project with bridge access could:
-- Send messages as the user.
-- Read conversation history.
-- Exfiltrate message content.
+This is a deliberate security choice. A JS bridge would dramatically expand the attack surface. If a JS bridge is ever added, it must be gated by a scoped permission system: the Project declares what native capabilities it needs, the user explicitly approves, and the bridge only exposes approved capabilities. 
 
-If a JS bridge is ever added, it must be gated by a scoped permission system: the Project declares what native capabilities it needs, the user explicitly approves, and the bridge only exposes approved capabilities. This is Stage 6+ work.
+## Messaging-extension surfaces (Stage 6+)
+
+`23-messaging-extensions.md` is the catalog of surfaces by which Projects extend messaging, and where the core-vs-Project line falls. This section records their **security posture**; it does not repeat the mechanics.
+
+First, the boundary. Most features `23` discusses are **core, not Project** — reactions, `@`-mentions, simple polls, generic link unfurling, live location. These sit **outside the Project trust boundary**: there is no Project API to them, and a Project can neither read, mediate, nor inject them. A member bot sees reactions/replies/messages in a conversation it belongs to *exactly as any member does* (the visible-bot model above) — that is the only way a Project touches them, and it grants no new capability. "Lightweight bot actions" (react ✅ to approve) ride on this and add nothing to the attack surface.
+
+The genuinely Project-facing surfaces, and what each newly exposes:
+
+| Surface (see `23`) | New disclosure / trust | Mitigation |
+|---|---|---|
+| **Entry points** (`+` menu, message long-press, deep-link launcher) | A registered entry point is an attributed label that could phish ("Verify your account"); a message-action discloses *that one message* to the Project | Entries visibly attributed to their Project; admin vetting; message-action disclosure is per-message, consent-gated by the tap (signpost on first use per Project); a launcher may only open its owning Project (no open-redirect) |
+| **Webview I/O** (URL params in, deeplinks out) | The return-content deeplink makes the client fetch a webview-chosen URL (SSRF/privacy) and proposes a message/attachment the user then sends | **No bridge** = no native API surface; the fetch is https-only, size-capped, origin-allowlisted (sender-side, like on-device unfurl); return-content is **proposed, never sent silently**; conversation posts go through the bot server-side. Inbound params never carry E2E data |
+| **Slash-command manifest** | A bot advertises commands; autocomplete text is Project-supplied (mild phishing via misleading descriptions) | No bridge and no new wire format — a slash command is a plain message the bot reads (it's a member; expected). Attributed to the bot; manifest vetted by the admin |
+| **Custom emoji / reaction asset pack** | Project-supplied images in the reaction picker (offensive content; remote-load tracking; oversized assets) | Fetched/cached like attachments (no per-render remote load), size-capped, admin-vetted |
+| **Rich text authored by bots** | Link spans can spoof (display text ≠ destination) | Anti-spoof rule from `35-attachments.md` (show the real URL); render only the fixed inline style set |
+
+The recurring theme: every Project-facing surface is an **explicit, attributed, consent-gated handoff**, and none grant a Project access to conversation content it isn't already a member of. The privacy-sensitive primitives stay in core, out of reach.
 
 ## Threat: malicious bot behavior
 
@@ -245,21 +258,53 @@ If multiple Projects run on the same homeserver, can one Project interfere with 
 
 **No shared API surface:** Projects have no way to discover or interact with each other except through the same mechanisms available to any user (sending messages, looking up DIDs).
 
-## Threat: guest access to remote Projects
+## Threat: multiple homeservers and client-visible Project surfaces
 
-### The problem (deferred)
+Two developments make this bigger than the original "guest access is a Stage-9 federation problem" framing:
 
-When a user from homeserver A visits a Project on homeserver B (guest access), the trust model gets more complex. The user trusts their own admin but not necessarily homeserver B's admin or its Projects.
+1. **Multi-account is here now.** Per `53-multi-account-ux.md`, a user can be logged into several homeservers at once, each a first-class account. So the client routinely **holds and renders Project surfaces from multiple trust domains simultaneously** — this is a normal state, not a deferred edge case.
+2. **Projects now expose client-visible surfaces.** Per `23-messaging-extensions.md`, Projects advertise **slash-command manifests, entry-point labels/icons, custom-emoji packs, and bot-authored rich text** — data and assets the *client* parses and renders, not just bot messages a bot sends. That is a new surface reaching the client.
 
-This is a real concern but is deferred to the federation stage (Stage 9). For now, Projects are single-server only — users only see Projects on homeservers they've registered on.
+These two compound: client-rendered, Project-authored content, sourced from several servers of differing trust, shown side by side in one app.
 
-### Future approach
+### Three relationships, each × every homeserver you're on
 
-Guest access would require:
-- A guest credential issued by the user's homeserver ("this is a valid user").
-- The remote Project accepting the credential and granting scoped access.
-- A clear UX indicating the user is interacting with a remote, potentially untrusted Project.
-- Possibly: the user's homeserver acting as a proxy, so the remote Project never learns the user's real DID.
+- **Your homeserver's Projects (vetted).** Admin-vetted, full trust per the trust chain above — but you now have *one such chain per homeserver you hold an account on*. Trust does not pool across them: server A's admin vouches for A's Projects only.
+- **Guest on a remote homeserver (Stage 9, deferred).** You participate in a Project/group on a server where you have **no account**, via a guest credential. That admin is not in your trust chain → untrusted.
+- **No relationship → no reach.** A Project you've never encountered cannot project anything into your client; surfaces are gated (next).
+
+### Gating: client-visible surfaces follow bot visibility / explicit invocation
+
+The core invariant — *a Project only sees a conversation where its bot is a visible member* — extends to **what a Project can render in your client**. A Project may project UI into the client only where it has a **visible bot member** of that conversation (in-conversation slash autocomplete, entry points) or where the **user explicitly invoked** it (a compose helper like Giphy). A foreign Project cannot inject a slash command, entry point, or emoji into a conversation it isn't a member of. The new surfaces are therefore bounded by the same per-conversation visible-membership rule that already bounds message access.
+
+### Appearance scope — where each affordance can show up
+
+Bot-membership gates the bot-backed surfaces, but a **compose helper has no bot** (Giphy is invoked from "+", not a member of anything), so its appearance must be defined explicitly. The rule: **a conversation lives on exactly one homeserver via one account, and the affordances available in it come only from *that homeserver's* Projects.** Switching to a different account's conversation swaps the affordance set; nothing bleeds across accounts or servers.
+
+| Affordance | Appears in | Scope |
+|---|---|---|
+| Slash autocomplete, in-conversation entry points (bot-backed) | only conversation(s) where that Project's **bot is a member** | per-conversation (⊂ one account) |
+| Compose helpers / "+" entries (no bot — Giphy, meme maker) | the **"+" menu of conversations on the account/homeserver where the Project is installed** | per-account |
+| Custom emoji / reaction packs | the **reaction picker in conversations on the installing account's homeserver** | per-account |
+| Bot-posted content & rich text | wherever that **bot is a member** | per-conversation |
+
+**The motivating example:** Giphy installed on homeserver A → its "+" entry appears in your **account-A** conversations only. Composing in an account-B (homeserver B) conversation shows server B's helpers, **not** A's Giphy — B's admin never vetted it, and the affordance does not follow you across servers. A pure compose-helper leaks little even if it did bleed (Giphy would see only "account A opened me, picked GIF X," never the B conversation), but per-account scoping keeps trust attribution clean and the "+" menu predictable. A cross-account "use everywhere" opt-in could be offered later — explicit and attributed, never a silent default.
+
+### Scoping & isolation (needed now — Stage 6 / multi-account, not Stage 9)
+
+This work lands with multi-account, ahead of federation:
+
+- **Per-(account, server, conversation) scoping.** Every client-visible surface is tagged with where it came from and shown only there. A Project on server A must never appear in — or influence the rendering of — a conversation belonging to account B. No global, co-mingled command palette or entry-point list spanning accounts.
+- **Per-account fetch.** Manifests, entry-point lists, and emoji packs sync over the **owning account's own connection**. Server A's Projects must learn nothing about account B's activity, and the client must not leak one account's state to another.
+- **Manifests are untrusted input.** Command names/descriptions, entry-point labels, and emoji names/assets are Project-authored strings and binaries the client displays. Treat them as hostile: sanitize and length-limit text; guard against homoglyph/Unicode spoofing in command and Project names; size-cap and lazily fetch assets (no per-render remote load → no tracking beacon); rate/size-limit manifest sync (DoS); and **always attribute a surface to its (server, Project)** so one Project can't impersonate another or pose as native/system UI.
+
+### Guest access (Stage 9, still deferred — but sharper now)
+
+When the user is a *guest* on a remote homeserver (no account there), the remote admin isn't in the trust chain, so on top of the scoping above:
+
+- Guest sessions get **reduced or no client-visible surface** from remote Projects — at most, surfaces the user explicitly opts into, clearly marked "remote / not vetted by your admin."
+- A **guest credential** issued by the user's own homeserver vouches "valid user" without exposing the real DID; the homeserver-as-proxy / pseudonymous-DID option keeps the remote Project from learning identity.
+- The remote Project accepts the credential and grants scoped access; the UX makes the remote, untrusted nature explicit.
 
 ## Summary: what we build now
 
@@ -274,6 +319,8 @@ For the chatbot Project (and the first iteration of the Project model):
 
 Items deferred:
 - Scoped permissions for bots (Stage 6).
-- JS bridge with permission gating (Stage 6+).
+- Messaging-extension surfaces — entry points, slash-command manifests, custom-emoji packs, bot rich text — and their scopes (Stage 6); see `23-messaging-extensions.md` and *Messaging-extension surfaces* above.
+- Webview return-content via intercepted deeplink + sender-side fetch — **no JS bridge** (Stage 6); specced in `23-messaging-extensions.md`.
+- Per-(account, server, conversation) scoping and isolation of client-visible Project surfaces, and treating Project manifests as untrusted input (Stage 6, with multi-account); see *Threat: multiple homeservers and client-visible Project surfaces* above.
 - Token scoping enforcement on verify endpoint (v2).
-- Guest access to remote Projects (Stage 9).
+- Guest access to remote Projects, incl. reduced client-visible surface and pseudonymous credentials (Stage 9).
