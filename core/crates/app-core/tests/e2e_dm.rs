@@ -162,3 +162,48 @@ async fn login_re_authenticates() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+/// Full wire round-trip for a reaction (docs/33): build → encrypt → server →
+/// decrypt → dispatch → store, on both the reactor's and the recipient's side.
+/// Edits and deletes ride the identical ContentMessage transport + dispatch;
+/// their store effects are covered by the store unit tests.
+#[tokio::test]
+async fn alice_reacts_to_a_message_bob_sees_it() {
+    let url = server_url();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true).await.unwrap();
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    // Alice reacts 👍 to one of Bob's messages (identified by author+sent_at).
+    let target_sent_at = 1_700_000_000_000i64;
+    alice.send_dm_reaction_async(&bob_did, &bob_did, target_sent_at, "👍", false, now_ms()).await.unwrap();
+
+    // Reactor's own store reflects it immediately.
+    let alice_conv = format!("dm-{alice_did}-{bob_did}");
+    let ar = alice.load_reactions_async(&alice_conv).await.unwrap();
+    assert_eq!(ar.len(), 1);
+    assert_eq!(ar[0].emoji, "👍");
+    assert_eq!(ar[0].reactor_did, alice_did);
+
+    // Bob receives and applies it (keyed on the target's wire identity).
+    bob.receive_messages_async().await.unwrap();
+    let bob_conv = format!("dm-{bob_did}-{alice_did}");
+    let br = bob.load_reactions_async(&bob_conv).await.unwrap();
+    assert_eq!(br.len(), 1);
+    assert_eq!(br[0].emoji, "👍");
+    assert_eq!(br[0].reactor_did, alice_did);
+    assert_eq!(br[0].target_author, bob_did);
+
+    // Re-reacting replaces (one per person per message).
+    alice.send_dm_reaction_async(&bob_did, &bob_did, target_sent_at, "❤️", false, now_ms()).await.unwrap();
+    bob.receive_messages_async().await.unwrap();
+    let br = bob.load_reactions_async(&bob_conv).await.unwrap();
+    assert_eq!(br.len(), 1);
+    assert_eq!(br[0].emoji, "❤️");
+
+    // Removing clears it.
+    alice.send_dm_reaction_async(&bob_did, &bob_did, target_sent_at, "❤️", true, now_ms()).await.unwrap();
+    bob.receive_messages_async().await.unwrap();
+    assert!(bob.load_reactions_async(&bob_conv).await.unwrap().is_empty());
+}

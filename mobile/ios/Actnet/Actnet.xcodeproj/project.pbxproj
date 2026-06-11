@@ -29,6 +29,7 @@
 		453C9CABA749A1A2D5191AC4 /* AppCoreProtocol+Defaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A8F652C3B8F59F3A47CB029 /* AppCoreProtocol+Defaults.swift */; };
 		4CB5F41795DCD29D8786B22B /* CallsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E488C4D9264B250098E100E /* CallsView.swift */; };
 		5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */; };
+		5E9CE6A936CB3EE5A7D534D1 /* EditHistorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */; };
 		638610176DD56586489BAF89 /* ActnetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65A7BC7A36A4F6D36947106A /* ActnetApp.swift */; };
 		6C9898720C9563E270D15E23 /* RecoveryExplainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27783892A8D4D88BE570F79C /* RecoveryExplainerView.swift */; };
 		766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */; };
@@ -87,6 +88,7 @@
 		661A952A0D325A00D0F054E9 /* DevServerActnetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevServerActnetService.swift; sourceTree = "<group>"; };
 		6A58CC23E0AF8302F283FC87 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6B7C0912B10EFE68A1C776BB /* AppCoreFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = AppCoreFFI.xcframework; path = ../AppCoreFFI.xcframework; sourceTree = "<group>"; };
+		6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditHistorySheet.swift; sourceTree = "<group>"; };
 		6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailView.swift; sourceTree = "<group>"; };
 		6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCameraView.swift; sourceTree = "<group>"; };
 		7313225243535C7C945AD8D7 /* AccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsView.swift; sourceTree = "<group>"; };
@@ -201,6 +203,7 @@
 				77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */,
 				C0BC2191A5A534D46806501B /* ConversationRow.swift */,
 				2C83A54ACCB386940D8E4689 /* ConversationView.swift */,
+				6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */,
 				6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */,
 				1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */,
 				7F73DF560719B0774C43444C /* RecipientTokenField.swift */,
@@ -409,6 +412,7 @@
 				FE24D043CB770E44A2F5F3EE /* ConversationView.swift in Sources */,
 				1626F0227BC811D82FDAE1E4 /* CutCornerRectangle.swift in Sources */,
 				25BD1E1E253DCEBC39F160D4 /* DevServerActnetService.swift in Sources */,
+				5E9CE6A936CB3EE5A7D534D1 /* EditHistorySheet.swift in Sources */,
 				20F6033A948AC335C87AA56C /* GroupDetailView.swift in Sources */,
 				1D2BDEE0FB41FAED5BAB86A8 /* Hexagon.swift in Sources */,
 				CC462B8999850429242D1E9A /* IdentityDetailView.swift in Sources */,

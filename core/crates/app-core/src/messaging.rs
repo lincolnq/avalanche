@@ -11,7 +11,8 @@ use types::{AccountId, DeviceId, Timestamp};
 use crate::groups;
 use crate::profile;
 use crate::proto::{
-    self, content_message::Body, receipt_message, ContentMessage, ReceiptMessage,
+    self, content_message::Body, delete_message, receipt_message, ContentMessage, DeleteMessage,
+    EditMessage, ReactionMessage, ReceiptMessage,
 };
 use crate::{
     AppCore, AppCoreInner, AppError, DecryptedMessage, DeliveryStatusUpdate, IncomingEvent,
@@ -489,6 +490,148 @@ impl AppCoreInner {
         })
     }
 
+    /// Apply an inbound edit to the DM with `sender` and return the event to
+    /// surface, or `None` if nothing changed. Authorship is implicit: an edit
+    /// only targets the sender's own message, so we key the store update on
+    /// `(conv, sender, target_sent_at)` — it can never touch another author's
+    /// message (docs/36). `op_sent_at_ms` is the edit's LWW clock.
+    pub(crate) async fn apply_inbound_edit(
+        &self,
+        conv_id: &str,
+        sender: &str,
+        edit: EditMessage,
+        op_sent_at_ms: u64,
+    ) -> Option<IncomingEvent> {
+        let new_body = edit.replacement.map(|t| t.body).unwrap_or_default();
+        let target_sent_at = edit.target_sent_at as i64;
+        let applied = self
+            .store
+            .apply_edit(
+                conv_id,
+                sender,
+                Timestamp(target_sent_at),
+                &new_body,
+                Timestamp(op_sent_at_ms as i64),
+                true,
+            )
+            .await
+            .unwrap_or(false);
+        applied.then_some(IncomingEvent::MessageEdited {
+            conversation_id: conv_id.to_string(),
+            author_did: sender.to_string(),
+            sent_at_ms: target_sent_at,
+            new_body,
+            edited_at_ms: op_sent_at_ms as i64,
+        })
+    }
+
+    /// Apply an inbound delete to the DM with `sender`. FOR_EVERYONE tombstones
+    /// the target (authorship-gated: the op's authenticated sender must equal
+    /// `target_author`). FOR_ME from a peer only affects the peer's own view,
+    /// so it's ignored here (docs/36).
+    pub(crate) async fn apply_inbound_delete(
+        &self,
+        conv_id: &str,
+        sender: &str,
+        del: DeleteMessage,
+        op_sent_at_ms: u64,
+    ) -> Option<IncomingEvent> {
+        if del.scope != delete_message::Scope::ForEveryone as i32 {
+            return None;
+        }
+        // The load-bearing security check: a FOR_EVERYONE delete is honored
+        // only if its authenticated sender authored the target message.
+        if del.target_author != sender {
+            return None;
+        }
+        let target_sent_at = del.target_sent_at as i64;
+        self.store
+            .tombstone_message(
+                conv_id,
+                &del.target_author,
+                Timestamp(target_sent_at),
+                Timestamp(op_sent_at_ms as i64),
+            )
+            .await
+            .ok()?;
+        Some(IncomingEvent::MessageDeleted {
+            conversation_id: conv_id.to_string(),
+            author_did: del.target_author,
+            sent_at_ms: target_sent_at,
+        })
+    }
+
+    /// Apply an inbound reaction to the DM with `sender` (the reactor). The
+    /// target message is `(target_author, target_sent_at)`; stored keyed on the
+    /// wire identity so it converges even if it arrives before the target
+    /// (docs/33).
+    pub(crate) async fn apply_inbound_reaction(
+        &self,
+        conv_id: &str,
+        sender: &str,
+        r: ReactionMessage,
+        op_sent_at_ms: u64,
+    ) -> Option<IncomingEvent> {
+        let target_sent_at = r.target_sent_at as i64;
+        if r.remove {
+            self.store
+                .remove_reaction(conv_id, &r.target_author, Timestamp(target_sent_at), sender)
+                .await
+                .ok()?;
+        } else {
+            self.store
+                .upsert_reaction(&store::messages::ReactionRow {
+                    conversation_id: conv_id.to_string(),
+                    target_author: r.target_author.clone(),
+                    target_sent_at: Timestamp(target_sent_at),
+                    reactor_did: sender.to_string(),
+                    emoji: r.emoji.clone(),
+                    reacted_at: Timestamp(op_sent_at_ms as i64),
+                })
+                .await
+                .ok()?;
+        }
+        Some(IncomingEvent::ReactionUpdated {
+            conversation_id: conv_id.to_string(),
+            target_author: r.target_author,
+            target_sent_at_ms: target_sent_at,
+            reactor_did: sender.to_string(),
+            emoji: r.emoji,
+            removed: r.remove,
+        })
+    }
+
+    /// Build a `ContentMessage` envelope around `body` (with our timestamp and
+    /// profile key) and fan it out to the group via the sealed-sender path.
+    /// This is the group analogue of the DM envelope wrapping in `send_dm`:
+    /// all group content now rides a `ContentMessage`, so receipts/reactions/
+    /// edits/deletes work in groups exactly as in DMs.
+    pub(crate) async fn send_group_content(
+        &mut self,
+        group_id: &str,
+        body: Body,
+        sent_at_ms: u64,
+    ) -> Result<(), AppError> {
+        let did = self.did.clone();
+        let device_id = self.device_id;
+        let server_url = self.client.server_url().to_string();
+        let profile_key = self.own_profile_key().await;
+        let msg = ContentMessage {
+            body: Some(body),
+            timestamp_ms: sent_at_ms,
+            profile_key,
+        };
+        let bytes = msg.encode_to_vec();
+        let AppCoreInner {
+            ref mut store,
+            ref client,
+            ..
+        } = *self;
+        groups::send_group_message(store, client, &server_url, &did, device_id, group_id, &bytes)
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn receive_messages(
         &mut self,
         ws: Option<&net::ws::WsConnection>,
@@ -617,6 +760,32 @@ impl AppCoreInner {
                                 .save_conversation_expiry(&raw.sender_did, expiry)
                                 .await;
                         }
+                        Some(Body::Edit(edit)) => {
+                            // Apply to the store; no DecryptedMessage to surface
+                            // on the polling path (the WS path emits an event).
+                            // /v1/messages carries DMs, so the conv is a DM.
+                            let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                            let _ = self
+                                .apply_inbound_edit(&conv_id, &raw.sender_did, edit, content.timestamp_ms)
+                                .await;
+                        }
+                        Some(Body::Delete(del)) => {
+                            let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                            let _ = self
+                                .apply_inbound_delete(&conv_id, &raw.sender_did, del, content.timestamp_ms)
+                                .await;
+                        }
+                        Some(Body::Reaction(reaction)) => {
+                            let conv_id = format!("dm-{}-{}", self.did, raw.sender_did);
+                            let _ = self
+                                .apply_inbound_reaction(
+                                    &conv_id,
+                                    &raw.sender_did,
+                                    reaction,
+                                    content.timestamp_ms,
+                                )
+                                .await;
+                        }
                         None => {
                             // ContentMessage with no body — backward compat.
                             decrypted.push(raw);
@@ -707,6 +876,14 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             .await;
     }
 
+    // The conversation this content belongs to: the group thread for group
+    // deliveries, otherwise the DM with the sender. Edit/delete/reaction and
+    // receipt application all key on this.
+    let conv_id = match decrypted.group_id.as_deref() {
+        Some(g) => format!("group-{g}"),
+        None => format!("dm-{}-{}", core.inner.lock().await.did, decrypted.sender_did),
+    };
+
     match msg.body {
         Some(Body::Receipt(receipt)) => {
             // DELIVERY (0) → status 2, READ (1) → status 3.
@@ -719,15 +896,13 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             if timestamps.is_empty() {
                 return;
             }
-            let conv_id = {
+            {
                 let inner = core.inner.lock().await;
-                let conv_id = format!("dm-{}-{}", inner.did, decrypted.sender_did);
                 let _ = inner
                     .store
                     .update_delivery_status(&conv_id, &timestamps, status)
                     .await;
-                conv_id
-            };
+            }
             for ts in timestamps {
                 let _ = core.event_tx.send(IncomingEvent::ReceiptUpdate {
                     update: DeliveryStatusUpdate {
@@ -756,8 +931,10 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     .await;
             }
 
-            // Auto-send delivery receipt to the sender.
-            if let Some(ts) = sent_at {
+            // Auto-send delivery receipt to the sender — DM only. Group
+            // delivery receipts would fan out per-recipient and aren't part of
+            // the group read-tracking model yet.
+            if let (Some(ts), None) = (sent_at, decrypted.group_id.as_deref()) {
                 let ws = core.ws.lock().expect("ws mutex poisoned").clone();
                 let mut inner = core.inner.lock().await;
                 let profile_key = inner.own_profile_key().await;
@@ -885,6 +1062,36 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                 .store
                 .save_conversation_expiry(&decrypted.sender_did, expiry)
                 .await;
+        }
+        Some(Body::Edit(edit)) => {
+            let inner = core.inner.lock().await;
+            if let Some(ev) = inner
+                .apply_inbound_edit(&conv_id, &decrypted.sender_did, edit, msg.timestamp_ms)
+                .await
+            {
+                drop(inner);
+                let _ = core.event_tx.send(ev);
+            }
+        }
+        Some(Body::Delete(del)) => {
+            let inner = core.inner.lock().await;
+            if let Some(ev) = inner
+                .apply_inbound_delete(&conv_id, &decrypted.sender_did, del, msg.timestamp_ms)
+                .await
+            {
+                drop(inner);
+                let _ = core.event_tx.send(ev);
+            }
+        }
+        Some(Body::Reaction(reaction)) => {
+            let inner = core.inner.lock().await;
+            if let Some(ev) = inner
+                .apply_inbound_reaction(&conv_id, &decrypted.sender_did, reaction, msg.timestamp_ms)
+                .await
+            {
+                drop(inner);
+                let _ = core.event_tx.send(ev);
+            }
         }
         None => {
             // ContentMessage with no body — emit as raw bytes (backward compat).

@@ -165,3 +165,73 @@ async fn group_send_arrives_via_ws_push() {
         "alice should have received bob's group reply via WS push within 5s"
     );
 }
+
+/// A group reaction (docs/33) rides the new group `ContentMessage` envelope,
+/// fans out over WS push, and is decoded + applied on the receiver — proving
+/// the wrapped-envelope group path end-to-end (not just the raw-text fallback).
+#[tokio::test]
+async fn group_reaction_arrives_via_ws_push() {
+    let url = server_url();
+
+    let alice = live_account(&url).await;
+    let bob = live_account(&url).await;
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    let created = alice.create_group_async("react-grp", "", 0).await.unwrap();
+    alice
+        .invite_member_async(&created.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    wait_for_event(
+        &bob,
+        |ev| matches!(ev, IncomingEvent::GroupInvite { group_id, .. } if group_id == &created.group_id),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("bob should accept the group invite");
+    alice
+        .fetch_group_state_async(&created.group_id)
+        .await
+        .unwrap();
+
+    // Bob reacts 👍 to one of Alice's messages, identified by (author, sent_at).
+    let target_sent_at = 1_700_000_000_000i64;
+    bob.send_group_reaction_async(&created.group_id, &alice_did, target_sent_at, "👍", false, 1_700_000_100_000)
+        .await
+        .unwrap();
+
+    // Alice receives the reaction via WS push: the envelope decodes to a
+    // ReactionMessage and dispatches through `process_decrypted` → store.
+    let group_conv = format!("group-{}", created.group_id);
+    let want_author = alice_did.clone();
+    let want_reactor = bob_did.clone();
+    let conv_check = group_conv.clone();
+    let got = wait_for_event(
+        &alice,
+        |ev| match ev {
+            IncomingEvent::ReactionUpdated {
+                conversation_id, target_author, reactor_did, emoji, removed, ..
+            } => {
+                conversation_id == &conv_check
+                    && target_author == &want_author
+                    && reactor_did == &want_reactor
+                    && emoji == "👍"
+                    && !removed
+            }
+            _ => false,
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "alice should receive bob's group reaction via WS push within 5s"
+    );
+
+    let rs = alice.load_reactions_async(&group_conv).await.unwrap();
+    assert_eq!(rs.len(), 1);
+    assert_eq!(rs[0].emoji, "👍");
+    assert_eq!(rs[0].reactor_did, bob_did);
+    assert_eq!(rs[0].target_author, alice_did);
+}

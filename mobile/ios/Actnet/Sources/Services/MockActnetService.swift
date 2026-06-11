@@ -35,6 +35,110 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         AccountInfoFfi(did: did, displayName: nil, isBot: false)
     }
 
+    // MARK: - Reactions / editing / deletion (mock; docs/33, docs/36)
+
+    /// Reactions keyed by the DM conversation id `dm-<mockDid>-<recipientDid>`.
+    private var reactionsByConv: [String: [ReactionFfi]] = [:]
+    /// Prior bodies keyed by "<convId>|<author>|<sentAt>".
+    private var revisionsByTarget: [String: [MessageRevisionFfi]] = [:]
+
+    private func dmConvId(_ recipientDid: String) -> String { "dm-\(mockDid)-\(recipientDid)" }
+
+    func sendDmReaction(recipientDid: String, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {
+        let convId = dmConvId(recipientDid)
+        lock.lock(); defer { lock.unlock() }
+        var list = reactionsByConv[convId] ?? []
+        // One reaction per (target, reactor=self): drop any prior, then re-add.
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs && $0.reactorDid == mockDid }
+        if !remove {
+            list.append(ReactionFfi(conversationId: convId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: mockDid, emoji: emoji, reactedAtMs: sentAtMs))
+        }
+        reactionsByConv[convId] = list
+    }
+
+    func loadReactions(conversationId: String) throws -> [ReactionFfi] {
+        lock.lock(); defer { lock.unlock() }
+        return reactionsByConv[conversationId] ?? []
+    }
+
+    func sendDmEdit(recipientDid: String, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {
+        let convId = dmConvId(recipientDid)
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[convId] else { return }
+        for i in msgs.indices where msgs[i].senderDid == mockDid && msgs[i].sentAtMs == targetSentAtMs && !msgs[i].deleted {
+            let key = "\(convId)|\(mockDid)|\(targetSentAtMs)"
+            revisionsByTarget[key, default: []].append(MessageRevisionFfi(body: msgs[i].body, replacedAtMs: sentAtMs))
+            msgs[i].body = newBody
+            msgs[i].editedAtMs = sentAtMs
+            msgs[i].editCount += 1
+        }
+        storedMessages[convId] = msgs
+    }
+
+    func loadMessageRevisions(conversationId: String, author: String, sentAtMs: Int64) throws -> [MessageRevisionFfi] {
+        lock.lock(); defer { lock.unlock() }
+        return revisionsByTarget["\(conversationId)|\(author)|\(sentAtMs)"] ?? []
+    }
+
+    func sendDmDelete(recipientDid: String, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {
+        let convId = dmConvId(recipientDid)
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[convId] else { return }
+        if forEveryone {
+            for i in msgs.indices where msgs[i].senderDid == targetAuthor && msgs[i].sentAtMs == targetSentAtMs {
+                msgs[i].body = ""
+                msgs[i].editedAtMs = nil
+                msgs[i].deleted = true
+            }
+        } else {
+            msgs.removeAll { $0.senderDid == targetAuthor && $0.sentAtMs == targetSentAtMs }
+        }
+        storedMessages[convId] = msgs
+        reactionsByConv[convId]?.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs }
+    }
+
+    // Group variants: identical bookkeeping keyed by the `group-<id>` conv id.
+    func sendGroupReaction(groupId: String, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {
+        let convId = "group-\(groupId)"
+        lock.lock(); defer { lock.unlock() }
+        var list = reactionsByConv[convId] ?? []
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs && $0.reactorDid == mockDid }
+        if !remove {
+            list.append(ReactionFfi(conversationId: convId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: mockDid, emoji: emoji, reactedAtMs: sentAtMs))
+        }
+        reactionsByConv[convId] = list
+    }
+
+    func sendGroupEdit(groupId: String, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {
+        let convId = "group-\(groupId)"
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[convId] else { return }
+        for i in msgs.indices where msgs[i].senderDid == mockDid && msgs[i].sentAtMs == targetSentAtMs && !msgs[i].deleted {
+            revisionsByTarget["\(convId)|\(mockDid)|\(targetSentAtMs)", default: []].append(MessageRevisionFfi(body: msgs[i].body, replacedAtMs: sentAtMs))
+            msgs[i].body = newBody
+            msgs[i].editedAtMs = sentAtMs
+            msgs[i].editCount += 1
+        }
+        storedMessages[convId] = msgs
+    }
+
+    func sendGroupDelete(groupId: String, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {
+        let convId = "group-\(groupId)"
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[convId] else { return }
+        if forEveryone {
+            for i in msgs.indices where msgs[i].senderDid == targetAuthor && msgs[i].sentAtMs == targetSentAtMs {
+                msgs[i].body = ""
+                msgs[i].editedAtMs = nil
+                msgs[i].deleted = true
+            }
+        } else {
+            msgs.removeAll { $0.senderDid == targetAuthor && $0.sentAtMs == targetSentAtMs }
+        }
+        storedMessages[convId] = msgs
+        reactionsByConv[convId]?.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs }
+    }
+
     func fetchProjects() throws -> [ProjectInfoFfi] {
         [ProjectInfoFfi(name: "Testbot", url: "http://localhost:3001", description: "Chat with an AI bot")]
     }
@@ -89,7 +193,9 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 sentAtMs: msgs[i].sentAtMs,
                 editedAtMs: msgs[i].editedAtMs,
                 readAtMs: now,
-                deliveryStatus: msgs[i].deliveryStatus
+                deliveryStatus: msgs[i].deliveryStatus,
+                editCount: msgs[i].editCount,
+                deleted: msgs[i].deleted
             )
             count += 1
         }

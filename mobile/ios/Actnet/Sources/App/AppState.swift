@@ -30,6 +30,10 @@ final class AppState: ObservableObject {
     @Published var isOnboarding: Bool = true
     @Published var conversations: [Conversation] = []
     @Published var messagesByConversation: [String: [Message]] = [:]
+    /// Reactions per conversation (docs/33), keyed by conversation id. Each
+    /// reaction carries its target message's wire identity
+    /// `(targetAuthor, targetSentAtMs)`; the UI clusters by target + emoji.
+    @Published var reactionsByConversation: [String: [ReactionFfi]] = [:]
     @Published var serviceMode: ServiceMode
     @Published var selectedTab: Tab = .chats
     @Published var navigateToConversation: Conversation?
@@ -597,7 +601,9 @@ final class AppState: ObservableObject {
             sentAtMs: nowMs,
             editedAtMs: nil,
             readAtMs: nowMs,
-            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue)
+            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue),
+            editCount: 0,
+            deleted: false
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -609,7 +615,7 @@ final class AppState: ObservableObject {
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -618,7 +624,7 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -820,7 +826,9 @@ final class AppState: ObservableObject {
                     sentAtMs: m.sentAtMs,
                     editedAtMs: m.editedAtMs,
                     readAtMs: m.readAtMs,
-                    deliveryStatus: DeliveryStatus(rawValue: Int(m.deliveryStatus)) ?? .sent
+                    deliveryStatus: DeliveryStatus(rawValue: Int(m.deliveryStatus)) ?? .sent,
+                    editCount: Int(m.editCount),
+                    isDeleted: m.deleted
                 )
             }
             await MainActor.run {
@@ -982,19 +990,21 @@ final class AppState: ObservableObject {
             sentAtMs: sentAtMs,
             editedAtMs: nil,
             readAtMs: sentAtMs,
-            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue)
+            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue),
+            editCount: 0,
+            deleted: false
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
         do {
             try await Task.detached {
-                try core.sendGroupMessage(groupId: groupId, plaintext: plaintext)
+                try core.sendGroupMessage(groupId: groupId, plaintext: plaintext, sentAtMs: sentAtMs)
             }.value
             updateMessageStatus(messageId: messageId, conversationId: conversation.id, newStatus: .sent)
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -1003,7 +1013,7 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -1171,6 +1181,12 @@ final class AppState: ObservableObject {
                     // Master key already persisted by app-core; just refresh
                     // the chat list so the new group becomes visible.
                     sawGroupInvite = true
+                case let .messageEdited(conversationId, authorDid, sentAtMs, newBody, editedAtMs):
+                    applyInboundEdit(conversationId: conversationId, authorDid: authorDid, sentAtMs: sentAtMs, newBody: newBody, editedAtMs: editedAtMs)
+                case let .messageDeleted(conversationId, authorDid, sentAtMs):
+                    applyInboundDelete(conversationId: conversationId, authorDid: authorDid, sentAtMs: sentAtMs)
+                case let .reactionUpdated(conversationId, targetAuthor, targetSentAtMs, reactorDid, emoji, removed):
+                    applyInboundReaction(conversationId: conversationId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: reactorDid, emoji: emoji, removed: removed)
                 }
             }
             for msg in messages {
@@ -1185,6 +1201,147 @@ final class AppState: ObservableObject {
         }
         eventTasks.removeValue(forKey: accountId)
         AppLog.info("evt", "event listener ended for \(accountId)")
+    }
+
+    // MARK: - Reactions, editing, deletion (docs/33, docs/36)
+
+    /// Reactions currently on a specific message (for the on-bubble cluster).
+    func reactions(for message: Message) -> [ReactionFfi] {
+        (reactionsByConversation[message.conversationId] ?? []).filter {
+            $0.targetAuthor == message.senderAccountId && $0.targetSentAtMs == message.sentAtMs
+        }
+    }
+
+    /// Load a conversation's reactions from the store into memory.
+    func loadReactions(conversationId: String, accountId: String) {
+        guard let core = cores[accountId] else { return }
+        let convId = conversationId
+        Task.detached { [weak self] in
+            guard let rows = try? core.loadReactions(conversationId: convId) else { return }
+            await MainActor.run { self?.reactionsByConversation[convId] = rows }
+        }
+    }
+
+    /// Toggle this account's reaction on a message: tapping the emoji we already
+    /// have removes it; otherwise it replaces any prior one (one per person per
+    /// message, docs/33). DM only.
+    func toggleReaction(message: Message, emoji: String, conversation: Conversation) {
+        guard let core = cores[conversation.accountId] else { return }
+        let myDid = conversation.accountId
+        let convId = conversation.id
+        let targetAuthor = message.senderAccountId
+        let targetSentAt = message.sentAtMs
+        let existingMine = (reactionsByConversation[convId] ?? []).first {
+            $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAt && $0.reactorDid == myDid
+        }
+        let remove = existingMine?.emoji == emoji
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        // Optimistic in-memory update.
+        var list = reactionsByConversation[convId] ?? []
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAt && $0.reactorDid == myDid }
+        if !remove {
+            list.append(ReactionFfi(conversationId: convId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, reactorDid: myDid, emoji: emoji, reactedAtMs: nowMs))
+        }
+        reactionsByConversation[convId] = list
+        if let groupId = conversation.groupId {
+            Task.detached { try? core.sendGroupReaction(groupId: groupId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, emoji: emoji, remove: remove, sentAtMs: nowMs) }
+        } else if let recipientDid = conversation.recipientDid {
+            Task.detached { try? core.sendDmReaction(recipientDid: recipientDid, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, emoji: emoji, remove: remove, sentAtMs: nowMs) }
+        }
+    }
+
+    /// Edit one of my own messages in place (docs/36). DM only.
+    func editMessage(message: Message, newBody: String, conversation: Conversation) {
+        guard let core = cores[conversation.accountId] else { return }
+        let trimmed = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != message.body else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let convId = conversation.id
+        if var msgs = messagesByConversation[convId], let i = msgs.firstIndex(where: { $0.id == message.id }) {
+            msgs[i].body = trimmed
+            msgs[i].editedAtMs = nowMs
+            msgs[i].editCount += 1
+            messagesByConversation[convId] = msgs
+        }
+        let targetSentAt = message.sentAtMs
+        if let groupId = conversation.groupId {
+            Task.detached { try? core.sendGroupEdit(groupId: groupId, targetSentAtMs: targetSentAt, newBody: trimmed, sentAtMs: nowMs) }
+        } else if let recipientDid = conversation.recipientDid {
+            Task.detached { try? core.sendDmEdit(recipientDid: recipientDid, targetSentAtMs: targetSentAt, newBody: trimmed, sentAtMs: nowMs) }
+        }
+    }
+
+    /// Delete a message (docs/36). `forEveryone` tombstones for both sides (own
+    /// messages only); otherwise removes it from this device. DM only.
+    func deleteMessage(message: Message, forEveryone: Bool, conversation: Conversation) {
+        guard let core = cores[conversation.accountId] else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let convId = conversation.id
+        if var msgs = messagesByConversation[convId] {
+            if forEveryone {
+                if let i = msgs.firstIndex(where: { $0.id == message.id }) {
+                    msgs[i].body = ""
+                    msgs[i].isDeleted = true
+                    msgs[i].editedAtMs = nil
+                }
+            } else {
+                msgs.removeAll { $0.id == message.id }
+            }
+            messagesByConversation[convId] = msgs
+        }
+        reactionsByConversation[convId]?.removeAll { $0.targetAuthor == message.senderAccountId && $0.targetSentAtMs == message.sentAtMs }
+        let targetAuthor = message.senderAccountId
+        let targetSentAt = message.sentAtMs
+        if let groupId = conversation.groupId {
+            Task.detached { try? core.sendGroupDelete(groupId: groupId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, forEveryone: forEveryone, sentAtMs: nowMs) }
+        } else if let recipientDid = conversation.recipientDid {
+            Task.detached { try? core.sendDmDelete(recipientDid: recipientDid, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, forEveryone: forEveryone, sentAtMs: nowMs) }
+        }
+    }
+
+    /// Load the prior bodies of an edited message for the history sheet (docs/36).
+    func loadMessageRevisions(message: Message, conversation: Conversation) async -> [MessageRevisionFfi] {
+        guard let core = cores[conversation.accountId] else { return [] }
+        let convId = conversation.id
+        let author = message.senderAccountId
+        let sentAt = message.sentAtMs
+        return (try? await Task.detached {
+            try core.loadMessageRevisions(conversationId: convId, author: author, sentAtMs: sentAt)
+        }.value) ?? []
+    }
+
+    // Inbound op handlers — the store is already updated by app-core; these
+    // patch the in-memory model so the open conversation refreshes live.
+
+    private func applyInboundEdit(conversationId: String, authorDid: String, sentAtMs: Int64, newBody: String, editedAtMs: Int64) {
+        guard var msgs = messagesByConversation[conversationId],
+              let i = msgs.firstIndex(where: { $0.senderAccountId == authorDid && $0.sentAtMs == sentAtMs }),
+              !msgs[i].isDeleted else { return }
+        msgs[i].body = newBody
+        msgs[i].editedAtMs = editedAtMs
+        msgs[i].editCount += 1
+        messagesByConversation[conversationId] = msgs
+    }
+
+    private func applyInboundDelete(conversationId: String, authorDid: String, sentAtMs: Int64) {
+        if var msgs = messagesByConversation[conversationId],
+           let i = msgs.firstIndex(where: { $0.senderAccountId == authorDid && $0.sentAtMs == sentAtMs }) {
+            msgs[i].body = ""
+            msgs[i].isDeleted = true
+            msgs[i].editedAtMs = nil
+            messagesByConversation[conversationId] = msgs
+        }
+        reactionsByConversation[conversationId]?.removeAll { $0.targetAuthor == authorDid && $0.targetSentAtMs == sentAtMs }
+    }
+
+    private func applyInboundReaction(conversationId: String, targetAuthor: String, targetSentAtMs: Int64, reactorDid: String, emoji: String, removed: Bool) {
+        var list = reactionsByConversation[conversationId] ?? []
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs && $0.reactorDid == reactorDid }
+        if !removed {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            list.append(ReactionFfi(conversationId: conversationId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: reactorDid, emoji: emoji, reactedAtMs: nowMs))
+        }
+        reactionsByConversation[conversationId] = list
     }
 
     private func handleIncomingMessage(_ msg: DecryptedMessage, accountId: String) {
@@ -1261,7 +1418,9 @@ final class AppState: ObservableObject {
                 sentAtMs: sentAtMs,
                 editedAtMs: nil,
                 readAtMs: nil,  // unread
-                deliveryStatus: 1  // sent
+                deliveryStatus: 1,  // sent
+                editCount: 0,
+                deleted: false
             )
             Task.detached { try? core.saveMessage(msg: stored) }
         }

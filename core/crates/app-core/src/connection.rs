@@ -7,7 +7,7 @@
 use types::Timestamp;
 
 use crate::messaging::process_decrypted;
-use crate::{AdminEvent, AppCore, AppError, ConnectionState, IncomingEvent};
+use crate::{AdminEvent, AppCore, AppError, ConnectionState};
 
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
@@ -216,7 +216,12 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                 let _ = ws.group_ack(delivery.ack_token).await;
 
                 if let Some(msg) = decrypted {
-                    let _ = core.event_tx.send(IncomingEvent::Message { msg });
+                    // Group content now rides a `ContentMessage` envelope just
+                    // like DMs, so dispatch through the same decoder: text →
+                    // Message, plus reactions/edits/deletes. Raw-text legacy
+                    // group messages fall back to a plain Message inside
+                    // `process_decrypted`.
+                    process_decrypted(core, msg).await;
                 }
             }
         }

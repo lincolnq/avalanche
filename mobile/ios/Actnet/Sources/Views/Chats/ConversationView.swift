@@ -8,9 +8,29 @@ struct ConversationView: View {
     @State private var messageText = ""
     @State private var errorMessage: String?
     @State private var scrollPosition = ScrollPosition(idType: Int64.self)
+    /// Non-nil while editing an existing message (docs/36); the composer turns
+    /// into an edit bar prefilled with its body.
+    @State private var editingMessage: Message?
+    /// The message whose edit-history sheet is showing, plus its loaded revisions.
+    @State private var historyMessage: Message?
+    @State private var historyRevisions: [MessageRevisionFfi] = []
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
+    }
+
+    /// Reactions/editing/deletion ride the `ContentMessage` envelope, which now
+    /// wraps group content too — so the long-press actions work in both DMs and
+    /// groups.
+    private var actionsEnabled: Bool { true }
+
+    /// Human edit/delete-for-everyone window (docs/36): 24h from send.
+    private static let editWindowMs: Int64 = 24 * 60 * 60 * 1000
+
+    private func canEdit(_ message: Message) -> Bool {
+        message.senderAccountId == conversation.accountId
+            && !message.isDeleted
+            && (Int64(Date().timeIntervalSince1970 * 1000) - message.sentAtMs) <= Self.editWindowMs
     }
 
     /// Whether an incoming message's sender is a bot, for the octagon-ish
@@ -28,7 +48,19 @@ struct ConversationView: View {
                         MessageBubble(
                             message: message,
                             isMe: message.senderAccountId == conversation.accountId,
-                            isBot: isBotSender(message)
+                            isBot: isBotSender(message),
+                            reactions: appState.reactions(for: message),
+                            myDid: conversation.accountId,
+                            actionsEnabled: actionsEnabled,
+                            canEdit: canEdit(message),
+                            onToggleReaction: { emoji in
+                                appState.toggleReaction(message: message, emoji: emoji, conversation: conversation)
+                            },
+                            onEdit: { startEditing(message) },
+                            onDelete: { forEveryone in
+                                appState.deleteMessage(message: message, forEveryone: forEveryone, conversation: conversation)
+                            },
+                            onShowHistory: { showHistory(message) }
                         )
                         .id(message.sentAtMs)
                     }
@@ -60,18 +92,34 @@ struct ConversationView: View {
 
             Divider()
 
+            if editingMessage != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil")
+                        .foregroundStyle(Color.avBrand)
+                    Text("Editing message")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button { cancelEdit() } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 6)
+            }
+
             HStack(spacing: 12) {
-                TextField("Message", text: $messageText, axis: .vertical)
+                TextField(editingMessage == nil ? "Message" : "Edit message", text: $messageText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
 
                 Button {
-                    sendMessage()
+                    if editingMessage != nil { applyEdit() } else { sendMessage() }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: editingMessage != nil ? "checkmark.circle.fill" : "arrow.up.circle.fill")
                         .font(.title2)
                 }
-                .disabled(messageText.isEmpty)
+                .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -102,9 +150,13 @@ struct ConversationView: View {
                 }
             }
         }
+        .sheet(item: $historyMessage) { msg in
+            EditHistorySheet(current: msg, revisions: historyRevisions)
+        }
         .onAppear {
             appState.currentConversationId = conversation.id
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
+            appState.loadReactions(conversationId: conversation.id, accountId: conversation.accountId)
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
             // Re-fetch the contact's encrypted profile and update the cached
             // display name if it changed. Primary change-detection path.
@@ -131,6 +183,30 @@ struct ConversationView: View {
             } else {
                 scrollPosition.scrollTo(edge: .bottom)
             }
+        }
+    }
+
+    private func startEditing(_ message: Message) {
+        editingMessage = message
+        messageText = message.body
+    }
+
+    private func cancelEdit() {
+        editingMessage = nil
+        messageText = ""
+    }
+
+    private func applyEdit() {
+        guard let message = editingMessage else { return }
+        appState.editMessage(message: message, newBody: messageText, conversation: conversation)
+        editingMessage = nil
+        messageText = ""
+    }
+
+    private func showHistory(_ message: Message) {
+        Task {
+            historyRevisions = await appState.loadMessageRevisions(message: message, conversation: conversation)
+            historyMessage = message
         }
     }
 

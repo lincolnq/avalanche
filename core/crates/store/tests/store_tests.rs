@@ -145,6 +145,8 @@ async fn load_conversations_one_row_per_convo_newest_first() {
             edited_at: None,
             read_at: None,
             delivery_status: 1,
+            edit_count: 0,
+            deleted_at: None,
         }).await.unwrap();
     }
 
@@ -242,4 +244,167 @@ async fn conversation_expiry_independent_per_conversation() {
     store.save_conversation_expiry("did:example:bob", Some(86400)).await.unwrap();
     assert_eq!(store.load_conversation_expiry("did:example:alice").await.unwrap(), Some(3600));
     assert_eq!(store.load_conversation_expiry("did:example:bob").await.unwrap(), Some(86400));
+}
+
+// ── Editing, deletion, reactions (docs/33, docs/36) ──────────────────────
+
+#[cfg(test)]
+mod edit_delete_react {
+    use store::messages::{HistoryMessage, ReactionRow};
+    use store::Store;
+    use types::Timestamp;
+
+    async fn seed(store: &Store, conv: &str, author: &str, sent_at: i64, body: &str) {
+        store
+            .save_message(&HistoryMessage {
+                id: format!("{author}-{sent_at}"),
+                conversation_id: conv.into(),
+                sender_did: author.into(),
+                body: body.into(),
+                sent_at: Timestamp(sent_at),
+                edited_at: None,
+                read_at: None,
+                delivery_status: 1,
+                edit_count: 0,
+                deleted_at: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn edit_updates_body_bumps_count_and_records_revision() {
+        let store = Store::open_in_memory().await.unwrap();
+        seed(&store, "dm-me-bob", "did:bob", 100, "helo").await;
+
+        let applied = store
+            .apply_edit("dm-me-bob", "did:bob", Timestamp(100), "hello", Timestamp(200), true)
+            .await
+            .unwrap();
+        assert!(applied);
+
+        let m = store.find_message("dm-me-bob", "did:bob", Timestamp(100)).await.unwrap().unwrap();
+        assert_eq!(m.body, "hello");
+        assert_eq!(m.edit_count, 1);
+        assert_eq!(m.edited_at, Some(Timestamp(200)));
+
+        let revs = store.load_revisions("dm-me-bob", "did:bob", Timestamp(100)).await.unwrap();
+        assert_eq!(revs.len(), 1);
+        assert_eq!(revs[0].body, "helo");
+    }
+
+    #[tokio::test]
+    async fn edit_is_last_writer_wins() {
+        let store = Store::open_in_memory().await.unwrap();
+        seed(&store, "c", "a", 100, "v1").await;
+        store.apply_edit("c", "a", Timestamp(100), "v2", Timestamp(300), true).await.unwrap();
+        // An older edit (op time 200 < 300) must be ignored.
+        store.apply_edit("c", "a", Timestamp(100), "stale", Timestamp(200), true).await.unwrap();
+        let m = store.find_message("c", "a", Timestamp(100)).await.unwrap().unwrap();
+        assert_eq!(m.body, "v2");
+        assert_eq!(m.edit_count, 1);
+    }
+
+    #[tokio::test]
+    async fn edit_of_missing_target_is_dropped() {
+        let store = Store::open_in_memory().await.unwrap();
+        let applied = store
+            .apply_edit("c", "a", Timestamp(100), "x", Timestamp(200), true)
+            .await
+            .unwrap();
+        assert!(!applied);
+        assert!(store.find_message("c", "a", Timestamp(100)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn tombstone_clears_body_drops_reactions_and_absorbs_edits() {
+        let store = Store::open_in_memory().await.unwrap();
+        seed(&store, "c", "a", 100, "secret").await;
+        store
+            .upsert_reaction(&ReactionRow {
+                conversation_id: "c".into(),
+                target_author: "a".into(),
+                target_sent_at: Timestamp(100),
+                reactor_did: "b".into(),
+                emoji: "👍".into(),
+                reacted_at: Timestamp(150),
+            })
+            .await
+            .unwrap();
+
+        store.tombstone_message("c", "a", Timestamp(100), Timestamp(400)).await.unwrap();
+
+        let m = store.find_message("c", "a", Timestamp(100)).await.unwrap().unwrap();
+        assert_eq!(m.body, "");
+        assert_eq!(m.deleted_at, Some(Timestamp(400)));
+        assert!(store.load_reactions("c").await.unwrap().is_empty());
+
+        // A late edit can't resurrect a tombstone.
+        store.apply_edit("c", "a", Timestamp(100), "back", Timestamp(500), true).await.unwrap();
+        let m = store.find_message("c", "a", Timestamp(100)).await.unwrap().unwrap();
+        assert_eq!(m.body, "");
+        assert!(m.deleted_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_for_me_removes_row_and_reactions() {
+        let store = Store::open_in_memory().await.unwrap();
+        seed(&store, "c", "a", 100, "bye").await;
+        store
+            .upsert_reaction(&ReactionRow {
+                conversation_id: "c".into(),
+                target_author: "a".into(),
+                target_sent_at: Timestamp(100),
+                reactor_did: "b".into(),
+                emoji: "❤️".into(),
+                reacted_at: Timestamp(150),
+            })
+            .await
+            .unwrap();
+
+        store.delete_message_for_me("c", "a", Timestamp(100)).await.unwrap();
+        assert!(store.find_message("c", "a", Timestamp(100)).await.unwrap().is_none());
+        assert!(store.load_reactions("c").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reaction_is_one_per_person_and_removable() {
+        let store = Store::open_in_memory().await.unwrap();
+        let row = |emoji: &str, at: i64| ReactionRow {
+            conversation_id: "c".into(),
+            target_author: "a".into(),
+            target_sent_at: Timestamp(100),
+            reactor_did: "b".into(),
+            emoji: emoji.into(),
+            reacted_at: Timestamp(at),
+        };
+        store.upsert_reaction(&row("👍", 150)).await.unwrap();
+        store.upsert_reaction(&row("❤️", 160)).await.unwrap();
+        // Re-reacting replaces, never duplicates: one row, latest emoji.
+        let rs = store.load_reactions("c").await.unwrap();
+        assert_eq!(rs.len(), 1);
+        assert_eq!(rs[0].emoji, "❤️");
+
+        store.remove_reaction("c", "a", Timestamp(100), "b").await.unwrap();
+        assert!(store.load_reactions("c").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn distinct_reactors_each_get_a_row() {
+        let store = Store::open_in_memory().await.unwrap();
+        for reactor in ["b", "c", "d"] {
+            store
+                .upsert_reaction(&ReactionRow {
+                    conversation_id: "conv".into(),
+                    target_author: "a".into(),
+                    target_sent_at: Timestamp(100),
+                    reactor_did: reactor.into(),
+                    emoji: "👍".into(),
+                    reacted_at: Timestamp(150),
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.load_reactions("conv").await.unwrap().len(), 3);
+    }
 }

@@ -222,4 +222,40 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         id            INTEGER PRIMARY KEY CHECK (id = 1),\
         key           BLOB    NOT NULL\
     )",
+    // ── Message editing & deletion (docs/36-message-editing-deletion.md) ──
+    // Per-message edit counter (for the human ~10 cap) and tombstone marker.
+    // `deleted_at` non-NULL means the message is a FOR_EVERYONE tombstone:
+    // body is cleared, reactions dropped, position/sent_at retained.
+    "ALTER TABLE message_history ADD COLUMN edit_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE message_history ADD COLUMN deleted_at INTEGER",
+    // Prior bodies for the edit-history sheet, keyed by the message's wire
+    // identity (conversation_id, author, sent_at) so it survives even if the
+    // message_history row's UUID changes. `replaced_at` is when this body was
+    // superseded. Bot authors retain no history — nothing is written for them.
+    "CREATE TABLE IF NOT EXISTS message_revisions (\
+        conversation_id  TEXT    NOT NULL,\
+        author_did       TEXT    NOT NULL,\
+        target_sent_at   INTEGER NOT NULL,\
+        body             TEXT    NOT NULL,\
+        replaced_at      INTEGER NOT NULL\
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_message_revisions_target \
+        ON message_revisions (conversation_id, author_did, target_sent_at, replaced_at)",
+    // ── Emoji reactions (docs/33-reactions.md) ───────────────────────────
+    // One reaction per (target message, reactor): the PK enforces Signal's
+    // one-per-person rule. The target message is identified by its wire
+    // identity (author, sent_at) within a conversation, NOT by message_history
+    // row id, so a reaction can be stored and converge even if it arrives
+    // before its target message.
+    "CREATE TABLE IF NOT EXISTS reactions (\
+        conversation_id  TEXT    NOT NULL,\
+        target_author    TEXT    NOT NULL,\
+        target_sent_at   INTEGER NOT NULL,\
+        reactor_did      TEXT    NOT NULL,\
+        emoji            TEXT    NOT NULL,\
+        reacted_at       INTEGER NOT NULL,\
+        PRIMARY KEY (conversation_id, target_author, target_sent_at, reactor_did)\
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_reactions_conv \
+        ON reactions (conversation_id)",
 ];

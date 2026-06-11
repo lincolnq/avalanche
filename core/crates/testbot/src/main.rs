@@ -349,6 +349,11 @@ async fn bot_message_loop(
                 app_core::IncomingEvent::Message { msg } => Some(msg),
                 app_core::IncomingEvent::ReceiptUpdate { .. } => None,
                 app_core::IncomingEvent::GroupInvite { .. } => None,
+                // The testbot doesn't act on edits/deletes/reactions to its
+                // own messages; the store is already updated by app-core.
+                app_core::IncomingEvent::MessageEdited { .. } => None,
+                app_core::IncomingEvent::MessageDeleted { .. } => None,
+                app_core::IncomingEvent::ReactionUpdated { .. } => None,
             })
             .collect();
 

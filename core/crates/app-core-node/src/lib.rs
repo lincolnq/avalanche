@@ -107,6 +107,9 @@ impl From<StoredMessageJs> for StoredMessageFfi {
             edited_at_ms: m.edited_at_ms,
             read_at_ms: m.read_at_ms,
             delivery_status: m.delivery_status as u8,
+            // Edit/delete state is managed by app-core, not the JS layer.
+            edit_count: 0,
+            deleted: false,
         }
     }
 }
@@ -366,6 +369,27 @@ impl From<IncomingEvent> for IncomingEventJs {
                     hosting_server_url,
                     inviter_did,
                 }),
+            },
+            // Editing/deletion/reactions (docs/33, docs/36): the store is
+            // already updated by app-core. JS admin consumers don't act on
+            // these today, so surface a bare kind with no payload.
+            IncomingEvent::MessageEdited { .. } => Self {
+                kind: "messageEdited".into(),
+                message: None,
+                receipt: None,
+                group_invite: None,
+            },
+            IncomingEvent::MessageDeleted { .. } => Self {
+                kind: "messageDeleted".into(),
+                message: None,
+                receipt: None,
+                group_invite: None,
+            },
+            IncomingEvent::ReactionUpdated { .. } => Self {
+                kind: "reactionUpdated".into(),
+                message: None,
+                receipt: None,
+                group_invite: None,
             },
         }
     }
@@ -1008,7 +1032,13 @@ impl AppCore {
     ) -> napi::Result<()> {
         let core = self.inner.clone();
         let pt = plaintext.to_vec();
-        tokio::task::spawn_blocking(move || core.send_group_message(group_id, pt))
+        // Group messages now carry a ContentMessage envelope with a
+        // sender-assigned timestamp; bots stamp it with the current time.
+        let sent_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        tokio::task::spawn_blocking(move || core.send_group_message(group_id, pt, sent_at_ms))
             .await
             .map_err(join_err)?
             .map_err(to_napi)

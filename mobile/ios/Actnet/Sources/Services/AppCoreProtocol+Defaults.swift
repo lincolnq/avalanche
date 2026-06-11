@@ -47,6 +47,14 @@ extension AppCoreProtocol {
     func getConversationTimer(conversationId: String) throws -> UInt32? { nil }
     func setConversationTimer(recipientDid: String, expirySecs: UInt32?) throws {}
 
+    // MARK: - Reactions / editing / deletion (docs/33, docs/36)
+
+    func sendDmReaction(recipientDid: String, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {}
+    func sendDmEdit(recipientDid: String, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {}
+    func sendDmDelete(recipientDid: String, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {}
+    func loadReactions(conversationId: String) throws -> [ReactionFfi] { [] }
+    func loadMessageRevisions(conversationId: String, author: String, sentAtMs: Int64) throws -> [MessageRevisionFfi] { [] }
+
     // MARK: - Projects / push
 
     func fetchProjects() throws -> [ProjectInfoFfi] { [] }
@@ -98,5 +106,8 @@ extension AppCoreProtocol {
     func changeMemberRole(groupId: String, encryptedMemberId: String, newRole: Int16) throws {}
     func applyPendingGroupChanges(groupId: String) throws -> Int64 { 0 }
     func rotateGroupPseudonym(groupId: String) throws -> Data { Data(count: 24) }
-    func sendGroupMessage(groupId: String, plaintext: Data) throws {}
+    func sendGroupMessage(groupId: String, plaintext: Data, sentAtMs: Int64) throws {}
+    func sendGroupReaction(groupId: String, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {}
+    func sendGroupEdit(groupId: String, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {}
+    func sendGroupDelete(groupId: String, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {}
 }

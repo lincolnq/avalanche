@@ -43,7 +43,7 @@ use types::Timestamp;
 use crate::error::{AppError, AppErrorFfi};
 use crate::proto::{self, content_message::Body, groups as gproto, ContentMessage};
 use crate::{
-    ffi_runtime, AppCore, AppCoreInner, CreatedGroupFfi, GroupSummaryFfi, JoinResultFfi,
+    ffi_runtime, AppCore, CreatedGroupFfi, GroupSummaryFfi, JoinResultFfi,
     summary_to_ffi,
 };
 
@@ -1725,39 +1725,24 @@ impl AppCore {
         .map_err(AppErrorFfi::from)
     }
 
-    /// Send a group message to every other current member. Encrypted
-    /// once under our Sender Key for the group, then fanned out as a
-    /// per-recipient DM carrying the same `proto::GroupMessage` body.
-    ///
-    /// This Stage 5 path uses the existing /v1/messages transport. The
-    /// sealed-sender wrapping and dedicated send endpoint (§3.11) layer
-    /// in at PR 2.
+    /// Send a group text message to every other current member. The text is
+    /// wrapped in a `ContentMessage` envelope (with `sent_at_ms` and our
+    /// profile key), encrypted once under our Sender Key, and fanned out over
+    /// the sealed-sender path. Carrying the envelope (rather than raw text) is
+    /// what lets reactions/edits/deletes/receipts work in groups, and gives
+    /// every member the same sender-assigned `sent_at` to target by.
     pub fn send_group_message(
         &self,
         group_id: String,
         plaintext: Vec<u8>,
+        sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
-            let did = inner.did.clone();
-            let device_id = inner.device_id;
-            let server_url = inner.client.server_url().to_string();
-            let AppCoreInner {
-                ref mut store,
-                ref client,
-                ..
-            } = *inner;
-            send_group_message(
-                store,
-                client,
-                &server_url,
-                &did,
-                device_id,
-                &group_id,
-                &plaintext,
-            )
-            .await?;
-            Ok::<_, AppError>(())
+            let body = String::from_utf8_lossy(&plaintext).into_owned();
+            inner
+                .send_group_content(&group_id, Body::Text(proto::TextMessage { body }), sent_at_ms as u64)
+                .await
         })
         .map_err(AppErrorFfi::from)
     }
