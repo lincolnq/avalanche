@@ -13,7 +13,7 @@ Docs are numbered by category. First digit = area, second digit = sequence withi
 | `2x` | Projects | [`20`](20-project-security.md) project security · [`21`](21-chatbot-project.md) chatbot project · [`22`](22-adminbot.md) adminbot · [`23`](23-messaging-extensions.md) messaging extensions (core vs. Project) |
 | `3x` | Messaging & conversation UX | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-threading.md) threading · [`33`](33-reactions.md) reactions · [`34`](34-connection-state.md) connection state · [`35`](35-attachments.md) attachments · [`36`](36-message-editing-deletion.md) message editing & deletion |
 | `4x` | Deployment & infra | [`40`](40-deployment.md) deployment · [`41`](41-relay-deployment.md) relay deployment |
-| `5x` | Identity, accounts & contacts | [`50`](50-identity-auth-recovery.md) identity / auth / recovery · [`51`](51-invite-tokens.md) invite tokens · [`52`](52-contacts-and-profiles.md) contacts and profiles · [`53`](53-multi-account-ux.md) multi-account UX |
+| `5x` | Identity, accounts & contacts | [`50`](50-identity-auth-recovery.md) identity / auth / recovery · [`51`](51-invite-tokens.md) invite tokens · [`52`](52-contacts-and-profiles.md) contacts and profiles · [`53`](53-multi-account-ux.md) multi-account UX · [`54`](54-bot-presentation.md) bot identity & presentation |
 
 ## Premise
 
