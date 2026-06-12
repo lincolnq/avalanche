@@ -34,6 +34,19 @@ pub struct ContactProfile {
     pub fetched_at: Timestamp,
 }
 
+/// A cached copy of the server's public account record (`get_account_info`).
+/// Distinct from `ContactProfile`: this holds the server-published display name
+/// + bot flag (the only name source for bots), whereas `ContactProfile` holds
+/// the encrypted-profile name humans share. Cached so bot DM titles/avatars
+/// resolve offline.
+#[derive(Debug, Clone)]
+pub struct AccountInfoCache {
+    pub did: String,
+    pub display_name: String,
+    pub is_bot: bool,
+    pub fetched_at: Timestamp,
+}
+
 impl Store {
     /// Persist (or replace) the user's own profile key and display name.
     pub async fn save_own_profile(&self, profile: &OwnProfile) -> Result<(), StoreError> {
@@ -147,6 +160,102 @@ impl Store {
                     "SELECT profile_key FROM contact_profiles WHERE did = ?1",
                     rusqlite::params![did_q],
                     |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Write-through cache of a server account record. Called after every
+    /// successful `get_account_info` so bot names/flags survive offline.
+    pub async fn upsert_account_info(&self, info: &AccountInfoCache) -> Result<(), StoreError> {
+        let did = info.did.clone();
+        let name = info.display_name.clone();
+        let is_bot = info.is_bot;
+        let fetched_at = info.fetched_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO account_info_cache
+                       (did, display_name, is_bot, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![did, name, is_bot, fetched_at],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Record a name-fetch attempt and its outcome for `did`. The outcome is
+    /// an opaque code owned by app-core; this layer only persists it so the
+    /// per-outcome skip window survives app launches (docs/52).
+    pub async fn record_fetch_attempt(
+        &self,
+        did: &str,
+        outcome: i64,
+        at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let did = did.to_string();
+        let at = at.as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO profile_fetch_state
+                       (did, last_attempt_at, outcome)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![did, at, outcome],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load the last fetch attempt `(last_attempt_at, outcome)` for `did`, if
+    /// any. Returns `None` when we've never tried — caller should fetch.
+    pub async fn load_fetch_state(
+        &self,
+        did: &str,
+    ) -> Result<Option<(Timestamp, i64)>, StoreError> {
+        let did_q = did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT last_attempt_at, outcome
+                     FROM profile_fetch_state WHERE did = ?1",
+                    rusqlite::params![did_q],
+                    |row| Ok((Timestamp(row.get::<_, i64>(0)?), row.get::<_, i64>(1)?)),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Look up a cached server account record by DID.
+    pub async fn load_account_info(
+        &self,
+        did: &str,
+    ) -> Result<Option<AccountInfoCache>, StoreError> {
+        let did_q = did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT did, display_name, is_bot, fetched_at
+                     FROM account_info_cache WHERE did = ?1",
+                    rusqlite::params![did_q],
+                    |row| {
+                        Ok(AccountInfoCache {
+                            did: row.get::<_, String>(0)?,
+                            display_name: row.get::<_, String>(1)?,
+                            is_bot: row.get::<_, bool>(2)?,
+                            fetched_at: Timestamp(row.get::<_, i64>(3)?),
+                        })
+                    },
                 )
                 .optional()
                 .map_err(Into::into)

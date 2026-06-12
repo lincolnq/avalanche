@@ -193,6 +193,61 @@ async fn contact_profile_cache() {
     assert_eq!(loaded.fetched_at, Timestamp(2000));
 }
 
+#[tokio::test]
+async fn account_info_cache_round_trip() {
+    use types::Timestamp;
+    let store = Store::open_in_memory().await.unwrap();
+
+    let did = "did:local:adminbot";
+    assert!(store.load_account_info(did).await.unwrap().is_none());
+
+    let info = store::profiles::AccountInfoCache {
+        did: did.into(),
+        display_name: "Admin Bot".into(),
+        is_bot: true,
+        fetched_at: Timestamp(1000),
+    };
+    store.upsert_account_info(&info).await.unwrap();
+
+    let loaded = store.load_account_info(did).await.unwrap().unwrap();
+    assert_eq!(loaded.display_name, "Admin Bot");
+    assert!(loaded.is_bot);
+    assert_eq!(loaded.fetched_at, Timestamp(1000));
+
+    // Re-fetch overwrites name + timestamp (server is authoritative).
+    let info2 = store::profiles::AccountInfoCache {
+        did: did.into(),
+        display_name: "Admin Bot v2".into(),
+        is_bot: true,
+        fetched_at: Timestamp(2000),
+    };
+    store.upsert_account_info(&info2).await.unwrap();
+    let loaded = store.load_account_info(did).await.unwrap().unwrap();
+    assert_eq!(loaded.display_name, "Admin Bot v2");
+    assert_eq!(loaded.fetched_at, Timestamp(2000));
+}
+
+#[tokio::test]
+async fn profile_fetch_state_round_trip() {
+    use types::Timestamp;
+    let store = Store::open_in_memory().await.unwrap();
+
+    let did = "did:plc:dormant00000000000001";
+    assert!(store.load_fetch_state(did).await.unwrap().is_none());
+
+    // Record an attempt; read it back.
+    store.record_fetch_attempt(did, 3, Timestamp(5000)).await.unwrap();
+    let (at, outcome) = store.load_fetch_state(did).await.unwrap().unwrap();
+    assert_eq!(at, Timestamp(5000));
+    assert_eq!(outcome, 3);
+
+    // A later attempt overwrites (one row per DID).
+    store.record_fetch_attempt(did, 0, Timestamp(9000)).await.unwrap();
+    let (at, outcome) = store.load_fetch_state(did).await.unwrap().unwrap();
+    assert_eq!(at, Timestamp(9000));
+    assert_eq!(outcome, 0);
+}
+
 // ── conversation_settings ─────────────────────────────────────────────────────
 
 #[tokio::test]

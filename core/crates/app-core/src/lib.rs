@@ -1532,13 +1532,61 @@ impl AppCore {
     pub fn get_account_info(&self, did: String) -> Result<AccountInfoFfi, AppErrorFfi> {
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
-            let info = inner.client.get_account_info(&did).await
-                .map_err(AppError::from)?;
-            Ok::<_, AppError>(AccountInfoFfi {
-                did: info.did,
-                display_name: info.display_name,
-                is_bot: info.is_bot,
-            })
+
+            // Map a cached account record to the FFI shape.
+            let from_cache = |c: store::profiles::AccountInfoCache| AccountInfoFfi {
+                did: c.did,
+                display_name: if c.display_name.is_empty() { None } else { Some(c.display_name) },
+                is_bot: c.is_bot,
+            };
+
+            // Throttle: skip the server hit when a recent attempt is still
+            // inside its skip window (docs/52). Serve the cached record if we
+            // have one; otherwise report the throttled miss so the caller falls
+            // back to a placeholder without re-hitting the server every render.
+            if !inner.should_fetch_name(&did).await {
+                return match inner.store.load_account_info(&did).await.map_err(AppError::from)? {
+                    Some(c) => Ok::<_, AppError>(from_cache(c)),
+                    None => Err(AppError::Protocol("account info fetch throttled".into())),
+                };
+            }
+
+            // Server is authoritative; on success write through to the local
+            // cache so the name + bot flag survive offline (bot names have no
+            // other local source — see store `account_info_cache`).
+            match inner.client.get_account_info(&did).await {
+                Ok(info) => {
+                    inner.record_fetch(&did, crate::messaging::FetchOutcome::Success).await;
+                    // Only cache rows that carry signal — a real name or the
+                    // bot flag. An empty human record becomes a throttle
+                    // outcome, not a junk cache row (docs/52 §"Negative-row
+                    // hygiene").
+                    if info.is_bot || info.display_name.is_some() {
+                        let _ = inner.store.upsert_account_info(&store::profiles::AccountInfoCache {
+                            did: info.did.clone(),
+                            display_name: info.display_name.clone().unwrap_or_default(),
+                            is_bot: info.is_bot,
+                            fetched_at: Timestamp::now(),
+                        }).await;
+                    }
+                    Ok(AccountInfoFfi {
+                        did: info.did,
+                        display_name: info.display_name,
+                        is_bot: info.is_bot,
+                    })
+                }
+                // Offline / fetch failure: record the outcome (so 404s get the
+                // 6h negative-cache window, transport errors retry in 1m), then
+                // fall back to the cached record so bot DM titles + avatars
+                // still resolve. Propagate the error only with no cached row.
+                Err(e) => {
+                    inner.record_fetch(&did, crate::messaging::classify_net_error(&e)).await;
+                    match inner.store.load_account_info(&did).await.map_err(AppError::from)? {
+                        Some(c) => Ok(from_cache(c)),
+                        None => Err(AppError::from(e)),
+                    }
+                }
+            }
         }).map_err(AppErrorFfi::from)
     }
 
@@ -1718,9 +1766,29 @@ impl AppCore {
                 _ => return Ok::<_, AppError>(false),
             };
 
-            let blob = match inner.client.get_profile(&did).await? {
-                Some(b) => b,
-                None => return Ok(false),
+            // Throttle the opportunistic conversation-open refetch (docs/52).
+            // Called on every onAppear; skip when a recent attempt is still
+            // inside its window. The version-mismatch path (inbound) is the
+            // unthrottled change-driven trigger and lives elsewhere.
+            if !inner.should_fetch_name(&did).await {
+                return Ok(false);
+            }
+
+            let blob = match inner.client.get_profile(&did).await {
+                Ok(Some(b)) => {
+                    inner.record_fetch(&did, crate::messaging::FetchOutcome::Success).await;
+                    b
+                }
+                // No blob on the server — negative-cache it (6h) so we stop
+                // asking until something changes.
+                Ok(None) => {
+                    inner.record_fetch(&did, crate::messaging::FetchOutcome::NotFound).await;
+                    return Ok(false);
+                }
+                Err(e) => {
+                    inner.record_fetch(&did, crate::messaging::classify_net_error(&e)).await;
+                    return Err(AppError::from(e));
+                }
             };
 
             let mut key = [0u8; profile::PROFILE_KEY_LEN];
@@ -1757,7 +1825,11 @@ impl AppCore {
                 if row.did == own_did {
                     continue;
                 }
-                let display_name = inner
+                // Name source priority mirrors `resolveDisplayName` on the
+                // client: the encrypted-profile name (humans) first, then the
+                // cached server account record (bots). Both are local reads, so
+                // contact-book names — including bots — resolve offline.
+                let mut display_name = inner
                     .store
                     .load_contact_profile(&row.did)
                     .await
@@ -1765,6 +1837,16 @@ impl AppCore {
                     .flatten()
                     .map(|p| p.display_name)
                     .unwrap_or_default();
+                if display_name.is_empty() {
+                    display_name = inner
+                        .store
+                        .load_account_info(&row.did)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|c| c.display_name)
+                        .unwrap_or_default();
+                }
                 out.push(ContactRowFfi {
                     did: row.did,
                     display_name,

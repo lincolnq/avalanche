@@ -258,4 +258,29 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
     )",
     "CREATE INDEX IF NOT EXISTS idx_reactions_conv \
         ON reactions (conversation_id)",
+    // ── Account info cache (docs/54-bot-presentation.md, docs/35-profiles.md) ─
+    // Write-through cache of the server's public account record (display name +
+    // bot flag), keyed by DID. Humans publish no plaintext name server-side, so
+    // their names live in `contact_profiles`; BOT names only ever come from the
+    // server `get_account_info` call. Caching them here makes bot DM titles +
+    // avatars resolve offline — without it, a bot conversation falls back to the
+    // raw DID until the next online fetch.
+    "CREATE TABLE IF NOT EXISTS account_info_cache (\
+        did           TEXT    PRIMARY KEY,\
+        display_name  TEXT    NOT NULL,\
+        is_bot        INTEGER NOT NULL,\
+        fetched_at    INTEGER NOT NULL\
+    )",
+    // ── Profile-fetch throttle (docs/52 §"Client-side rate limiting") ─────────
+    // Per-DID record of the last server fetch attempt for a name (either the
+    // encrypted profile blob for humans or the public account record for bots)
+    // and its outcome. The per-outcome skip window — including the negative
+    // outcomes (not-found, not-authorized) — is applied in app-core; this table
+    // just persists the (when, what-happened) so the throttle survives app
+    // launches. `outcome` is a small integer code owned by app-core.
+    "CREATE TABLE IF NOT EXISTS profile_fetch_state (\
+        did              TEXT    PRIMARY KEY,\
+        last_attempt_at  INTEGER NOT NULL,\
+        outcome          INTEGER NOT NULL\
+    )",
 ];

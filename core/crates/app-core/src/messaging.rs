@@ -19,6 +19,63 @@ use crate::{
     MessageTarget,
 };
 
+/// Outcome of a server name-fetch attempt, used as the throttle key
+/// (docs/52). The integer codes are persisted in `profile_fetch_state.outcome`
+/// — keep them stable. Windows mirror Signal's `ProfileFetcher` LRU
+/// (`docs/signal-research/profile-key-transmission.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchOutcome {
+    Success = 0,
+    Network = 1,
+    NotAuthorized = 2,
+    NotFound = 3,
+    RateLimited = 4,
+    Other = 5,
+}
+
+impl FetchOutcome {
+    fn code(self) -> i64 {
+        self as i64
+    }
+
+    fn from_code(c: i64) -> Self {
+        match c {
+            0 => Self::Success,
+            1 => Self::Network,
+            2 => Self::NotAuthorized,
+            3 => Self::NotFound,
+            4 => Self::RateLimited,
+            _ => Self::Other,
+        }
+    }
+
+    /// Minimum time before another attempt is allowed.
+    fn skip_window_ms(self) -> i64 {
+        match self {
+            Self::Success => 5 * 60 * 1000,
+            Self::Network => 60 * 1000,
+            Self::NotAuthorized => 30 * 60 * 1000,
+            Self::NotFound => 6 * 60 * 60 * 1000,
+            Self::RateLimited => 5 * 60 * 1000,
+            Self::Other => 30 * 60 * 1000,
+        }
+    }
+}
+
+/// Map a net error onto a throttle outcome so failures get an appropriate
+/// negative-cache window (404 → 6h, 401/403 → 30m, transport → 1m, etc.).
+pub(crate) fn classify_net_error(e: &net::error::NetError) -> FetchOutcome {
+    use net::error::NetError;
+    match e {
+        NetError::Server(401 | 403, _) => FetchOutcome::NotAuthorized,
+        NetError::Server(404, _) => FetchOutcome::NotFound,
+        NetError::Server(429, _) => FetchOutcome::RateLimited,
+        NetError::Server(_, _) => FetchOutcome::Other,
+        NetError::Http(_) | NetError::WebSocket(_) => FetchOutcome::Network,
+        _ => FetchOutcome::Other,
+    }
+}
+
 /// Ensure a usable Double Ratchet session exists for `(recipient_did, device_id)`.
 ///
 /// If there is no session (or `force_refresh` is set), fetch that device's
@@ -164,6 +221,30 @@ impl AppCoreInner {
                 profile_key: profile_key.to_vec(),
                 fetched_at: Timestamp::now(),
             })
+            .await;
+    }
+
+    /// Whether a name fetch for `did` is allowed right now, per the persisted
+    /// per-outcome throttle (docs/52 §"Client-side rate limiting"). `None`
+    /// (never attempted) → fetch. Otherwise honor the skip window for the last
+    /// outcome. Errors reading the throttle fail open (allow the fetch).
+    pub(crate) async fn should_fetch_name(&self, did: &str) -> bool {
+        match self.store.load_fetch_state(did).await {
+            Ok(Some((last_attempt, code))) => {
+                let window = FetchOutcome::from_code(code).skip_window_ms();
+                Timestamp::now().as_millis() - last_attempt.as_millis() >= window
+            }
+            Ok(None) => true,
+            Err(_) => true,
+        }
+    }
+
+    /// Record the outcome of a name fetch for `did` so the throttle (and the
+    /// negative cache for failures) survives launches. Best-effort.
+    pub(crate) async fn record_fetch(&self, did: &str, outcome: FetchOutcome) {
+        let _ = self
+            .store
+            .record_fetch_attempt(did, outcome.code(), Timestamp::now())
             .await;
     }
 

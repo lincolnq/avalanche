@@ -65,6 +65,12 @@ final class AppState: ObservableObject {
     private var displayNameCache: [String: String] = [:]
     /// DIDs currently being fetched (to avoid duplicate requests).
     private var displayNameInFlight: Set<String> = []
+    /// DIDs that resolved to no name this session. Suppresses re-spawning a
+    /// resolve task on every re-render of an unnameable row. The persistent
+    /// per-outcome throttle in core (docs/52) already makes the *server* side
+    /// cheap; this just avoids the per-render Task churn on the client.
+    /// Cleared on reconnect so coming back online retries.
+    private var unresolvedDids: Set<String> = []
     /// Cached bot status for remote DIDs, keyed by DID. Populated as a
     /// side-effect of name resolution (same server account record), and read
     /// by avatar rendering to pick the bot frame + badge
@@ -252,6 +258,7 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        unresolvedDids.removeAll()
         isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
@@ -271,6 +278,7 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        unresolvedDids.removeAll()
         isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
@@ -529,6 +537,8 @@ final class AppState: ObservableObject {
     ///    bot accounts (humans never put a plaintext name on the server).
     private func resolveDisplayName(did: String, accountId: String) {
         guard !displayNameInFlight.contains(did) else { return }
+        // Already resolved-to-empty this session — don't re-spawn until reconnect.
+        guard !unresolvedDids.contains(did) else { return }
         guard let core = cores[accountId] else { return }
         displayNameInFlight.insert(did)
         let targetDid = did
@@ -537,7 +547,9 @@ final class AppState: ObservableObject {
             let localName = (try? core.contactDisplayName(did: targetDid)) ?? ""
             // Fall back to server lookup (bots) only if the local cache is empty.
             // The same record carries `isBot`, so we learn bot status here too
-            // (docs/54-bot-presentation.md) without a separate round-trip.
+            // (docs/54-bot-presentation.md) without a separate round-trip. Core
+            // throttles this call (docs/52) — offline/throttled lookups return
+            // a cached record or throw, never a fresh server hit per render.
             let serverInfo = localName.isEmpty ? try? core.getAccountInfo(did: targetDid) : nil
             let resolved = !localName.isEmpty ? localName : (serverInfo?.displayName ?? "")
             // A resolved local name means a human contact; only the server
@@ -548,7 +560,11 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 self.displayNameInFlight.remove(targetDid)
                 self.isBotCache[targetDid] = isBot
-                guard !resolved.isEmpty else { return }
+                guard !resolved.isEmpty else {
+                    // Negative-cache so we don't re-spawn this task every render.
+                    self.unresolvedDids.insert(targetDid)
+                    return
+                }
                 self.applyResolvedDisplayName(did: targetDid, name: resolved)
             }
         }
@@ -1152,6 +1168,12 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled else { break }
             last = next
             connectionStates[accountId] = next
+            // Coming back online is a chance to resolve names we gave up on
+            // while offline/throttled — drop the session negative cache so the
+            // next render re-attempts (core still applies its own throttle).
+            if case .connected = next {
+                unresolvedDids.removeAll()
+            }
         }
         stateTasks.removeValue(forKey: accountId)
         AppLog.info("conn", "connection-state listener ended for \(accountId)")
