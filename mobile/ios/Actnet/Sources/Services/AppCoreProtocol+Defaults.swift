@@ -32,6 +32,10 @@ extension AppCoreProtocol {
     func hasRecovery() -> Bool { false }
     func updateRecoveryBlob(prfOutput: Data, servers: [String]) throws {}
 
+    // MARK: - Storage sync (docs/05-device-data-sync.md)
+
+    func syncStorage() throws {}
+
     // MARK: - Messaging
 
     func sendDm(recipientDid: String, plaintext: Data, sentAtMs: Int64) throws {}
