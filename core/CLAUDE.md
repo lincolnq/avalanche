@@ -4,9 +4,9 @@ The Rust workspace root is `core/`. See the root `CLAUDE.md` for the crate depen
 
 ## Adding a New Server Endpoint
 
-1. `/new-migration <name>` — create migration file first
-2. `/new-db-module <entity>` — scaffold DB layer
-3. `/new-route <name>` — scaffold route + register in `routes/mod.rs`
+1. `/new-migration <name>` — create migration file (see `.claude/commands/new-migration.md`)
+2. `/new-db-module <entity>` — scaffold DB layer (see `.claude/commands/new-db-module.md`)
+3. `/new-route <name>` — scaffold route + register in `routes/mod.rs` (see `.claude/commands/new-route.md`)
 4. Add rate limiting if the endpoint is writable or fetchable (see `middleware/rate_limit.rs`)
 5. `make ci` before opening PR
 

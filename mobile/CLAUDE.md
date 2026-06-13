@@ -24,7 +24,7 @@ The full cycle for a feature that involves new Rust logic exposed to iOS:
 4. Call from `AppState.swift` via `Task.detached { try core.methodName() }.value`
 5. `make ios` to rebuild
 
-Use `/new-ffi-method <name>` to scaffold steps 1–4 as a single command.
+Use `/new-ffi-method <name>` to scaffold all four steps as a single command (see `.claude/commands/new-ffi-method.md`).
 
 ### FFI constraints (do not violate)
 
