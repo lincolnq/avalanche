@@ -1,8 +1,10 @@
 # Device data sync & the storage service
 
-Status: **in-progress design doc.** Not yet implemented. Sections marked **OPEN**
-are unresolved; **DECIDED** are committed. Spun out of `docs/04-multi-device.md`
-§5, which got too big once the durable-state mechanism was fleshed out.
+Status: **partially implemented.** Stages 1 (server) and 2 (client engine + the
+first adapter) are built; stages 3–5 are not. See §13 for the per-stage status.
+Sections marked **OPEN** are unresolved; **DECIDED** are committed. Spun out of
+`docs/04-multi-device.md` §5, which got too big once the durable-state mechanism
+was fleshed out.
 
 Background reading:
 
@@ -492,9 +494,65 @@ the push, periodic poll is the safety net — zero per-write-path code (§6.1)**
 - **OPEN:** the `SyncRegistry` / trigger generation ergonomics (hand-written vs.
 generated triggers); exact `TYPE_TAG` registry location; snapshot cadence;
 whether the snapshot is a serialized item-set or an independent re-encode.
-- **Implementation order:** (1) server `storage_items` + `/v1/storage/items`
-(migration → db-module → route per CLAUDE.md); (2) client sidecar + engine +
-one adapter (group keys, since they already have a domain table); (3) trigger
-generation + more adapters (contacts, settings); (4) snapshot endpoints +
-backup push; (5) fast-sync nudge on the WebSocket.
+### 13.1 Implementation status (by stage)
+
+**Stage 1 — server `storage_items` + `/v1/storage/items` — DONE.**
+
+- `infra/migrations/013_storage_items.sql` — `storage_items` (PK `(account_id,
+record_id)`, `version`/`seq`/`byte_len`/`deleted`), index `storage_items_seq`,
+and a per-account `storage_seq` counter table.
+- `core/crates/server/src/db/storage.rs` — `StorageItem`, `PutOutcome::{Applied,
+Conflict}`, `account_usage` (running byte+count quota), `pull` (cursor query),
+`alloc_seq` (atomic upsert), `put_item` (CAS under `SELECT … FOR UPDATE`).
+- `core/crates/server/src/routes/storage.rs` — authenticated, account-scoped
+`pull_items` (GET) + `put_items` (PUT) with the §10 caps as consts
+(`MAX_RECORD_BYTES` 8 KB, `MAX_TOTAL_BYTES` 8 MB, `MAX_RECORD_COUNT` 25 000,
+pull limit clamped to 1000, ≤500 writes/request). Tombstones store their sealed
+header verbatim (§4) rather than blanked ciphertext.
+- Rate limits: `ACTION_STORAGE_PULL`/`PUSH` in
+`core/crates/server/src/middleware/rate_limit.rs`. `delete_account` now also
+purges `storage_items` + `storage_seq` (`db/accounts.rs`).
+- Tests: 8 db + 4 http storage tests (`server/tests/{db,http}_tests.rs`).
+
+**Stage 2 — client sidecar + engine + group-key adapter — DONE.**
+
+- Sidecar schema (`storage_sync`, `storage_cursor`, `storage_key_state`) and the
+three `groups` dirty-tracking triggers (TYPE_TAG 1) in
+`core/crates/store/src/schema.rs`; sidecar accessors in
+`core/crates/store/src/storage_sync.rs`.
+- `core/crates/net/src/lib.rs` — `storage_pull`/`storage_push` + wire types.
+- `core/crates/app-core/src/storage_sync.rs` — record crypto (§4: `record_id`
+HMAC, `seal`/`open` with the `tag‖key_len‖logical_key‖payload` plaintext
+layout), `SyncAdapter` trait + `SyncRegistry`, `GroupKeyAdapter`, and the
+`sync`/`pull`/`push` engine.
+- Storage-key provisioning: generated at account creation, carried in the
+recovery blob (`storage_key` field added to `proto/recovery.proto`;
+`build_recovery_blob` in `app-core/src/recovery.rs`), and restored on recover
+(`app-core/src/lib.rs`).
+- FFI: `sync_storage` (sync export) + `sync_storage_async`
+(`app-core/src/lib.rs`); iOS picks it up via the no-op default in
+`mobile/.../AppCoreProtocol+Defaults.swift`.
+- Tests: store sidecar tests (`store/tests/store_tests.rs`) + the push→pull
+restore e2e (`app-core/tests/e2e_storage.rs`).
+
+**Stages 3–5 — NOT YET BUILT.**
+
+- (3) Trigger *generation* from the registry (triggers are still hand-written),
+the ergonomic `SyncedType`→`SyncAdapter` blanket bridge (§3.2), and more
+adapters (contacts, settings).
+- (4) Snapshot endpoints + backup push (§5/§7) — `storage_snapshots` table and
+`PUT`/`GET /v1/storage/snapshot` are **not** implemented; only `/items` exists.
+This path is load-bearing for total-loss recovery (§11), so recovery currently
+relies on the authoritative account's live items only.
+- (5) Fast-sync nudge on the WebSocket (§8) — sync is poll/explicit-call only;
+no `storage_changed` push yet.
+
+### 13.2 Known gaps / deferred
+
+- The §11 total-loss recovery path is not covered by an automated e2e test
+(`recover_from_blob` is an FFI constructor, so a nested `block_on` can't run
+inside an async test; needs a `recover_*_async` harness).
+- The §11 `MAX_RECOVERY_BLOB` cap is not yet enforced; the blob now carries the
+storage key but group keys still inline a `master_key` per group, so the tight
+cap must wait until group-key sync is the sole path (see §11 sequencing note).
 
