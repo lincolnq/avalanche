@@ -4,6 +4,20 @@ You are about to implement a new feature from the actnet backlog. Work through t
 
 Read `docs/02-todos-deferred.md` in full. Display every item as a numbered list, preserving section headings.
 
+For each item, append a platform tag based on what can be **implemented and meaningfully tested** without macOS:
+
+- `[Any]` — fully implementable and testable on Windows/Linux: touches only server, Rust crates (`types`, `crypto`, `store`, `net`, `app-core`, `server`, `relay`), napi/Node.js, or docs. All tests run via `cargo test`, `make test`, or `make test-e2e`.
+- `[macOS]` — requires macOS to test: the change lives entirely in iOS/Swift (`mobile/ios/`), or the only meaningful test is the iOS simulator.
+- `[Any + macOS for full test]` — has server/Rust work doable on any platform, **and** a mobile component that requires macOS for integration testing. Server-side tests pass on any OS; full end-to-end requires macOS.
+
+Tagging heuristic:
+- If the item mentions a UI element, SwiftUI view, account switcher, scroll behavior, onboarding step, or QR code screen → `[macOS]`.
+- If the item is pure server, protocol, crypto, DB schema, or Rust crate logic with no mobile surface → `[Any]`.
+- If it mentions both a server-side change (new endpoint, DB column, relay message) and a mobile client consuming it → `[Any + macOS for full test]`.
+- Delivery receipts, read receipts, recovery blob re-upload, sender-key recovery, and similar items that require both a server change and an iOS change → `[Any + macOS for full test]`.
+
+After displaying the list, note which platform the user is currently on (check the session's OS context or ask if unknown) and call out which items they **cannot fully test** from their current machine.
+
 $ARGUMENTS
 
 If `$ARGUMENTS` is non-empty, treat it as the user's preference for which item to work on (partial name, number from the list, or verbatim line). Confirm which item you matched and ask the user to verify. If `$ARGUMENTS` is empty, ask the user to pick by number or name.
