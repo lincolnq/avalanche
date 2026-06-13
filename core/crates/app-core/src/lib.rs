@@ -1093,6 +1093,56 @@ impl AppCore {
         }
     }
 
+    /// Open a bot account, registering it on first run and re-logging-in
+    /// thereafter — the idempotent bootstrap every operator-run bot needs.
+    ///
+    /// If the local store at `db_path` already holds an account, this logs in
+    /// (and `server_url` / `display_name` / `did_suffix` are ignored — they're
+    /// fixed by the original registration). If the store has no account — a
+    /// fresh deploy, or an empty DB left behind by a registration that opened
+    /// the store but failed before writing identity — this registers a new bot
+    /// account via [`Self::create_bot_account`]'s path.
+    ///
+    /// This is exactly the "try login, else register" dance bots used to spell
+    /// out by inspecting error strings. Folding it into one primitive means the
+    /// empty-store signal stays typed ([`AppError::NoAccount`]) instead of being
+    /// rediscovered by callers. Caller-side identity policy (e.g. asserting the
+    /// returned [`Self::did`] equals a reserved DID) layers on top.
+    ///
+    /// Call from a background thread — this blocks until complete.
+    #[uniffi::constructor]
+    pub fn login_or_create_bot(
+        server_url: String,
+        db_path: String,
+        db_key: String,
+        display_name: String,
+        did_suffix: Option<String>,
+    ) -> Result<Arc<Self>, AppErrorFfi> {
+        let rt = ffi_runtime();
+
+        let store = rt.block_on(store::Store::open(
+            Path::new(&db_path),
+            &store::DatabaseKey::from_passphrase(db_key),
+        )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
+
+        // Store is Arc-backed (Clone shares one connection), so the login probe
+        // and the registration fallback operate on the same underlying DB.
+        let inner = rt.block_on(async {
+            match Self::login_inner(store.clone()).await {
+                Ok(inner) => Ok(inner),
+                Err(AppError::NoAccount) => {
+                    let prepared = PreparedAccountState::prepare(server_url, &[], false)?;
+                    Self::create_inner(prepared, store, Some(display_name), true, did_suffix).await
+                }
+                Err(e) => Err(e),
+            }
+        }).map_err(AppErrorFfi::from)?;
+
+        let core = Arc::new(Self::build(inner));
+        core.start_reconnect_task();
+        Ok(core)
+    }
+
     pub fn did(&self) -> String {
         self.inner.blocking_lock().did.clone()
     }
@@ -1128,6 +1178,47 @@ impl AppCore {
                 .store
                 .touch_contact(&recipient_did, true, Timestamp::now())
                 .await;
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Send a plain-text message to a [`MessageTarget`] — a DM or a group —
+    /// without the caller having to pick the right transport-specific entry
+    /// point. The DM and group sends differ only in their conversation key and
+    /// wire transport; this folds that fork into one call (the same way
+    /// `send_reaction` / `send_edit` / `send_delete` already do via
+    /// [`AppCoreInner::send_to_target`]).
+    ///
+    /// Behaviour matches the targeted primitive exactly: a `Dm` target wraps
+    /// the body in a content envelope, fans out per recipient device, and marks
+    /// the recipient a curated contact (the deliberate-gesture rule, docs/35); a
+    /// `Group` target encrypts under our Sender Key and fans out to members.
+    ///
+    /// Call from a background thread — this blocks until complete.
+    pub fn send_message(
+        &self,
+        target: MessageTarget,
+        plaintext: Vec<u8>,
+        sent_at_ms: i64,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
+            let mut inner = self.inner.lock().await;
+            let body = String::from_utf8_lossy(&plaintext).into_owned();
+            inner
+                .send_to_target(
+                    ws.as_ref(),
+                    &target,
+                    Body::Text(TextMessage { body }),
+                    sent_at_ms as u64,
+                )
+                .await?;
+            if let MessageTarget::Dm { recipient_did } = &target {
+                let _ = inner
+                    .store
+                    .touch_contact(recipient_did, true, Timestamp::now())
+                    .await;
+            }
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }

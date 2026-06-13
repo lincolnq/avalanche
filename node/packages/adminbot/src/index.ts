@@ -22,6 +22,7 @@ import {
   initLogging,
   type AdminEvent,
   type IncomingEvent,
+  type SendTarget,
 } from "@actnet/app-core";
 
 // Reserved well-known suffix for the canonical adminbot account on every
@@ -79,36 +80,25 @@ function adminsTitle(serverUrl: string): string {
   return `#admins @ ${new URL(serverUrl).hostname}`;
 }
 
-async function registerOrLogin(env: Env): Promise<AppCore> {
-  // Try login first. A SQLCipher file existing on disk doesn't mean it
-  // contains a registered account (createBotAccount opens the store before
-  // it talks to the server, so a failed registration can leave an empty
-  // DB behind).
-  if (existsSync(env.dbPath)) {
-    try {
-      const core = await AppCore.login(env.dbPath, env.dbKey);
-      if (core.did() !== ADMINBOT_DID) {
-        throw new Error(
-          `local store DID (${core.did()}) is not the reserved adminbot DID ` +
-            `(${ADMINBOT_DID}). This state dir belongs to a different bot.`,
-        );
-      }
-      return core;
-    } catch (e) {
-      if (!/no account found in local store/.test((e as Error).message)) throw e;
-      // Empty store from a previous failed registration — fall through.
-    }
-  }
-  console.log(`adminbot: registering reserved DID ${ADMINBOT_DID} on ${env.serverUrl}`);
-  const core = await AppCore.createBotAccount(
+async function loginOrRegister(env: Env): Promise<AppCore> {
+  // Register on first run, re-login thereafter. app-core decides which based
+  // on whether the store already holds an account (including the empty-DB-from-
+  // a-failed-registration case) — adminbot only supplies the reserved DID.
+  const core = await AppCore.loginOrCreateBot(
     env.serverUrl,
     env.dbPath,
     env.dbKey,
     "Adminbot",
     ADMINBOT_DID_SUFFIX,
   );
+  // Identity policy is ours, not the core's: the store must belong to the
+  // reserved adminbot DID. A mismatch means this state dir was created by a
+  // different bot, or the server handed back an unexpected DID.
   if (core.did() !== ADMINBOT_DID) {
-    throw new Error(`server returned unexpected DID ${core.did()}; expected ${ADMINBOT_DID}`);
+    throw new Error(
+      `local store DID (${core.did()}) is not the reserved adminbot DID ` +
+        `(${ADMINBOT_DID}); this state dir belongs to a different bot`,
+    );
   }
   return core;
 }
@@ -213,21 +203,9 @@ async function handleAdminEvent(
   }
 }
 
-type ReplyChannel =
-  | { kind: "group"; groupId: string }
-  | { kind: "dm"; recipientDid: string };
-
-async function reply(core: AppCore, channel: ReplyChannel, body: string): Promise<void> {
-  if (channel.kind === "group") {
-    await core.sendGroupMessage(channel.groupId, body);
-  } else {
-    await core.sendDm(channel.recipientDid, body);
-  }
-}
-
 async function handleCommand(
   core: AppCore,
-  channel: ReplyChannel,
+  channel: SendTarget,
   senderDid: string,
   body: string,
 ): Promise<void> {
@@ -235,17 +213,16 @@ async function handleCommand(
   const [cmd] = body.split(/\s+/, 1);
   switch (cmd) {
     case "/whoami":
-      await reply(core, channel, `${senderDid} (admin)`);
+      await core.send(channel, `${senderDid} (admin)`);
       break;
     case "/help":
-      await reply(
-        core,
+      await core.send(
         channel,
         ["Available commands:", "  /whoami    echo your DID", "  /help      show this help"].join("\n"),
       );
       break;
     default:
-      await reply(core, channel, `unknown command: ${cmd}. Try /help.`);
+      await core.send(channel, `unknown command: ${cmd}. Try /help.`);
   }
 }
 
@@ -254,7 +231,7 @@ async function run(): Promise<void> {
   initLogging(env.logLevel);
 
   const state: AdminbotState = loadState(env.statePath) ?? {};
-  const core = await withRetry("register/login", () => registerOrLogin(env));
+  const core = await withRetry("login/register", () => loginOrRegister(env));
   console.log(`adminbot: started (did=${core.did()})`);
 
   const groupId = await withRetry("ensure #admins group", () =>

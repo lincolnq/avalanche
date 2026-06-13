@@ -17,8 +17,8 @@ use app_core::error::AppErrorFfi;
 use app_core::{
     self as core, AccountInfoFfi, ConnectionState, ContactRowFfi, ConversationSummaryFfi,
     CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate, GroupMemberFfi, GroupPendingFfi,
-    AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo, JoinResultFfi, ProjectInfoFfi,
-    StoredMessageFfi,
+    AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo, JoinResultFfi, MessageTarget,
+    ProjectInfoFfi, StoredMessageFfi,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -314,6 +314,35 @@ impl ConnectionStateJs {
     }
 }
 
+/// Where a plain-text send is directed. `kind` is `"dm"` or `"group"`;
+/// `recipientDid` is set for `"dm"`, `groupId` for `"group"`.
+#[napi(object)]
+pub struct MessageTargetJs {
+    pub kind: String,
+    pub recipient_did: Option<String>,
+    pub group_id: Option<String>,
+}
+
+impl MessageTargetJs {
+    fn into_ffi(self) -> napi::Result<MessageTarget> {
+        match self.kind.as_str() {
+            "dm" => Ok(MessageTarget::Dm {
+                recipient_did: self
+                    .recipient_did
+                    .ok_or_else(|| NapiError::from_reason("dm target requires recipientDid"))?,
+            }),
+            "group" => Ok(MessageTarget::Group {
+                group_id: self
+                    .group_id
+                    .ok_or_else(|| NapiError::from_reason("group target requires groupId"))?,
+            }),
+            other => Err(NapiError::from_reason(format!(
+                "unknown message target kind: {other}"
+            ))),
+        }
+    }
+}
+
 /// A single event from the receive loop. `kind` is one of `"message"`,
 /// `"receipt"`, or `"groupInvite"`. Exactly one of `message` / `receipt` /
 /// `groupInvite` is set, matching `kind`.
@@ -510,6 +539,29 @@ impl AppCore {
         Ok(AppCore { inner })
     }
 
+    /// Open a bot account, registering it on first run and re-logging-in
+    /// thereafter. Logs in when the store at `dbPath` already holds an account
+    /// (ignoring `serverUrl` / `displayName` / `didSuffix`, which are fixed by
+    /// the original registration); otherwise registers a new bot account. The
+    /// empty-store branch is detected internally — callers no longer inspect
+    /// error strings to tell "fresh deploy" from "real failure".
+    #[napi]
+    pub async fn login_or_create_bot(
+        server_url: String,
+        db_path: String,
+        db_key: String,
+        display_name: String,
+        did_suffix: Option<String>,
+    ) -> napi::Result<AppCore> {
+        let inner = tokio::task::spawn_blocking(move || {
+            core::AppCore::login_or_create_bot(server_url, db_path, db_key, display_name, did_suffix)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)?;
+        Ok(AppCore { inner })
+    }
+
     #[napi]
     pub async fn finalize_account(
         prepared: &PreparedAccount,
@@ -582,6 +634,49 @@ impl AppCore {
             .await
             .map_err(join_err)?
             .map_err(to_napi)
+    }
+
+    /// Send a plain-text message to a DM or group target without the caller
+    /// choosing the transport. Mirrors `sendDm` / `sendGroupMessage` exactly
+    /// for the matching target; folds the fork into one call.
+    #[napi]
+    pub async fn send_message(
+        &self,
+        target: MessageTargetJs,
+        plaintext: Buffer,
+        sent_at_ms: i64,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let target = target.into_ffi()?;
+        let pt = plaintext.to_vec();
+        tokio::task::spawn_blocking(move || core.send_message(target, pt, sent_at_ms))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    /// React to a message (docs/33) in a DM or group. `remove = true` clears
+    /// this account's reaction on the target; otherwise `emoji` replaces any
+    /// prior one. `targetAuthor` is the DID of the reacted-to message's author;
+    /// `targetSentAtMs` identifies that message; `sentAtMs` is this op's clock.
+    #[napi]
+    pub async fn send_reaction(
+        &self,
+        target: MessageTargetJs,
+        target_author: String,
+        target_sent_at_ms: i64,
+        emoji: String,
+        remove: bool,
+        sent_at_ms: i64,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let target = target.into_ffi()?;
+        tokio::task::spawn_blocking(move || {
+            core.send_reaction(target, target_author, target_sent_at_ms, emoji, remove, sent_at_ms)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)
     }
 
     #[napi]

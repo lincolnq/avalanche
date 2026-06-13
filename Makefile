@@ -33,7 +33,7 @@
 #
 # Also available: `make bindings` (regenerate UniFFI Swift/Kotlin glue only,
 # no xcframework or xcodebuild), `make dev` (homeserver only), `make check`,
-# `make clippy`, `make fmt`, `make testbot`, `make relay`.
+# `make clippy`, `make fmt`, `make node-testbot`, `make relay`.
 # ============================================================================
 
 TEST_DATABASE_URL ?= postgres://actnet:actnet-dev@localhost/actnet
@@ -50,7 +50,16 @@ SWIFT_BINDING := mobile/ios/Generated/app_core.swift
 XCFRAMEWORK_STAMP := mobile/ios/AppCoreFFI.xcframework/Info.plist
 XCODE_PROJ_FILE := mobile/ios/Actnet/Actnet.xcodeproj/project.pbxproj
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev testbot relay relay-release server-release dev-all node node-debug adminbot adminbot-build
+# Node @actnet/app-core napi binding — same file-based incremental approach as
+# the iOS chain. The native build regenerates native/index.d.ts every run, so
+# it doubles as the stamp for "the binding is current with the Rust sources".
+# The TS wrapper compiles to dist/index.js. Both are real file targets gated on
+# their inputs, so a no-op bot build skips the expensive napi rebuild.
+APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/dev/null)
+APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
+APP_CORE_DIST := node/packages/app-core/dist/index.js
+
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -64,6 +73,21 @@ node-debug:
 	cd node && [ -d node_modules ] || npm install
 	cd node && npm run build:debug
 
+# Rebuild the @actnet/app-core napi native binding when any Rust source
+# changes (the binding statically links the whole core, so the dep set is the
+# same RUST_SOURCES the xcframework uses). cargo's incremental keeps this cheap.
+$(APP_CORE_NATIVE): $(RUST_SOURCES)
+	cd node && [ -d node_modules ] || npm install
+	cd node && npm run build:native -w @actnet/app-core
+
+# Recompile the TS wrapper when the native binding or the wrapper sources change.
+$(APP_CORE_DIST): $(APP_CORE_NATIVE) $(APP_CORE_TS_SOURCES)
+	cd node && npm run build:ts -w @actnet/app-core
+
+# Human-friendly alias for "bring the shared binding up to date". The real
+# gating lives on the file targets above; this just names them.
+node-app-core: $(APP_CORE_DIST)
+
 # ----------------------------------------------------------------------------
 # Adminbot (Node)
 # ----------------------------------------------------------------------------
@@ -76,21 +100,37 @@ node-debug:
 # ADMINBOT_STATE_DIR (default ./adminbot-state), ADMINBOT_DB_KEY,
 # ADMINBOT_LOG (default info).
 
-# Build the adminbot binary (and its dependency, @actnet/app-core if needed).
-adminbot-build:
-	cd node && [ -d node_modules ] || npm install
-	# Always rebuild the napi binary so changes to the Rust crate
-	# regenerate native/index.d.ts (cargo's incremental keeps this cheap).
-	# Then rebuild TS (also cheap) so signature changes propagate.
-	cd node && npm run build:native -w @actnet/app-core
-	cd node && npm run build:ts -w @actnet/app-core
+# Build the adminbot package. Depends on the shared app-core binding (which
+# only rebuilds when the Rust/TS sources actually change).
+node-adminbot-build: $(APP_CORE_DIST)
 	cd node && npm run build -w @actnet/adminbot
 
 # Run the adminbot. Idempotent — first run registers the reserved DID, later
 # runs re-login against the existing SQLCipher store.
-adminbot: adminbot-build
+node-adminbot: node-adminbot-build
 	cd node && ADMINBOT_SERVER_URL=$${ADMINBOT_SERVER_URL:-http://localhost:3000} \
 		node packages/adminbot/dist/index.js
+
+# ----------------------------------------------------------------------------
+# Testbot (Node)
+# ----------------------------------------------------------------------------
+#
+# A standalone HTTP service that spins up ephemeral AI chatbot accounts on
+# demand (see node/packages/testbot). Replaced the old Rust `testbot` crate.
+#
+# Required env: none (HOMESERVER_URL defaults to http://localhost:3000).
+# Optional: ANTHROPIC_API_KEY (else bots echo), TESTBOT_BIND_ADDR
+# (default 0.0.0.0:3001), TESTBOT_LOG (default info).
+
+# Build the testbot package. Depends on the shared app-core binding (which
+# only rebuilds when the Rust/TS sources actually change).
+node-testbot-build: $(APP_CORE_DIST)
+	cd node && npm run build -w @actnet/testbot
+
+# Run the testbot HTTP service.
+node-testbot: node-testbot-build
+	cd node && HOMESERVER_URL=$${HOMESERVER_URL:-http://localhost:3000} \
+		node packages/testbot/dist/index.js
 
 # ----------------------------------------------------------------------------
 # Rust
@@ -137,9 +177,6 @@ db-down:
 # safe to re-run. Same code path the prod release uses.
 migrate:
 	cd core && DATABASE_URL=$(TEST_DATABASE_URL) cargo run -q -p server -- migrate
-
-testbot:
-	cd core && RUST_LOG=actnet_testbot=debug,app_core=debug,tower_http=debug cargo run -p testbot
 
 relay:
 	cd core && RUST_LOG=relay=debug,tower_http=debug cargo run -p relay

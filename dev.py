@@ -43,9 +43,9 @@ PROJECTS = [
     {
         "name": "Testbot",
         "description": "Chat with an AI bot",
-        "package": "testbot",
+        "dist": "packages/testbot/dist/index.js",
         "bind_env": "TESTBOT_BIND_ADDR",
-        "rust_log": "actnet_testbot=debug,app_core=debug",
+        "log_env": "TESTBOT_LOG",
     },
 ]
 
@@ -106,21 +106,22 @@ def run_migrations():
     )
 
 
-def build_adminbot():
-    """Build the Node adminbot package (and its native @actnet/app-core dep)."""
-    print("Building adminbot...")
-    subprocess.run(["make", "adminbot-build"], cwd=REPO_DIR, check=True)
+def build_node_bots():
+    """Build the first-party Node bots (adminbot + testbot). Both depend on the
+    shared `node-app-core` binding; a single `make` invocation rebuilds that
+    dep just once (and only when the Rust/TS sources changed)."""
+    print("Building node bots (adminbot + testbot)...")
+    subprocess.run(["make", "node-adminbot-build", "node-testbot-build"], cwd=REPO_DIR, check=True)
 
 
 def main():
     start_postgres()
 
-    # Build all crates in parallel while Postgres starts up
+    # Build the server while Postgres starts up. Project services are Node
+    # packages, built alongside the bots below.
     print("Building...")
-    subprocess.run(["cargo", "build", "-p", "server"] +
-                   [f"-p{p['package']}" for p in PROJECTS],
-                   cwd=CORE_DIR, check=True)
-    build_adminbot()
+    subprocess.run(["cargo", "build", "-p", "server"], cwd=CORE_DIR, check=True)
+    build_node_bots()
 
     wait_for_postgres()
     run_migrations()
@@ -161,9 +162,14 @@ def main():
     for project, port in project_launches:
         print(f"  {project['name']} -> {host}:{port}")
         processes.append(subprocess.Popen(
-            ["cargo", "run", "-p", project["package"]],
-            cwd=CORE_DIR,
-            env={**os.environ, project["bind_env"]: f"0.0.0.0:{port}", "RUST_LOG": project["rust_log"]},
+            node_cmd([project["dist"]]),
+            cwd=NODE_DIR,
+            env={
+                **os.environ,
+                project["bind_env"]: f"0.0.0.0:{port}",
+                "HOMESERVER_URL": os.environ.get("HOMESERVER_URL", "http://localhost:3000"),
+                project["log_env"]: os.environ.get(project["log_env"], "info"),
+            },
         ))
 
     # Adminbot — auto-registers as did:local:adminbot on first launch (matches
