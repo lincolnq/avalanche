@@ -287,6 +287,7 @@ impl AppCoreInner {
             .ok_or(AppError::NoAccount)?;
         let own_profile = self.store.load_own_profile().await?;
         let groups = crate::recovery::collect_group_blob_entries(&self.store).await?;
+        let storage_key = self.store.load_storage_key().await?;
         let server_url = self.client.server_url().to_string();
         let plaintext = crate::recovery::build_recovery_blob(
             &identity.serialize(),
@@ -300,6 +301,7 @@ impl AppCoreInner {
                 .map(|p| p.display_name.as_str())
                 .unwrap_or(""),
             &groups,
+            storage_key.as_ref().map(|k| k.as_slice()).unwrap_or(&[]),
         );
         let blob = crate::recovery::encrypt_recovery_blob(&plaintext, &key)?;
         self.client.update_recovery_blob(&blob).await?;

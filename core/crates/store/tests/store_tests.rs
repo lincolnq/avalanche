@@ -301,6 +301,92 @@ async fn conversation_expiry_independent_per_conversation() {
     assert_eq!(store.load_conversation_expiry("did:example:bob").await.unwrap(), Some(86400));
 }
 
+// ── Storage-service sidecar & dirty-tracking triggers (docs/05) ──────────────
+
+#[cfg(test)]
+mod storage_sync {
+    use store::groups::{GroupRow, PolicyRow};
+    use store::Store;
+    use types::Timestamp;
+
+    fn sample_group(id: &str) -> GroupRow {
+        GroupRow {
+            group_id: id.to_string(),
+            master_key: vec![7u8; 32],
+            hosting_server_url: "https://hs.example".into(),
+            revision: 0,
+            encrypted_state_plaintext: Vec::new(),
+            policy: PolicyRow::default_admin_only(),
+            group_push_pseudonym: None,
+            created_at: Timestamp::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_key_round_trips() {
+        let store = Store::open_in_memory().await.unwrap();
+        assert!(store.load_storage_key().await.unwrap().is_none());
+        let key = [3u8; 32];
+        store.save_storage_key(&key).await.unwrap();
+        assert_eq!(store.load_storage_key().await.unwrap(), Some(key));
+    }
+
+    #[tokio::test]
+    async fn cursor_defaults_zero_and_advances() {
+        let store = Store::open_in_memory().await.unwrap();
+        assert_eq!(store.storage_cursor().await.unwrap(), 0);
+        store.set_storage_cursor(42).await.unwrap();
+        assert_eq!(store.storage_cursor().await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn group_insert_marks_sidecar_dirty() {
+        let store = Store::open_in_memory().await.unwrap();
+        store.save_group(&sample_group("group-abc")).await.unwrap();
+
+        let dirty = store.dirty_records().await.unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].type_tag, 1); // TYPE_GROUP_KEY
+        assert_eq!(dirty[0].logical_key, "group-abc");
+        assert!(!dirty[0].deleted);
+        assert_eq!(dirty[0].version, 0);
+    }
+
+    #[tokio::test]
+    async fn group_delete_marks_sidecar_tombstone_keeping_version() {
+        let store = Store::open_in_memory().await.unwrap();
+        store.save_group(&sample_group("group-del")).await.unwrap();
+        // Mimic a successful push so the row is clean at version 5.
+        store.set_sync_meta_clean(1, "group-del", 5).await.unwrap();
+        assert!(store.dirty_records().await.unwrap().is_empty());
+
+        store.delete_group("group-del").await.unwrap();
+        let dirty = store.dirty_records().await.unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert!(dirty[0].deleted);
+        // Version is preserved so the tombstone push CASes against version 5.
+        assert_eq!(dirty[0].version, 5);
+    }
+
+    #[tokio::test]
+    async fn set_sync_meta_clears_dirty_and_records_version() {
+        let store = Store::open_in_memory().await.unwrap();
+        store.save_group(&sample_group("g1")).await.unwrap();
+        assert_eq!(store.dirty_records().await.unwrap().len(), 1);
+
+        // Pull-side apply: record the server version and clear dirty.
+        store.set_sync_meta(1, "g1", 9, false, false).await.unwrap();
+        assert!(store.dirty_records().await.unwrap().is_empty());
+        assert_eq!(store.sync_version(1, "g1").await.unwrap(), 9);
+    }
+
+    #[tokio::test]
+    async fn sync_version_defaults_zero_for_unknown_record() {
+        let store = Store::open_in_memory().await.unwrap();
+        assert_eq!(store.sync_version(1, "never-seen").await.unwrap(), 0);
+    }
+}
+
 // ── Editing, deletion, reactions (docs/33, docs/36) ──────────────────────
 
 #[cfg(test)]

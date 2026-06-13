@@ -206,12 +206,17 @@ pub struct GroupBlobEntry {
 /// `profile_key` is the 32-byte symmetric key that encrypts the user's
 /// profile blob on each homeserver. Pass `&[]` to omit (e.g. for bot
 /// accounts that have no profile).
+///
+/// `storage_key` is the 32-byte identity-level storage key (docs/05 §11). Pass
+/// `&[]` to omit. Carrying it here is what lets a recovering/linking device
+/// read the identity's durable-state records.
 pub fn build_recovery_blob(
     identity_keypair_bytes: &[u8],
     account_servers: &[String],
     profile_key: &[u8],
     display_name: &str,
     groups: &[GroupBlobEntry],
+    storage_key: &[u8],
 ) -> RecoveryBlob {
     let mut servers: Vec<ServerEntry> = Vec::new();
     let mut intern = |url: &str| -> u32 {
@@ -239,6 +244,7 @@ pub fn build_recovery_blob(
         profile_key: profile_key.to_vec(),
         display_name: display_name.to_string(),
         groups: recovered,
+        storage_key: storage_key.to_vec(),
     }
 }
 
@@ -274,6 +280,7 @@ mod tests {
                 master_key: vec![1u8; 32],
                 hosting_server_url: "https://server1.example".into(),
             }],
+            &[9u8; 32],
         );
 
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
@@ -287,6 +294,7 @@ mod tests {
         // Group's server URL already in account_servers, so index reuses 0.
         assert_eq!(decrypted.groups[0].server_index, 0);
         assert_eq!(decrypted.groups[0].master_key, vec![1u8; 32]);
+        assert_eq!(decrypted.storage_key, vec![9u8; 32]);
     }
 
     #[test]
@@ -304,6 +312,7 @@ mod tests {
                 GroupBlobEntry { master_key: vec![2u8; 32], hosting_server_url: "https://hs-b".into() },
                 GroupBlobEntry { master_key: vec![3u8; 32], hosting_server_url: "https://hs-a".into() },
             ],
+            &[],
         );
         let urls: Vec<&str> = blob.servers.iter().map(|s| s.url.as_str()).collect();
         assert_eq!(urls, vec!["https://hs-a", "https://hs-b"]);
@@ -323,6 +332,7 @@ mod tests {
             profile_key: vec![],
             display_name: String::new(),
             groups: vec![RecoveredGroup { master_key: vec![1u8; 32], server_index: 99 }],
+            storage_key: vec![],
         };
         let blob = encrypt_recovery_blob(&bad, &key).unwrap();
         assert!(decrypt_recovery_blob(&blob, &key).is_err());
@@ -331,7 +341,7 @@ mod tests {
     #[test]
     fn wrong_version_rejected() {
         let key = [42u8; 32];
-        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[]);
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let mut blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         blob[0] = 0xFF;
         assert!(decrypt_recovery_blob(&blob, &key).is_err());
@@ -342,7 +352,7 @@ mod tests {
     #[test]
     fn encoded_blob_starts_with_version_byte() {
         let key = [42u8; 32];
-        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[]);
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         assert_eq!(blob[0], RECOVERY_BLOB_VERSION);
     }
@@ -351,7 +361,7 @@ mod tests {
     fn wrong_key_fails() {
         let key = [42u8; 32];
         let wrong_key = [99u8; 32];
-        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[]);
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         assert!(decrypt_recovery_blob(&blob, &wrong_key).is_err());
     }

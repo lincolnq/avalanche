@@ -283,4 +283,47 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         last_attempt_at  INTEGER NOT NULL,\
         outcome          INTEGER NOT NULL\
     )",
+    // ── Storage service / device data sync (docs/05-device-data-sync.md) ──────
+    // 32-byte identity-level storage key that encrypts durable-state records.
+    // Same across all of the identity's devices; provisioned at account
+    // creation and carried in the recovery blob. Constrained to one row.
+    "CREATE TABLE IF NOT EXISTS storage_key_state (\
+        id           INTEGER PRIMARY KEY CHECK (id = 1),\
+        storage_key  BLOB    NOT NULL\
+    )",
+    // Per-record sync bookkeeping sidecar (§3.1). Holds NO payload — the
+    // payload lives in the domain table (e.g. `groups`) and is read/written
+    // through the adapter on demand. `type` is the TYPE_TAG, `logical_key` the
+    // domain natural key (e.g. group_id). The opaque server `record_id` is
+    // recomputable from (type, logical_key), so it is never stored.
+    "CREATE TABLE IF NOT EXISTS storage_sync (\
+        type         INTEGER NOT NULL,\
+        logical_key  TEXT    NOT NULL,\
+        version      INTEGER NOT NULL DEFAULT 0,\
+        dirty        INTEGER NOT NULL DEFAULT 0,\
+        deleted      INTEGER NOT NULL DEFAULT 0,\
+        PRIMARY KEY (type, logical_key)\
+    )",
+    // Single-row cursor: highest server `seq` consumed by a delta pull (§3.1).
+    "CREATE TABLE IF NOT EXISTS storage_cursor (\
+        id   INTEGER PRIMARY KEY CHECK (id = 1),\
+        seq  INTEGER NOT NULL\
+    )",
+    // Dirty-tracking triggers for the `groups` domain table (§3.4). Feature
+    // code just writes `groups`; these mark the matching sidecar row dirty in
+    // the same transaction. TYPE_TAG 1 = group key (see app-core storage_sync).
+    // Stage 2 hand-writes these for `groups`; stage 3 generalizes/auto-generates
+    // them and adds the commit-hook scheduler.
+    "CREATE TRIGGER IF NOT EXISTS groups_sync_ai AFTER INSERT ON groups BEGIN \
+        INSERT INTO storage_sync(type, logical_key, dirty) VALUES (1, NEW.group_id, 1) \
+        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
+     END",
+    "CREATE TRIGGER IF NOT EXISTS groups_sync_au AFTER UPDATE ON groups BEGIN \
+        INSERT INTO storage_sync(type, logical_key, dirty) VALUES (1, NEW.group_id, 1) \
+        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
+     END",
+    "CREATE TRIGGER IF NOT EXISTS groups_sync_ad AFTER DELETE ON groups BEGIN \
+        INSERT INTO storage_sync(type, logical_key, dirty, deleted) VALUES (1, OLD.group_id, 1, 1) \
+        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 1; \
+     END",
 ];

@@ -28,6 +28,13 @@ message RecoveryBlob {
 
   // Group memberships. Each entry's `server_index` is into `servers`.
   repeated RecoveredGroup groups = 5;
+
+  // 32-byte identity-level storage key (docs/05-device-data-sync.md §4/§11).
+  // Encrypts the durable-state store; never sent to any server in the clear.
+  // Carried here so a recovering/linking device gets the same key and can
+  // read the identity's storage records. Empty on the no-passkey path (no
+  // blob is written) and on blobs predating this field.
+  bytes storage_key = 6;
 }
 
 message ServerEntry {

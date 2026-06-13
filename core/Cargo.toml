@@ -48,6 +48,9 @@ rand = "0.9"
 p256        = { version = "0.13", features = ["ecdsa"] }
 aes-gcm     = "0.10"
 sha2        = "0.10"
+# HMAC-SHA256 for deriving opaque storage record ids (docs/05 §4). digest 0.10
+# family, matching sha2 0.10; no rand_core, so it doesn't widen the graph.
+hmac        = "0.12"
 
 # Async
 tokio      = { version = "1", features = ["full"] }

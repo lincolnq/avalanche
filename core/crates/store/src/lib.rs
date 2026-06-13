@@ -48,6 +48,7 @@ pub mod push;
 pub mod recovery;
 pub mod schema;
 pub mod session;
+pub mod storage_sync;
 
 pub use db::{DatabaseKey, Store};
 pub use error::StoreError;

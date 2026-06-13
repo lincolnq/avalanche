@@ -29,7 +29,9 @@ uuid               = { workspace = true }
 p256               = { workspace = true }
 aes-gcm            = { workspace = true }
 sha2               = { workspace = true }
+hmac               = { workspace = true }
 hkdf               = "0.12"
+async-trait        = { workspace = true }
 base32             = { workspace = true }
 bs58               = { workspace = true }
 serde_ipld_dagcbor = { workspace = true }

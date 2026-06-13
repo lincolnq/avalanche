@@ -189,11 +189,12 @@ async fn put_items(
         if record_id.is_empty() {
             return Err(ServerError::BadRequest("empty record_id".into()));
         }
-        let ciphertext = if w.deleted {
-            Vec::new()
-        } else {
-            decode_b64(&w.ciphertext)?
-        };
+        // Stored verbatim even for tombstones: the client seals a small routing
+        // header (type tag + logical key, no payload) into a deleted record's
+        // ciphertext so a pulling device can route the deletion. The server
+        // stays type-blind — it's opaque bytes either way. Tombstone bytes are
+        // excluded from the live byte/count quota (account_usage filters them).
+        let ciphertext = decode_b64(&w.ciphertext)?;
         if ciphertext.len() > MAX_RECORD_BYTES {
             return Err(ServerError::BadRequest("record exceeds size limit".into()));
         }
