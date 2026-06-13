@@ -22,6 +22,7 @@ pub mod error;
 pub mod groups;
 pub mod messaging;
 pub mod plc;
+pub mod prekeys;
 pub mod profile;
 pub mod recovery;
 
@@ -61,6 +62,22 @@ use tokio::sync::Mutex;
 use types::{AccountId, DeviceId, Timestamp};
 
 uniffi::setup_scaffolding!();
+
+// ── Prekey id layout at registration ────────────────────────────────────────
+// One-time EC and one-time Kyber prekeys are both minted with ids `1..=20`.
+// The last-resort Kyber prekey is placed just *past* that range so it never
+// collides with a one-time Kyber id — both live in one local table
+// (`store` `kyber_prekeys`), where a shared id would clobber the record under
+// `INSERT OR REPLACE`. After registration the persistent allocators
+// (`store::allocate_prekey_ids`) are seeded to the next free id so replenished
+// keys continue monotonically without ever reusing an id.
+
+/// Id of the last-resort (reused) Kyber prekey, past the `1..=20` one-time range.
+const LAST_RESORT_KYBER_ID: u32 = 21;
+/// Next free one-time EC prekey id after registration (`1..=20` issued).
+const REG_ONE_TIME_NEXT_ID: u32 = 21;
+/// Next free one-time Kyber prekey id after registration (`1..=20` + last-resort 21).
+const REG_KYBER_NEXT_ID: u32 = 22;
 
 /// Shared tokio runtime for FFI blocking calls. Created once, lives forever.
 pub(crate) fn ffi_runtime() -> &'static tokio::runtime::Runtime {
@@ -862,7 +879,7 @@ impl AppCore {
             // Fresh prekeys signed by the restored identity.
             let signed = crypto::prekeys::generate_signed_prekey(&identity, 1)?;
             let one_time = crypto::prekeys::generate_one_time_prekeys(1, 20)?;
-            let kyber = crypto::prekeys::generate_kyber_prekey(&identity, 1)?;
+            let kyber = crypto::prekeys::generate_kyber_prekey(&identity, LAST_RESORT_KYBER_ID)?;
             let one_time_kyber: Vec<crypto::prekeys::GeneratedKyberPreKey> = (1u32..=20)
                 .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
                 .collect::<Result<_, _>>()?;
@@ -943,6 +960,9 @@ impl AppCore {
                         .collect::<Vec<_>>(),
                 )
                 .await?;
+            // Seed the replenishment allocators past the ids just issued.
+            store.seed_prekey_counter("one_time", REG_ONE_TIME_NEXT_ID).await?;
+            store.seed_prekey_counter("kyber", REG_KYBER_NEXT_ID).await?;
 
             // Restore the user's profile from the blob if it carries one.
             // Newer blobs include profile_key + display_name so we can keep
@@ -2288,7 +2308,7 @@ impl AppCore {
 
         let signed = crypto::prekeys::generate_signed_prekey(&identity, 1)?;
         let one_time = crypto::prekeys::generate_one_time_prekeys(1, 20)?;
-        let kyber = crypto::prekeys::generate_kyber_prekey(&identity, 1)?;
+        let kyber = crypto::prekeys::generate_kyber_prekey(&identity, LAST_RESORT_KYBER_ID)?;
         let one_time_kyber: Vec<crypto::prekeys::GeneratedKyberPreKey> = (1u32..=20)
             .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
             .collect::<Result<_, _>>()?;
@@ -2422,6 +2442,10 @@ impl AppCore {
         store.save_kyber_prekeys(
             &one_time_kyber.iter().map(|k| (k.wire.id, k.record.clone())).collect::<Vec<_>>(),
         ).await?;
+        // Seed the replenishment allocators past the ids just issued, so future
+        // top-ups (`prekeys::replenish_if_low`) continue monotonically.
+        store.seed_prekey_counter("one_time", REG_ONE_TIME_NEXT_ID).await?;
+        store.seed_prekey_counter("kyber", REG_KYBER_NEXT_ID).await?;
 
         let client = build_authed_client(
             server_url,
@@ -2550,6 +2574,21 @@ impl AppCore {
             profile_key,
         };
         inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
+    }
+
+    /// Trigger one-time prekey replenishment now (test/bot helper). Normally
+    /// driven automatically from the reconnect loop on connect and on the
+    /// server's `PrekeyLow` push; this lets tests/bots force a check. Best-effort.
+    pub async fn replenish_prekeys_async(&self) {
+        crate::prekeys::replenish_if_low(self).await;
+    }
+
+    /// Server-reported remaining one-time prekey counts `(one_time, kyber)`.
+    /// Test/diagnostic helper around `GET /v1/prekeys/status`.
+    pub async fn prekey_status_async(&self) -> Result<(i64, i64), AppError> {
+        let inner = self.inner.lock().await;
+        let s = inner.client.prekey_status().await?;
+        Ok((s.one_time_remaining, s.kyber_remaining))
     }
 
     /// Async `send_reaction` for tests/bots running inside a tokio runtime.

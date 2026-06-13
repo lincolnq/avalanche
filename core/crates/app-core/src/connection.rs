@@ -34,6 +34,10 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
                 if let Err(e) = subscribe_group_pseudonyms(&core, &ws).await {
                     tracing::warn!("[ws] group-pseudonym subscribe failed: {e}");
                 }
+                // Proactively top up one-time prekey pools if the server says
+                // we're low — covers draining while offline or a missed
+                // `PrekeyLow` push. (The push handles draining while connected.)
+                crate::prekeys::replenish_if_low(&core).await;
                 run_receive_loop(&core, &ws).await;
                 *core.ws.lock().expect("ws mutex poisoned") = None;
                 // Only reset backoff if the connection was actually usable.
@@ -179,6 +183,20 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                     }
                     Err(e) => {
                         tracing::debug!("[ws] receive error (account_joined): {e}");
+                        return;
+                    }
+                }
+            }
+            low = ws.next_prekey_low() => {
+                match low {
+                    // Server says a pool is low while we're connected — top up.
+                    Ok(Some(_)) => crate::prekeys::replenish_if_low(core).await,
+                    Ok(None) => {
+                        tracing::debug!("[ws] connection closed cleanly (prekey_low)");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::debug!("[ws] receive error (prekey_low): {e}");
                         return;
                     }
                 }
