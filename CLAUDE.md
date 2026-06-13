@@ -101,7 +101,7 @@ Each subsystem has its own CLAUDE.md with workflow and conventions specific to t
 
 ## Behavior Rules
 
-- **Cite sources.** When making a claim about the codebase (what a module does, whether something exists, how a pattern works), cite the file and line number. Do not state things as fact without having read them.
+- **Cite sources.** When making a claim about the codebase (what a module does, whether something exists, how a pattern works), cite the file and line range (e.g. `path/to/file.rs:42-57`). Do not state things as fact without having read them. Do not rely solely on CLAUDE.md descriptions — read the actual source and cite it.
 - **Spec before code.** Before writing implementation code for a new feature, write a spec covering what changes, what files are touched, what assumptions are being made, and a test plan. Use `/new-feature` to run the full workflow. Wait for explicit approval before implementing.
 - **Assumptions audit.** After completing an implementation, list what was assumed but not explicitly verified.
 
