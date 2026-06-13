@@ -4,7 +4,7 @@ Status: draft for review. This is a UX proposal.
 
 ## Why
 
-A user needs to know, at a glance, when the account they're talking to is a
+A user needs to know, at a glance, when the identity they're talking to is a
 bot — an automated participant rather than a person. The activist threat model
 makes this sharper than the usual product concern: an adversary running a bot
 that poses as a friendly human organizer is a real attack (astroturf,
@@ -20,7 +20,7 @@ fact the substrate hands us — it's something we either **attest** to or
 
 `36-message-editing-deletion.md` already branches on "is this author a bot"
 (bots get a wider edit/delete envelope). This doc supplies the definition that
-branch leans on: what makes an account read as a bot, and how strongly.
+branch leans on: what makes an identity read as a bot, and how strongly.
 
 ## Two axes, not one
 
@@ -30,10 +30,10 @@ different enforceability. Keeping them separate is the whole design:
 - **Provenance — is this an *official* bot?** Cryptographically verifiable. The
   `OfficialBotAttestation` chain in `22-adminbot.md` (server trust root → adminbot
   delegation cert → attestation, embedded in the bot's profile blob) lets the
-  client prove an account is an official bot run within this server's trust
+  client prove an identity is an official bot run within this server's trust
   domain. Cannot be forged. This is the ✓ badge.
-- **Automation — is this account a *bot* rather than a *human*?** For an
-  arbitrary account this is **only ever self-declared** and **not enforceable**.
+- **Automation — is this identity a *bot* rather than a *human*?** For an
+  arbitrary identity this is **only ever self-declared** and **not enforceable**.
   A bot a user invited into a casual group (`00-design.md`: participants may
   invite bots, no special privileges) can simply *not* declare itself. Nothing
   in the protocol forces the disclosure.
@@ -44,7 +44,7 @@ claim we verify; automation is a claim we relay.
 
 ## Core model — a three-tier presentation
 
-Every account renders at exactly one of three trust tiers, decided client-side:
+Every identity renders at exactly one of three trust tiers, decided client-side:
 
 1. **Verified bot** — carries a valid `OfficialBotAttestation` whose chain
    verifies against the hosting server's pinned trust root and isn't expired.
@@ -52,7 +52,7 @@ Every account renders at exactly one of three trust tiers, decided client-side:
    bot · run by {server}"). This is the only tier whose "bot" claim is provable.
 2. **Self-identified bot** — profile declares `account_kind = bot` (see below)
    but carries no valid attestation. Render with the **bot frame, no ✓**, and an
-   explicitly hedged label ("Automated account · not verified"). Honest bots get
+   explicitly hedged label ("Automated (not verified)"). Honest bots get
    honest framing; the user is told the claim is unverified.
 3. **Person (default)** — no bot declaration, no attestation. Rendered as a
    human contact per `52-contacts-and-profiles.md`. The *absence* of a bot
@@ -67,7 +67,7 @@ tier governs the chrome, not the picture.
 The load-bearing signal is **chrome the avatar bytes cannot override** — a
 distinct **frame shape** plus a corner **badge glyph**, applied by the client at
 render time based on the tier it computed. This mirrors Slack/Discord, where app
-accounts render in a squared frame humans don't get.
+identities render in a squared frame humans don't get.
 
 Why chrome rather than constraining the avatar image:
 
@@ -165,7 +165,7 @@ avatar or name does:
   instead of rounded ones, so bot messages are distinguishable inline in a
   mixed group thread, not just by the avatar.
 - **Contact card / profile** — the full hedged or attributed line ("Official
-  bot, run by {server}" / "Automated account · not verified"), plus the bot's
+  bot, run by {server}" / "Automated (not verified)"), plus the bot's
   `purpose` string when attested.
 - **Compose / recipient chips & autocomplete** — the frame carries into chips so
   a user adding a recipient sees they're addressing a bot before sending.
@@ -193,7 +193,7 @@ avatar or name does:
 - **Badge art** — the ✓ vs a "robot" glyph for the verified badge, and the
   tier-2 "unverified" mark. Pure visual-design choices. (Frame shape is settled:
   hexagon for bots, circle for people.)
-- **How loud tier 2 should be.** "Automated account · not verified" is honest but
+- **How loud tier 2 should be.** "Automated (not verified)" is honest but
   wordy; a quieter treatment may suffice in-list with the full line on the
   contact card. Tune once it's in front of users.
 - **Server-policy hook (later).** A server could *require* its registered bot

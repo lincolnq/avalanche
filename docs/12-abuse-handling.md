@@ -305,7 +305,7 @@ For Apple review, the four requirements map cleanly:
 |---|---|
 | Method for filtering objectionable material | Message Requests (gates first contact); client-side profile name filter |
 | Mechanism to report offensive content + timely response | Report Spam in Message Request UI → homeserver-mediated report → operator action ladder |
-| Ability to block abusive users | Per-account block list, client-enforced |
+| Ability to block abusive users | Per-identity block list, client-enforced |
 | Published contact info | Support email in app and App Store listing |
 
 In review notes, explicitly call out: "This is an end-to-end encrypted messaging app. The server cannot read message content. Abuse handling is account-level, following the model used by Signal, WhatsApp, and other E2E messengers."

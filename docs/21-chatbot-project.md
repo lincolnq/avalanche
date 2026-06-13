@@ -145,16 +145,21 @@ Add expired-token cleanup to the existing background garbage-collection task.
 **Also add to `net` crate:** `fetch_projects()` and `request_project_token(project_url)` methods.
 **Also add to `app-core`:** FFI wrappers so the mobile app can call them.
 
-### Step 2: Chatbot service (Rust binary)
+### Step 2: Chatbot service (TypeScript)
 
-New crate: `core/crates/testbot/`
+Package: `node/packages/testbot/`
 
-- Depends on `app-core`, `store`, `net`, `tokio`, `axum`, `reqwest` (for Claude API).
-- Binary that starts an HTTP server on `:3001`.
+- A TypeScript service on `@actnet/app-core` (the napi binding), using Node's
+  built-in `node:http` (no web framework) and global `fetch` for the Claude API.
+- Starts an HTTP server on `:3001`.
 - `GET /`: serves a static HTML page with the "Text Me" button.
-- `POST /api/text-me`: verifies Project token with homeserver, creates an in-memory store, registers a bot account, sends opening DM.
-- Background poll loop per bot: receive → Claude → reply.
-- Claude API key from `ANTHROPIC_API_KEY` env var.
+- `POST /api/text-me`: verifies the Project token with the homeserver, registers
+  an ephemeral bot account (a throwaway SQLCipher store in the OS temp dir —
+  node has no in-memory store binding — so bots die with the process), sends the
+  opening DM.
+- Per-bot `for await (core.events())` loop: receive → read receipt + 👍 reaction
+  → Claude → reply.
+- Claude API key from `ANTHROPIC_API_KEY` env var (echoes when unset).
 - Homeserver URL from `HOMESERVER_URL` env var (default `http://localhost:3000`).
 
 ### Step 3: Mobile — Network tab + webview

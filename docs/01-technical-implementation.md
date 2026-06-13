@@ -287,7 +287,7 @@ A few notes on what drives these numbers:
 
 ## Multi-device
 
-A user may register multiple devices (phone, tablet, desktop). Each device has its own identity key pair, its own prekey bundles, and its own Double Ratchet sessions. When Alice sends a message to Bob, her device encrypts separately for each of Bob's registered devices — the server knows which devices belong to an account and fans out the ciphertext to each one. This is the same model Signal uses.
+A user may register multiple devices (phone, tablet, desktop). The **identity key is identity-scoped and shared** across all of a user's devices (it is provisioned onto each device at link time, not minted per device); what is **per-device** is the prekey bundles, registration ID, Double Ratchet sessions, and group sender keys. When Alice sends a message to Bob, her device encrypts separately for each of Bob's registered devices — the server knows which devices belong to an account and fans out the ciphertext to each one. This is the same model Signal uses. See `docs/04-multi-device.md` for the full design (why identity is shared but sessions are per-device, linking, sync, revocation).
 
 Implications:
 

@@ -108,7 +108,7 @@ For stage 4, the profile contains only `display_name` (required, set at account 
 
 ### Profile key
 
-A 32-byte random symmetric key generated at account creation. Stored alongside the account's identity keys in the local SQLCipher DB. The profile key is the single secret that controls who can read your profile.
+A 32-byte random symmetric key generated at account creation. Stored alongside the identity's identity keys in the local SQLCipher DB. The profile key is the single secret that controls who can read your profile.
 
 It does NOT rotate when you update your profile. It only rotates when you want to revoke access (e.g., after blocking someone), which forces re-distribution to all remaining contacts. Profile key rotation is out of scope for stage 4.
 
