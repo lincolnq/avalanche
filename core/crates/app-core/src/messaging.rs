@@ -325,7 +325,7 @@ impl AppCoreInner {
                 ))
             })?;
         let trust_root = groups::load_sender_cert_trust_root(
-            &mut self.store,
+            &self.store,
             &self.client,
             &group_row.hosting_server_url,
         )

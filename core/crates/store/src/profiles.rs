@@ -35,8 +35,9 @@ pub struct ContactProfile {
 }
 
 /// A cached copy of the server's public account record (`get_account_info`).
+///
 /// Distinct from `ContactProfile`: this holds the server-published display name
-/// + bot flag (the only name source for bots), whereas `ContactProfile` holds
+/// and bot flag (the only name source for bots), whereas `ContactProfile` holds
 /// the encrypted-profile name humans share. Cached so bot DM titles/avatars
 /// resolve offline.
 #[derive(Debug, Clone)]
