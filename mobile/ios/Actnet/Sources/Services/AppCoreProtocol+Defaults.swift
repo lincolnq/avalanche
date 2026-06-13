@@ -35,6 +35,7 @@ extension AppCoreProtocol {
     // MARK: - Messaging
 
     func sendDm(recipientDid: String, plaintext: Data, sentAtMs: Int64) throws {}
+    func sendMessage(target: MessageTarget, plaintext: Data, sentAtMs: Int64) throws {}
     func sendReadReceipt(recipientDid: String, timestamps: [Int64]) throws {}
     func receiveMessages() throws -> [DecryptedMessage] { [] }
 
