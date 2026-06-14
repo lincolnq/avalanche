@@ -150,6 +150,22 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+    /// Remove a cached contact profile. Used by the storage-sync engine to
+    /// apply a pulled tombstone (docs/05).
+    pub async fn delete_contact_profile(&self, did: &str) -> Result<(), StoreError> {
+        let did_s = did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM contact_profiles WHERE did = ?1",
+                    rusqlite::params![did_s],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// Return the stored profile key for a contact, if cached.
     /// Used by the inbound-message hot path to decide whether a freshly
     /// received `profile_key` needs a fetch.

@@ -86,9 +86,23 @@ impl Store {
     }
 
     /// Advance the delta-pull cursor.
+    ///
+    /// No-ops when the cursor is already at `seq`. This is load-bearing for the
+    /// commit-hook scheduler (docs/05 §6.1): the hook fires on every committed
+    /// write, including the engine's own. If a no-op pull rewrote an unchanged
+    /// cursor it would commit, re-poke the hook, and spin. Reading-then-skipping
+    /// guarantees a settled `sync()` commits nothing and the loop quiesces.
     pub async fn set_storage_cursor(&self, seq: i64) -> Result<(), StoreError> {
         self.conn
             .call(move |conn| {
+                let current: Option<i64> = conn
+                    .query_row("SELECT seq FROM storage_cursor WHERE id = 1", [], |row| {
+                        row.get(0)
+                    })
+                    .optional()?;
+                if current == Some(seq) {
+                    return Ok(());
+                }
                 conn.execute(
                     "INSERT OR REPLACE INTO storage_cursor (id, seq) VALUES (1, ?1)",
                     rusqlite::params![seq],
@@ -193,5 +207,106 @@ impl Store {
             })
             .await
             .map_err(StoreError::Db)
+    }
+
+    /// Install the dirty-tracking triggers for the given synced types (§3.4).
+    ///
+    /// One `AFTER INSERT`/`AFTER UPDATE`/`AFTER DELETE` trigger per spec, each
+    /// marking the matching `storage_sync` sidecar row dirty in the same
+    /// transaction as the domain write — so feature code never has to remember
+    /// to. Idempotent (`CREATE TRIGGER IF NOT EXISTS`), so it is safe to call on
+    /// every store open.
+    ///
+    /// The specs come from the app-core sync registry — the single source of
+    /// truth for `(table, key_column, type_tag)` — replacing what used to be
+    /// hand-written SQL in `schema.rs`. Callers install these only when storage
+    /// sync is enabled for the account (a storage key is present), so an
+    /// opted-out account (e.g. a bot) accrues no sidecar rows.
+    ///
+    /// The fields are compile-time constants, never user input, so formatting
+    /// them into DDL is not an injection surface.
+    pub async fn install_sync_triggers(
+        &self,
+        specs: &[SyncTriggerSpec],
+    ) -> Result<(), StoreError> {
+        let sql = specs.iter().map(SyncTriggerSpec::ddl).collect::<String>();
+        if sql.is_empty() {
+            return Ok(());
+        }
+        self.conn
+            .call(move |conn| {
+                conn.execute_batch(&sql)?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Register a callback invoked on every committed write to the database
+    /// (docs/05 §6.1 — the push scheduler's wake source).
+    ///
+    /// The callback runs on the connection's blocking thread and must be cheap
+    /// and non-blocking — typically just poking a `Notify`. It replaces any
+    /// previously-registered hook. Returning is fine; the commit always proceeds.
+    pub async fn set_commit_hook<F>(&self, mut hook: F) -> Result<(), StoreError>
+    where
+        F: FnMut() + Send + 'static,
+    {
+        self.conn
+            .call(move |conn| {
+                conn.commit_hook(Some(move || {
+                    hook();
+                    false // false = allow the commit to proceed
+                }));
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+}
+
+/// Declarative description of one synced type's dirty-tracking triggers (§3.4).
+/// `table`/`key_column`/`type_tag` are all compile-time constants supplied by
+/// the app-core adapters, so the generated DDL is fixed, not user-driven.
+#[derive(Debug, Clone)]
+pub struct SyncTriggerSpec {
+    pub table: String,
+    pub key_column: String,
+    pub type_tag: u16,
+}
+
+impl SyncTriggerSpec {
+    pub fn new(table: impl Into<String>, key_column: impl Into<String>, type_tag: u16) -> Self {
+        Self {
+            table: table.into(),
+            key_column: key_column.into(),
+            type_tag,
+        }
+    }
+
+    /// The three `CREATE TRIGGER IF NOT EXISTS` statements for this type. INSERT
+    /// and UPDATE mark the row dirty (clearing any stale tombstone); DELETE marks
+    /// it dirty + tombstoned. Mirrors the hand-written groups triggers that used
+    /// to live in `schema.rs`.
+    fn ddl(&self) -> String {
+        let Self {
+            table,
+            key_column,
+            type_tag,
+        } = self;
+        format!(
+            "CREATE TRIGGER IF NOT EXISTS {table}_sync_ai AFTER INSERT ON {table} BEGIN \
+               INSERT INTO storage_sync(type, logical_key, dirty) VALUES ({type_tag}, NEW.{key_column}, 1) \
+               ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
+             END; \
+             CREATE TRIGGER IF NOT EXISTS {table}_sync_au AFTER UPDATE ON {table} BEGIN \
+               INSERT INTO storage_sync(type, logical_key, dirty) VALUES ({type_tag}, NEW.{key_column}, 1) \
+               ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
+             END; \
+             CREATE TRIGGER IF NOT EXISTS {table}_sync_ad AFTER DELETE ON {table} BEGIN \
+               INSERT INTO storage_sync(type, logical_key, dirty, deleted) VALUES ({type_tag}, OLD.{key_column}, 1, 1) \
+               ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 1; \
+             END; "
+        )
     }
 }

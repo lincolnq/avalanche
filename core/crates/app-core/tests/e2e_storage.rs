@@ -15,7 +15,10 @@
 //! Requires a homeserver at `SERVER_URL` (default `http://localhost:3000`).
 //! Run via `make test-e2e`.
 
+use app_core::storage_sync::{TYPE_CONTACT, TYPE_CONTACT_PROFILE, TYPE_CONV_SETTINGS};
 use app_core::AppCore;
+use store::profiles::ContactProfile;
+use types::Timestamp;
 
 fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
@@ -27,6 +30,19 @@ async fn test_store() -> store::Store {
     store
 }
 
+/// Enable storage sync on a store the way a human account's creation does:
+/// provision a storage key and install the dirty-tracking triggers.
+///
+/// The engine and adapters are account-type-agnostic — the bot opt-out only
+/// skips *provisioning the key* (docs/05 §11). These tests use bot accounts (as
+/// every e2e test here does, since a human account needs a minted PLC DID the
+/// harness avoids) and inject the key directly, exercising the full push/pull
+/// machinery without that orthogonal concern. The opt-out itself is unit-tested.
+async fn enable_storage_sync(store: &store::Store) {
+    store.save_storage_key(&[42u8; 32]).await.unwrap();
+    app_core::storage_sync::ensure_triggers(store).await.unwrap();
+}
+
 #[tokio::test]
 async fn storage_push_then_pull_restores_group_key() {
     let url = server_url();
@@ -35,6 +51,7 @@ async fn storage_push_then_pull_restores_group_key() {
     let alice = AppCore::create_account_with_store(&url, store.clone(), None, true)
         .await
         .unwrap();
+    enable_storage_sync(&store).await;
 
     // 1. Create a group → groups row written + sidecar marked dirty by trigger.
     let created = alice.create_group_async("Sync", "storage e2e", 0).await.unwrap();
@@ -73,4 +90,75 @@ async fn storage_push_then_pull_restores_group_key() {
         .expect("group row restored by storage pull");
     assert_eq!(restored.master_key, original.master_key);
     assert_eq!(restored.hosting_server_url, original.hosting_server_url);
+}
+
+/// Stage-3 adapters: a contact (curation), its profile (name + profile_key),
+/// and a conversation-expiry setting all roam across devices. Exercises the
+/// `SyncedType` blanket bridge, trigger generation for the three new tables,
+/// and pull-side write-through, the same push → simulated-fresh-device → pull
+/// shape as the group-key test above.
+#[tokio::test]
+async fn contact_profile_and_settings_round_trip() {
+    let url = server_url();
+    let store = test_store().await;
+    let alice = AppCore::create_account_with_store(&url, store.clone(), None, true)
+        .await
+        .unwrap();
+    enable_storage_sync(&store).await;
+
+    let did = "did:plc:contact-roams";
+    let cid = "did:plc:some-conversation";
+
+    // 1. Local mutations → triggers mark the sidecar dirty (no per-write code).
+    store.touch_contact(did, true, Timestamp(1_700_000_000_000)).await.unwrap();
+    store
+        .upsert_contact_profile(&ContactProfile {
+            did: did.to_string(),
+            display_name: "Roaming Rita".into(),
+            profile_key: vec![7u8; 32],
+            fetched_at: Timestamp(1_700_000_111_111),
+        })
+        .await
+        .unwrap();
+    store.save_conversation_expiry(cid, Some(3600)).await.unwrap();
+
+    // 2. Push to the authoritative server.
+    alice.sync_storage_async().await.unwrap();
+
+    // 3. Simulate a fresh device of the same identity: drop the local rows,
+    //    neutralize the tombstones the delete triggers just set, and rewind both
+    //    the per-record versions and the pull cursor to 0.
+    store.delete_contact(did).await.unwrap();
+    store.delete_contact_profile(did).await.unwrap();
+    store.delete_conversation_settings(cid).await.unwrap();
+    store.set_sync_meta(TYPE_CONTACT, did, 0, false, false).await.unwrap();
+    store.set_sync_meta(TYPE_CONTACT_PROFILE, did, 0, false, false).await.unwrap();
+    store.set_sync_meta(TYPE_CONV_SETTINGS, cid, 0, false, false).await.unwrap();
+    store.set_storage_cursor(0).await.unwrap();
+    assert!(store.load_contact(did).await.unwrap().is_none());
+
+    // 4. Pull restores all three, routed by TYPE_TAG and written through.
+    alice.sync_storage_async().await.unwrap();
+
+    let contact = store
+        .load_contact(did)
+        .await
+        .unwrap()
+        .expect("contact row restored by storage pull");
+    assert!(contact.is_curated);
+    assert_eq!(contact.last_interaction_at.as_millis(), 1_700_000_000_000);
+
+    let profile = store
+        .load_contact_profile(did)
+        .await
+        .unwrap()
+        .expect("contact profile restored by storage pull");
+    assert_eq!(profile.display_name, "Roaming Rita");
+    assert_eq!(profile.profile_key, vec![7u8; 32]);
+
+    assert_eq!(
+        store.load_conversation_expiry(cid).await.unwrap(),
+        Some(3600),
+        "conversation timer restored by storage pull"
+    );
 }

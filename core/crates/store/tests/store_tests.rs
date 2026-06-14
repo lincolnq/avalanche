@@ -306,8 +306,22 @@ async fn conversation_expiry_independent_per_conversation() {
 #[cfg(test)]
 mod storage_sync {
     use store::groups::{GroupRow, PolicyRow};
+    use store::storage_sync::SyncTriggerSpec;
     use store::Store;
     use types::Timestamp;
+
+    /// Open a store and install the `groups` dirty-tracking trigger. The triggers
+    /// are no longer baked into the schema (docs/05 stage 3); app-core installs
+    /// them from its sync registry at account open, so trigger-dependent tests
+    /// install the same spec here.
+    async fn store_with_group_triggers() -> Store {
+        let store = Store::open_in_memory().await.unwrap();
+        store
+            .install_sync_triggers(&[SyncTriggerSpec::new("groups", "group_id", 1)])
+            .await
+            .unwrap();
+        store
+    }
 
     fn sample_group(id: &str) -> GroupRow {
         GroupRow {
@@ -341,7 +355,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn group_insert_marks_sidecar_dirty() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = store_with_group_triggers().await;
         store.save_group(&sample_group("group-abc")).await.unwrap();
 
         let dirty = store.dirty_records().await.unwrap();
@@ -354,7 +368,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn group_delete_marks_sidecar_tombstone_keeping_version() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = store_with_group_triggers().await;
         store.save_group(&sample_group("group-del")).await.unwrap();
         // Mimic a successful push so the row is clean at version 5.
         store.set_sync_meta_clean(1, "group-del", 5).await.unwrap();
@@ -370,7 +384,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn set_sync_meta_clears_dirty_and_records_version() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = store_with_group_triggers().await;
         store.save_group(&sample_group("g1")).await.unwrap();
         assert_eq!(store.dirty_records().await.unwrap().len(), 1);
 
@@ -384,6 +398,45 @@ mod storage_sync {
     async fn sync_version_defaults_zero_for_unknown_record() {
         let store = Store::open_in_memory().await.unwrap();
         assert_eq!(store.sync_version(1, "never-seen").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn install_sync_triggers_generates_per_table_dirty_tracking() {
+        // Prove the generator works for an arbitrary table/key/tag, not just the
+        // hardcoded groups triggers it replaced.
+        let store = Store::open_in_memory().await.unwrap();
+        store
+            .install_sync_triggers(&[SyncTriggerSpec::new("contacts", "did", 2)])
+            .await
+            .unwrap();
+        assert!(store.dirty_records().await.unwrap().is_empty());
+
+        store
+            .touch_contact("did:plc:abc", true, Timestamp(123))
+            .await
+            .unwrap();
+        let dirty = store.dirty_records().await.unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].type_tag, 2);
+        assert_eq!(dirty[0].logical_key, "did:plc:abc");
+        assert!(!dirty[0].deleted);
+
+        store.delete_contact("did:plc:abc").await.unwrap();
+        let dirty = store.dirty_records().await.unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert!(dirty[0].deleted, "delete marks a tombstone");
+    }
+
+    #[tokio::test]
+    async fn cursor_write_is_skipped_when_unchanged() {
+        // The commit-hook scheduler relies on set_storage_cursor not committing
+        // when the value is unchanged, so a settled sync quiesces (docs/05 §6.1).
+        let store = store_with_group_triggers().await;
+        store.set_storage_cursor(7).await.unwrap();
+        // Re-writing the same value must not resurrect a cleared dirty bit via a
+        // spurious commit; here we just assert the value is stable + idempotent.
+        store.set_storage_cursor(7).await.unwrap();
+        assert_eq!(store.storage_cursor().await.unwrap(), 7);
     }
 }
 

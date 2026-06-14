@@ -1,8 +1,10 @@
 # Device data sync & the storage service
 
-Status: **partially implemented.** Stages 1 (server) and 2 (client engine + the
-first adapter) are built; stages 3–5 are not. See §13 for the per-stage status.
-Sections marked **OPEN** are unresolved; **DECIDED** are committed. Spun out of
+Status: **partially implemented.** Stages 1–3 are built (server, client engine,
+the `SyncedType` ergonomic bridge, trigger generation, the contacts/settings/
+profile adapters, and the commit-hook scheduler); stages 4–5 (snapshots/backup
+and WebSocket fast-sync) are not. See §13 for the per-stage status. Sections
+marked **OPEN** are unresolved; **DECIDED** are committed. Spun out of
 `docs/04-multi-device.md` §5, which got too big once the durable-state mechanism
 was fleshed out.
 
@@ -193,6 +195,12 @@ has no adapter and no triggers.
 - **Storage key** — a 32-byte **identity-level** key (per DID — the same across
 all of the identity's devices and accounts), provisioned alongside the identity
 key at link time and carried in the recovery blob (§11). Never sent to any server.
+The **presence of this key is the single opt-in signal** for storage sync: a
+human account provisions one at creation; a bot account does not (bots are
+single-instance, have no second device or recovery blob). With no key the
+engine no-ops, no dirty-tracking triggers are installed, and the background
+scheduler exits immediately — so an opted-out account does zero sync work and
+accrues no sidecar rows.
 - **Record id** — `record_id = HMAC-SHA256(storage_key, u16_be(TYPE_TAG) || logical_key)[..16]`.
 Deterministic, so two devices independently address the same record without a
 shared manifest; opaque, so the server learns neither type nor key.
@@ -490,19 +498,21 @@ table, operational with no per-type bootstrap code.
 - **DECIDED:** domain-tables + sidecar + adapters (no payload duplication);
 single-authoritative + passive backups; per-record LWW; client-side coalescing;
 storage-key chaining; **trigger marks dirty, a single `commit_hook` schedules
-the push, periodic poll is the safety net — zero per-write-path code (§6.1)**.
-- **OPEN:** the `SyncRegistry` / trigger generation ergonomics (hand-written vs.
-generated triggers); exact `TYPE_TAG` registry location; snapshot cadence;
-whether the snapshot is a serialized item-set or an independent re-encode.
+the push, periodic poll is the safety net — zero per-write-path code (§6.1)**;
+**triggers are generated from the `SyncRegistry` (the single source of truth for
+`(table, key_column, TYPE_TAG)`) and installed at open, not hand-written**;
+`TYPE_TAG`s are module constants in `app-core/src/storage_sync.rs`; **storage
+sync is opt-in via storage-key presence, so bots opt out (§4)**.
+- **OPEN:** snapshot cadence; whether the snapshot is a serialized item-set or an
+independent re-encode; the WebSocket fast-sync nudge to *other* devices (§8).
+
 ### 13.1 Implementation status (by stage)
 
 **Stage 1 — server `storage_items` + `/v1/storage/items` — DONE.**
 
-- `infra/migrations/013_storage_items.sql` — `storage_items` (PK `(account_id,
-record_id)`, `version`/`seq`/`byte_len`/`deleted`), index `storage_items_seq`,
+- `infra/migrations/013_storage_items.sql` — `storage_items` (PK `(account_id, record_id)`, `version`/`seq`/`byte_len`/`deleted`), index `storage_items_seq`,
 and a per-account `storage_seq` counter table.
-- `core/crates/server/src/db/storage.rs` — `StorageItem`, `PutOutcome::{Applied,
-Conflict}`, `account_usage` (running byte+count quota), `pull` (cursor query),
+- `core/crates/server/src/db/storage.rs` — `StorageItem`, `PutOutcome::{Applied, Conflict}`, `account_usage` (running byte+count quota), `pull` (cursor query),
 `alloc_seq` (atomic upsert), `put_item` (CAS under `SELECT … FOR UPDATE`).
 - `core/crates/server/src/routes/storage.rs` — authenticated, account-scoped
 `pull_items` (GET) + `put_items` (PUT) with the §10 caps as consts
@@ -535,17 +545,52 @@ recovery blob (`storage_key` field added to `proto/recovery.proto`;
 - Tests: store sidecar tests (`store/tests/store_tests.rs`) + the push→pull
 restore e2e (`app-core/tests/e2e_storage.rs`).
 
-**Stages 3–5 — NOT YET BUILT.**
+**Stage 3 — ergonomics, trigger generation, more adapters, scheduler — DONE.**
 
-- (3) Trigger *generation* from the registry (triggers are still hand-written),
-the ergonomic `SyncedType`→`SyncAdapter` blanket bridge (§3.2), and more
-adapters (contacts, settings).
+- `SyncedType` typed trait + blanket `impl<T: SyncedType> SyncAdapter for T`
+(`app-core/src/storage_sync.rs`) — the §3.2 "primary ergonomic goal". Authors
+write only the typed trait (`encode`/`decode` on the payload, `upsert`/`delete`/
+`load` on the store); `GroupKeyAdapter` is rewritten onto it. The engine still
+only ever stores `dyn SyncAdapter`. Note: the doc's `logical_key(&Record)` is
+dropped — the engine carries the key from the sealed header + sidecar, so it is
+unused; `decode` instead receives the logical key.
+- **Trigger generation** — `store::storage_sync::SyncTriggerSpec` +
+`Store::install_sync_triggers` generate the three `AFTER INSERT/UPDATE/DELETE`
+triggers per type from the registry (`SyncRegistry::trigger_specs`). The
+hand-written `groups_sync_`* triggers are removed from `schema.rs`. Installed at
+account open via `storage_sync::ensure_triggers`, **gated on the storage key
+being present** (so opted-out accounts get none — §4).
+- **New adapters** — `ContactAdapter` (tag 2, `contacts`), `ConvSettingsAdapter`
+(tag 3, `conversation_settings`), `ContactProfileAdapter` (tag 4,
+`contact_profiles`). Contacts roam as **curation + profile**: two synced types
+keyed by the same DID (the curated row, and the name/profile_key), preserving
+the one-table-per-`SyncedType` invariant. New store methods: `delete_contact`,
+`load_conversation_settings`/`delete_conversation_settings`,
+`delete_contact_profile`.
+- **Commit-hook scheduler** (§6.1) — `Store::set_commit_hook` (rusqlite `hooks`
+feature) pokes `AppCore::sync_notify` on every committed local write;
+`storage_sync::run_scheduler` (spawned like `start_reconnect_task` —
+`spawn_blocking` + current-thread runtime + `Weak`, since store futures aren't
+`Send`) debounces the burst and runs `sync()`, with a 60 s safety-net poll. Spin
+is avoided by `set_storage_cursor` no-op-ing on an unchanged value, so a settled
+sync commits nothing and the loop quiesces. The scheduler is started only on the
+human FFI constructors and exits immediately for an opted-out account.
+- **Bot opt-out** (new, §4) — storage-key provisioning is gated on `!is_bot`; key
+presence then gates triggers, the scheduler, and the engine.
+- Tests: adapter codecs + bridge routing + registry/trigger-spec unit tests
+(`app-core`), `install_sync_triggers` + cursor-guard store tests, and a contact +
+profile + conversation-timer e2e round-trip (`e2e_storage.rs`).
+
+**Stages 4–5 — NOT YET BUILT.**
+
 - (4) Snapshot endpoints + backup push (§5/§7) — `storage_snapshots` table and
 `PUT`/`GET /v1/storage/snapshot` are **not** implemented; only `/items` exists.
 This path is load-bearing for total-loss recovery (§11), so recovery currently
 relies on the authoritative account's live items only.
-- (5) Fast-sync nudge on the WebSocket (§8) — sync is poll/explicit-call only;
-no `storage_changed` push yet.
+- (5) Fast-sync nudge on the WebSocket (§8) — the commit-hook scheduler covers
+the *push* side (local writes propagate promptly to the server), but there is no
+`storage_changed` nudge to *other* devices yet; they catch up via the 60 s
+safety-net poll / on next foreground rather than instantly.
 
 ### 13.2 Known gaps / deferred
 

@@ -309,23 +309,12 @@ pub const ALTER_MIGRATIONS: &[&str] = &[
         id   INTEGER PRIMARY KEY CHECK (id = 1),\
         seq  INTEGER NOT NULL\
     )",
-    // Dirty-tracking triggers for the `groups` domain table (§3.4). Feature
-    // code just writes `groups`; these mark the matching sidecar row dirty in
-    // the same transaction. TYPE_TAG 1 = group key (see app-core storage_sync).
-    // Stage 2 hand-writes these for `groups`; stage 3 generalizes/auto-generates
-    // them and adds the commit-hook scheduler.
-    "CREATE TRIGGER IF NOT EXISTS groups_sync_ai AFTER INSERT ON groups BEGIN \
-        INSERT INTO storage_sync(type, logical_key, dirty) VALUES (1, NEW.group_id, 1) \
-        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
-     END",
-    "CREATE TRIGGER IF NOT EXISTS groups_sync_au AFTER UPDATE ON groups BEGIN \
-        INSERT INTO storage_sync(type, logical_key, dirty) VALUES (1, NEW.group_id, 1) \
-        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 0; \
-     END",
-    "CREATE TRIGGER IF NOT EXISTS groups_sync_ad AFTER DELETE ON groups BEGIN \
-        INSERT INTO storage_sync(type, logical_key, dirty, deleted) VALUES (1, OLD.group_id, 1, 1) \
-        ON CONFLICT(type, logical_key) DO UPDATE SET dirty = 1, deleted = 1; \
-     END",
+    // NOTE: the per-table dirty-tracking triggers (§3.4) are no longer hand-
+    // written here. They are generated from the app-core sync registry and
+    // installed via `Store::install_sync_triggers` at account open — but only
+    // when storage sync is enabled for the account (a storage key is present),
+    // so an opted-out account (e.g. a bot) accrues no sidecar rows. See
+    // `storage_sync::SyncTriggerSpec` and app-core's `ensure_storage_sync`.
     // ── Prekey ID allocator (one row per pool) ────────────────────────────────
     // Monotonic next-id cursor for replenishing one-time prekey pools. A plain
     // MAX(id) over the pool tables is unsafe because consumed keys are deleted,

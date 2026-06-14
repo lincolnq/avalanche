@@ -585,6 +585,14 @@ pub struct AppCore {
     /// `send_dm` prefers the WS when present and falls back to HTTP `POST
     /// /v1/messages` otherwise.
     pub(crate) ws: std::sync::Mutex<Option<net::ws::WsConnection>>,
+    /// Poke source for the storage-sync push scheduler (docs/05 §6.1). The
+    /// store's commit hook calls `notify_one` on every committed local write;
+    /// the background sync loop coalesces the burst into one `sync()`.
+    pub(crate) sync_notify: Arc<tokio::sync::Notify>,
+    /// Handle to the background storage-sync task. Held so it isn't detached;
+    /// the task self-exits when the last `Arc<AppCore>` drops. `None` until
+    /// started, and stays `None` for accounts opted out of sync (e.g. bots).
+    pub(crate) sync_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 pub(crate) struct AppCoreInner {
@@ -612,6 +620,8 @@ impl AppCore {
             admin_event_rx: Mutex::new(admin_event_rx),
             reconnect_task: std::sync::Mutex::new(None),
             ws: std::sync::Mutex::new(None),
+            sync_notify: Arc::new(tokio::sync::Notify::new()),
+            sync_task: std::sync::Mutex::new(None),
         }
     }
 
@@ -638,6 +648,32 @@ impl AppCore {
                 .build()
                 .expect("reconnect runtime build");
             rt.block_on(connection::reconnect_loop(weak));
+        });
+        *slot = Some(handle);
+    }
+
+    /// Spawn the background storage-sync scheduler (docs/05 §6.1). Idempotent —
+    /// a second call is a no-op. The spawned task itself decides whether to do
+    /// anything: an account opted out of sync (no storage key — e.g. a bot)
+    /// registers no commit hook and exits immediately.
+    ///
+    /// Same `spawn_blocking` + dedicated current-thread runtime as
+    /// `start_reconnect_task`, and for the same reason: the store futures the
+    /// loop drives are not `Send`, so they can't run on the multi-thread
+    /// runtime. The task holds a `Weak` and self-exits when the last
+    /// `Arc<AppCore>` drops. The FFI constructors call this automatically.
+    pub fn start_storage_sync_task(self: &Arc<Self>) {
+        let mut slot = self.sync_task.lock().unwrap();
+        if slot.is_some() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let handle = ffi_runtime().spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("storage-sync runtime build");
+            rt.block_on(storage_sync::run_scheduler(weak));
         });
         *slot = Some(handle);
     }
@@ -695,6 +731,7 @@ impl AppCore {
         {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
+            core.start_storage_sync_task();
             Ok(core)
         }
     }
@@ -772,6 +809,7 @@ impl AppCore {
         {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
+            core.start_storage_sync_task();
             Ok(core)
         }
     }
@@ -945,6 +983,9 @@ impl AppCore {
                 let sk: [u8; 32] = rand::Rng::random(&mut rand::rng());
                 store.save_storage_key(&sk).await?;
             }
+            // Storage sync is enabled (a key is present) → install the dirty-
+            // tracking triggers (docs/05 §3.4). Idempotent.
+            storage_sync::ensure_triggers(&store).await?;
             store
                 .save_registration(&RegistrationInfo {
                     account_id: did.clone(),
@@ -1062,6 +1103,7 @@ impl AppCore {
                 device_id: new_device_id,
             }));
             core.start_reconnect_task();
+            core.start_storage_sync_task();
 
             // Restore group memberships carried in the blob (v3+).
             // For each group:
@@ -1122,6 +1164,7 @@ impl AppCore {
         {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
+            core.start_storage_sync_task();
             Ok(core)
         }
     }
@@ -2430,10 +2473,18 @@ impl AppCore {
 
         store.save_identity(&identity, registration_id).await?;
         store.save_rotation_key(&rotation_key_private, &rotation_key_public).await?;
-        // Persist the identity-level storage key (docs/05). Stored unconditionally
-        // (even on the no-passkey path) so the local store can sync; recovery of
-        // it across devices only works when a recovery blob was written.
-        store.save_storage_key(&storage_key).await?;
+        // Persist the identity-level storage key (docs/05 §4/§11) — but only for
+        // human accounts. Bots are single-instance with no second device and no
+        // recovery blob, so they opt out of storage sync entirely: with no key
+        // the engine no-ops, no dirty-tracking triggers are installed, and the
+        // background sync task never starts. Cross-device recovery of the key
+        // for a human works only when a recovery blob was also written.
+        if !is_bot {
+            store.save_storage_key(&storage_key).await?;
+            // Install the dirty-tracking triggers now that sync is enabled
+            // (docs/05 §3.4). Idempotent; generated from the sync registry.
+            storage_sync::ensure_triggers(&store).await?;
+        }
 
         // Cache the blob_key locally so the client can re-encrypt + upload
         // an updated recovery blob (on group join, server-list change, etc.)
@@ -2527,6 +2578,11 @@ impl AppCore {
             AccountId::new(crypto::groups::did_to_service_id_string(&reg.account_id)),
             DeviceId::new(device_id),
         );
+
+        // Returning device: install the dirty-tracking triggers if storage sync
+        // is enabled for this account (a storage key was provisioned at create
+        // or recovery). No-op for opted-out accounts (docs/05 §3.4). Idempotent.
+        storage_sync::ensure_triggers(&store).await?;
 
         Ok(AppCoreInner {
             store,

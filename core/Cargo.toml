@@ -59,7 +59,7 @@ async-trait = "0.1"
 # Storage
 # rusqlite is listed explicitly to control the bundled-sqlcipher feature.
 # tokio-rusqlite wraps it with an async interface.
-rusqlite       = { version = "0.31", features = ["bundled-sqlcipher"] }
+rusqlite       = { version = "0.31", features = ["bundled-sqlcipher", "hooks"] }
 tokio-rusqlite = "0.5"
 
 # HTTP client

@@ -70,6 +70,20 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+    /// Remove a contact row. Used by the storage-sync engine to apply a pulled
+    /// tombstone (docs/05); the AFTER DELETE trigger marks the sidecar so the
+    /// deletion also propagates to this device's other accounts.
+    pub async fn delete_contact(&self, did: &str) -> Result<(), StoreError> {
+        let did_s = did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute("DELETE FROM contacts WHERE did = ?1", rusqlite::params![did_s])?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// List every known contact, newest interaction first. Caller filters
     /// for `is_curated` if it wants the People list.
     pub async fn list_contacts(&self) -> Result<Vec<ContactRow>, StoreError> {

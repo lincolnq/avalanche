@@ -1,6 +1,16 @@
 //! Storage-service sync engine (docs/05-device-data-sync.md §3, §4, §6).
 //!
-//! The only client component that talks to the storage service. Feature code
+//! Users might have multiple devices. Those devices all need to durably share
+//! some data: contacts, group keys, preferences, muted channels, etc.
+//! Each homeserver provides an encrypted storage service to its users;
+//! this is the module that connects with that service and syncs the data.
+//!
+//! The `store` module is responsible for the local storage of the data.
+//! You can easily mark any local table as synced and we'll sync it for you.
+//!
+//! There are limits (about 8MB total, 8KB per record) so don't go overboard.
+//!
+//! This is the only client component that talks to the storage service. Feature code
 //! just mutates its domain table; a trigger marks the `storage_sync` sidecar
 //! dirty (store crate), and [`sync`] reconciles: it pulls everything newer than
 //! the cursor and writes it through to the domain tables, then pushes every
@@ -31,6 +41,8 @@ use aes_gcm::{
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use store::storage_sync::SyncTriggerSpec;
+use types::Timestamp;
 
 use crate::error::AppError;
 
@@ -46,6 +58,9 @@ const PULL_LIMIT: i64 = 500;
 // record_id space (silent corruption). The full enum-reuse enforcement is
 // doc 05's OPEN item; for now the registry panics on a duplicate tag.
 pub const TYPE_GROUP_KEY: u16 = 1;
+pub const TYPE_CONTACT: u16 = 2;
+pub const TYPE_CONV_SETTINGS: u16 = 3;
+pub const TYPE_CONTACT_PROFILE: u16 = 4;
 
 // ── Record crypto (§4) ───────────────────────────────────────────────────────
 
@@ -124,12 +139,16 @@ fn open(storage_key: &[u8; 32], blob: &[u8]) -> Result<(u16, String, Vec<u8>), A
 // ── Adapters & registry (§3.2, §3.3) ─────────────────────────────────────────
 
 /// One synced record type, viewed byte-oriented and object-safe. The engine
-/// routes pulled records to `apply` and reads dirty rows via `read`. (Stage 2
-/// implements this object-safe trait directly; the typed `SyncedType` bridge
-/// that makes adding a type a one-liner is the stage-3 ergonomic payoff.)
+/// routes pulled records to `apply` and reads dirty rows via `read`. Adapters
+/// are not written by hand — they fall out of the typed [`SyncedType`] trait
+/// via the SyncedType impl below.
 #[async_trait]
 pub trait SyncAdapter: Send + Sync {
     fn type_tag(&self) -> u16;
+
+    /// The dirty-tracking triggers this type needs (§3.4). Collected by the
+    /// registry and installed at account open.
+    fn trigger_spec(&self) -> SyncTriggerSpec;
 
     /// Apply a pulled record to its domain table. `payload = None` is a tombstone.
     async fn apply(
@@ -143,6 +162,78 @@ pub trait SyncAdapter: Send + Sync {
     /// no longer exists (the engine then pushes a tombstone).
     async fn read(&self, store: &store::Store, logical_key: &str)
         -> Result<Option<Vec<u8>>, AppError>;
+}
+
+/// The typed, ergonomic view of a synced type (docs/05 §3.2) — the primary
+/// goal of the whole design (§2.2): adding a synced type is an `impl` of this
+/// trait plus one `reg.add(...)` line; encryption, CAS, the cursor, conflict
+/// resolution, the push nudge, and recovery all then work unchanged.
+///
+/// `encode`/`decode` handle only the **payload** — the logical key is framed
+/// separately by the engine into the sealed header (§4), so it is passed back
+/// to `decode` rather than duplicated in the bytes. The store-touching methods
+/// stay `async` (our store is async; the doc's sync signatures don't survive).
+#[async_trait]
+pub trait SyncedType: Send + Sync + 'static {
+    /// Stable, globally-unique, NEVER-reused tag. Part of the record_id (§4).
+    const TYPE_TAG: u16;
+    /// Domain table this type lives in — for trigger generation (§3.4).
+    const TABLE: &'static str;
+    /// The table's natural-key column (e.g. `group_id`, `did`).
+    const KEY_COLUMN: &'static str;
+
+    type Record: Send;
+
+    /// Serialize the payload (everything except the logical key).
+    fn encode(record: &Self::Record) -> Vec<u8>;
+    /// Rebuild a record from its logical key + payload.
+    fn decode(logical_key: &str, bytes: &[u8]) -> Result<Self::Record, AppError>;
+
+    /// Write a pulled record through into the domain table.
+    async fn upsert(store: &store::Store, record: &Self::Record) -> Result<(), AppError>;
+    /// Apply a tombstone: remove the domain row.
+    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError>;
+    /// Read the domain row for push. `None` ⇒ row gone ⇒ engine pushes a tombstone.
+    async fn load(
+        store: &store::Store,
+        logical_key: &str,
+    ) -> Result<Option<Self::Record>, AppError>;
+}
+
+/// Every [`SyncedType`] is a [`SyncAdapter`]. Authors only
+/// ever write the typed trait; the registry only ever stores `dyn SyncAdapter`.
+#[async_trait]
+impl<T: SyncedType> SyncAdapter for T {
+    fn type_tag(&self) -> u16 {
+        T::TYPE_TAG
+    }
+
+    fn trigger_spec(&self) -> SyncTriggerSpec {
+        SyncTriggerSpec::new(T::TABLE, T::KEY_COLUMN, T::TYPE_TAG)
+    }
+
+    async fn apply(
+        &self,
+        store: &store::Store,
+        logical_key: &str,
+        payload: Option<&[u8]>,
+    ) -> Result<(), AppError> {
+        match payload {
+            None => T::delete(store, logical_key).await,
+            Some(bytes) => {
+                let record = T::decode(logical_key, bytes)?;
+                T::upsert(store, &record).await
+            }
+        }
+    }
+
+    async fn read(
+        &self,
+        store: &store::Store,
+        logical_key: &str,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        Ok(T::load(store, logical_key).await?.map(|r| T::encode(&r)))
+    }
 }
 
 /// The set of adapters the client knows about, keyed by TYPE_TAG.
@@ -173,12 +264,34 @@ impl SyncRegistry {
             .map(|a| a.as_ref())
     }
 
+    /// The dirty-tracking trigger specs for every registered type (§3.4),
+    /// installed via [`store::Store::install_sync_triggers`] at account open.
+    pub fn trigger_specs(&self) -> Vec<SyncTriggerSpec> {
+        self.adapters.iter().map(|a| a.trigger_spec()).collect()
+    }
+
     /// The default registry: every synced type the client currently knows.
     pub fn default_registry() -> Self {
         let mut reg = Self::new();
         reg.add(Box::new(GroupKeyAdapter));
+        reg.add(Box::new(ContactAdapter));
+        reg.add(Box::new(ConvSettingsAdapter));
+        reg.add(Box::new(ContactProfileAdapter));
         reg
     }
+}
+
+/// Install the dirty-tracking triggers for the default registry — but only when
+/// storage sync is enabled for this account (a storage key is present). A bot
+/// (no key, §11/opt-out) accrues no sidecar rows. Idempotent; safe every open.
+pub async fn ensure_triggers(store: &store::Store) -> Result<(), AppError> {
+    if store.load_storage_key().await?.is_none() {
+        return Ok(());
+    }
+    store
+        .install_sync_triggers(&SyncRegistry::default_registry().trigger_specs())
+        .await?;
+    Ok(())
 }
 
 impl Default for SyncRegistry {
@@ -187,7 +300,7 @@ impl Default for SyncRegistry {
     }
 }
 
-// ── Group-key adapter (the one stage-2 adapter) ──────────────────────────────
+// ── Group-key adapter (tag 1) ─────────────────────────────────────────────────
 
 /// Syncs group master keys, which already live in the `groups` domain table.
 /// `logical_key` is the group_id. The payload is `master_key(32) ‖ utf8(host)`
@@ -196,6 +309,11 @@ impl Default for SyncRegistry {
 /// re-fetched). Protobuf is the doc's recommended codec for multi-field records;
 /// this fixed-prefix+tail layout needs none and is swappable per adapter.
 pub struct GroupKeyAdapter;
+
+pub struct GroupKeyRecord {
+    pub master_key: [u8; 32],
+    pub hosting_server_url: String,
+}
 
 fn encode_group(master_key: &[u8], hosting_server_url: &str) -> Vec<u8> {
     let mut v = Vec::with_capacity(32 + hosting_server_url.len());
@@ -216,46 +334,332 @@ fn decode_group(bytes: &[u8]) -> Result<([u8; 32], String), AppError> {
 }
 
 #[async_trait]
-impl SyncAdapter for GroupKeyAdapter {
-    fn type_tag(&self) -> u16 {
-        TYPE_GROUP_KEY
+impl SyncedType for GroupKeyAdapter {
+    const TYPE_TAG: u16 = TYPE_GROUP_KEY;
+    const TABLE: &'static str = "groups";
+    const KEY_COLUMN: &'static str = "group_id";
+    type Record = GroupKeyRecord;
+
+    fn encode(record: &GroupKeyRecord) -> Vec<u8> {
+        encode_group(&record.master_key, &record.hosting_server_url)
     }
 
-    async fn apply(
-        &self,
+    fn decode(_logical_key: &str, bytes: &[u8]) -> Result<GroupKeyRecord, AppError> {
+        let (master_key, hosting_server_url) = decode_group(bytes)?;
+        Ok(GroupKeyRecord {
+            master_key,
+            hosting_server_url,
+        })
+    }
+
+    async fn upsert(store: &store::Store, record: &GroupKeyRecord) -> Result<(), AppError> {
+        // Reuse the inbound-group-context path: it derives group_id from
+        // master_key and inserts a default-policy row if absent (the rest of
+        // group state is fetched separately). Idempotent on re-pull. The
+        // group_id logical key is not needed — it falls out of master_key.
+        crate::groups::store_inbound_group_context(
+            store,
+            &record.master_key,
+            &record.hosting_server_url,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+        store.delete_group(logical_key).await?;
+        Ok(())
+    }
+
+    async fn load(
         store: &store::Store,
         logical_key: &str,
-        payload: Option<&[u8]>,
+    ) -> Result<Option<GroupKeyRecord>, AppError> {
+        Ok(store.load_group(logical_key).await?.map(|g| GroupKeyRecord {
+            master_key: {
+                let mut mk = [0u8; 32];
+                // group master keys are always 32 bytes; truncate/pad defensively.
+                let n = g.master_key.len().min(32);
+                mk[..n].copy_from_slice(&g.master_key[..n]);
+                mk
+            },
+            hosting_server_url: g.hosting_server_url,
+        }))
+    }
+}
+
+// ── Contact adapter (tag 2) ───────────────────────────────────────────────────
+
+/// Syncs the curated-contacts list (`contacts` table). `logical_key` is the
+/// DID. Payload is `is_curated(1) ‖ last_interaction_at(i64 BE 8)`. The contact's
+/// name/profile_key roam separately as [`ContactProfileAdapter`] records.
+pub struct ContactAdapter;
+
+pub struct ContactRecord {
+    pub did: String,
+    pub is_curated: bool,
+    pub last_interaction_at: i64,
+}
+
+#[async_trait]
+impl SyncedType for ContactAdapter {
+    const TYPE_TAG: u16 = TYPE_CONTACT;
+    const TABLE: &'static str = "contacts";
+    const KEY_COLUMN: &'static str = "did";
+    type Record = ContactRecord;
+
+    fn encode(record: &ContactRecord) -> Vec<u8> {
+        let mut v = Vec::with_capacity(9);
+        v.push(record.is_curated as u8);
+        v.extend_from_slice(&record.last_interaction_at.to_be_bytes());
+        v
+    }
+
+    fn decode(logical_key: &str, bytes: &[u8]) -> Result<ContactRecord, AppError> {
+        if bytes.len() < 9 {
+            return Err(AppError::Protocol("contact record too short".into()));
+        }
+        let is_curated = bytes[0] != 0;
+        let last_interaction_at = i64::from_be_bytes(bytes[1..9].try_into().unwrap());
+        Ok(ContactRecord {
+            did: logical_key.to_string(),
+            is_curated,
+            last_interaction_at,
+        })
+    }
+
+    async fn upsert(store: &store::Store, record: &ContactRecord) -> Result<(), AppError> {
+        // touch_contact's MAX merge is the right LWW behavior here: it never
+        // un-curates and never rewinds recency, both of which are monotonic.
+        store
+            .touch_contact(
+                &record.did,
+                record.is_curated,
+                Timestamp(record.last_interaction_at),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+        store.delete_contact(logical_key).await?;
+        Ok(())
+    }
+
+    async fn load(
+        store: &store::Store,
+        logical_key: &str,
+    ) -> Result<Option<ContactRecord>, AppError> {
+        Ok(store.load_contact(logical_key).await?.map(|c| ContactRecord {
+            did: c.did,
+            is_curated: c.is_curated,
+            last_interaction_at: c.last_interaction_at.as_millis(),
+        }))
+    }
+}
+
+// ── Conversation-settings adapter (tag 3) ─────────────────────────────────────
+
+/// Syncs per-conversation expiry timers (`conversation_settings` table).
+/// `logical_key` is the conversation_id. Payload is the timer as 4-byte BE when
+/// set, empty when there is no timer (distinct from a tombstone, which clears
+/// the whole row via the `deleted` envelope flag).
+pub struct ConvSettingsAdapter;
+
+pub struct ConvSettingsRecord {
+    pub conversation_id: String,
+    pub expiry_secs: Option<u32>,
+}
+
+#[async_trait]
+impl SyncedType for ConvSettingsAdapter {
+    const TYPE_TAG: u16 = TYPE_CONV_SETTINGS;
+    const TABLE: &'static str = "conversation_settings";
+    const KEY_COLUMN: &'static str = "conversation_id";
+    type Record = ConvSettingsRecord;
+
+    fn encode(record: &ConvSettingsRecord) -> Vec<u8> {
+        match record.expiry_secs {
+            Some(v) => v.to_be_bytes().to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    fn decode(logical_key: &str, bytes: &[u8]) -> Result<ConvSettingsRecord, AppError> {
+        let expiry_secs = match bytes.len() {
+            0 => None,
+            4 => Some(u32::from_be_bytes(bytes.try_into().unwrap())),
+            _ => return Err(AppError::Protocol("conv-settings record malformed".into())),
+        };
+        Ok(ConvSettingsRecord {
+            conversation_id: logical_key.to_string(),
+            expiry_secs,
+        })
+    }
+
+    async fn upsert(store: &store::Store, record: &ConvSettingsRecord) -> Result<(), AppError> {
+        store
+            .save_conversation_expiry(&record.conversation_id, record.expiry_secs)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+        store.delete_conversation_settings(logical_key).await?;
+        Ok(())
+    }
+
+    async fn load(
+        store: &store::Store,
+        logical_key: &str,
+    ) -> Result<Option<ConvSettingsRecord>, AppError> {
+        Ok(store
+            .load_conversation_settings(logical_key)
+            .await?
+            .map(|r| ConvSettingsRecord {
+                conversation_id: r.conversation_id,
+                expiry_secs: r.expiry_secs,
+            }))
+    }
+}
+
+// ── Contact-profile adapter (tag 4) ───────────────────────────────────────────
+
+/// Syncs cached contact profiles (`contact_profiles` table) so a fresh device
+/// can render names and re-fetch updates. `logical_key` is the DID. Payload is
+/// `fetched_at(i64 BE 8) ‖ key_len(u16 BE) ‖ profile_key ‖ utf8(display_name)`
+/// — `profile_key` is length-prefixed since it is a variable-length blob.
+pub struct ContactProfileAdapter;
+
+#[async_trait]
+impl SyncedType for ContactProfileAdapter {
+    const TYPE_TAG: u16 = TYPE_CONTACT_PROFILE;
+    const TABLE: &'static str = "contact_profiles";
+    const KEY_COLUMN: &'static str = "did";
+    type Record = store::profiles::ContactProfile;
+
+    fn encode(record: &store::profiles::ContactProfile) -> Vec<u8> {
+        let key = &record.profile_key;
+        let name = record.display_name.as_bytes();
+        let mut v = Vec::with_capacity(8 + 2 + key.len() + name.len());
+        v.extend_from_slice(&record.fetched_at.as_millis().to_be_bytes());
+        v.extend_from_slice(&(key.len() as u16).to_be_bytes());
+        v.extend_from_slice(key);
+        v.extend_from_slice(name);
+        v
+    }
+
+    fn decode(
+        logical_key: &str,
+        bytes: &[u8],
+    ) -> Result<store::profiles::ContactProfile, AppError> {
+        if bytes.len() < 10 {
+            return Err(AppError::Protocol("contact-profile record too short".into()));
+        }
+        let fetched_at = i64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let key_len = u16::from_be_bytes(bytes[8..10].try_into().unwrap()) as usize;
+        if bytes.len() < 10 + key_len {
+            return Err(AppError::Protocol("contact-profile key_len out of range".into()));
+        }
+        let profile_key = bytes[10..10 + key_len].to_vec();
+        let display_name = String::from_utf8(bytes[10 + key_len..].to_vec())
+            .map_err(|_| AppError::Protocol("contact-profile name not utf8".into()))?;
+        Ok(store::profiles::ContactProfile {
+            did: logical_key.to_string(),
+            display_name,
+            profile_key,
+            fetched_at: Timestamp(fetched_at),
+        })
+    }
+
+    async fn upsert(
+        store: &store::Store,
+        record: &store::profiles::ContactProfile,
     ) -> Result<(), AppError> {
-        match payload {
-            None => {
-                store.delete_group(logical_key).await?;
-                Ok(())
-            }
-            Some(bytes) => {
-                let (master_key, host) = decode_group(bytes)?;
-                // Reuse the inbound-group-context path: it derives group_id from
-                // master_key and inserts a default-policy row if absent (the rest
-                // of group state is fetched separately). Idempotent on re-pull.
-                crate::groups::store_inbound_group_context(store, &master_key, &host).await?;
-                Ok(())
-            }
-        }
+        store.upsert_contact_profile(record).await?;
+        Ok(())
     }
 
-    async fn read(
-        &self,
+    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+        store.delete_contact_profile(logical_key).await?;
+        Ok(())
+    }
+
+    async fn load(
         store: &store::Store,
         logical_key: &str,
-    ) -> Result<Option<Vec<u8>>, AppError> {
-        match store.load_group(logical_key).await? {
-            Some(g) => Ok(Some(encode_group(&g.master_key, &g.hosting_server_url))),
-            None => Ok(None),
-        }
+    ) -> Result<Option<store::profiles::ContactProfile>, AppError> {
+        Ok(store.load_contact_profile(logical_key).await?)
     }
 }
 
 // ── The engine (§6) ──────────────────────────────────────────────────────────
+
+/// Debounce window: coalesce a burst of local writes into a single push.
+const SCHEDULER_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(750);
+/// Safety-net poll: catch a missed commit-hook poke or an offline-recovery
+/// backlog even if nothing pokes us. The durable `dirty` bit outlives any
+/// missed `Notify`, so this makes the scheduler self-healing (§6.1).
+const SCHEDULER_SAFETY_POLL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The background push scheduler (docs/05 §6.1). Registers the store commit hook
+/// (which pokes `AppCore::sync_notify` on every committed local write) and then
+/// loops: on a poke or the safety-net tick, debounce and run [`sync`]. The
+/// `Notify` coalesces a burst into one permit, and the loop is single-flight, so
+/// a flurry of writes collapses to ~one sync.
+///
+/// Exits immediately for an account opted out of storage sync (no storage key —
+/// e.g. a bot): no hook is registered and no work is scheduled. Self-exits when
+/// the last `Arc<AppCore>` drops (the `Weak` upgrade fails).
+pub(crate) async fn run_scheduler(weak: std::sync::Weak<crate::AppCore>) {
+    // One-time setup: grab a store handle + the shared notify.
+    let (store, notify) = {
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        let store = app.inner.lock().await.store.clone();
+        (store, app.sync_notify.clone())
+    };
+
+    // Opt-out gate: no storage key ⇒ nothing to schedule.
+    match store.load_storage_key().await {
+        Ok(Some(_)) => {}
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("[storage] scheduler could not read storage key: {e}");
+            return;
+        }
+    }
+
+    // Wake the loop on every committed local write.
+    let hook_notify = notify.clone();
+    if let Err(e) = store
+        .set_commit_hook(move || hook_notify.notify_one())
+        .await
+    {
+        tracing::warn!("[storage] failed to register commit hook: {e}");
+        return;
+    }
+
+    let mut poll = tokio::time::interval(SCHEDULER_SAFETY_POLL);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = notify.notified() => {}
+            _ = poll.tick() => {}
+        }
+        // Coalesce a burst before syncing.
+        tokio::time::sleep(SCHEDULER_DEBOUNCE).await;
+
+        let Some(app) = weak.upgrade() else {
+            break;
+        };
+        if let Err(e) = app.sync_storage_async().await {
+            tracing::warn!("[storage] scheduled sync failed: {e}");
+        }
+    }
+}
 
 /// Reconcile the local durable-state store with the authoritative server:
 /// pull everything newer than the cursor (write-through to domain tables), then
@@ -485,5 +889,109 @@ mod tests {
         let mut reg = SyncRegistry::new();
         reg.add(Box::new(GroupKeyAdapter));
         reg.add(Box::new(GroupKeyAdapter)); // same tag → panic
+    }
+
+    // ── Stage-3 adapters (SyncedType codecs) ──────────────────────────────────
+
+    #[test]
+    fn contact_payload_round_trips() {
+        let r = ContactRecord {
+            did: "did:plc:x".into(),
+            is_curated: true,
+            last_interaction_at: 1_700_000_000_000,
+        };
+        let bytes = ContactAdapter::encode(&r);
+        let back = ContactAdapter::decode("did:plc:x", &bytes).unwrap();
+        assert_eq!(back.did, "did:plc:x"); // logical_key injected, not in payload
+        assert!(back.is_curated);
+        assert_eq!(back.last_interaction_at, 1_700_000_000_000);
+    }
+
+    #[test]
+    fn conv_settings_round_trips_some_and_none() {
+        // Some(timer)
+        let some = ConvSettingsRecord {
+            conversation_id: "c1".into(),
+            expiry_secs: Some(86_400),
+        };
+        let b = ConvSettingsAdapter::encode(&some);
+        assert_eq!(b.len(), 4);
+        assert_eq!(
+            ConvSettingsAdapter::decode("c1", &b).unwrap().expiry_secs,
+            Some(86_400)
+        );
+        // None (row present, no timer) encodes empty — distinct from a tombstone.
+        let none = ConvSettingsRecord {
+            conversation_id: "c1".into(),
+            expiry_secs: None,
+        };
+        let b2 = ConvSettingsAdapter::encode(&none);
+        assert!(b2.is_empty());
+        assert_eq!(
+            ConvSettingsAdapter::decode("c1", &b2).unwrap().expiry_secs,
+            None
+        );
+        // A malformed (non-0, non-4) payload is rejected.
+        assert!(ConvSettingsAdapter::decode("c1", &[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn contact_profile_round_trips() {
+        let p = store::profiles::ContactProfile {
+            did: "did:plc:y".into(),
+            display_name: "Alice 👋".into(),
+            profile_key: vec![9u8; 32],
+            fetched_at: Timestamp(42),
+        };
+        let b = ContactProfileAdapter::encode(&p);
+        let back = ContactProfileAdapter::decode("did:plc:y", &b).unwrap();
+        assert_eq!(back.did, "did:plc:y");
+        assert_eq!(back.display_name, "Alice 👋");
+        assert_eq!(back.profile_key, vec![9u8; 32]);
+        assert_eq!(back.fetched_at.as_millis(), 42);
+    }
+
+    #[test]
+    fn default_registry_has_four_distinct_types_and_triggers() {
+        let reg = SyncRegistry::default_registry();
+        for tag in [
+            TYPE_GROUP_KEY,
+            TYPE_CONTACT,
+            TYPE_CONV_SETTINGS,
+            TYPE_CONTACT_PROFILE,
+        ] {
+            assert!(reg.get(tag).is_some(), "missing adapter for tag {tag}");
+        }
+        let specs = reg.trigger_specs();
+        assert_eq!(specs.len(), 4);
+        let tables: std::collections::HashSet<_> =
+            specs.iter().map(|s| s.table.clone()).collect();
+        assert_eq!(tables.len(), 4, "each synced type watches a distinct table");
+    }
+
+    #[tokio::test]
+    async fn blanket_bridge_applies_upserts_reads_and_tombstones() {
+        let store = store::Store::open_in_memory().await.unwrap();
+        let adapter = ContactAdapter;
+
+        // apply(Some) → decode + upsert into the domain table.
+        let rec = ContactRecord {
+            did: "did:plc:z".into(),
+            is_curated: true,
+            last_interaction_at: 100,
+        };
+        let payload = ContactAdapter::encode(&rec);
+        adapter.apply(&store, "did:plc:z", Some(&payload)).await.unwrap();
+
+        // read() → load + encode, round-tripping through the store.
+        let read = adapter.read(&store, "did:plc:z").await.unwrap().unwrap();
+        let back = ContactAdapter::decode("did:plc:z", &read).unwrap();
+        assert!(back.is_curated);
+        assert_eq!(back.last_interaction_at, 100);
+
+        // apply(None) → delete the domain row (tombstone).
+        adapter.apply(&store, "did:plc:z", None).await.unwrap();
+        assert!(store.load_contact("did:plc:z").await.unwrap().is_none());
+        assert!(adapter.read(&store, "did:plc:z").await.unwrap().is_none());
     }
 }
