@@ -15,6 +15,7 @@ Background reading:
 - `docs/03-groups.md` — group master keys live in the local `groups` table; this doc syncs that table, it does not duplicate it.
 - `docs/52-contacts-and-profiles.md` — contacts/profile are consumers of this service.
 - `docs/35-attachments.md` — large content (avatars, files) goes to the media path; the store holds only references.
+- `docs/06-identity-device-store-split.md` — the proposed split of per-device crypto from the per-identity durable store; it defines the single "identity store" that this service syncs and that stage 4 snapshots.
 
 ## 1. Scope
 
@@ -581,12 +582,27 @@ presence then gates triggers, the scheduler, and the engine.
 (`app-core`), `install_sync_triggers` + cursor-guard store tests, and a contact +
 profile + conversation-timer e2e round-trip (`e2e_storage.rs`).
 
-**Stages 4–5 — NOT YET BUILT.**
+**Stage 4 — snapshot endpoints (server) — DONE; client backup push — NOT YET BUILT.**
 
-- (4) Snapshot endpoints + backup push (§5/§7) — `storage_snapshots` table and
-`PUT`/`GET /v1/storage/snapshot` are **not** implemented; only `/items` exists.
-This path is load-bearing for total-loss recovery (§11), so recovery currently
-relies on the authoritative account's live items only.
+- Server side (§5/§7) is implemented:
+  - `infra/migrations/014_storage_snapshots.sql` — `storage_snapshots`
+  (PK `account_id`, `snapshot_version`/`blob`/`updated_at`).
+  - `core/crates/server/src/db/storage.rs` — `Snapshot`,
+  `SnapshotOutcome::{Stored, Stale}`, `get_snapshot`, `put_snapshot` (LWW on
+  `snapshot_version` via a single `ON CONFLICT … WHERE EXCLUDED.snapshot_version
+  > …` upsert; a stale push leaves the held blob untouched).
+  - `core/crates/server/src/routes/storage.rs` — authenticated, account-scoped
+  `GET /v1/storage/snapshot` (→ `{snapshot_version, blob}` | 404) and
+  `PUT /v1/storage/snapshot` (→ `{stored, snapshot_version}`). The PUT route
+  raises the body limit above axum's 2 MB default (snapshots are the whole
+  store) and caps the blob at `MAX_SNAPSHOT_BYTES` (12 MB).
+  - Rate limits `ACTION_STORAGE_SNAPSHOT_GET`/`PUT` (60/hr) in
+  `middleware/rate_limit.rs`; `delete_account` purges `storage_snapshots`.
+  - Tests: 3 db + 4 http snapshot tests (`server/tests/{db,http}_tests.rs`).
+- **Not yet built (client):** the periodic backup-push task and the
+`build_snapshot`/`restore_snapshot` core that serialize/hydrate the store. Until
+those land, recovery still relies on the authoritative account's live items
+only, even though the server can now hold a snapshot.
 - (5) Fast-sync nudge on the WebSocket (§8) — the commit-hook scheduler covers
 the *push* side (local writes propagate promptly to the server), but there is no
 `storage_changed` nudge to *other* devices yet; they catch up via the 60 s

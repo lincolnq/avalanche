@@ -21,6 +21,9 @@ Doc filenames follow `NN-description.md`. The first digit is the category:
 | Tech stack, crate layout, staged build plan | `01-technical-implementation.md` |
 | Backlog / deferred TODOs | `02-todos-deferred.md` |
 | Group protocol design | `03-groups.md` |
+| Multi-device model, event vs durable channels | `04-multi-device.md` |
+| Device data sync / storage service | `05-device-data-sync.md` |
+| Identity store / device store split | `06-identity-device-store-split.md` |
 | Server endpoint design, DB schema, message relay | `10-server-implementation.md` |
 | API reference sketch | `11-core-api-sketch.md` |
 | Abuse handling, block lists, report flow | `12-abuse-handling.md` |
