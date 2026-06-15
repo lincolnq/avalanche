@@ -1068,16 +1068,20 @@ pub async fn send_group_message(
     group_id_b64: &str,
     plaintext: &[u8],
 ) -> Result<Vec<i64>, AppError> {
-    let mk = master_key_for(store, group_id_b64).await?;
+    // Master key is stable; derive it (and the per-day auth material) once. The
+    // member/recipient sets may be stale, so the endorsement step below refreshes
+    // group state and retries on a whole-set MAC failure.
+    let mk: [u8; 32] = {
+        let row = store
+            .load_group(group_id_b64)
+            .await?
+            .ok_or_else(|| AppError::Protocol("group not found".into()))?;
+        row.master_key
+            .clone()
+            .try_into()
+            .map_err(|_| AppError::Protocol("master_key length != 32".into()))?
+    };
     let group_key = GroupKey::from_bytes(mk);
-    let other_dids = other_member_dids(store, group_id_b64, sender_did).await?;
-    if other_dids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Inner SenderKey ciphertext over the caller's payload.
-    let senderkey_ct =
-        encrypt_group_content(store, sender_did, sender_device_id, &mk, plaintext).await?;
 
     // Today's credential + sender cert (cached together in group_credentials).
     let public = ensure_server_params(store, client, server_url).await?;
@@ -1087,35 +1091,109 @@ pub async fn send_group_message(
         .load_group_credential(server_url, sender_did, today)
         .await?
         .ok_or_else(|| AppError::Protocol("sender cert not cached after refresh".into()))?;
-
-    // Fresh endorsements for this group (one MAC over the full member set).
     let presentation = build_presentation_bytes(&public, &cred, &group_key)?;
-    let endo = client
-        .get_group_endorsements(group_id_b64, &presentation)
-        .await?;
-    let mut all_dids: Vec<String> = Vec::with_capacity(other_dids.len() + 1);
-    all_dids.push(sender_did.to_string());
-    all_dids.extend(other_dids.iter().cloned());
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system time before epoch")
-        .as_secs();
-    let endorsements_in_order = crypto::groups::endorsements::receive_endorsements(
-        &endo.response,
-        &all_dids,
-        &group_key,
-        &public,
-        now_secs,
-    )
-    .map_err(|e| AppError::Protocol(format!("receive endorsements: {e}")))?;
-    // Drop our own (index 0) — token covers only the recipients.
-    let recipient_endorsements: Vec<Vec<u8>> = endorsements_in_order.into_iter().skip(1).collect();
+
+    // Validate the server's endorsement response over the group's *full* member
+    // ciphertext set. EMIs come from cached state — present even for members
+    // whose DID we don't know (invite-link joins are stored with an empty DID by
+    // `approve_join_request`), so unlike a DID-derived set they don't silently
+    // drop members. If cached membership is stale (a member we invited has since
+    // accepted server-side, or one was removed), the whole-set MAC fails with
+    // `InvalidCiphertext`; refresh group state from the server and retry once.
+    // (Historically this surfaced as "receive endorsements: unexpected ciphertext
+    // type" once a group accrued unknown-DID / not-yet-synced members.)
+    let (recipient_endorsements, other_dids, expiration) = {
+        let mut attempt = 0;
+        loop {
+            let row = store
+                .load_group(group_id_b64)
+                .await?
+                .ok_or_else(|| AppError::Protocol("group not found".into()))?;
+            if row.encrypted_state_plaintext.is_empty() {
+                return Err(AppError::Protocol(
+                    "no cached group state; call fetch_group_state first".into(),
+                ));
+            }
+            let state = gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?;
+            let member_emis: Vec<Vec<u8>> = state
+                .members
+                .iter()
+                .map(|m| m.encrypted_member_id.clone())
+                .collect();
+            // Addressable recipients = members whose DID we know, excluding self
+            // (a sealed-sender envelope / session can only be built for those).
+            let other_dids: Vec<String> = state
+                .members
+                .iter()
+                .filter(|m| !m.did.is_empty() && m.did != sender_did)
+                .map(|m| m.did.clone())
+                .collect();
+            if other_dids.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let endo = client
+                .get_group_endorsements(group_id_b64, &presentation)
+                .await?;
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before epoch")
+                .as_secs();
+            tracing::debug!(
+                "group send: endorsing over {} members, {} addressable recipients (attempt {})",
+                member_emis.len(),
+                other_dids.len(),
+                attempt
+            );
+            match crypto::groups::endorsements::receive_endorsements_by_ciphertexts(
+                &endo.response,
+                &member_emis,
+                &public,
+                now_secs,
+            ) {
+                // Result aligned to `member_emis` (== `state.members`) order; keep
+                // only the addressable recipients' endorsements so the token's set
+                // matches the sealed-sender fanout the server verifies against.
+                Ok(endorsements_in_order) => {
+                    let recip: Vec<Vec<u8>> = state
+                        .members
+                        .iter()
+                        .zip(endorsements_in_order)
+                        .filter(|(m, _)| !m.did.is_empty() && m.did != sender_did)
+                        .map(|(_, e)| e)
+                        .collect();
+                    break (recip, other_dids, endo.expiration_unix_seconds);
+                }
+                Err(_) if attempt == 0 => {
+                    attempt += 1;
+                    tracing::debug!(
+                        "group send: endorsement set stale at {} cached members; \
+                         refreshing group state and retrying once",
+                        member_emis.len()
+                    );
+                    fetch_group_state(store, client, server_url, sender_did, group_id_b64).await?;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(AppError::Protocol(format!("receive endorsements: {e}")));
+                }
+            }
+        }
+    };
+
     let token = crypto::groups::endorsements::token_for_recipients(
         &recipient_endorsements,
         &group_key,
-        endo.expiration_unix_seconds,
+        expiration,
     )
     .map_err(|e| AppError::Protocol(format!("token_for_recipients: {e}")))?;
+
+    // Inner SenderKey ciphertext over the caller's payload (member-independent,
+    // so it's built after the endorsement set is settled to avoid re-ratcheting
+    // on a refresh+retry).
+    let senderkey_ct =
+        encrypt_group_content(store, sender_did, sender_device_id, &mk, plaintext).await?;
 
     // One ProtocolAddress per (recipient, device); per-recipient wire entries
     // pair the ServiceId with the EMI we precompute so the server can resolve

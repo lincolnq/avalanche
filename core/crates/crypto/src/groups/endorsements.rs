@@ -107,6 +107,42 @@ pub fn receive_endorsements(
         .collect())
 }
 
+/// Client-side: validate a server-issued endorsement response using the group's
+/// member **ciphertexts** (serialized [`crate::groups::EncryptedMemberId`]s)
+/// rather than member DIDs, returning one serialized endorsement per ciphertext
+/// **in the given order**.
+///
+/// This is the correct primitive whenever the caller may not know every
+/// member's DID — e.g. members admitted via an invite link (`approve_join_request`
+/// stores them with an empty DID until they reveal it). The endorsement MAC is
+/// over the *full* member set, so [`receive_endorsements`] (which derives the set
+/// from DIDs) fails the moment any member's DID is unknown; the EMIs, by
+/// contrast, are present in cached group state for every member.
+pub fn receive_endorsements_by_ciphertexts(
+    response_bytes: &[u8],
+    member_ciphertext_bytes: &[Vec<u8>],
+    server_public: &ServerPublicParams,
+    now_unix_seconds: u64,
+) -> Result<Vec<Vec<u8>>, CryptoError> {
+    let response: zkgroup::groups::GroupSendEndorsementsResponse =
+        zkgroup::deserialize(response_bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
+    let now = ZkTimestamp::from_epoch_seconds(now_unix_seconds);
+    let mut ciphertexts = Vec::with_capacity(member_ciphertext_bytes.len());
+    for bytes in member_ciphertext_bytes {
+        let ct: zkgroup::groups::UuidCiphertext =
+            zkgroup::deserialize(bytes).map_err(|_| CryptoError::ZkgroupDeserialize)?;
+        ciphertexts.push(ct);
+    }
+    let received = response
+        .receive_with_ciphertexts(ciphertexts, now, server_public.zkgroup())
+        .map_err(|_| CryptoError::InvalidCiphertext)?;
+    // Result is in the same order as `member_ciphertext_bytes`.
+    Ok(received
+        .into_iter()
+        .map(|r| zkgroup::serialize(&r.decompressed))
+        .collect())
+}
+
 /// Client-side: combine the supplied endorsements and produce a
 /// `GroupSendFullToken` authorizing sending to that set of recipients.
 /// Caller supplies the endorsement bytes for the intended recipients (e.g.
@@ -216,6 +252,25 @@ mod tests {
             .expect("token");
 
         verify_token(&token, &recipients, &secret, now).expect("verify");
+    }
+
+    #[test]
+    fn receive_by_ciphertexts_matches_did_path_and_verifies() {
+        let (secret, public, group, dids, ciphertexts) = setup();
+        let now = now_seconds();
+        let expiration = default_expiration_unix_seconds(now);
+        let response = issue_endorsements(&secret, &ciphertexts, expiration).expect("issue");
+
+        // Validating over the member ciphertexts yields endorsements aligned to
+        // the input order (== `dids` order here), usable without knowing DIDs.
+        let by_ct = receive_endorsements_by_ciphertexts(&response, &ciphertexts, &public, now)
+            .expect("receive by ciphertexts");
+        assert_eq!(by_ct.len(), ciphertexts.len());
+
+        // The recipient subset (drop sender dids[0]) builds a token that the
+        // server verifies against the recipient DIDs.
+        let token = token_for_recipients(&by_ct[1..].to_vec(), &group, expiration).expect("token");
+        verify_token(&token, &dids[1..], &secret, now).expect("verify");
     }
 
     #[test]
