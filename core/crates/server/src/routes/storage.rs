@@ -2,14 +2,21 @@
 //!
 //! - `GET  /v1/storage/items?since={cursor}&limit={n}` — authenticated delta pull
 //! - `PUT  /v1/storage/items` — authenticated batch write, per-item CAS
+//! - `GET  /v1/storage/snapshot` — authenticated whole-store snapshot fetch
+//! - `PUT  /v1/storage/snapshot` — authenticated snapshot push, LWW on version
 //!
-//! Both are scoped to the caller's own account: a device reads and writes only
+//! All are scoped to the caller's own account: a device reads and writes only
 //! its own identity store. Records are opaque ciphertext (`record_id` is an HMAC
 //! of type+key, see §4); the server enforces only byte/count quotas (§10), never
 //! anything type-aware.
+//!
+//! The `/items` pair is the live, single-authoritative read/write path; the
+//! `/snapshot` pair is the passive-backup side-channel (§7) — one whole-store
+//! blob per account, pushed one-way to the identity's non-authoritative accounts
+//! and read only on recovery.
 
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     routing::get,
     Json, Router,
 };
@@ -33,9 +40,23 @@ const DEFAULT_PULL_LIMIT: i64 = 500;
 const MAX_PULL_LIMIT: i64 = 1000;
 const MAX_WRITES_PER_REQUEST: usize = 500;
 
+// A snapshot is the whole store re-encoded into one blob (§7), so it is bounded
+// by the per-account total (`MAX_TOTAL_BYTES`, 8 MB) plus envelope overhead.
+// Allow comfortable headroom above that.
+const MAX_SNAPSHOT_BYTES: usize = 12 * 1024 * 1024;
+// The snapshot blob is base64-encoded inside a JSON body, which inflates it by
+// ~4/3. Raise the request body limit above axum's 2 MB default so a legitimate
+// snapshot push isn't rejected before the handler's own cap applies.
+const SNAPSHOT_BODY_LIMIT: usize = 20 * 1024 * 1024;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/storage/items", get(pull_items).put(put_items))
+        .route(
+            "/v1/storage/snapshot",
+            get(get_snapshot).put(put_snapshot)
+                .layer(DefaultBodyLimit::max(SNAPSHOT_BODY_LIMIT)),
+        )
 }
 
 fn decode_b64(s: &str) -> Result<Vec<u8>, ServerError> {
@@ -266,4 +287,103 @@ async fn put_items(
     tx.commit().await?;
 
     Ok(Json(PutResponse { applied, conflicts }))
+}
+
+// ── GET /v1/storage/snapshot ─────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SnapshotResponse {
+    snapshot_version: i64,
+    blob: String, // base64
+}
+
+async fn get_snapshot(
+    State(state): State<AppState>,
+    auth: AuthDevice,
+) -> Result<Json<SnapshotResponse>, ServerError> {
+    let mut conn = state.db.acquire().await?;
+    let account_id = account_for(&mut conn, &auth).await?;
+
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        account_id,
+        crate::middleware::rate_limit::ACTION_STORAGE_SNAPSHOT_GET,
+        crate::middleware::rate_limit::LIMIT_STORAGE_SNAPSHOT_GET,
+        crate::middleware::rate_limit::WINDOW_STORAGE_SNAPSHOT_GET,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
+    let snap = db::storage::get_snapshot(&mut conn, account_id)
+        .await?
+        .ok_or(ServerError::NotFound)?;
+    Ok(Json(SnapshotResponse {
+        snapshot_version: snap.snapshot_version,
+        blob: BASE64_STANDARD.encode(&snap.blob),
+    }))
+}
+
+// ── PUT /v1/storage/snapshot ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PutSnapshotRequest {
+    snapshot_version: i64,
+    blob: String, // base64
+}
+
+#[derive(Serialize)]
+struct PutSnapshotResponse {
+    /// True iff this push won LWW and is now the stored snapshot.
+    stored: bool,
+    /// The snapshot_version held after this request (the incoming one if it
+    /// won, otherwise the newer one already on file).
+    snapshot_version: i64,
+}
+
+async fn put_snapshot(
+    State(state): State<AppState>,
+    auth: AuthDevice,
+    Json(req): Json<PutSnapshotRequest>,
+) -> Result<Json<PutSnapshotResponse>, ServerError> {
+    if req.snapshot_version < 0 {
+        return Err(ServerError::BadRequest("negative snapshot_version".into()));
+    }
+    let blob = decode_b64(&req.blob)?;
+    if blob.is_empty() {
+        return Err(ServerError::BadRequest("empty snapshot blob".into()));
+    }
+    if blob.len() > MAX_SNAPSHOT_BYTES {
+        return Err(ServerError::BadRequest("snapshot exceeds size limit".into()));
+    }
+
+    let mut conn = state.db.acquire().await?;
+    let account_id = account_for(&mut conn, &auth).await?;
+
+    if !db::rate_limits::check_and_increment(
+        &mut conn,
+        account_id,
+        crate::middleware::rate_limit::ACTION_STORAGE_SNAPSHOT_PUT,
+        crate::middleware::rate_limit::LIMIT_STORAGE_SNAPSHOT_PUT,
+        crate::middleware::rate_limit::WINDOW_STORAGE_SNAPSHOT_PUT,
+    )
+    .await?
+    {
+        return Err(ServerError::RateLimited);
+    }
+
+    let outcome =
+        db::storage::put_snapshot(&mut conn, account_id, req.snapshot_version, &blob).await?;
+    let resp = match outcome {
+        db::storage::SnapshotOutcome::Stored { snapshot_version } => PutSnapshotResponse {
+            stored: true,
+            snapshot_version,
+        },
+        db::storage::SnapshotOutcome::Stale { current_version } => PutSnapshotResponse {
+            stored: false,
+            snapshot_version: current_version,
+        },
+    };
+    Ok(Json(resp))
 }

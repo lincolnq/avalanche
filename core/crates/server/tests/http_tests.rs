@@ -692,3 +692,125 @@ async fn storage_record_over_size_limit_rejected() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+// ── Storage snapshot HTTP tests (docs/05 §7) ─────────────────────────────────
+
+async fn snapshot_put(app: &axum::Router, token: &str, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/storage/snapshot")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
+async fn snapshot_get(app: &axum::Router, token: Option<&str>) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method("GET")
+        .uri("/v1/storage/snapshot");
+    if let Some(t) = token {
+        builder = builder.header("authorization", format!("Bearer {t}"));
+    }
+    let resp = app
+        .clone()
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
+#[tokio::test]
+async fn storage_snapshot_put_then_get_roundtrip() {
+    let app = routes::router().with_state(test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    // No snapshot yet → 404.
+    let (status, _) = snapshot_get(&app, Some(&token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let blob = BASE64_STANDARD.encode(b"whole-store-snapshot");
+    let (status, body) = snapshot_put(
+        &app,
+        &token,
+        serde_json::json!({ "snapshot_version": 3, "blob": blob }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stored"], true);
+    assert_eq!(body["snapshot_version"], 3);
+
+    let (status, body) = snapshot_get(&app, Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["snapshot_version"], 3);
+    assert_eq!(body["blob"], blob);
+}
+
+#[tokio::test]
+async fn storage_snapshot_requires_auth() {
+    let app = routes::router().with_state(test_state().await);
+    let (status, _) = snapshot_get(&app, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn storage_snapshot_stale_push_rejected() {
+    let app = routes::router().with_state(test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    let v2 = BASE64_STANDARD.encode(b"v2");
+    let (status, body) = snapshot_put(
+        &app,
+        &token,
+        serde_json::json!({ "snapshot_version": 2, "blob": v2.clone() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stored"], true);
+
+    // An older version is not stored and reports the version still held.
+    let v1 = BASE64_STANDARD.encode(b"v1");
+    let (status, body) = snapshot_put(
+        &app,
+        &token,
+        serde_json::json!({ "snapshot_version": 1, "blob": v1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stored"], false);
+    assert_eq!(body["snapshot_version"], 2);
+
+    // The stored blob is still v2's.
+    let (_, body) = snapshot_get(&app, Some(&token)).await;
+    assert_eq!(body["blob"], v2);
+}
+
+#[tokio::test]
+async fn storage_snapshot_empty_blob_rejected() {
+    let app = routes::router().with_state(test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    let (status, _) = snapshot_put(
+        &app,
+        &token,
+        serde_json::json!({ "snapshot_version": 1, "blob": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

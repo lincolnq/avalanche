@@ -1002,3 +1002,76 @@ async fn storage_account_usage_excludes_tombstones() {
     assert_eq!(bytes, 3);
     assert_eq!(count, 1);
 }
+
+// ── Storage snapshot tests (docs/05 §7) ──────────────────────────────────────
+
+use server::db::storage::SnapshotOutcome;
+
+#[tokio::test]
+async fn storage_snapshot_absent_then_stored() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00001", None, false).await.unwrap();
+
+    // No snapshot yet.
+    assert!(storage::get_snapshot(&mut *tx, acc).await.unwrap().is_none());
+
+    // First push always wins (no row to compare against).
+    match storage::put_snapshot(&mut *tx, acc, 5, b"snap-v5").await.unwrap() {
+        SnapshotOutcome::Stored { snapshot_version } => assert_eq!(snapshot_version, 5),
+        SnapshotOutcome::Stale { .. } => panic!("first snapshot should store"),
+    }
+
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.snapshot_version, 5);
+    assert_eq!(snap.blob, b"snap-v5");
+}
+
+#[tokio::test]
+async fn storage_snapshot_lww_newer_wins_stale_rejected() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00002", None, false).await.unwrap();
+
+    storage::put_snapshot(&mut *tx, acc, 10, b"v10").await.unwrap();
+
+    // A strictly newer version replaces the blob.
+    match storage::put_snapshot(&mut *tx, acc, 11, b"v11").await.unwrap() {
+        SnapshotOutcome::Stored { snapshot_version } => assert_eq!(snapshot_version, 11),
+        SnapshotOutcome::Stale { .. } => panic!("newer snapshot should store"),
+    }
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.blob, b"v11");
+
+    // An equal version is not strictly newer → rejected, blob untouched.
+    match storage::put_snapshot(&mut *tx, acc, 11, b"v11-dup").await.unwrap() {
+        SnapshotOutcome::Stale { current_version } => assert_eq!(current_version, 11),
+        SnapshotOutcome::Stored { .. } => panic!("equal version should not store"),
+    }
+    // An older version is likewise rejected.
+    match storage::put_snapshot(&mut *tx, acc, 9, b"v9").await.unwrap() {
+        SnapshotOutcome::Stale { current_version } => assert_eq!(current_version, 11),
+        SnapshotOutcome::Stored { .. } => panic!("older version should not store"),
+    }
+
+    // The stored snapshot is still v11's blob, never the rejected pushes.
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.snapshot_version, 11);
+    assert_eq!(snap.blob, b"v11");
+}
+
+#[tokio::test]
+async fn storage_snapshot_is_scoped_to_account() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let a = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00003", None, false).await.unwrap();
+    let b = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00004", None, false).await.unwrap();
+
+    storage::put_snapshot(&mut *tx, a, 1, b"a-snap").await.unwrap();
+
+    // Account b has no snapshot of its own.
+    assert!(storage::get_snapshot(&mut *tx, b).await.unwrap().is_none());
+}

@@ -144,3 +144,89 @@ pub async fn put_item(
 
     Ok(PutOutcome::Applied { version: seq, seq })
 }
+
+// ── Snapshots (docs/05 §5/§7) ────────────────────────────────────────────────
+//
+// A whole-store blob per account for the passive backups: single-authoritative
+// live items on the discovery server, one-way snapshots on the rest. Opaque to
+// the server (encrypted under the identity storage key) and conflict-free —
+// last-writer-wins on `snapshot_version`.
+
+/// A stored whole-store snapshot.
+pub struct Snapshot {
+    pub snapshot_version: i64,
+    pub blob: Vec<u8>,
+}
+
+/// Outcome of a snapshot PUT.
+pub enum SnapshotOutcome {
+    /// The incoming snapshot won LWW and is now stored.
+    Stored { snapshot_version: i64 },
+    /// The incoming `snapshot_version` was not strictly newer than the held one;
+    /// nothing was written. Carries the version currently stored.
+    Stale { current_version: i64 },
+}
+
+/// Fetch the account's snapshot, if any.
+pub async fn get_snapshot(
+    conn: &mut PgConnection,
+    account_id: i64,
+) -> Result<Option<Snapshot>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT snapshot_version, blob FROM storage_snapshots WHERE account_id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|r| Snapshot {
+        snapshot_version: r.get("snapshot_version"),
+        blob: r.get("blob"),
+    }))
+}
+
+/// Store a snapshot under last-writer-wins on `snapshot_version`: the blob is
+/// written iff its version is strictly newer than the one held (or none exists).
+/// A stale push leaves the stored snapshot untouched. Atomic in a single
+/// statement — the `ON CONFLICT … WHERE` only updates when the incoming version
+/// wins, and `RETURNING` is empty when the update is skipped.
+pub async fn put_snapshot(
+    conn: &mut PgConnection,
+    account_id: i64,
+    snapshot_version: i64,
+    blob: &[u8],
+) -> Result<SnapshotOutcome, sqlx::Error> {
+    let stored: Option<i64> = sqlx::query(
+        "INSERT INTO storage_snapshots (account_id, snapshot_version, blob, updated_at) \
+         VALUES ($1, $2, $3, now()) \
+         ON CONFLICT (account_id) DO UPDATE \
+           SET snapshot_version = EXCLUDED.snapshot_version, \
+               blob = EXCLUDED.blob, \
+               updated_at = now() \
+           WHERE EXCLUDED.snapshot_version > storage_snapshots.snapshot_version \
+         RETURNING snapshot_version",
+    )
+    .bind(account_id)
+    .bind(snapshot_version)
+    .bind(blob)
+    .fetch_optional(&mut *conn)
+    .await?
+    .map(|r| r.get("snapshot_version"));
+
+    match stored {
+        Some(v) => Ok(SnapshotOutcome::Stored { snapshot_version: v }),
+        None => {
+            // The update was skipped because the incoming version did not win.
+            // Read back the version currently held to report it.
+            let current: i64 = sqlx::query(
+                "SELECT snapshot_version FROM storage_snapshots WHERE account_id = $1",
+            )
+            .bind(account_id)
+            .fetch_one(&mut *conn)
+            .await?
+            .get("snapshot_version");
+            Ok(SnapshotOutcome::Stale {
+                current_version: current,
+            })
+        }
+    }
+}

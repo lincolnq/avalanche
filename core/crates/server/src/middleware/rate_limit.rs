@@ -8,6 +8,8 @@ pub const ACTION_UPDATE_RECOVERY: &str = "update_recovery";
 pub const ACTION_UPDATE_PROFILE: &str = "update_profile";
 pub const ACTION_STORAGE_PULL: &str = "storage_pull";
 pub const ACTION_STORAGE_PUSH: &str = "storage_push";
+pub const ACTION_STORAGE_SNAPSHOT_GET: &str = "storage_snapshot_get";
+pub const ACTION_STORAGE_SNAPSHOT_PUT: &str = "storage_snapshot_put";
 
 // Maximum requests per window.
 pub const LIMIT_SEND_MESSAGE: i32 = 100;
@@ -20,6 +22,11 @@ pub const LIMIT_UPDATE_PROFILE: i32 = 20;
 // are steady-state sync traffic, not abuse vectors (records are quota-capped).
 pub const LIMIT_STORAGE_PULL: i32 = 600;
 pub const LIMIT_STORAGE_PUSH: i32 = 300;
+// Snapshots are the passive-backup path (docs/05 §7): pushed periodically by the
+// authoritative device and read only on recovery/promotion. Far lower frequency
+// than item sync, so tight per-hour limits suffice.
+pub const LIMIT_STORAGE_SNAPSHOT_GET: i32 = 60;
+pub const LIMIT_STORAGE_SNAPSHOT_PUT: i32 = 60;
 
 // Window sizes in seconds.
 pub const WINDOW_SEND_MESSAGE: i64 = 60;
@@ -29,6 +36,8 @@ pub const WINDOW_UPDATE_RECOVERY: i64 = 3600;
 pub const WINDOW_UPDATE_PROFILE: i64 = 3600;
 pub const WINDOW_STORAGE_PULL: i64 = 60;
 pub const WINDOW_STORAGE_PUSH: i64 = 60;
+pub const WINDOW_STORAGE_SNAPSHOT_GET: i64 = 3600;
+pub const WINDOW_STORAGE_SNAPSHOT_PUT: i64 = 3600;
 
 // ── Per-IP rate limits (unauthenticated endpoints) ──────────────────────────
 
