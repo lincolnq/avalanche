@@ -83,7 +83,7 @@ pub(crate) fn classify_net_error(e: &net::error::NetError) -> FetchOutcome {
 /// first — used after a stale-device signal (DM path) or when the peer's
 /// registration id has changed (group path).
 pub(crate) async fn ensure_session(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     local: &DeviceAddress,
     recipient_did: &str,
@@ -150,7 +150,7 @@ pub(crate) async fn ensure_session(
 /// This is what lets `encrypt_group_envelope` find a session for every
 /// destination instead of failing with `NoSession`.
 pub(crate) async fn ensure_group_recipient_sessions(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     sender_did: &str,
     sender_device_id: u32,

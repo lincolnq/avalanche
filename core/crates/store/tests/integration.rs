@@ -8,8 +8,8 @@ use crypto::{
 };
 use proptest::prelude::*;
 use store::{
-    account::RegistrationInfo,
-    Store,
+    account::DeviceAccount,
+    DeviceStore,
 };
 use types::{AccountId, DeviceId, Timestamp};
 
@@ -17,7 +17,7 @@ use types::{AccountId, DeviceId, Timestamp};
 
 /// A fully initialised local peer ready for use in tests.
 struct Peer {
-    store: Store,
+    store: DeviceStore,
     identity: IdentityKeyPair,
     address: DeviceAddress,
     reg_id: u32,
@@ -25,16 +25,27 @@ struct Peer {
 
 impl Peer {
     async fn new(name: &str) -> Self {
-        let store = Store::open_in_memory().await.expect("open in-memory store");
+        let store = DeviceStore::open_in_memory().await.expect("open in-memory store");
         let identity = IdentityKeyPair::generate();
         // libsignal registration IDs are arbitrary u32s assigned at account
         // creation and included in prekey bundles so recipients can detect
         // reregistration. Any non-zero value works for tests.
         let reg_id = 1u32;
+        // keypair → identity.db; registration_id → device.db. The crypto path
+        // reads registration_id via get_local_registration_id during session ops.
         store
-            .save_identity(&identity, reg_id)
+            .save_identity_keypair(&identity)
             .await
-            .expect("save identity");
+            .expect("save identity keypair");
+        store
+            .save_device_account(&DeviceAccount {
+                server_url: String::new(),
+                device_id: 1,
+                registered_at: Timestamp(0),
+                registration_id: reg_id,
+            })
+            .await
+            .expect("save device account");
         Peer {
             store,
             identity,
@@ -105,16 +116,15 @@ fn run<F: std::future::Future<Output = T>, T>(f: F) -> T {
 
 #[tokio::test]
 async fn store_opens_and_migrates() {
-    Store::open_in_memory().await.expect("store should open cleanly");
+    DeviceStore::open_in_memory().await.expect("store should open cleanly");
 }
 
 #[tokio::test]
 async fn identity_round_trip() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     let keypair = IdentityKeyPair::generate();
-    let reg_id = 42u32;
 
-    store.save_identity(&keypair, reg_id).await.unwrap();
+    store.save_identity_keypair(&keypair).await.unwrap();
 
     let loaded = store.load_identity().await.unwrap().expect("identity should be present");
     assert_eq!(keypair.serialize(), loaded.serialize());
@@ -123,22 +133,33 @@ async fn identity_round_trip() {
 
 #[tokio::test]
 async fn registration_round_trip() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
-    assert!(store.load_registration().await.unwrap().is_none());
+    // DID → identity.db, (server_url, device_id, registration_id) → device.db.
+    assert!(store.load_did().await.unwrap().is_none());
+    assert!(store.load_device_account().await.unwrap().is_none());
 
-    let info = RegistrationInfo {
-        account_id: "did:plc:abc123".to_string(),
-        server_url: "https://home.example.com".to_string(),
-        registered_at: Timestamp::now(),
-        device_id: 1,
-    };
-    store.save_registration(&info).await.unwrap();
+    store.save_did("did:plc:abc123", Timestamp::now()).await.unwrap();
+    store
+        .save_device_account(&DeviceAccount {
+            server_url: "https://home.example.com".to_string(),
+            device_id: 1,
+            registered_at: Timestamp::now(),
+            registration_id: 7,
+        })
+        .await
+        .unwrap();
 
-    let loaded = store.load_registration().await.unwrap().expect("registration should be present");
-    assert_eq!(loaded.account_id, info.account_id);
-    assert_eq!(loaded.server_url, info.server_url);
-    assert_eq!(loaded.device_id, info.device_id);
+    let (did, _) = store.load_did().await.unwrap().expect("did should be present");
+    let dev = store
+        .load_device_account()
+        .await
+        .unwrap()
+        .expect("device account should be present");
+    assert_eq!(did, "did:plc:abc123");
+    assert_eq!(dev.server_url, "https://home.example.com");
+    assert_eq!(dev.device_id, 1);
+    assert_eq!(dev.registration_id, 7);
 }
 
 #[tokio::test]
@@ -158,7 +179,7 @@ async fn message_queue_enqueue_drain_deliver() {
     use store::messages::QueuedMessage;
     use types::MessageId;
 
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     let msg = QueuedMessage {
         id: MessageId::new(),

@@ -1,11 +1,11 @@
 //! Locally-cached secrets that support recovery-blob updates without
 //! re-authenticating the passkey.
 
-use crate::db::Store;
+use crate::db::IdentityStore;
 use crate::error::StoreError;
 use rusqlite::OptionalExtension;
 
-impl Store {
+impl IdentityStore {
     /// Persist the 32-byte PRF-derived recovery-blob symmetric key. Idempotent
     /// (single-row table; insert-or-replace). Called once at signup and
     /// again whenever the key is re-derived (e.g. recovery).

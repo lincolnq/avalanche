@@ -6,14 +6,14 @@
 //! sits above them and deals with batches and pool health.
 //!
 //! `app-core` is responsible for the refill policy: it calls
-//! [`Store::remaining_one_time_prekey_count`] and
-//! [`Store::remaining_kyber_prekey_count`] after each session initiation and
+//! [`DeviceStore::remaining_one_time_prekey_count`] and
+//! [`DeviceStore::remaining_kyber_prekey_count`] after each session initiation and
 //! tops up the pools when either drops below a threshold (typically 10 keys).
 //! The threshold is a policy decision, not enforced here.
 
 use rusqlite::OptionalExtension;
 
-use crate::{db::Store, error::StoreError};
+use crate::{db::DeviceStore, error::StoreError};
 
 /// First id handed out for a pool whose `prekey_counters` row doesn't exist
 /// yet. Stores created before this allocator existed only ever issued ids
@@ -22,7 +22,7 @@ use crate::{db::Store, error::StoreError};
 /// only covers pre-existing ones.
 const DEFAULT_NEXT_PREKEY_ID: i64 = 21;
 
-impl Store {
+impl DeviceStore {
     /// Save a batch of generated one-time prekey records to the pool.
     pub async fn save_one_time_prekeys(
         &self,
@@ -165,10 +165,10 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use crate::Store;
+    use crate::DeviceStore;
 
-    async fn mem_store() -> Store {
-        Store::open_in_memory().await.expect("open in-memory store")
+    async fn mem_store() -> DeviceStore {
+        DeviceStore::open_in_memory().await.expect("open in-memory store")
     }
 
     #[tokio::test]

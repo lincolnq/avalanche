@@ -24,10 +24,8 @@ fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
 }
 
-async fn test_store() -> store::Store {
-    let store = store::Store::open_in_memory().await.unwrap();
-    store.migrate().await.unwrap();
-    store
+async fn test_store() -> store::DeviceStore {
+    store::DeviceStore::open_in_memory().await.unwrap()
 }
 
 /// Enable storage sync on a store the way a human account's creation does:
@@ -38,7 +36,7 @@ async fn test_store() -> store::Store {
 /// every e2e test here does, since a human account needs a minted PLC DID the
 /// harness avoids) and inject the key directly, exercising the full push/pull
 /// machinery without that orthogonal concern. The opt-out itself is unit-tested.
-async fn enable_storage_sync(store: &store::Store) {
+async fn enable_storage_sync(store: &store::DeviceStore) {
     store.save_storage_key(&[42u8; 32]).await.unwrap();
     app_core::storage_sync::ensure_triggers(store).await.unwrap();
 }

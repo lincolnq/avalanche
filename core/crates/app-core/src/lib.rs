@@ -58,7 +58,7 @@ use proto::{
 };
 use prost::Message as _;
 use rand::TryRngCore as _;
-use store::account::RegistrationInfo;
+use store::account::DeviceAccount;
 use tokio::sync::Mutex;
 use types::{AccountId, DeviceId, Timestamp};
 
@@ -595,12 +595,59 @@ pub struct AppCore {
     pub(crate) sync_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
-pub(crate) struct AppCoreInner {
-    pub(crate) store: store::Store,
+/// One server-bound account context of an identity (docs/06 §9): a device store,
+/// the client talking to that server, and this device's registration there. An
+/// identity has one or more of these (one today: the single account; multi-server
+/// human backups add more).
+// Scaffolding for multi-server backup + snapshot routing (docs/06 §9); the
+// fields are populated/read once N>1 lands.
+#[allow(dead_code)]
+pub(crate) struct AccountContext {
+    pub(crate) server_url: String,
+    pub(crate) device_id: u32,
+    pub(crate) device: store::DeviceStore,
     pub(crate) client: net::Client,
     pub(crate) local_address: DeviceAddress,
-    pub(crate) did: String,
+    pub(crate) role: AccountRole,
+}
+
+/// Whether an account context hosts the live durable-state `/items` (the
+/// authoritative server) or only receives passive snapshot backups. With N=1 the
+/// single account is always authoritative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // variants selected once multi-server backup lands
+pub(crate) enum AccountRole {
+    Authoritative,
+    Backup,
+}
+
+/// One identity (one persona). Owns a single [`store::IdentityStore`] — the
+/// durable per-identity state shared across all its account contexts (docs/06
+/// §9) — plus the **primary** account context, surfaced directly as the
+/// `store`/`client`/`local_address`/`device_id` fields (the N=1 hot path), and
+/// 0..M additional `backup_accounts` for multi-server human backup (empty
+/// today). `did` is the identity's DID.
+///
+/// The `store` handle (a `DeviceStore`) `Deref`s to its `IdentityStore`, so
+/// durable methods called on `self.store` hit the same identity database as
+/// `self.identity` (they share the connection).
+pub(crate) struct AppCoreInner {
+    /// The identity's durable store. The hot path reaches durable methods via
+    /// `self.store` (a `DeviceStore` that `Deref`s to its own clone of this same
+    /// connection); this is the canonical owned handle the snapshot/sync paths
+    /// (docs/06 §8) read directly.
+    #[allow(dead_code)]
+    pub(crate) identity: store::IdentityStore,
+    pub(crate) store: store::DeviceStore,
+    pub(crate) client: net::Client,
+    pub(crate) local_address: DeviceAddress,
     pub(crate) device_id: u32,
+    pub(crate) did: String,
+    /// Additional (non-primary) account contexts — multi-server backup, docs/06
+    /// §9. Empty for the single-account case; the primary lives in the fields
+    /// above. `net::Client` isn't `Clone`, so the primary isn't duplicated here.
+    #[allow(dead_code)]
+    pub(crate) backup_accounts: Vec<AccountContext>,
 }
 
 impl AppCore {
@@ -718,7 +765,7 @@ impl AppCore {
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
-        let store = rt.block_on(store::Store::open(
+        let (_identity, store) = rt.block_on(store::open_split(
             Path::new(&db_path),
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
@@ -757,7 +804,7 @@ impl AppCore {
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
-        let store = rt.block_on(store::Store::open(
+        let (_identity, store) = rt.block_on(store::open_split(
             Path::new(&db_path),
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
@@ -798,7 +845,7 @@ impl AppCore {
             .ok_or_else(|| AppError::Protocol("PreparedAccount already consumed".into()))
             .map_err(AppErrorFfi::from)?;
 
-        let store = rt.block_on(store::Store::open(
+        let (_identity, store) = rt.block_on(store::open_split(
             Path::new(&db_path),
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
@@ -955,15 +1002,16 @@ impl AppCore {
                 })
                 .await?;
 
-            // Open the local store and persist the restored identity.
-            let store = store::Store::open(
+            // Open the local split store and persist the restored identity.
+            let (_identity_store, store) = store::open_split(
                 Path::new(&db_path),
                 &store::DatabaseKey::from_passphrase(db_key),
             )
             .await
             .map_err(AppError::from)?;
 
-            store.save_identity(&identity, new_registration_id).await?;
+            // keypair → identity.db; registration_id → device.db (below).
+            store.save_identity_keypair(&identity).await?;
             store
                 .save_rotation_key(&rotation_key_private, &rotation_key_public)
                 .await?;
@@ -986,12 +1034,13 @@ impl AppCore {
             // Storage sync is enabled (a key is present) → install the dirty-
             // tracking triggers (docs/05 §3.4). Idempotent.
             storage_sync::ensure_triggers(&store).await?;
+            store.save_did(&did, Timestamp::now()).await?;
             store
-                .save_registration(&RegistrationInfo {
-                    account_id: did.clone(),
+                .save_device_account(&DeviceAccount {
                     server_url: primary_server.clone(),
-                    registered_at: Timestamp::now(),
                     device_id: new_device_id,
+                    registered_at: Timestamp::now(),
+                    registration_id: new_registration_id,
                 })
                 .await?;
             store.save_signed_prekey(signed.wire.id, &signed.record).await?;
@@ -1095,12 +1144,15 @@ impl AppCore {
                 DeviceId::new(new_device_id),
             );
 
+            let identity = store.identity.clone();
             let core = Arc::new(Self::build(AppCoreInner {
+                identity,
                 store,
                 client,
                 local_address,
                 did,
                 device_id: new_device_id,
+                backup_accounts: Vec::new(),
             }));
             core.start_reconnect_task();
             core.start_storage_sync_task();
@@ -1153,7 +1205,7 @@ impl AppCore {
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
-        let store = rt.block_on(store::Store::open(
+        let (_identity, store) = rt.block_on(store::open_split(
             Path::new(&db_path),
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
@@ -1196,7 +1248,7 @@ impl AppCore {
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
-        let store = rt.block_on(store::Store::open(
+        let (_identity, store) = rt.block_on(store::open_split(
             Path::new(&db_path),
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
@@ -2344,7 +2396,7 @@ impl PreparedAccount {
 impl AppCore {
     async fn create_inner(
         prepared: PreparedAccountState,
-        store: store::Store,
+        store: store::DeviceStore,
         display_name: Option<String>,
         is_bot: bool,
         did_suffix: Option<String>,
@@ -2471,7 +2523,8 @@ impl AppCore {
             identity_key_signature,
         }).await?;
 
-        store.save_identity(&identity, registration_id).await?;
+        // keypair → identity.db; registration_id → device.db (save_device_account below).
+        store.save_identity_keypair(&identity).await?;
         store.save_rotation_key(&rotation_key_private, &rotation_key_public).await?;
         // Persist the identity-level storage key (docs/05 §4/§11) — but only for
         // human accounts. Bots are single-instance with no second device and no
@@ -2502,11 +2555,12 @@ impl AppCore {
                 display_name: name.clone(),
             }).await?;
         }
-        store.save_registration(&RegistrationInfo {
-            account_id: reg_resp.did.clone(),
+        store.save_did(&reg_resp.did, Timestamp::now()).await?;
+        store.save_device_account(&DeviceAccount {
             server_url: server_url.to_string(),
-            registered_at: Timestamp::now(),
             device_id,
+            registered_at: Timestamp::now(),
+            registration_id,
         }).await?;
 
         store.save_signed_prekey(signed.wire.id, &signed.record).await?;
@@ -2547,35 +2601,40 @@ impl AppCore {
             DeviceId::new(device_id),
         );
 
+        let identity_store = store.identity.clone();
         Ok(AppCoreInner {
+            identity: identity_store,
             store,
             client,
             local_address,
             did: reg_resp.did,
             device_id,
+            backup_accounts: Vec::new(),
         })
     }
 
-    async fn login_inner(store: store::Store) -> Result<AppCoreInner, AppError> {
+    async fn login_inner(store: store::DeviceStore) -> Result<AppCoreInner, AppError> {
         let identity = store.load_identity().await?
             .ok_or(AppError::NoAccount)?;
-        let reg = store.load_registration().await?
+        let (did, _registered_at) = store.load_did().await?
+            .ok_or(AppError::NoAccount)?;
+        let dev_acct = store.load_device_account().await?
             .ok_or(AppError::NoAccount)?;
 
         // Offline-safe: build the Client with a signer but no token. The first
         // authenticated request (HTTP send_authed or the reconnect task's WS
         // open) will trigger lazy challenge/response.
         let client = build_authed_client(
-            &reg.server_url,
-            reg.account_id.clone(),
-            reg.device_id,
+            &dev_acct.server_url,
+            did.clone(),
+            dev_acct.device_id,
             &identity,
             None,
         );
-        let device_id = reg.device_id;
+        let device_id = dev_acct.device_id;
 
         let local_address = DeviceAddress::new(
-            AccountId::new(crypto::groups::did_to_service_id_string(&reg.account_id)),
+            AccountId::new(crypto::groups::did_to_service_id_string(&did)),
             DeviceId::new(device_id),
         );
 
@@ -2584,12 +2643,15 @@ impl AppCore {
         // or recovery). No-op for opted-out accounts (docs/05 §3.4). Idempotent.
         storage_sync::ensure_triggers(&store).await?;
 
+        let identity_store = store.identity.clone();
         Ok(AppCoreInner {
+            identity: identity_store,
             store,
             client,
             local_address,
-            did: reg.account_id,
+            did,
             device_id,
+            backup_accounts: Vec::new(),
         })
     }
 
@@ -2600,7 +2662,7 @@ impl AppCore {
     /// are exchanged via encrypted profile bundles, not stored on the server.
     pub async fn create_account_with_store(
         server_url: &str,
-        store: store::Store,
+        store: store::DeviceStore,
         display_name: Option<String>,
         is_bot: bool,
     ) -> Result<Self, AppError> {
@@ -2612,7 +2674,7 @@ impl AppCore {
     /// Login with a pre-opened store (for tests).
     /// Does not spawn the reconnect task; callers that want it must wrap in
     /// `Arc` and call `start_reconnect_task()` themselves.
-    pub async fn login_with_store(store: store::Store) -> Result<Self, AppError> {
+    pub async fn login_with_store(store: store::DeviceStore) -> Result<Self, AppError> {
         let inner = Self::login_inner(store).await?;
         Ok(Self::build(inner))
     }

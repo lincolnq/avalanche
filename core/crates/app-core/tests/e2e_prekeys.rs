@@ -19,10 +19,8 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-async fn test_store() -> store::Store {
-    let store = store::Store::open_in_memory().await.unwrap();
-    store.migrate().await.unwrap();
-    store
+async fn test_store() -> store::DeviceStore {
+    store::DeviceStore::open_in_memory().await.unwrap()
 }
 
 fn only_from(

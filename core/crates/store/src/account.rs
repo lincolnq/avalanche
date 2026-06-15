@@ -1,52 +1,46 @@
-//! Local account identity and registration state.
+//! Local account identity and registration state, split across the two stores.
 //!
-//! This module handles the two pieces of persistent state that exist before any
-//! messages are sent:
+//! - **Identity (identity.db):** the long-term identity key pair, the DID, and
+//!   the P-256 rotation key — the same on every device of the identity.
+//! - **Device (device.db):** this device's registration — the libsignal
+//!   registration_id plus the `(server_url, device_id)` this account context is
+//!   bound to.
 //!
-//! - **Identity key pair** — the long-term Ed25519 key pair generated at
-//!   account creation. Stored in the `identity_keypair` table alongside the
-//!   libsignal registration ID. This is also the data that
-//!   [`libsignal_protocol::IdentityKeyStore::get_identity_key_pair`] reads when
-//!   building outgoing messages (that implementation lives in [`crate::session`];
-//!   the storage layer is shared via the same database connection).
-//!
-//! - **Registration info** — the account DID and homeserver URL confirmed after
-//!   the server accepts the registration request. Absent until registration
-//!   completes; `app-core` checks for its presence to decide whether to show the
-//!   onboarding flow.
+//! The identity key pair is read by [`libsignal_protocol::IdentityKeyStore`]
+//! (impl in [`crate::session`], which reaches identity.db via
+//! [`crate::DeviceStore::identity`]); the registration_id is read by
+//! `get_local_registration_id` from device.db.
 
 use rusqlite::OptionalExtension as _;
 use types::Timestamp;
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
-/// The local account state saved after successful registration.
+/// This device's registration row (device.db).
 #[derive(Debug, Clone)]
-pub struct RegistrationInfo {
-    pub account_id: String,
+pub struct DeviceAccount {
     pub server_url: String,
-    pub registered_at: Timestamp,
-    /// The local libsignal-style device_id assigned to this client. Currently
-    /// always 1 (single-device), but threaded explicitly through registration
-    /// + recovery so callers don't have to assume a fixed value.
     pub device_id: u32,
+    pub registered_at: Timestamp,
+    pub registration_id: u32,
 }
 
-impl Store {
-    /// Persist the local identity key pair and libsignal registration ID.
-    /// Called once during account creation.
-    pub async fn save_identity(
+impl IdentityStore {
+    /// Persist the local identity key pair. Called once at account creation /
+    /// recovery.
+    pub async fn save_identity_keypair(
         &self,
         keypair: &crypto::IdentityKeyPair,
-        registration_id: u32,
     ) -> Result<(), StoreError> {
         let bytes = keypair.serialize();
         self.conn
             .call(move |conn| {
                 conn.execute(
-                    "INSERT OR REPLACE INTO identity_keypair (id, keypair_bytes, registration_id)
-                     VALUES (1, ?1, ?2)",
-                    rusqlite::params![bytes, registration_id],
+                    "INSERT OR REPLACE INTO identity_keypair (id, keypair_bytes) VALUES (1, ?1)",
+                    rusqlite::params![bytes],
                 )?;
                 Ok(())
             })
@@ -55,9 +49,7 @@ impl Store {
     }
 
     /// Load the local identity key pair. Returns `None` if not yet created.
-    pub async fn load_identity(
-        &self,
-    ) -> Result<Option<crypto::IdentityKeyPair>, StoreError> {
+    pub async fn load_identity(&self) -> Result<Option<crypto::IdentityKeyPair>, StoreError> {
         let result: Option<Vec<u8>> = self
             .conn
             .call(|conn| {
@@ -80,20 +72,34 @@ impl Store {
         }
     }
 
-    /// Persist registration details after the homeserver confirms the account.
-    pub async fn save_registration(&self, info: &RegistrationInfo) -> Result<(), StoreError> {
-        let account_id = info.account_id.clone();
-        let server_url = info.server_url.clone();
-        let registered_at = info.registered_at.as_millis();
-        let device_id = info.device_id;
+    /// Persist the identity's DID (and when it was first established locally).
+    pub async fn save_did(&self, did: &str, registered_at: Timestamp) -> Result<(), StoreError> {
+        let did = did.to_string();
+        let registered_at = registered_at.as_millis();
         self.conn
             .call(move |conn| {
                 conn.execute(
-                    "INSERT OR REPLACE INTO account (id, account_id, server_url, registered_at, device_id)
-                     VALUES (1, ?1, ?2, ?3, ?4)",
-                    rusqlite::params![account_id, server_url, registered_at, device_id],
+                    "INSERT OR REPLACE INTO account_identity (id, did, registered_at)
+                     VALUES (1, ?1, ?2)",
+                    rusqlite::params![did, registered_at],
                 )?;
                 Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load the identity's DID and establishment time. `None` until registered.
+    pub async fn load_did(&self) -> Result<Option<(String, Timestamp)>, StoreError> {
+        self.conn
+            .call(|conn| {
+                conn.query_row(
+                    "SELECT did, registered_at FROM account_identity WHERE id = 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, Timestamp(row.get::<_, i64>(1)?))),
+                )
+                .optional()
+                .map_err(Into::into)
             })
             .await
             .map_err(StoreError::Db)
@@ -135,36 +141,50 @@ impl Store {
             .await
             .map_err(StoreError::Db)
     }
+}
 
-    /// Load registration details. Returns `None` if not yet registered.
-    pub async fn load_registration(&self) -> Result<Option<RegistrationInfo>, StoreError> {
-        let result = self
-            .conn
+impl DeviceStore {
+    /// Persist this device's registration (server binding + registration_id).
+    pub async fn save_device_account(&self, info: &DeviceAccount) -> Result<(), StoreError> {
+        let server_url = info.server_url.clone();
+        let device_id = info.device_id;
+        let registered_at = info.registered_at.as_millis();
+        let registration_id = info.registration_id;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO device_account
+                       (id, server_url, device_id, registered_at, registration_id)
+                     VALUES (1, ?1, ?2, ?3, ?4)",
+                    rusqlite::params![server_url, device_id, registered_at, registration_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load this device's registration. Returns `None` if not yet registered.
+    pub async fn load_device_account(&self) -> Result<Option<DeviceAccount>, StoreError> {
+        self.conn
             .call(|conn| {
                 conn.query_row(
-                    "SELECT account_id, server_url, registered_at, device_id
-                     FROM account WHERE id = 1",
+                    "SELECT server_url, device_id, registered_at, registration_id
+                     FROM device_account WHERE id = 1",
                     [],
                     |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, i64>(2)?,
-                            row.get::<_, u32>(3)?,
-                        ))
+                        Ok(DeviceAccount {
+                            server_url: row.get::<_, String>(0)?,
+                            device_id: row.get::<_, u32>(1)?,
+                            registered_at: Timestamp(row.get::<_, i64>(2)?),
+                            registration_id: row.get::<_, u32>(3)?,
+                        })
                     },
                 )
                 .optional()
                 .map_err(Into::into)
             })
             .await
-            .map_err(StoreError::Db)?;
-
-        Ok(result.map(|(account_id, server_url, registered_at, device_id)| RegistrationInfo {
-            account_id,
-            server_url,
-            registered_at: Timestamp(registered_at),
-            device_id,
-        }))
+            .map_err(StoreError::Db)
     }
 }

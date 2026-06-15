@@ -153,14 +153,14 @@ pub trait SyncAdapter: Send + Sync {
     /// Apply a pulled record to its domain table. `payload = None` is a tombstone.
     async fn apply(
         &self,
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
         payload: Option<&[u8]>,
     ) -> Result<(), AppError>;
 
     /// Read a domain row and serialize its payload for push. `None` if the row
     /// no longer exists (the engine then pushes a tombstone).
-    async fn read(&self, store: &store::Store, logical_key: &str)
+    async fn read(&self, store: &store::IdentityStore, logical_key: &str)
         -> Result<Option<Vec<u8>>, AppError>;
 }
 
@@ -190,12 +190,12 @@ pub trait SyncedType: Send + Sync + 'static {
     fn decode(logical_key: &str, bytes: &[u8]) -> Result<Self::Record, AppError>;
 
     /// Write a pulled record through into the domain table.
-    async fn upsert(store: &store::Store, record: &Self::Record) -> Result<(), AppError>;
+    async fn upsert(store: &store::IdentityStore, record: &Self::Record) -> Result<(), AppError>;
     /// Apply a tombstone: remove the domain row.
-    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError>;
+    async fn delete(store: &store::IdentityStore, logical_key: &str) -> Result<(), AppError>;
     /// Read the domain row for push. `None` ⇒ row gone ⇒ engine pushes a tombstone.
     async fn load(
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<Self::Record>, AppError>;
 }
@@ -214,7 +214,7 @@ impl<T: SyncedType> SyncAdapter for T {
 
     async fn apply(
         &self,
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
         payload: Option<&[u8]>,
     ) -> Result<(), AppError> {
@@ -229,7 +229,7 @@ impl<T: SyncedType> SyncAdapter for T {
 
     async fn read(
         &self,
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
         Ok(T::load(store, logical_key).await?.map(|r| T::encode(&r)))
@@ -284,7 +284,7 @@ impl SyncRegistry {
 /// Install the dirty-tracking triggers for the default registry — but only when
 /// storage sync is enabled for this account (a storage key is present). A bot
 /// (no key, §11/opt-out) accrues no sidecar rows. Idempotent; safe every open.
-pub async fn ensure_triggers(store: &store::Store) -> Result<(), AppError> {
+pub async fn ensure_triggers(store: &store::IdentityStore) -> Result<(), AppError> {
     if store.load_storage_key().await?.is_none() {
         return Ok(());
     }
@@ -352,7 +352,7 @@ impl SyncedType for GroupKeyAdapter {
         })
     }
 
-    async fn upsert(store: &store::Store, record: &GroupKeyRecord) -> Result<(), AppError> {
+    async fn upsert(store: &store::IdentityStore, record: &GroupKeyRecord) -> Result<(), AppError> {
         // Reuse the inbound-group-context path: it derives group_id from
         // master_key and inserts a default-policy row if absent (the rest of
         // group state is fetched separately). Idempotent on re-pull. The
@@ -366,13 +366,13 @@ impl SyncedType for GroupKeyAdapter {
         Ok(())
     }
 
-    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+    async fn delete(store: &store::IdentityStore, logical_key: &str) -> Result<(), AppError> {
         store.delete_group(logical_key).await?;
         Ok(())
     }
 
     async fn load(
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<GroupKeyRecord>, AppError> {
         Ok(store.load_group(logical_key).await?.map(|g| GroupKeyRecord {
@@ -428,7 +428,7 @@ impl SyncedType for ContactAdapter {
         })
     }
 
-    async fn upsert(store: &store::Store, record: &ContactRecord) -> Result<(), AppError> {
+    async fn upsert(store: &store::IdentityStore, record: &ContactRecord) -> Result<(), AppError> {
         // touch_contact's MAX merge is the right LWW behavior here: it never
         // un-curates and never rewinds recency, both of which are monotonic.
         store
@@ -441,13 +441,13 @@ impl SyncedType for ContactAdapter {
         Ok(())
     }
 
-    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+    async fn delete(store: &store::IdentityStore, logical_key: &str) -> Result<(), AppError> {
         store.delete_contact(logical_key).await?;
         Ok(())
     }
 
     async fn load(
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<ContactRecord>, AppError> {
         Ok(store.load_contact(logical_key).await?.map(|c| ContactRecord {
@@ -497,20 +497,20 @@ impl SyncedType for ConvSettingsAdapter {
         })
     }
 
-    async fn upsert(store: &store::Store, record: &ConvSettingsRecord) -> Result<(), AppError> {
+    async fn upsert(store: &store::IdentityStore, record: &ConvSettingsRecord) -> Result<(), AppError> {
         store
             .save_conversation_expiry(&record.conversation_id, record.expiry_secs)
             .await?;
         Ok(())
     }
 
-    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+    async fn delete(store: &store::IdentityStore, logical_key: &str) -> Result<(), AppError> {
         store.delete_conversation_settings(logical_key).await?;
         Ok(())
     }
 
     async fn load(
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<ConvSettingsRecord>, AppError> {
         Ok(store
@@ -573,20 +573,20 @@ impl SyncedType for ContactProfileAdapter {
     }
 
     async fn upsert(
-        store: &store::Store,
+        store: &store::IdentityStore,
         record: &store::profiles::ContactProfile,
     ) -> Result<(), AppError> {
         store.upsert_contact_profile(record).await?;
         Ok(())
     }
 
-    async fn delete(store: &store::Store, logical_key: &str) -> Result<(), AppError> {
+    async fn delete(store: &store::IdentityStore, logical_key: &str) -> Result<(), AppError> {
         store.delete_contact_profile(logical_key).await?;
         Ok(())
     }
 
     async fn load(
-        store: &store::Store,
+        store: &store::IdentityStore,
         logical_key: &str,
     ) -> Result<Option<store::profiles::ContactProfile>, AppError> {
         Ok(store.load_contact_profile(logical_key).await?)
@@ -666,7 +666,7 @@ pub(crate) async fn run_scheduler(weak: std::sync::Weak<crate::AppCore>) {
 /// push every dirty row with per-record CAS. A no-op if no storage key is
 /// provisioned yet.
 pub async fn sync(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     registry: &SyncRegistry,
 ) -> Result<(), AppError> {
@@ -681,7 +681,7 @@ pub async fn sync(
 }
 
 async fn pull(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     registry: &SyncRegistry,
     storage_key: &[u8; 32],
@@ -751,7 +751,7 @@ async fn pull(
 }
 
 async fn push(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     registry: &SyncRegistry,
     storage_key: &[u8; 32],
@@ -971,7 +971,7 @@ mod tests {
 
     #[tokio::test]
     async fn blanket_bridge_applies_upserts_reads_and_tombstones() {
-        let store = store::Store::open_in_memory().await.unwrap();
+        let store = store::IdentityStore::open_in_memory().await.unwrap();
         let adapter = ContactAdapter;
 
         // apply(Some) → decode + upsert into the domain table.

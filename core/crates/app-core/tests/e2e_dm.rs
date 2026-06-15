@@ -22,10 +22,8 @@ fn now_ms() -> i64 {
 }
 
 /// Create an in-memory store for testing (no disk I/O).
-async fn test_store() -> store::Store {
-    let store = store::Store::open_in_memory().await.unwrap();
-    store.migrate().await.unwrap();
-    store
+async fn test_store() -> store::DeviceStore {
+    store::DeviceStore::open_in_memory().await.unwrap()
 }
 
 /// Filter to messages from `sender_did`. The dev homeserver runs adminbot,
@@ -137,19 +135,18 @@ async fn login_re_authenticates() {
             .as_nanos(),
     ));
 
-    let store1 = store::Store::open(
+    let (_id1, store1) = store::open_split(
         Path::new(&db_path),
         &store::DatabaseKey::from_passphrase("test-key".to_string()),
     )
     .await
     .unwrap();
-    store1.migrate().await.unwrap();
     AppCore::create_account_with_store(&url, store1, None, true)
         .await
         .unwrap();
 
     // Re-open the same DB and login — exercises the challenge-response flow.
-    let store2 = store::Store::open(
+    let (_id2, store2) = store::open_split(
         Path::new(&db_path),
         &store::DatabaseKey::from_passphrase("test-key".to_string()),
     )

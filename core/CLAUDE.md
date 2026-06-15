@@ -2,6 +2,18 @@
 
 The Rust workspace root is `core/`. See the root `CLAUDE.md` for the crate dependency graph and critical design patterns.
 
+## Code Navigation & Refactors
+
+For finding usages, call sites, and definitions — prefer the **LSP tool** over grep or throwaway scripts. rust-analyzer is type- and scope-aware, so it catches aliased/re-exported usages grep misses and produces no false hits from comments or strings, and these operations are read-only:
+
+- `findReferences` — every usage of a trait/method/type (e.g. censusing `Store` usages before a refactor)
+- `incomingCalls` / `outgoingCalls` — the call graph around a function
+- `goToDefinition`, `goToImplementation`, `workspaceSymbol` — locate symbols
+
+Use `Grep` only for non-symbol patterns (string literals, comments, macros the LSP can't resolve). Reserve `Bash` for things the LSP genuinely can't answer — don't write code to census usages.
+
+Note: rust-analyzer may under-report until indexing finishes. Run `make check` first to warm it up before a large `findReferences` sweep. The LSP applies no edits — actual changes still go through Edit/Write.
+
 ## Adding a New Server Endpoint
 
 1. `/new-migration <name>` — create migration file (see `.claude/commands/new-migration.md`)

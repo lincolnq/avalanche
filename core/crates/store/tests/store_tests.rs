@@ -1,11 +1,11 @@
 //! Tests that complement `integration.rs`. These cover store edge cases
 //! not exercised by the end-to-end session tests.
 
-use store::Store;
+use store::DeviceStore;
 
 #[tokio::test]
 async fn load_identity_returns_none_before_creation() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     assert!(store.load_identity().await.unwrap().is_none());
 }
 
@@ -13,9 +13,9 @@ async fn load_identity_returns_none_before_creation() {
 async fn store_satisfies_crypto_store_trait() {
     use crypto::Store as CryptoStore;
 
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     let identity = crypto::IdentityKeyPair::generate();
-    store.save_identity(&identity, 100).await.unwrap();
+    store.save_identity_keypair(&identity).await.unwrap();
 
     fn assert_is_crypto_store(_s: &impl CryptoStore) {}
     assert_is_crypto_store(&store);
@@ -30,7 +30,7 @@ async fn is_trusted_identity_is_direction_aware() {
         IdentityKey::decode(&crypto::IdentityKeyPair::generate().public_key().serialize()).unwrap()
     }
 
-    let mut store = Store::open_in_memory().await.unwrap();
+    let mut store = DeviceStore::open_in_memory().await.unwrap();
     let addr = ProtocolAddress::new("peer-uuid".to_string(), DeviceId::try_from(1u32).unwrap());
 
     let original = fresh_key();
@@ -74,7 +74,7 @@ async fn message_queue_ordering() {
     use store::messages::QueuedMessage;
     use types::{MessageId, Timestamp};
 
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     // Enqueue out of chronological order.
     let msg_later = QueuedMessage {
@@ -105,7 +105,7 @@ async fn message_queue_ordering() {
 
 #[tokio::test]
 async fn own_profile_round_trip() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     assert!(store.load_own_profile().await.unwrap().is_none());
 
     let profile = store::profiles::OwnProfile {
@@ -128,7 +128,7 @@ async fn own_profile_round_trip() {
 async fn load_conversations_one_row_per_convo_newest_first() {
     use store::messages::HistoryMessage;
     use types::Timestamp;
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     // Two messages in convA (newest at t=1000), one in convB (t=500).
     for (id, conv, sent_at, body) in [
@@ -161,7 +161,7 @@ async fn load_conversations_one_row_per_convo_newest_first() {
 #[tokio::test]
 async fn contact_profile_cache() {
     use types::Timestamp;
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     let did = "did:plc:bob000000000000000001";
     assert!(store.load_contact_profile(did).await.unwrap().is_none());
@@ -196,7 +196,7 @@ async fn contact_profile_cache() {
 #[tokio::test]
 async fn account_info_cache_round_trip() {
     use types::Timestamp;
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     let did = "did:local:adminbot";
     assert!(store.load_account_info(did).await.unwrap().is_none());
@@ -230,7 +230,7 @@ async fn account_info_cache_round_trip() {
 #[tokio::test]
 async fn profile_fetch_state_round_trip() {
     use types::Timestamp;
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
 
     let did = "did:plc:dormant00000000000001";
     assert!(store.load_fetch_state(did).await.unwrap().is_none());
@@ -252,14 +252,14 @@ async fn profile_fetch_state_round_trip() {
 
 #[tokio::test]
 async fn conversation_expiry_missing_returns_none() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     let result = store.load_conversation_expiry("did:example:alice").await.unwrap();
     assert!(result.is_none());
 }
 
 #[tokio::test]
 async fn conversation_expiry_round_trip() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     store.save_conversation_expiry("did:example:alice", Some(3600)).await.unwrap();
     let loaded = store.load_conversation_expiry("did:example:alice").await.unwrap();
     assert_eq!(loaded, Some(3600));
@@ -267,7 +267,7 @@ async fn conversation_expiry_round_trip() {
 
 #[tokio::test]
 async fn conversation_expiry_zero_treated_as_none() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     // Explicit zero means "no expiry"; load returns None.
     store.save_conversation_expiry("did:example:alice", Some(0)).await.unwrap();
     let loaded = store.load_conversation_expiry("did:example:alice").await.unwrap();
@@ -276,7 +276,7 @@ async fn conversation_expiry_zero_treated_as_none() {
 
 #[tokio::test]
 async fn conversation_expiry_none_clears_value() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     store.save_conversation_expiry("did:example:alice", Some(86400)).await.unwrap();
     store.save_conversation_expiry("did:example:alice", None).await.unwrap();
     let loaded = store.load_conversation_expiry("did:example:alice").await.unwrap();
@@ -285,7 +285,7 @@ async fn conversation_expiry_none_clears_value() {
 
 #[tokio::test]
 async fn conversation_expiry_overwrite() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     store.save_conversation_expiry("did:example:alice", Some(3600)).await.unwrap();
     store.save_conversation_expiry("did:example:alice", Some(604800)).await.unwrap();
     let loaded = store.load_conversation_expiry("did:example:alice").await.unwrap();
@@ -294,7 +294,7 @@ async fn conversation_expiry_overwrite() {
 
 #[tokio::test]
 async fn conversation_expiry_independent_per_conversation() {
-    let store = Store::open_in_memory().await.unwrap();
+    let store = DeviceStore::open_in_memory().await.unwrap();
     store.save_conversation_expiry("did:example:alice", Some(3600)).await.unwrap();
     store.save_conversation_expiry("did:example:bob", Some(86400)).await.unwrap();
     assert_eq!(store.load_conversation_expiry("did:example:alice").await.unwrap(), Some(3600));
@@ -307,15 +307,15 @@ async fn conversation_expiry_independent_per_conversation() {
 mod storage_sync {
     use store::groups::{GroupRow, PolicyRow};
     use store::storage_sync::SyncTriggerSpec;
-    use store::Store;
+    use store::DeviceStore;
     use types::Timestamp;
 
     /// Open a store and install the `groups` dirty-tracking trigger. The triggers
     /// are no longer baked into the schema (docs/05 stage 3); app-core installs
     /// them from its sync registry at account open, so trigger-dependent tests
     /// install the same spec here.
-    async fn store_with_group_triggers() -> Store {
-        let store = Store::open_in_memory().await.unwrap();
+    async fn store_with_group_triggers() -> DeviceStore {
+        let store = DeviceStore::open_in_memory().await.unwrap();
         store
             .install_sync_triggers(&[SyncTriggerSpec::new("groups", "group_id", 1)])
             .await
@@ -338,7 +338,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn storage_key_round_trips() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         assert!(store.load_storage_key().await.unwrap().is_none());
         let key = [3u8; 32];
         store.save_storage_key(&key).await.unwrap();
@@ -347,7 +347,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn cursor_defaults_zero_and_advances() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         assert_eq!(store.storage_cursor().await.unwrap(), 0);
         store.set_storage_cursor(42).await.unwrap();
         assert_eq!(store.storage_cursor().await.unwrap(), 42);
@@ -396,7 +396,7 @@ mod storage_sync {
 
     #[tokio::test]
     async fn sync_version_defaults_zero_for_unknown_record() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         assert_eq!(store.sync_version(1, "never-seen").await.unwrap(), 0);
     }
 
@@ -404,7 +404,7 @@ mod storage_sync {
     async fn install_sync_triggers_generates_per_table_dirty_tracking() {
         // Prove the generator works for an arbitrary table/key/tag, not just the
         // hardcoded groups triggers it replaced.
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         store
             .install_sync_triggers(&[SyncTriggerSpec::new("contacts", "did", 2)])
             .await
@@ -445,10 +445,10 @@ mod storage_sync {
 #[cfg(test)]
 mod edit_delete_react {
     use store::messages::{HistoryMessage, ReactionRow};
-    use store::Store;
+    use store::DeviceStore;
     use types::Timestamp;
 
-    async fn seed(store: &Store, conv: &str, author: &str, sent_at: i64, body: &str) {
+    async fn seed(store: &DeviceStore, conv: &str, author: &str, sent_at: i64, body: &str) {
         store
             .save_message(&HistoryMessage {
                 id: format!("{author}-{sent_at}"),
@@ -468,7 +468,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn edit_updates_body_bumps_count_and_records_revision() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         seed(&store, "dm-me-bob", "did:bob", 100, "helo").await;
 
         let applied = store
@@ -489,7 +489,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn edit_is_last_writer_wins() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         seed(&store, "c", "a", 100, "v1").await;
         store.apply_edit("c", "a", Timestamp(100), "v2", Timestamp(300), true).await.unwrap();
         // An older edit (op time 200 < 300) must be ignored.
@@ -501,7 +501,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn edit_of_missing_target_is_dropped() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         let applied = store
             .apply_edit("c", "a", Timestamp(100), "x", Timestamp(200), true)
             .await
@@ -512,7 +512,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn tombstone_clears_body_drops_reactions_and_absorbs_edits() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         seed(&store, "c", "a", 100, "secret").await;
         store
             .upsert_reaction(&ReactionRow {
@@ -542,7 +542,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn delete_for_me_removes_row_and_reactions() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         seed(&store, "c", "a", 100, "bye").await;
         store
             .upsert_reaction(&ReactionRow {
@@ -563,7 +563,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn reaction_is_one_per_person_and_removable() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         let row = |emoji: &str, at: i64| ReactionRow {
             conversation_id: "c".into(),
             target_author: "a".into(),
@@ -585,7 +585,7 @@ mod edit_delete_react {
 
     #[tokio::test]
     async fn distinct_reactors_each_get_a_row() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = DeviceStore::open_in_memory().await.unwrap();
         for reactor in ["b", "c", "d"] {
             store
                 .upsert_reaction(&ReactionRow {

@@ -252,7 +252,7 @@ pub fn build_recovery_blob(
 /// expects. Called by write sites (`update_recovery_blob`, signup,
 /// auto-upload triggers) so the blob always reflects current membership.
 pub async fn collect_group_blob_entries(
-    store: &store::Store,
+    store: &store::IdentityStore,
 ) -> Result<Vec<GroupBlobEntry>, AppError> {
     let rows = store.list_groups().await?;
     Ok(rows

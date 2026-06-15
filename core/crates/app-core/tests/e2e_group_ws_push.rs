@@ -17,10 +17,8 @@ fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
 }
 
-async fn test_store() -> store::Store {
-    let store = store::Store::open_in_memory().await.unwrap();
-    store.migrate().await.unwrap();
-    store
+async fn test_store() -> store::DeviceStore {
+    store::DeviceStore::open_in_memory().await.unwrap()
 }
 
 /// Create a bot account and start its reconnect task. Mirrors production

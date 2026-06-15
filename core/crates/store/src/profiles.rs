@@ -16,7 +16,10 @@
 use rusqlite::OptionalExtension as _;
 use types::Timestamp;
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
 /// Own profile state: 32-byte profile key + local display name.
 #[derive(Debug, Clone)]
@@ -48,7 +51,7 @@ pub struct AccountInfoCache {
     pub fetched_at: Timestamp,
 }
 
-impl Store {
+impl IdentityStore {
     /// Persist (or replace) the user's own profile key and display name.
     pub async fn save_own_profile(&self, profile: &OwnProfile) -> Result<(), StoreError> {
         let pk = profile.profile_key.clone();
@@ -206,6 +209,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl DeviceStore {
     /// Record a name-fetch attempt and its outcome for `did`. The outcome is
     /// an opaque code owned by app-core; this layer only persists it so the
     /// per-outcome skip window survives app launches (docs/52).
@@ -253,6 +259,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl IdentityStore {
     /// Look up a cached server account record by DID.
     pub async fn load_account_info(
         &self,

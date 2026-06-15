@@ -8,7 +8,10 @@
 
 use rusqlite::OptionalExtension as _;
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
 /// A dirty sidecar row awaiting push: identifies which domain record changed
 /// and the server version we last saw (the CAS `expected_version`).
@@ -22,7 +25,7 @@ pub struct DirtySyncRecord {
     pub deleted: bool,
 }
 
-impl Store {
+impl IdentityStore {
     /// Persist the 32-byte identity-level storage key. Called once at account
     /// creation and again on recovery/link when restored from the blob.
     pub async fn save_storage_key(&self, key: &[u8; 32]) -> Result<(), StoreError> {
@@ -69,6 +72,9 @@ impl Store {
         }
     }
 
+}
+
+impl DeviceStore {
     /// The highest server `seq` consumed so far (delta-pull cursor). 0 if unset.
     pub async fn storage_cursor(&self) -> Result<i64, StoreError> {
         let seq: Option<i64> = self
@@ -113,6 +119,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl IdentityStore {
     /// Every sidecar row with a local change pending push.
     pub async fn dirty_records(&self) -> Result<Vec<DirtySyncRecord>, StoreError> {
         self.conn

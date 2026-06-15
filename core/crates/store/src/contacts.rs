@@ -9,7 +9,7 @@
 use rusqlite::OptionalExtension as _;
 use types::Timestamp;
 
-use crate::{db::Store, error::StoreError};
+use crate::{db::IdentityStore, error::StoreError};
 
 #[derive(Debug, Clone)]
 pub struct ContactRow {
@@ -18,7 +18,7 @@ pub struct ContactRow {
     pub last_interaction_at: Timestamp,
 }
 
-impl Store {
+impl IdentityStore {
     /// Touch a contact row, creating it if missing. `curated_now` flips
     /// `is_curated` to true on any deliberate gesture; passing false leaves
     /// the existing value intact (sticky). `interaction_at` updates only if

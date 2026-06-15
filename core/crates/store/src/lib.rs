@@ -50,5 +50,7 @@ pub mod schema;
 pub mod session;
 pub mod storage_sync;
 
-pub use db::{DatabaseKey, Store};
+pub use db::{
+    open_in_memory_split, open_split, DatabaseKey, DeviceStore, IdentityStore,
+};
 pub use error::StoreError;

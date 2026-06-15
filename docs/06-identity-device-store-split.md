@@ -1,9 +1,24 @@
 # Identity store / device store split
 
-Status: **proposed design.** Not implemented. Captures the storage split that
-makes multi-device, multi-account, snapshot, and recovery fall out of one model
-instead of being special-cased. Spun out of the stage-4 discussion in `docs/05`
-§7. Sections marked **PROPOSED** are recommendations; **OPEN** are unresolved.
+Status: **implemented** (client split landed; multi-server backup + event-log
+home still future). The store crate now exposes `DeviceStore` (device.db,
+`crypto::Store`) and `IdentityStore` (identity.db) via `store::open_split`, with
+a one-time file-copy+prune migration from the pre-split single file
+(`core/crates/store/src/db.rs`); `AppCoreInner` owns one `IdentityStore` + the
+primary account context + a `backup_accounts` vec
+(`core/crates/app-core/src/lib.rs`). Captures the storage split that makes
+multi-device, multi-account, snapshot, and recovery fall out of one model instead
+of being special-cased. Spun out of the stage-4 discussion in `docs/05` §7.
+Sections marked **PROPOSED** are recommendations; **OPEN** are unresolved.
+
+Two pragmatic deviations from the literal design below, both noted inline at
+their sections: (1) `DeviceStore` `Deref`s to its `IdentityStore` so durable
+methods resolve on a device handle without an explicit `.identity` hop (§3/§5
+boundary-crosser, made ergonomic — the method-name sets are disjoint, so the
+type boundary still holds); (2) because `net::Client` isn't `Clone`, the primary
+account context is surfaced as `AppCoreInner` fields rather than `accounts[0]`,
+with the vec (`backup_accounts`) holding only the non-primary contexts (§9's
+"N=1 thin shim").
 
 Background reading:
 

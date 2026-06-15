@@ -11,7 +11,10 @@
 use rusqlite::OptionalExtension as _;
 use types::{MessageId, Timestamp};
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
 /// An encrypted message held in the outbound queue pending delivery.
 #[derive(Debug, Clone)]
@@ -25,7 +28,7 @@ pub struct QueuedMessage {
     pub enqueued_at: Timestamp,
 }
 
-impl Store {
+impl DeviceStore {
     /// Add a message to the outbound queue.
     pub async fn enqueue(&self, msg: &QueuedMessage) -> Result<(), StoreError> {
         let id = msg.id.to_string();
@@ -103,6 +106,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl IdentityStore {
     // ── Message history ─────────────────────────────────────────────────
 
     /// Save a decrypted message to the local history.

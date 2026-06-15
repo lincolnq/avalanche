@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use libsignal_protocol::{self as signal, GenericSignedPreKey as _};
 use rusqlite::OptionalExtension as _;
 
-use crate::{db::Store, error::StoreError};
+use crate::{db::DeviceStore, error::StoreError};
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ fn addr_key(address: &signal::ProtocolAddress) -> String {
 // ── SessionStore ──────────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
-impl signal::SessionStore for Store {
+impl signal::SessionStore for DeviceStore {
     async fn load_session(
         &self,
         address: &signal::ProtocolAddress,
@@ -91,11 +91,12 @@ impl signal::SessionStore for Store {
 // ── IdentityKeyStore ──────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
-impl signal::IdentityKeyStore for Store {
+impl signal::IdentityKeyStore for DeviceStore {
     async fn get_identity_key_pair(
         &self,
     ) -> Result<signal::IdentityKeyPair, signal::SignalProtocolError> {
         let result = self
+            .identity
             .conn
             .call(|conn| {
                 let mut stmt = conn
@@ -123,7 +124,7 @@ impl signal::IdentityKeyStore for Store {
             .conn
             .call(|conn| {
                 let mut stmt = conn
-                    .prepare("SELECT registration_id FROM identity_keypair WHERE id = 1")?;
+                    .prepare("SELECT registration_id FROM device_account WHERE id = 1")?;
                 let mut rows = stmt.query([])?;
                 Ok(rows.next()?.map(|row| {
                     let id: u32 = row.get(0)?;
@@ -149,6 +150,7 @@ impl signal::IdentityKeyStore for Store {
         let bytes = identity.serialize().to_vec();
 
         let changed = self
+            .identity
             .conn
             .call(move |conn| {
                 let existing: Option<Vec<u8>> = conn
@@ -194,6 +196,7 @@ impl signal::IdentityKeyStore for Store {
         let incoming_bytes = identity.serialize().to_vec();
 
         let stored: Option<Vec<u8>> = self
+            .identity
             .conn
             .call(move |conn| {
                 conn.query_row(
@@ -219,6 +222,7 @@ impl signal::IdentityKeyStore for Store {
         let key = addr_key(address);
 
         let result: Option<Vec<u8>> = self
+            .identity
             .conn
             .call(move |conn| {
                 conn.query_row(
@@ -244,7 +248,7 @@ impl signal::IdentityKeyStore for Store {
 // ── PreKeyStore ───────────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
-impl signal::PreKeyStore for Store {
+impl signal::PreKeyStore for DeviceStore {
     async fn get_pre_key(
         &self,
         prekey_id: signal::PreKeyId,
@@ -307,7 +311,7 @@ impl signal::PreKeyStore for Store {
 // ── SignedPreKeyStore ─────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
-impl signal::SignedPreKeyStore for Store {
+impl signal::SignedPreKeyStore for DeviceStore {
     async fn get_signed_pre_key(
         &self,
         id: signal::SignedPreKeyId,
@@ -356,7 +360,7 @@ impl signal::SignedPreKeyStore for Store {
 // ── KyberPreKeyStore ──────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
-impl signal::KyberPreKeyStore for Store {
+impl signal::KyberPreKeyStore for DeviceStore {
     async fn get_kyber_pre_key(
         &self,
         id: signal::KyberPreKeyId,
@@ -423,7 +427,7 @@ impl signal::KyberPreKeyStore for Store {
 // per sender are normal (e.g. one per group they're a member of).
 
 #[async_trait(?Send)]
-impl signal::SenderKeyStore for Store {
+impl signal::SenderKeyStore for DeviceStore {
     async fn store_sender_key(
         &mut self,
         sender: &signal::ProtocolAddress,
@@ -479,4 +483,4 @@ impl signal::SenderKeyStore for Store {
 
 // ── crypto::Store blanket impl ────────────────────────────────────────────────
 
-impl crypto::Store for Store {}
+impl crypto::Store for DeviceStore {}

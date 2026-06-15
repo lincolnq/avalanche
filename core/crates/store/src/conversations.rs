@@ -1,9 +1,9 @@
 use rusqlite::OptionalExtension as _;
 
-use crate::{db::Store, error::StoreError};
+use crate::{db::IdentityStore, error::StoreError};
 
 /// A `conversation_settings` row as stored. Distinct from
-/// [`Store::load_conversation_expiry`], which collapses "no row" and "timer
+/// [`IdentityStore::load_conversation_expiry`], which collapses "no row" and "timer
 /// disabled" into the same `None`: the storage-sync engine needs to tell those
 /// apart so it pushes a real record (row exists, no timer) rather than a
 /// tombstone (row absent). `expiry_secs` is the raw column (`None` = NULL/0).
@@ -13,7 +13,7 @@ pub struct ConversationSettingsRow {
     pub expiry_secs: Option<u32>,
 }
 
-impl Store {
+impl IdentityStore {
     pub async fn save_conversation_expiry(
         &self,
         conversation_id: &str,

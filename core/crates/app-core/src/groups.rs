@@ -179,7 +179,7 @@ pub enum JoinResult {
 /// root, reusing the local cached copy if its `version` matches what the
 /// server advertises.
 pub async fn ensure_server_params(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
 ) -> Result<ServerPublicParams, AppError> {
@@ -206,7 +206,7 @@ pub async fn ensure_server_params(
 /// populating the cache via [`ensure_server_params`] if it isn't there yet.
 /// Used by the sealed-sender group decrypt path to validate sender certs.
 pub async fn load_sender_cert_trust_root(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
 ) -> Result<Vec<u8>, AppError> {
@@ -226,7 +226,7 @@ pub async fn load_sender_cert_trust_root(
 /// `zkgroup::auth::AuthCredentialWithPniZkc` per §2.3; the carried
 /// identity is `Aci::from(UUID(did))`.
 pub async fn ensure_credential(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     did: &str,
@@ -377,7 +377,7 @@ pub struct CreatedGroup {
 /// The founder is themselves the only member; the group starts in `Closed`
 /// state (admin-only) with no link password.
 pub async fn create_group(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     founder_did: &str,
@@ -454,7 +454,7 @@ pub async fn create_group(
 
 /// Pull the current encrypted state, decrypt, and update the local cache.
 pub async fn fetch_group_state(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     did: &str,
@@ -498,7 +498,7 @@ pub async fn fetch_group_state(
 /// Load the group row + key from the store, fetch credential/presentation,
 /// and call `submit_group_changes` with the supplied actions.
 async fn submit_actions(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -586,7 +586,7 @@ async fn submit_actions(
 // ── invite / accept / decline ────────────────────────────────────────────
 
 pub async fn invite_member(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -622,7 +622,7 @@ pub async fn invite_member(
 }
 
 pub async fn accept_invite(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -674,7 +674,7 @@ pub async fn accept_invite(
 }
 
 pub async fn decline_invite(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -705,7 +705,7 @@ pub async fn decline_invite(
 /// must persist the group row locally *before* calling this so the
 /// presentation can be built against the right group key.
 pub async fn join_via_link(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -750,7 +750,7 @@ pub async fn join_via_link(
 }
 
 pub async fn cancel_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -778,7 +778,7 @@ pub async fn cancel_join_request(
 // ── admin-class actions ──────────────────────────────────────────────────
 
 pub async fn approve_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -811,7 +811,7 @@ pub async fn approve_join_request(
 }
 
 pub async fn deny_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -836,7 +836,7 @@ pub async fn deny_join_request(
 }
 
 pub async fn remove_member(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -863,7 +863,7 @@ pub async fn remove_member(
 }
 
 pub async fn change_role(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -900,7 +900,7 @@ pub async fn change_role(
 /// Pull `/changes` since the last applied revision, decrypt each blob, and
 /// fast-forward the local cache.
 pub async fn apply_pending_changes(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -944,7 +944,7 @@ pub async fn apply_pending_changes(
 /// (§3.7 rotation.) Returns the new pseudonym bytes for caller-side relay
 /// registration.
 pub async fn rotate_group_pseudonym(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -985,7 +985,7 @@ pub async fn rotate_group_pseudonym(
 /// the wire bytes the caller should ship to every other member.
 /// Idempotent — repeated calls within one chain return matching bytes.
 pub async fn seed_own_sender_key(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     did: &str,
     device_id: u32,
     master_key: &[u8; 32],
@@ -1000,7 +1000,7 @@ pub async fn seed_own_sender_key(
 /// `SenderKeyStore`. After this completes, `decrypt_group_content` calls
 /// for messages from `(sender_did, sender_device_id)` will succeed.
 pub async fn process_inbound_skdm(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     sender_did: &str,
     sender_device_id: u32,
     skdm_bytes: &[u8],
@@ -1014,7 +1014,7 @@ pub async fn process_inbound_skdm(
 /// a serialized `SenderKeyMessage` ready to ship inside a
 /// `proto::GroupMessage`.
 pub async fn encrypt_group_content(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     did: &str,
     device_id: u32,
     master_key: &[u8; 32],
@@ -1029,7 +1029,7 @@ pub async fn encrypt_group_content(
 /// Decrypt a `SenderKeyMessage` (received inside a `proto::GroupMessage`)
 /// using the locally cached sender key for `(sender_did, sender_device_id)`.
 pub async fn decrypt_group_content(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     sender_did: &str,
     sender_device_id: u32,
     ciphertext: &[u8],
@@ -1060,7 +1060,7 @@ pub struct ReceivedGroupMessage {
 /// `/v1/groups/{id}/send`. Caller-supplied `plaintext` is the inner payload
 /// (typically a `ContentMessage` proto with `body = Text/Receipt/...`).
 pub async fn send_group_message(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     sender_did: &str,
@@ -1180,7 +1180,7 @@ pub async fn send_group_message(
 /// `sender_keys::group_decrypt`), and ack them server-side. Returns the
 /// validated, decrypted messages in delivery order.
 pub async fn fetch_group_messages(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     recipient_did: &str,
@@ -1267,7 +1267,7 @@ pub async fn fetch_group_messages(
 /// return the DIDs of every current full member except `excluding_did`.
 /// Used to enumerate SKDM-distribution and group-send recipients.
 pub async fn other_member_dids(
-    store: &store::Store,
+    store: &store::DeviceStore,
     group_id_b64_s: &str,
     excluding_did: &str,
 ) -> Result<Vec<String>, AppError> {
@@ -1304,7 +1304,7 @@ pub async fn other_member_dids(
 /// for those. A group whose state fails to decode is skipped (logged) rather
 /// than failing the whole list.
 pub async fn local_group_titles(
-    store: &store::Store,
+    store: &store::DeviceStore,
 ) -> Result<HashMap<String, String>, AppError> {
     let rows = store.list_groups().await?;
     let mut out = HashMap::with_capacity(rows.len());
@@ -1327,7 +1327,7 @@ pub async fn local_group_titles(
 /// Master-key bytes for a stored group. Convenience: most call sites need
 /// the 32-byte array form, not the raw `Vec`.
 pub async fn master_key_for(
-    store: &store::Store,
+    store: &store::DeviceStore,
     group_id_b64_s: &str,
 ) -> Result<[u8; 32], AppError> {
     let row = store
@@ -1349,7 +1349,7 @@ pub async fn master_key_for(
 /// once it's ready to render the pending list. (Keeping these separate
 /// lets the inbound message hot path stay synchronous-ish.)
 pub async fn store_inbound_group_context(
-    store: &store::Store,
+    identity: &store::IdentityStore,
     master_key: &[u8],
     hosting_server_url: &str,
 ) -> Result<String, AppError> {
@@ -1361,7 +1361,7 @@ pub async fn store_inbound_group_context(
     let group_key = GroupKey::from_bytes(mk);
     let group_id_b64_s = b64(&group_key.group_id().0);
 
-    if store.load_group(&group_id_b64_s).await?.is_some() {
+    if identity.load_group(&group_id_b64_s).await?.is_some() {
         // Already known — silently drop. The invitee may have stored the
         // master key on a sibling device and synced over.
         return Ok(group_id_b64_s);
@@ -1377,7 +1377,7 @@ pub async fn store_inbound_group_context(
         group_push_pseudonym: None,
         created_at: Timestamp::now(),
     };
-    store.save_group(&row).await?;
+    identity.save_group(&row).await?;
     Ok(group_id_b64_s)
 }
 
