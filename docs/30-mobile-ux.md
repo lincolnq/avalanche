@@ -2,7 +2,7 @@
 
 ## First launch
 
-On first launch with no account, the app shows a splash screen with two paths:
+On first launch with no identity, the app shows a splash screen with two paths:
 
 - **Scan invite QR code** — opens the camera to scan an invite code
 - **Enter invite link** — paste or type a link manually
@@ -19,7 +19,7 @@ Invite links are web URLs on the homeserver's domain (e.g., `https://myorg.examp
 
 ## Registration flow
 
-### New user (no existing account)
+### New user (no existing identity)
 
 When the app receives an invite link (either via deep link or QR scan):
 
@@ -34,9 +34,9 @@ If the invite token specifies an onboarding Project (e.g., a conference registra
 
 Total interaction for the minimal case: scan, type name, tap continue, approve push notifications. A few seconds of background work. That's it.
 
-### Existing user (already has one or more accounts)
+### Existing user (already has one or more identities)
 
-When the app receives an invite and the user already has accounts:
+When the app receives an invite and the user already has identities:
 
 1. The app shows a choice of identities:
    - **Join as [Alice]**
@@ -44,24 +44,24 @@ When the app receives an invite and the user already has accounts:
    - **More options...**
    The Alice prefill is your most recently used identity. More options presents a list of all your signed-in accounts alongside which servers they are bound to.
 2. If joining as an existing identity: the app registers that DID with the new server (signs a challenge to prove ownership, uploads fresh prekeys). One confirmation tap.
-3. If creating a new account: full new-user flow — new DID, new name, new identity.
+3. If creating a new identity: full new-user flow — new DID, new name, new identity.
 4. Either way, auto-enrollment and onboarding proceed as above.
 
-Creating a separate account is the right choice when you want to keep identities apart — e.g., organizing pseudonymously with one group while using your real name with another. Most users will just tap their existing name.
+Creating a separate identity is the right choice when you want to keep identities apart — e.g., organizing pseudonymously with one group while using your real name with another. Most users will just tap their existing name.
 
 ## Account recovery (passkey)
 
-During initial signup, after entering a display name, the app prompts the user to create a passkey. This is a single biometric prompt (Face ID / fingerprint) — the passkey is stored in the user's password manager or iCloud Keychain and syncs across their devices automatically. The passkey protects an encrypted recovery blob (containing the user's DID rotation key and identity keypair) stored on each homeserver the user is registered on. See `docs/33-identity-auth-recovery.md` for the full design.
+During initial signup, after entering a display name, the app prompts the user to create a passkey. This is a single biometric prompt (Face ID / fingerprint) — the passkey is stored in the user's password manager or iCloud Keychain and syncs across their devices automatically. The passkey protects an encrypted recovery blob (containing the user's DID rotation key and identity keypair) stored on each homeserver the user is registered on. See `docs/50-identity-auth-recovery.md` for the full design.
 
 ## Display name
 
 Display name is attached to a DID, required at account creation. It is what other users see in chats. The name is client-owned — stored locally and pushed to every server the DID is registered on. Changing your name updates it everywhere. This is the same model Signal uses for profile names.
 
-If you want different names in different contexts, create separate accounts (separate DIDs). There are no per-server name overrides — one DID, one name.
+If you want different names in different contexts, create separate identities (separate DIDs). There are no per-server name overrides — one DID, one name.
 
 ## Multi-account
 
-The app supports multiple accounts (multiple DIDs). Each has its own display name, keys, and set of servers. All accounts' chats and servers appear together in the Chats and Network tabs — you don't switch accounts to see different content. Each chat and server has a subtle indicator showing which identity it's associated with.
+The app supports multiple identities (multiple DIDs). Each has its own display name, keys, and set of servers. All identities' chats and servers appear together in the Chats and Network tabs — you don't switch identities to see different content. Each chat and server has a subtle indicator showing which identity it's associated with.
 
 When you send a message, you send as whichever identity is a member of that group. When starting a new DM with someone reachable from multiple identities, the app asks which identity to use, defaulting to the one that shares a server with the recipient.
 
@@ -106,11 +106,11 @@ A single compose flow creates both DMs and groups. Like iMessage, the *number of
 A Messages-style chip field, not Signal's stacked contact-list-with-checkmarks UI.
 
 - Confirmed recipients render as **chips** showing display name (and small avatar). You can tap to highlight a chip; backspace while highlighted, or backspace at an empty caret after a chip, deletes.
-- **Autocomplete** is backed by the local contacts table per `docs/35-contacts-and-profiles.md`. Results mirror that doc's search shape:
+- **Autocomplete** is backed by the local contacts table per `docs/52-contacts-and-profiles.md`. Results mirror that doc's search shape:
   - **People** section first (rows where `is_curated`) — matched against nickname, profile `display_name`, notes, and DID prefix.
   - **Other** section below (every non-removed, non-blocked row) — matched against `display_name` and DID prefix only. These are folks the user has encountered (group co-members, message-request senders) but hasn't curated yet.
 - **Direct DID entry.** If what's typed looks like a DID (`did:[anything]`), Enter accepts it as-is. This is the path for adding someone whose DID you have but haven't met through the contact graph yet; the chip is shown grayed out because the client isn't yet sure if that DID can be reached on the chosen server.
-- **Empty state.** A brand-new user has no contact rows at all. The autocomplete dropdown shows a single hint: "Type a DID, or wait — anyone you message will appear here." No system-contact import; per `docs/35-contacts-and-profiles.md` we don't pull from OS contacts.
+- **Empty state.** A brand-new user has no contact rows at all. The autocomplete dropdown shows a single hint: "Type a DID, or wait — anyone you message will appear here." No system-contact import; per `docs/52-contacts-and-profiles.md` we don't pull from OS contacts.
 - **Dedupe silently.** Adding the same recipient twice, or yourself, is a no-op.
 - A **`+` button** on the right edge of the recipients box opens a contact browser modal: search bar at top, **People** and **Other** sections (same shape as the inline autocomplete), multi-select with a "Add N" confirm bar.
 - **Cross-server suggestions** stay visible in autocomplete but render **greyed out** below the same-server matches when a server has already been pinned by an existing chip — they're discoverable but de-prioritised, since adding one would conflict with the current server choice.
@@ -127,8 +127,8 @@ A Messages-style chip field, not Signal's stacked contact-list-with-checkmarks U
 Centered above the composer, format `From: Alice (at safe-haven.org) ▾`. (Not `alice@safe-haven.org` — the parenthetical reads more naturally when "Alice" is the user's display name rather than a handle.)
 
 - **Default on a fresh compose** (no recipients yet) is the last-used (identity, server) pair across all of the user's previous sends. The pill updates once the first chip is added, per the server-pinning rule above.
-- **Single account, single shared server:** non-interactive label.
-- **Multiple accounts or multiple shared servers reachable for the current recipient set:** tappable, opens a "Send as" sheet listing each `(identity, server)` pair with how many of the current recipients are reachable on it. Default selection: the pair reachable by the *most* recipients; ties broken by most-recently-used.
+- **Single identity, single shared server:** non-interactive label.
+- **Multiple identities or multiple shared servers reachable for the current recipient set:** tappable, opens a "Send as" sheet listing each `(identity, server)` pair with how many of the current recipients are reachable on it. Default selection: the pair reachable by the *most* recipients; ties broken by most-recently-used.
 - The pill is **editable mid-compose.** Changing the identity or server re-validates the chip set: any recipient now unreachable on the new server flips to a yellow or red chip (see below).
 
 ### Cross-server / unreachable recipients

@@ -35,6 +35,73 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         AccountInfoFfi(did: did, displayName: nil, isBot: false)
     }
 
+    // MARK: - Reactions / editing / deletion (mock; docs/33, docs/36)
+
+    /// Reactions keyed by conversation id (`dm-<mockDid>-<peer>` or `group-<id>`).
+    private var reactionsByConv: [String: [ReactionFfi]] = [:]
+    /// Prior bodies keyed by "<convId>|<author>|<sentAt>".
+    private var revisionsByTarget: [String: [MessageRevisionFfi]] = [:]
+
+    /// Local conversation id for a target — mirrors the core's `conv_id_for`.
+    private func convId(for target: MessageTarget) -> String {
+        switch target {
+        case .dm(let recipientDid): return "dm-\(mockDid)-\(recipientDid)"
+        case .group(let groupId): return "group-\(groupId)"
+        }
+    }
+
+    func sendReaction(target: MessageTarget, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {
+        let cid = convId(for: target)
+        lock.lock(); defer { lock.unlock() }
+        var list = reactionsByConv[cid] ?? []
+        // One reaction per (target, reactor=self): drop any prior, then re-add.
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs && $0.reactorDid == mockDid }
+        if !remove {
+            list.append(ReactionFfi(conversationId: cid, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: mockDid, emoji: emoji, reactedAtMs: sentAtMs))
+        }
+        reactionsByConv[cid] = list
+    }
+
+    func loadReactions(conversationId: String) throws -> [ReactionFfi] {
+        lock.lock(); defer { lock.unlock() }
+        return reactionsByConv[conversationId] ?? []
+    }
+
+    func sendEdit(target: MessageTarget, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {
+        let cid = convId(for: target)
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[cid] else { return }
+        for i in msgs.indices where msgs[i].senderDid == mockDid && msgs[i].sentAtMs == targetSentAtMs && !msgs[i].deleted {
+            revisionsByTarget["\(cid)|\(mockDid)|\(targetSentAtMs)", default: []].append(MessageRevisionFfi(body: msgs[i].body, replacedAtMs: sentAtMs))
+            msgs[i].body = newBody
+            msgs[i].editedAtMs = sentAtMs
+            msgs[i].editCount += 1
+        }
+        storedMessages[cid] = msgs
+    }
+
+    func loadMessageRevisions(conversationId: String, author: String, sentAtMs: Int64) throws -> [MessageRevisionFfi] {
+        lock.lock(); defer { lock.unlock() }
+        return revisionsByTarget["\(conversationId)|\(author)|\(sentAtMs)"] ?? []
+    }
+
+    func sendDelete(target: MessageTarget, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {
+        let cid = convId(for: target)
+        lock.lock(); defer { lock.unlock() }
+        guard var msgs = storedMessages[cid] else { return }
+        if forEveryone {
+            for i in msgs.indices where msgs[i].senderDid == targetAuthor && msgs[i].sentAtMs == targetSentAtMs {
+                msgs[i].body = ""
+                msgs[i].editedAtMs = nil
+                msgs[i].deleted = true
+            }
+        } else {
+            msgs.removeAll { $0.senderDid == targetAuthor && $0.sentAtMs == targetSentAtMs }
+        }
+        storedMessages[cid] = msgs
+        reactionsByConv[cid]?.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs }
+    }
+
     func fetchProjects() throws -> [ProjectInfoFfi] {
         [ProjectInfoFfi(name: "Testbot", url: "http://localhost:3001", description: "Chat with an AI bot")]
     }
@@ -69,7 +136,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         lock.unlock()
         return snapshot.compactMap { (convId, msgs) -> ConversationSummaryFfi? in
             guard let last = msgs.max(by: { $0.sentAtMs < $1.sentAtMs }) else { return nil }
-            return ConversationSummaryFfi(conversationId: convId, lastMessage: last)
+            return ConversationSummaryFfi(conversationId: convId, groupTitle: nil, lastMessage: last, isRequest: false, isBlocked: false)
         }
         .sorted { ($0.lastMessage?.sentAtMs ?? 0) > ($1.lastMessage?.sentAtMs ?? 0) }
     }
@@ -89,7 +156,9 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 sentAtMs: msgs[i].sentAtMs,
                 editedAtMs: msgs[i].editedAtMs,
                 readAtMs: now,
-                deliveryStatus: msgs[i].deliveryStatus
+                deliveryStatus: msgs[i].deliveryStatus,
+                editCount: msgs[i].editCount,
+                deleted: msgs[i].deleted
             )
             count += 1
         }
@@ -220,7 +289,7 @@ final class MockPreparedAccount: PreparedAccountProtocol, @unchecked Sendable {
 
 /// Mock service that creates fake accounts and seeds initial conversations.
 struct MockActnetService: ActnetService {
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String) throws -> any AppCoreProtocol {
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5) // simulate network
         return MockAppCore(displayName: displayName)
     }
@@ -233,7 +302,7 @@ struct MockActnetService: ActnetService {
         MockPreparedAccount()
     }
 
-    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
+    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5)
         return MockAppCore(did: prepared.did(), displayName: displayName)
     }

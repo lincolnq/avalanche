@@ -14,7 +14,7 @@ Two principles govern every technical decision here:
 The repository is a monorepo. The Rust codebase is the platform core — the cryptography, the homeserver, the mobile shared library, the push relay — but first-party Projects may be written in any language, and the mobile UI layers are Swift and Kotlin. Rust does not own the root.
 
 ```
-actnet/
+avalanche/
 ├── core/                     # Rust — Cargo workspace root
 ├── mobile/
 │   ├── ios/                  # Swift/SwiftUI
@@ -287,7 +287,7 @@ A few notes on what drives these numbers:
 
 ## Multi-device
 
-A user may register multiple devices (phone, tablet, desktop). Each device has its own identity key pair, its own prekey bundles, and its own Double Ratchet sessions. When Alice sends a message to Bob, her device encrypts separately for each of Bob's registered devices — the server knows which devices belong to an account and fans out the ciphertext to each one. This is the same model Signal uses.
+A user may register multiple devices (phone, tablet, desktop). The **identity key is identity-scoped and shared** across all of a user's devices (it is provisioned onto each device at link time, not minted per device); what is **per-device** is the prekey bundles, registration ID, Double Ratchet sessions, and group sender keys. When Alice sends a message to Bob, her device encrypts separately for each of Bob's registered devices — the server knows which devices belong to an account and fans out the ciphertext to each one. This is the same model Signal uses. See `docs/04-multi-device.md` for the full design (why identity is shared but sessions are per-device, linking, sync, revocation).
 
 Implications:
 
@@ -304,80 +304,68 @@ Multi-device support ships in **Stage 3** alongside the mobile apps. The server 
 
 The `EncryptedMessage.ciphertext` field wraps a structured plaintext envelope. The envelope is serialized with Protocol Buffers (the same wire format Signal uses) so that all clients and the eventual UniFFI boundary agree on encoding without ad-hoc parsing.
 
-```protobuf
-// proto/content.proto
+The authoritative definition is `core/proto/content.proto`. Its current shape (abridged — see the file for full field comments and reservations):
 
+```protobuf
+// core/proto/content.proto
 syntax = "proto3";
 package actnet;
 
 message ContentMessage {
   oneof body {
-    TextMessage    text       = 1;
-    MediaMessage   media      = 2;
-    ReceiptMessage receipt    = 3;
-    TypingMessage  typing     = 4;
-    ExpiryUpdate   expiry     = 5;
-    // Future: reaction, reply, profile key update, group state change, etc.
+    TextMessage           text                    = 1;
+    ReceiptMessage        receipt                 = 2;
+    GroupContext          group_context           = 3;  // invite bootstrap (03-groups.md)
+    SenderKeyDistribution sender_key_distribution = 4;  // group key dist
+    GroupMessage          group_message           = 5;  // Sender-Key group msg
+    TimerChangeMessage    timer_change            = 6;  // disappearing-msg timer
   }
-
-  uint64 timestamp_ms  = 15;  // sender's wall clock, unix millis
-  uint32 expiry_timer  = 16;  // seconds; 0 = use group/conversation default
+  reserved 7 to 14;            // future body variants
+  uint64 timestamp_ms = 15;
+  bytes  profile_key  = 17;    // 32 bytes, AES-256-GCM; empty = not sharing
+  reserved 18 to 30;           // future cross-cutting envelope metadata
 }
 
 message TextMessage {
   string body = 1;
-}
-
-message MediaMessage {
-  string content_type = 1;  // MIME type
-  bytes  key          = 2;  // AES-256-GCM key for the attachment blob
-  bytes  digest       = 3;  // SHA-256 of the encrypted blob
-  string upload_url   = 4;  // URL where the encrypted blob was uploaded
-  uint64 size_bytes   = 5;  // plaintext size (for UI pre-allocation)
-  bytes  thumbnail    = 6;  // optional encrypted thumbnail, inline
+  // reserved 2 to 10 for: attachments, mentions, reply_to, formatting.
+  // Attachments will claim field 2 — see 35-attachments.md.
+  reserved 2 to 10;
 }
 
 message ReceiptMessage {
-  enum Type {
-    DELIVERY = 0;
-    READ     = 1;
-  }
-  Type             type       = 1;
-  repeated uint64  timestamps = 2;  // timestamps of the messages being receipted
+  enum Type { DELIVERY = 0; READ = 1; reserved 2 to 5; }
+  Type            type       = 1;
+  repeated uint64 timestamps = 2;
 }
-
-message TypingMessage {
-  bool started = 1;
-}
-
-message ExpiryUpdate {
-  uint32 expiry_timer = 1;  // new timer in seconds
-}
+// Plus GroupContext, SenderKeyDistribution, GroupMessage, TimerChangeMessage.
 ```
 
-The protobuf definition lives in a new `proto/` directory at the workspace root. The `types` crate generates Rust structs from it via `prost-build`; mobile layers use the same `.proto` files to generate Swift and Kotlin types. The envelope is defined in Stage 1 alongside the crypto core, even though most message types won't be fully exercised until later stages.
+The protobuf lives in `core/proto/`. The `types` crate generates Rust structs via `prost-build`; mobile layers generate Swift/Kotlin from the same `.proto` files. The envelope was defined in Stage 1 and has grown per stage (group variants in Stage 5, etc.). Forward compatibility is by reserved field numbers — new body variants take a number from the reserved block and never reuse a retired one. **Attachments are not yet defined**; they will be added as a `repeated AttachmentPointer` inside `TextMessage` (field 2), per [`35-attachments.md`](35-attachments.md).
 
 ---
 
 ## Media and attachments
 
+> Full design — encryption scheme, server endpoints, storage backends, the pointer format, lifecycle/GC, padding, thumbnails, limits, multi-device, and forwarding — lives in [`35-attachments.md`](35-attachments.md). The summary below is the high-level shape.
+
 Attachments follow Signal's proven encrypt-then-upload model:
 
-1. **Sender encrypts the file locally** with a random AES-256-GCM key.
-2. **Sender uploads the encrypted blob** to the homeserver's attachment endpoint (or an S3-compatible object store that the homeserver proxies). The server stores opaque ciphertext and returns a URL.
-3. **Sender includes the decryption key, digest, and URL in the message envelope** (the `MediaMessage` field above). This metadata is itself E2E encrypted as part of the normal message.
-4. **Recipient downloads the blob from the URL**, verifies the digest, and decrypts locally.
+1. **Sender encrypts the file locally** with fresh, single-use key material (scheme in `35-attachments.md`).
+2. **Sender uploads the encrypted blob** to the homeserver's attachment endpoint (or an S3-compatible object store that the homeserver proxies). The server stores opaque ciphertext under an opaque `attachment_id`.
+3. **Sender includes the decryption key, digest, and `attachment_id` in the message envelope** (the `AttachmentPointer` inside `TextMessage`). This metadata is itself E2E encrypted as part of the normal message.
+4. **Recipient downloads the blob by `attachment_id`**, verifies the digest, and decrypts locally.
 
-The homeserver never sees plaintext file content. Attachment URLs are scoped to authenticated users (the server checks a session token before serving the blob), so the URLs are not publicly accessible.
+The homeserver never sees plaintext file content. Downloads require authentication (the server checks a session token), and the `attachment_id` only ever appears inside an E2E message, so blobs are not publicly reachable.
 
 Storage strategy:
 
 - **Small deployments:** attachments are stored on the homeserver's local filesystem and served directly by the Axum server.
 - **Larger deployments:** the homeserver is configured with an S3-compatible endpoint (MinIO, Backblaze B2, AWS S3). The homeserver generates presigned upload/download URLs; clients transfer directly to/from object storage, keeping the homeserver out of the data path.
 
-Attachment expiry follows message expiry: when a message is deleted (by timer or manually), the server deletes the corresponding blob. A background garbage-collection task catches orphaned blobs.
+Because the server can't see which message references which blob (the pointer is encrypted), it **can't reference-count** — blob retention is **TTL-based** (~45 days, Signal-style), and clients download promptly within that window. See `35-attachments.md` for the full lifecycle/GC story.
 
-Media handling ships in **Stage 3** alongside the first mobile DM experience. The server attachment endpoint is added in Stage 2.
+Media handling is **not yet built** — it lands as a focused increment alongside or just after the 1:1 messaging shipped in Stage 3 (server `attachments` table + endpoints + storage, client encrypt/upload/download/render). Details in `35-attachments.md`.
 
 ---
 

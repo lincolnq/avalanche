@@ -3,14 +3,49 @@ import SwiftUI
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
     let conversation: Conversation
+
+    /// The live row from `appState` so request/blocked state stays reactive
+    /// after an Accept / Block / Report action; falls back to the passed-in
+    /// value (e.g. previews) when not in the list.
+    private var liveConv: Conversation {
+        appState.conversations.first { $0.id == conversation.id } ?? conversation
+    }
 
     @State private var messageText = ""
     @State private var errorMessage: String?
     @State private var scrollPosition = ScrollPosition(idType: Int64.self)
+    /// Non-nil while editing an existing message (docs/36); the composer turns
+    /// into an edit bar prefilled with its body.
+    @State private var editingMessage: Message?
+    /// The message whose edit-history sheet is showing, plus its loaded revisions.
+    @State private var historyMessage: Message?
+    @State private var historyRevisions: [MessageRevisionFfi] = []
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
+    }
+
+    /// Reactions/editing/deletion ride the `ContentMessage` envelope, which now
+    /// wraps group content too — so the long-press actions work in both DMs and
+    /// groups.
+    private var actionsEnabled: Bool { true }
+
+    /// Human edit/delete-for-everyone window (docs/36): 24h from send.
+    private static let editWindowMs: Int64 = 24 * 60 * 60 * 1000
+
+    private func canEdit(_ message: Message) -> Bool {
+        message.senderAccountId == conversation.accountId
+            && !message.isDeleted
+            && (Int64(Date().timeIntervalSince1970 * 1000) - message.sentAtMs) <= Self.editWindowMs
+    }
+
+    /// Whether an incoming message's sender is a bot, for the octagon-ish
+    /// bubble shape (docs/54-bot-presentation.md). Own messages are never bots.
+    private func isBotSender(_ message: Message) -> Bool {
+        message.senderAccountId != conversation.accountId
+            && appState.isBot(message.senderAccountId, accountId: conversation.accountId)
     }
 
     var body: some View {
@@ -20,7 +55,20 @@ struct ConversationView: View {
                     ForEach(messages) { message in
                         MessageBubble(
                             message: message,
-                            isMe: message.senderAccountId == conversation.accountId
+                            isMe: message.senderAccountId == conversation.accountId,
+                            isBot: isBotSender(message),
+                            reactions: appState.reactions(for: message),
+                            myDid: conversation.accountId,
+                            actionsEnabled: actionsEnabled,
+                            canEdit: canEdit(message),
+                            onToggleReaction: { emoji in
+                                appState.toggleReaction(message: message, emoji: emoji, conversation: conversation)
+                            },
+                            onEdit: { startEditing(message) },
+                            onDelete: { forEveryone in
+                                appState.deleteMessage(message: message, forEveryone: forEveryone, conversation: conversation)
+                            },
+                            onShowHistory: { showHistory(message) }
                         )
                         .id(message.sentAtMs)
                     }
@@ -52,44 +100,45 @@ struct ConversationView: View {
 
             Divider()
 
-            HStack(spacing: 12) {
-                TextField("Message", text: $messageText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-
-                Button {
-                    sendMessage()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .disabled(messageText.isEmpty)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .onChange(of: messageText) {
-                if !messages.isEmpty {
-                    scrollPosition.scrollTo(edge: .bottom)
-                }
+            // Bottom bar: a blocked DM shows an unblock prompt, an un-accepted
+            // request shows the Accept/Delete/Report gate (docs/12 §1), and an
+            // accepted DM or group shows the normal composer.
+            if liveConv.isBlocked, let did = liveConv.recipientDid {
+                blockedBar(did: did)
+            } else if liveConv.isRequest, let did = liveConv.recipientDid {
+                messageRequestGate(did: did)
+            } else {
+                composer
             }
         }
         .background(Color.avPaper)
         .navigationTitle(conversation.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // For groups, the centered title + avatar is a tappable link into
+            // the group detail screen. (DMs keep the plain navigationTitle.)
             if conversation.isGroup, let groupId = conversation.groupId {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
                     NavigationLink {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
-                        Image(systemName: "person.2")
+                        HStack(spacing: 8) {
+                            ContactAvatar(name: conversation.title, size: 28)
+                            Text(conversation.title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                        }
                     }
                 }
             }
         }
+        .sheet(item: $historyMessage) { msg in
+            EditHistorySheet(current: msg, revisions: historyRevisions)
+        }
         .onAppear {
             appState.currentConversationId = conversation.id
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
+            appState.loadReactions(conversationId: conversation.id, accountId: conversation.accountId)
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
             // Re-fetch the contact's encrypted profile and update the cached
             // display name if it changed. Primary change-detection path.
@@ -116,6 +165,127 @@ struct ConversationView: View {
             } else {
                 scrollPosition.scrollTo(edge: .bottom)
             }
+        }
+    }
+
+    /// The normal text composer (with the inline edit bar when editing).
+    @ViewBuilder private var composer: some View {
+        if editingMessage != nil {
+            HStack(spacing: 8) {
+                Image(systemName: "pencil")
+                    .foregroundStyle(Color.avBrand)
+                Text("Editing message")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { cancelEdit() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 6)
+        }
+
+        HStack(spacing: 12) {
+            TextField(editingMessage == nil ? "Message" : "Edit message", text: $messageText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+
+            Button {
+                if editingMessage != nil { applyEdit() } else { sendMessage() }
+            } label: {
+                Image(systemName: editingMessage != nil ? "checkmark.circle.fill" : "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .onChange(of: messageText) {
+            if !messages.isEmpty {
+                scrollPosition.scrollTo(edge: .bottom)
+            }
+        }
+    }
+
+    /// The message-request gate (docs/12 §1): a stranger's first contact is
+    /// read-only until the user Accepts, Deletes, or Reports & Blocks. Reporting
+    /// is exposed only here — not in established conversations.
+    @ViewBuilder private func messageRequestGate(did: String) -> some View {
+        VStack(spacing: 10) {
+            Text("Let \(conversation.title) message you and share your name with them?")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 12) {
+                Button(role: .destructive) {
+                    Task {
+                        await appState.reportAndBlock(did: did, accountId: conversation.accountId)
+                    }
+                } label: {
+                    Text("Block").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button(role: .destructive) {
+                    Task {
+                        await appState.deleteRequest(did: did, accountId: conversation.accountId)
+                        dismiss()
+                    }
+                } label: {
+                    Text("Delete").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    Task { await appState.acceptRequest(did: did, accountId: conversation.accountId) }
+                } label: {
+                    Text("Accept").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    /// Shown in place of the composer for a blocked DM (docs/12 §2).
+    @ViewBuilder private func blockedBar(did: String) -> some View {
+        HStack(spacing: 12) {
+            Text("You blocked this contact.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Unblock") {
+                Task { await appState.unblockContact(did: did, accountId: conversation.accountId) }
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    private func startEditing(_ message: Message) {
+        editingMessage = message
+        messageText = message.body
+    }
+
+    private func cancelEdit() {
+        editingMessage = nil
+        messageText = ""
+    }
+
+    private func applyEdit() {
+        guard let message = editingMessage else { return }
+        appState.editMessage(message: message, newBody: messageText, conversation: conversation)
+        editingMessage = nil
+        messageText = ""
+    }
+
+    private func showHistory(_ message: Message) {
+        Task {
+            historyRevisions = await appState.loadMessageRevisions(message: message, conversation: conversation)
+            historyMessage = message
         }
     }
 
@@ -175,3 +345,118 @@ struct ConversationView: View {
         }
     }
 }
+
+#if DEBUG
+/// Wraps `ConversationView` in a preview-ready environment: one account, a
+/// canned contact for name resolution, and pre-seeded messages (which survive
+/// `loadMessagesFromStore`, since it only loads when the cache is empty).
+@MainActor
+private func conversationPreview(_ conversation: Conversation, _ messages: [Message]) -> some View {
+    let me = Account(
+        id: "did:plc:me",
+        displayName: "Me",
+        avatarData: nil,
+        servers: [ServerInfo(
+            id: "https://server.example",
+            name: "Example",
+            url: URL(string: "https://server.example")!
+        )]
+    )
+    let state = AppState.preview(
+        accounts: [me],
+        contacts: [
+            ContactRowFfi(did: "did:plc:bob", displayName: "Bob Chena", isCurated: true, lastInteractionAtMs: 0),
+        ]
+    )
+    state.conversations = [conversation]
+    state.messagesByConversation[conversation.id] = messages
+    return NavigationStack {
+        ConversationView(conversation: conversation)
+            .environmentObject(state)
+    }
+}
+
+#Preview("DM") {
+    let conv = Conversation(
+        id: "dm-bob",
+        title: "Bob Chena",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: "did:plc:bob",
+        groupId: nil,
+        lastMessage: nil,
+        lastMessageDate: nil
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:bob",
+                body: "Are we still meeting at noon?", sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: 1_700_000_001_000, deliveryStatus: .delivered),
+        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:me",
+                body: "Yes — I'll be at the front entrance.", sentAtMs: 1_700_000_060_000,
+                editedAtMs: nil, readAtMs: 1_700_000_061_000, deliveryStatus: .read),
+    ])
+}
+
+#Preview("Message Request") {
+    let conv = Conversation(
+        id: "dm-stranger",
+        title: "Jordan Vale",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: "did:plc:stranger",
+        groupId: nil,
+        lastMessage: nil,
+        lastMessageDate: nil,
+        isRequest: true
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:stranger",
+                body: "Hi! I saw you at the rally — want to join our organizing channel?",
+                sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: nil, deliveryStatus: .delivered),
+    ])
+}
+
+#Preview("Blocked") {
+    let conv = Conversation(
+        id: "dm-blocked",
+        title: "Jordan Vale",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: "did:plc:stranger",
+        groupId: nil,
+        lastMessage: nil,
+        lastMessageDate: nil,
+        isBlocked: true
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:stranger",
+                body: "Hi! I saw you at the rally — want to join our organizing channel?",
+                sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: nil, deliveryStatus: .delivered),
+    ])
+}
+
+#Preview("Group") {
+    let gid = "grp1"
+    let conv = Conversation(
+        id: groupConversationId(gid),
+        title: "March Logistics",
+        accountId: "did:plc:me",
+        serverUrl: "https://server.example",
+        recipientDid: nil,
+        groupId: gid,
+        lastMessage: nil,
+        lastMessageDate: nil,
+        isGroup: true
+    )
+    return conversationPreview(conv, [
+        Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:bob",
+                body: "Crew — check in when you arrive.", sentAtMs: 1_700_000_000_000,
+                editedAtMs: nil, readAtMs: 1_700_000_001_000, deliveryStatus: .delivered),
+        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:me",
+                body: "On site 👍", sentAtMs: 1_700_000_060_000,
+                editedAtMs: nil, readAtMs: 1_700_000_061_000, deliveryStatus: .read),
+    ])
+}
+#endif

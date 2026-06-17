@@ -827,3 +827,454 @@ async fn profile_get_missing_returns_none() {
     let got = server::db::profiles::get_by_account_id(&mut *tx, account_id).await.unwrap();
     assert!(got.is_none());
 }
+
+// ── Storage service tests (docs/05) ──────────────────────────────────────────
+
+use server::db::storage::{self, PutOutcome};
+
+#[tokio::test]
+async fn storage_seq_is_monotonic_per_account() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let a = server::db::accounts::create(&mut *tx, "did:plc:storageseq000000001", None, false).await.unwrap();
+    let b = server::db::accounts::create(&mut *tx, "did:plc:storageseq000000002", None, false).await.unwrap();
+
+    // First allocation for an account is 1 (0 stays reserved).
+    assert_eq!(storage::alloc_seq(&mut *tx, a).await.unwrap(), 1);
+    assert_eq!(storage::alloc_seq(&mut *tx, a).await.unwrap(), 2);
+    assert_eq!(storage::alloc_seq(&mut *tx, a).await.unwrap(), 3);
+    // Counters are independent per account.
+    assert_eq!(storage::alloc_seq(&mut *tx, b).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn storage_put_create_then_pull() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storageput0000001", None, false).await.unwrap();
+    let rid = [1u8; 16];
+
+    match storage::put_item(&mut *tx, acc, &rid, 0, false, b"cipher").await.unwrap() {
+        PutOutcome::Applied { version, seq } => {
+            assert_eq!(version, 1);
+            assert_eq!(seq, 1);
+        }
+        PutOutcome::Conflict { .. } => panic!("create should not conflict"),
+    }
+
+    let items = storage::pull(&mut *tx, acc, 0, 500).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].record_id, rid);
+    assert_eq!(items[0].ciphertext, b"cipher");
+    assert!(!items[0].deleted);
+    assert_eq!(items[0].version, 1);
+    assert_eq!(items[0].seq, 1);
+}
+
+#[tokio::test]
+async fn storage_cas_conflict_leaves_row_unchanged() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagecas0000001", None, false).await.unwrap();
+    let rid = [2u8; 16];
+
+    storage::put_item(&mut *tx, acc, &rid, 0, false, b"v1").await.unwrap();
+
+    // A stale expected_version (0, but the row is now version 1) must conflict.
+    match storage::put_item(&mut *tx, acc, &rid, 0, false, b"v2").await.unwrap() {
+        PutOutcome::Conflict { current_version } => assert_eq!(current_version, 1),
+        PutOutcome::Applied { .. } => panic!("stale write should conflict"),
+    }
+
+    // The row is untouched: still v1 at version 1.
+    let items = storage::pull(&mut *tx, acc, 0, 500).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].ciphertext, b"v1");
+    assert_eq!(items[0].version, 1);
+}
+
+#[tokio::test]
+async fn storage_correct_version_update_bumps_version_and_seq() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storageupd0000001", None, false).await.unwrap();
+    let rid = [3u8; 16];
+
+    storage::put_item(&mut *tx, acc, &rid, 0, false, b"v1").await.unwrap();
+
+    // Updating with the matching expected_version applies and allocates a new seq.
+    match storage::put_item(&mut *tx, acc, &rid, 1, false, b"v2").await.unwrap() {
+        PutOutcome::Applied { version, seq } => {
+            assert_eq!(version, 2);
+            assert_eq!(seq, 2);
+        }
+        PutOutcome::Conflict { .. } => panic!("matching version should apply"),
+    }
+
+    let items = storage::pull(&mut *tx, acc, 0, 500).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].ciphertext, b"v2");
+    assert_eq!(items[0].version, 2);
+}
+
+#[tokio::test]
+async fn storage_tombstone_is_recorded() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagetomb000001", None, false).await.unwrap();
+    let rid = [4u8; 16];
+
+    storage::put_item(&mut *tx, acc, &rid, 0, false, b"live").await.unwrap();
+    // Delete with the matching version; tombstones carry an empty ciphertext.
+    storage::put_item(&mut *tx, acc, &rid, 1, true, b"").await.unwrap();
+
+    let items = storage::pull(&mut *tx, acc, 0, 500).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].deleted);
+    assert!(items[0].ciphertext.is_empty());
+    assert_eq!(items[0].version, 2);
+}
+
+#[tokio::test]
+async fn storage_pull_respects_since_and_limit_ordering() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagepull000001", None, false).await.unwrap();
+    // Three independent records → seq 1, 2, 3.
+    storage::put_item(&mut *tx, acc, &[10u8; 16], 0, false, b"a").await.unwrap();
+    storage::put_item(&mut *tx, acc, &[11u8; 16], 0, false, b"b").await.unwrap();
+    storage::put_item(&mut *tx, acc, &[12u8; 16], 0, false, b"c").await.unwrap();
+
+    // limit caps the page and results are ordered by seq ascending.
+    let page = storage::pull(&mut *tx, acc, 0, 2).await.unwrap();
+    assert_eq!(page.len(), 2);
+    assert_eq!(page[0].seq, 1);
+    assert_eq!(page[1].seq, 2);
+
+    // since filters to strictly newer rows.
+    let rest = storage::pull(&mut *tx, acc, 1, 500).await.unwrap();
+    assert_eq!(rest.len(), 2);
+    assert_eq!(rest[0].seq, 2);
+    assert_eq!(rest[1].seq, 3);
+}
+
+#[tokio::test]
+async fn storage_is_scoped_to_account() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let a = server::db::accounts::create(&mut *tx, "did:plc:storageiso0000001", None, false).await.unwrap();
+    let b = server::db::accounts::create(&mut *tx, "did:plc:storageiso0000002", None, false).await.unwrap();
+
+    storage::put_item(&mut *tx, a, &[20u8; 16], 0, false, b"a-only").await.unwrap();
+
+    // Account b's store never sees account a's records.
+    let b_items = storage::pull(&mut *tx, b, 0, 500).await.unwrap();
+    assert!(b_items.is_empty());
+
+    let (b_bytes, b_count) = storage::account_usage(&mut *tx, b).await.unwrap();
+    assert_eq!(b_bytes, 0);
+    assert_eq!(b_count, 0);
+}
+
+#[tokio::test]
+async fn storage_account_usage_excludes_tombstones() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storageusage00001", None, false).await.unwrap();
+    storage::put_item(&mut *tx, acc, &[30u8; 16], 0, false, b"12345").await.unwrap();
+    storage::put_item(&mut *tx, acc, &[31u8; 16], 0, false, b"678").await.unwrap();
+
+    let (bytes, count) = storage::account_usage(&mut *tx, acc).await.unwrap();
+    assert_eq!(bytes, 8);
+    assert_eq!(count, 2);
+
+    // Tombstoning a record removes it from the live byte/count totals.
+    storage::put_item(&mut *tx, acc, &[30u8; 16], 1, true, b"").await.unwrap();
+    let (bytes, count) = storage::account_usage(&mut *tx, acc).await.unwrap();
+    assert_eq!(bytes, 3);
+    assert_eq!(count, 1);
+}
+
+// ── Storage snapshot tests (docs/05 §7) ──────────────────────────────────────
+
+use server::db::storage::SnapshotOutcome;
+
+#[tokio::test]
+async fn storage_snapshot_absent_then_stored() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00001", None, false).await.unwrap();
+
+    // No snapshot yet.
+    assert!(storage::get_snapshot(&mut *tx, acc).await.unwrap().is_none());
+
+    // First push always wins (no row to compare against).
+    match storage::put_snapshot(&mut *tx, acc, 5, b"snap-v5").await.unwrap() {
+        SnapshotOutcome::Stored { snapshot_version } => assert_eq!(snapshot_version, 5),
+        SnapshotOutcome::Stale { .. } => panic!("first snapshot should store"),
+    }
+
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.snapshot_version, 5);
+    assert_eq!(snap.blob, b"snap-v5");
+}
+
+#[tokio::test]
+async fn storage_snapshot_lww_newer_wins_stale_rejected() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let acc = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00002", None, false).await.unwrap();
+
+    storage::put_snapshot(&mut *tx, acc, 10, b"v10").await.unwrap();
+
+    // A strictly newer version replaces the blob.
+    match storage::put_snapshot(&mut *tx, acc, 11, b"v11").await.unwrap() {
+        SnapshotOutcome::Stored { snapshot_version } => assert_eq!(snapshot_version, 11),
+        SnapshotOutcome::Stale { .. } => panic!("newer snapshot should store"),
+    }
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.blob, b"v11");
+
+    // An equal version is not strictly newer → rejected, blob untouched.
+    match storage::put_snapshot(&mut *tx, acc, 11, b"v11-dup").await.unwrap() {
+        SnapshotOutcome::Stale { current_version } => assert_eq!(current_version, 11),
+        SnapshotOutcome::Stored { .. } => panic!("equal version should not store"),
+    }
+    // An older version is likewise rejected.
+    match storage::put_snapshot(&mut *tx, acc, 9, b"v9").await.unwrap() {
+        SnapshotOutcome::Stale { current_version } => assert_eq!(current_version, 11),
+        SnapshotOutcome::Stored { .. } => panic!("older version should not store"),
+    }
+
+    // The stored snapshot is still v11's blob, never the rejected pushes.
+    let snap = storage::get_snapshot(&mut *tx, acc).await.unwrap().unwrap();
+    assert_eq!(snap.snapshot_version, 11);
+    assert_eq!(snap.blob, b"v11");
+}
+
+#[tokio::test]
+async fn storage_snapshot_is_scoped_to_account() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let a = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00003", None, false).await.unwrap();
+    let b = server::db::accounts::create(&mut *tx, "did:plc:storagesnap00004", None, false).await.unwrap();
+
+    storage::put_snapshot(&mut *tx, a, 1, b"a-snap").await.unwrap();
+
+    // Account b has no snapshot of its own.
+    assert!(storage::get_snapshot(&mut *tx, b).await.unwrap().is_none());
+}
+
+// ── Projects / capabilities / tokens / events (docs/22, 24) ──────────────────
+
+use server::db::{capabilities, projects, server_events, token_redemptions};
+
+#[tokio::test]
+async fn project_create_find_delete() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let id = projects::create(&mut *tx, "proj-cfd", "Project", Some("https://x.test")).await.unwrap();
+    let found = projects::find_by_slug(&mut *tx, "proj-cfd").await.unwrap().unwrap();
+    assert_eq!(found.id, id);
+    assert_eq!(found.name, "Project");
+    assert_eq!(found.url.as_deref(), Some("https://x.test"));
+    assert!(found.signing_public_key.is_none());
+
+    assert!(projects::delete_by_slug(&mut *tx, "proj-cfd").await.unwrap());
+    assert!(projects::find_by_slug(&mut *tx, "proj-cfd").await.unwrap().is_none());
+    assert!(!projects::delete_by_slug(&mut *tx, "proj-cfd").await.unwrap());
+}
+
+#[tokio::test]
+async fn ensure_adminbot_project_idempotent() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let a = projects::ensure_adminbot_project(&mut *tx, "adminbot").await.unwrap();
+    let b = projects::ensure_adminbot_project(&mut *tx, "adminbot").await.unwrap();
+    assert_eq!(a, b, "ensure must be idempotent");
+}
+
+#[tokio::test]
+async fn project_bots_one_to_many_and_resolution() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let p1 = projects::create(&mut *tx, "proj-otm-1", "P1", None).await.unwrap();
+    let p2 = projects::create(&mut *tx, "proj-otm-2", "P2", None).await.unwrap();
+    let bot_a = server::db::accounts::create(&mut *tx, "did:local:botm1", None, true).await.unwrap();
+    let bot_b = server::db::accounts::create(&mut *tx, "did:local:botm2", None, true).await.unwrap();
+
+    // One Project, many bots.
+    projects::link_bot(&mut *tx, p1, bot_a).await.unwrap();
+    projects::link_bot(&mut *tx, p1, bot_b).await.unwrap();
+    let dids = projects::bot_dids(&mut *tx, p1).await.unwrap();
+    assert_eq!(dids.len(), 2);
+
+    // Resolution: account -> its project.
+    let (pid, slug) = projects::project_for_account(&mut *tx, bot_a).await.unwrap().unwrap();
+    assert_eq!(pid, p1);
+    assert_eq!(slug, "proj-otm-1");
+
+    // Re-linking a bot moves it to another Project (a bot is in <=1 Project).
+    projects::link_bot(&mut *tx, p2, bot_a).await.unwrap();
+    let (pid2, _) = projects::project_for_account(&mut *tx, bot_a).await.unwrap().unwrap();
+    assert_eq!(pid2, p2);
+    assert_eq!(projects::bot_dids(&mut *tx, p1).await.unwrap().len(), 1);
+
+    // Unlink.
+    assert!(projects::unlink_bot(&mut *tx, bot_a).await.unwrap());
+    assert!(projects::project_for_account(&mut *tx, bot_a).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn capabilities_grant_check_revoke() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let p = projects::create(&mut *tx, "proj-cap", "P", None).await.unwrap();
+    let bot = server::db::accounts::create(&mut *tx, "did:local:capbot1", None, true).await.unwrap();
+    projects::link_bot(&mut *tx, p, bot).await.unwrap();
+
+    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+
+    capabilities::grant(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED, "did:local:admin").await.unwrap();
+    // Idempotent re-grant.
+    capabilities::grant(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED, "did:local:admin").await.unwrap();
+    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert_eq!(capabilities::list(&mut *tx, p).await.unwrap(), vec![capabilities::SUBSCRIBE_ACCOUNT_JOINED.to_string()]);
+
+    assert!(capabilities::revoke(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(!capabilities::revoke(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+}
+
+#[tokio::test]
+async fn adminbot_superuser_short_circuit() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let pid = projects::ensure_adminbot_project(&mut *tx, "adminbot").await.unwrap();
+    let bot = server::db::accounts::create(&mut *tx, "did:local:superu1", None, true).await.unwrap();
+    projects::link_bot(&mut *tx, pid, bot).await.unwrap();
+
+    // No capability rows granted, yet the adminbot Project's bot holds all.
+    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::REGISTRATION_GATEKEEPER).await.unwrap());
+}
+
+// Note: `any_gatekeeper_exists` is a *global* existence check, so it can't be
+// asserted under the transaction-rollback pattern on the shared dev DB
+// (http_tests commits gatekeeper grants that this would observe). Its behavior
+// — and the shared-secret auto-disable/re-enable it drives — is covered
+// end-to-end by `closed_registration_admission_matrix` in http_tests.rs.
+
+#[tokio::test]
+async fn gatekeeper_signing_key_set_and_clear() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let p = projects::create(&mut *tx, "proj-gk", "GK", None).await.unwrap();
+    projects::set_signing_key(&mut *tx, p, Some(&[7u8; 32])).await.unwrap();
+    let found = projects::find_by_slug(&mut *tx, "proj-gk").await.unwrap().unwrap();
+    assert_eq!(found.signing_public_key.as_deref(), Some(&[7u8; 32][..]));
+
+    projects::set_signing_key(&mut *tx, p, None).await.unwrap();
+    assert!(projects::find_by_slug(&mut *tx, "proj-gk").await.unwrap().unwrap().signing_public_key.is_none());
+}
+
+#[tokio::test]
+async fn token_redemption_is_single_use() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    assert!(!token_redemptions::is_redeemed(&mut *tx, "jti-su-1").await.unwrap());
+    assert!(token_redemptions::try_redeem(&mut *tx, "jti-su-1", "gk", "invite", "did:plc:x").await.unwrap());
+    assert!(token_redemptions::is_redeemed(&mut *tx, "jti-su-1").await.unwrap());
+    // Replay conflicts.
+    assert!(!token_redemptions::try_redeem(&mut *tx, "jti-su-1", "gk", "invite", "did:plc:y").await.unwrap());
+}
+
+#[tokio::test]
+async fn server_events_append_and_fetch() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let id1 = server_events::append_account_joined(&mut *tx, "did:plc:ev1", Some("tok-1"), 1000).await.unwrap();
+    let id2 = server_events::append_account_joined(&mut *tx, "did:plc:ev2", None, 2000).await.unwrap();
+    assert!(id2 > id1);
+
+    // Filter to our own events rather than asserting raw counts — the shared
+    // dev DB carries many committed events from other tests. Window from just
+    // below id1 so the LIMIT can't truncate ours (they're the lowest ids in it).
+    let kind = server_events::KIND_ACCOUNT_JOINED;
+    let window = server_events::fetch_since(&mut *tx, id1 - 1, kind, 500).await.unwrap();
+    let e1 = window.iter().find(|e| e.id == id1).expect("ev1 present");
+    let e2 = window.iter().find(|e| e.id == id2).expect("ev2 present");
+    assert_eq!(e1.did, "did:plc:ev1");
+    assert_eq!(e1.invite_token.as_deref(), Some("tok-1"));
+    assert_eq!(e2.did, "did:plc:ev2");
+    assert!(e2.invite_token.is_none());
+
+    // fetch_since is strictly-greater-than: id1 is excluded, id2 included.
+    let after = server_events::fetch_since(&mut *tx, id1, kind, 500).await.unwrap();
+    assert!(after.iter().any(|e| e.id == id2), "id2 after id1");
+    assert!(!after.iter().any(|e| e.id == id1), "id1 excluded by since=id1");
+}
+
+#[tokio::test]
+async fn delete_account_unlinks_from_project() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let p = projects::create(&mut *tx, "proj-del", "P", None).await.unwrap();
+    let bot = server::db::accounts::create(&mut *tx, "did:local:delbot1", None, true).await.unwrap();
+    projects::link_bot(&mut *tx, p, bot).await.unwrap();
+
+    server::db::accounts::delete_account(&mut *tx, bot).await.unwrap();
+
+    // Bot link is gone; the Project row survives.
+    assert!(projects::project_for_account(&mut *tx, bot).await.unwrap().is_none());
+    assert!(projects::find_by_slug(&mut *tx, "proj-del").await.unwrap().is_some());
+}
+
+// ── Abuse reports (docs/12 §3) ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn abuse_report_insert_and_count() {
+    use server::db::{abuse, accounts};
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let reporter = accounts::create(&mut *tx, "did:plc:abusereporter01", None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(abuse::count_by_reporter(&mut *tx, reporter).await.unwrap(), 0);
+
+    let id = abuse::insert(&mut *tx, "did:plc:spammer1", "spam", reporter).await.unwrap();
+    assert!(id > 0);
+    abuse::insert(&mut *tx, "did:plc:spammer1", "harassment", reporter).await.unwrap();
+
+    // Per-reporter count drives the rate limit / operator audit.
+    assert_eq!(abuse::count_by_reporter(&mut *tx, reporter).await.unwrap(), 2);
+
+    // Operator-review listing returns both, newest first, no message content.
+    let reports = abuse::list_for_did(&mut *tx, "did:plc:spammer1").await.unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].reason, "harassment");
+    assert_eq!(reports[1].reason, "spam");
+    assert!(reports.iter().all(|r| r.reporter_account == reporter));
+}

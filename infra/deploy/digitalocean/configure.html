@@ -95,6 +95,7 @@ write_files:
       SERVER_URL="__SERVER_URL__"
       SERVER_NAME="__SERVER_NAME__"
       RELAY_URL="__RELAY_URL__"
+      REGISTRATION_SHARED_SECRET="__REGISTRATION_SHARED_SECRET__"
 
   - path: /etc/postgresql/16/main/conf.d/avalanche.conf
     permissions: '0644'
@@ -283,6 +284,7 @@ write_files:
       RELAY_URL=$RELAY_URL
       BIND_ADDR=127.0.0.1:3000
       DATABASE_URL=postgresql:///avalanche?host=/var/run/postgresql
+      REGISTRATION_SHARED_SECRET=$REGISTRATION_SHARED_SECRET
       EOF
       chown root:avalanche /etc/avalanche/avalanche.env
       chmod 640 /etc/avalanche/avalanche.env
@@ -333,11 +335,30 @@ const INVITE_DOMAIN = 'go.theavalanche.net';
 const RELEASE_VERSION = '0.1.0';
 const BINARY_URL = `https://github.com/lincolnq/actnet/releases/download/${RELEASE_VERSION}/avalanche-server`;
 
+// One high-entropy bootstrap secret per page load. Stable across re-renders so
+// the env file and the invite link always agree. It gates registration while
+// the server runs closed (the default) and auto-disables once a gatekeeper
+// Project is installed (see docs/24).
+const SHARED_SECRET = (() => {
+  // 16 bytes = 128 bits, ample for a rate-limited bootstrap credential, and
+  // keeps the invite token (and its QR) compact.
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+})();
+
+function b64url(s) {
+  return btoa(s).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
 function inviteUrl(serverUrl) {
-  // Matches dev-invite.py: base64url(JSON({"server_url": ...})), no padding.
-  const payload = JSON.stringify({server_url: serverUrl});
-  const b64 = btoa(payload).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-  return `https://${INVITE_DOMAIN}/invite/${b64}`;
+  // base64url(JSON) with single-char keys (s=server_url, k=bootstrap_secret),
+  // no padding — keeps the QR low-density. The secret lets people register
+  // while the server is closed; share this link/QR to onboard your first
+  // members, then install a gatekeeper to retire it.
+  const payload = JSON.stringify({s: serverUrl, k: SHARED_SECRET});
+  return `https://${INVITE_DOMAIN}/i/${b64url(payload)}`;
 }
 
 function render() {
@@ -350,6 +371,7 @@ function render() {
     .replace('__SERVER_URL__', values.server_url)
     .replace('__SERVER_NAME__', values.server_name)
     .replace('__RELAY_URL__', RELAY_URL)
+    .replace('__REGISTRATION_SHARED_SECRET__', SHARED_SECRET)
     .replace('__BINARY_URL__', BINARY_URL)
     .replace('__INVITE_URL__', url);
   document.getElementById('cloudinit_out').value = cloudinit;

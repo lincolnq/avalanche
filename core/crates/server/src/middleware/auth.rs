@@ -49,15 +49,18 @@ where
     }
 }
 
-/// Extractor for `/v1/admin/*` endpoints. Validates the session token (same
-/// as [`AuthDevice`]), then resolves the device to an account DID and
-/// rejects unless that DID matches the server's pinned `ADMINBOT_DID`.
+/// Extractor for `/v1/admin/*` endpoints. Validates the session token (same as
+/// [`AuthDevice`]), then resolves the device's account and rejects unless that
+/// account is a bot of the pinned adminbot Project (slug
+/// [`crate::config::ADMINBOT_PROJECT_SLUG`]).
 ///
-/// If `ADMINBOT_DID` is unset, every caller is rejected — adminbot's
-/// bootstrap requires the operator to set the pin before any privileged
-/// endpoint accepts a caller.
+/// Authority is *membership in that Project*, not a fixed DID — so adminbot may
+/// use any DID(s) and rotate freely. The membership is seeded only from
+/// operator config (`ADMINBOT_DIDS`) at startup, never via the admin API, which
+/// keeps superuser grantable only by the operator (docs/22).
 pub struct AuthAdminbot {
     pub device_pk: i64,
+    pub account_id: i64,
     pub did: String,
 }
 
@@ -70,7 +73,6 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let pinned = app_state.config.adminbot_did.as_str();
 
         let token = extract_bearer_token(parts)?;
         let mut conn = app_state.db.acquire().await.map_err(ServerError::Db)?;
@@ -78,21 +80,29 @@ where
             .await?
             .ok_or(ServerError::Unauthorized)?;
 
-        let did: String = sqlx::query(
-            "SELECT a.did FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
+        let row = sqlx::query(
+            "SELECT a.id AS account_id, a.did FROM devices d \
+             JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
         )
         .bind(device_pk)
         .fetch_optional(&mut *conn)
         .await
         .map_err(ServerError::Db)?
-        .ok_or(ServerError::Unauthorized)?
-        .get("did");
+        .ok_or(ServerError::Unauthorized)?;
+        let account_id: i64 = row.get("account_id");
+        let did: String = row.get("did");
 
-        if did != pinned {
-            return Err(ServerError::Unauthorized);
+        // Adminbot authority = membership in the pinned adminbot Project.
+        match db::projects::project_for_account(&mut conn, account_id).await? {
+            Some((_, slug)) if slug == crate::config::ADMINBOT_PROJECT_SLUG => {}
+            _ => return Err(ServerError::Unauthorized),
         }
 
-        Ok(AuthAdminbot { device_pk, did })
+        Ok(AuthAdminbot {
+            device_pk,
+            account_id,
+            did,
+        })
     }
 }
 

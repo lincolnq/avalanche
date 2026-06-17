@@ -76,7 +76,7 @@ pub struct PlcService {
 /// The genesis op intentionally omits `verification_methods` so the resulting
 /// DID is a function of only the rotation key + signup server URL. This is
 /// what makes the DID deterministically recoverable from the passkey alone
-/// (see `33-identity-auth-recovery.md`).
+/// (see `50-identity-auth-recovery.md`).
 ///
 /// The identity key is added immediately afterward via
 /// [`build_identity_update_op`].
@@ -541,7 +541,7 @@ mod tests {
     fn did_is_deterministic_from_rotation_and_server() {
         // Same rotation key + server URL → same DID. Load-bearing for the
         // "recover the DID from passkey + signup server URL alone" property
-        // documented in 33-identity-auth-recovery.md. Relies on RFC 6979
+        // documented in 50-identity-auth-recovery.md. Relies on RFC 6979
         // deterministic ECDSA, which is the p256 crate's default for `sign`.
         let (priv_key, pub_key) = generate_rotation_key();
         let server = "https://example.com";

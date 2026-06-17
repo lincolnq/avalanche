@@ -42,6 +42,7 @@
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod invite_token;
 pub mod middleware;
 pub mod migrate;
 pub mod plc;

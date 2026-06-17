@@ -29,12 +29,26 @@ extension AppCoreProtocol {
     func listContacts() throws -> [ContactRowFfi] { [] }
     func touchContact(did: String, curated: Bool) throws {}
 
+    // MARK: - Abuse handling (docs/12-abuse-handling.md)
+
+    func blockContact(did: String) throws {}
+    func unblockContact(did: String) throws {}
+    func listBlocked() throws -> [ContactRowFfi] { [] }
+    func acceptRequest(did: String) throws {}
+    func deleteRequest(did: String) throws {}
+    func reportAndBlock(did: String, reason: String) throws {}
+
     func hasRecovery() -> Bool { false }
-    func updateRecoveryBlob(recoveryKey: Data, servers: [String]) throws {}
+    func updateRecoveryBlob(prfOutput: Data, servers: [String]) throws {}
+
+    // MARK: - Storage sync (docs/05-device-data-sync.md)
+
+    func syncStorage() throws {}
 
     // MARK: - Messaging
 
     func sendDm(recipientDid: String, plaintext: Data, sentAtMs: Int64) throws {}
+    func sendMessage(target: MessageTarget, plaintext: Data, sentAtMs: Int64) throws {}
     func sendReadReceipt(recipientDid: String, timestamps: [Int64]) throws {}
     func receiveMessages() throws -> [DecryptedMessage] { [] }
 
@@ -44,6 +58,16 @@ extension AppCoreProtocol {
     func loadConversations() throws -> [ConversationSummaryFfi] { [] }
     func markMessagesRead(conversationId: String, upToSentAtMs: Int64) throws -> UInt64 { 0 }
     func unreadCount(conversationId: String) throws -> UInt64 { 0 }
+    func getConversationTimer(conversationId: String) throws -> UInt32? { nil }
+    func setConversationTimer(recipientDid: String, expirySecs: UInt32?) throws {}
+
+    // MARK: - Reactions / editing / deletion (docs/33, docs/36)
+
+    func sendReaction(target: MessageTarget, targetAuthor: String, targetSentAtMs: Int64, emoji: String, remove: Bool, sentAtMs: Int64) throws {}
+    func sendEdit(target: MessageTarget, targetSentAtMs: Int64, newBody: String, sentAtMs: Int64) throws {}
+    func sendDelete(target: MessageTarget, targetAuthor: String, targetSentAtMs: Int64, forEveryone: Bool, sentAtMs: Int64) throws {}
+    func loadReactions(conversationId: String) throws -> [ReactionFfi] { [] }
+    func loadMessageRevisions(conversationId: String, author: String, sentAtMs: Int64) throws -> [MessageRevisionFfi] { [] }
 
     // MARK: - Projects / push
 
@@ -96,5 +120,5 @@ extension AppCoreProtocol {
     func changeMemberRole(groupId: String, encryptedMemberId: String, newRole: Int16) throws {}
     func applyPendingGroupChanges(groupId: String) throws -> Int64 { 0 }
     func rotateGroupPseudonym(groupId: String) throws -> Data { Data(count: 24) }
-    func sendGroupMessage(groupId: String, plaintext: Data) throws {}
+    func sendGroupMessage(groupId: String, plaintext: Data, sentAtMs: Int64) throws {}
 }

@@ -80,19 +80,32 @@ async fn ws_upgrade(
         .await?
         .ok_or(ServerError::Unauthorized)?;
 
-    // Resolve the device's account DID once at upgrade time so the loop can
-    // check whether this is the pinned adminbot session without touching the
-    // DB on every frame.
-    let did: Option<String> = sqlx::query_scalar(
-        "SELECT a.did FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
+    // Resolve the device's account once at upgrade time and check whether it
+    // holds `subscribe.account_joined` (the pinned adminbot Project's bots get
+    // it via the superuser short-circuit). If so, this session receives
+    // `AccountJoinedEvent` pushes for as long as it's connected.
+    let account_id: Option<i64> = sqlx::query_scalar(
+        "SELECT a.id FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
     )
     .bind(device_pk)
     .fetch_optional(&mut *conn)
     .await
     .map_err(ServerError::Db)?;
-    let is_adminbot = did.as_deref() == Some(state.config.adminbot_did.as_str());
+    let subscribes_account_joined = match account_id {
+        Some(aid) => {
+            db::capabilities::account_has_capability(
+                &mut conn,
+                aid,
+                db::capabilities::SUBSCRIBE_ACCOUNT_JOINED,
+            )
+            .await?
+        }
+        None => false,
+    };
 
-    Ok(ws.on_upgrade(move |socket| handle_ws(socket, state, device_pk, is_adminbot)))
+    Ok(ws.on_upgrade(move |socket| {
+        handle_ws(socket, state, device_pk, subscribes_account_joined)
+    }))
 }
 
 /// Outstanding server-initiated pushes awaiting an ack. Tracks both
@@ -105,14 +118,23 @@ enum PendingAck {
 }
 type PendingAcks = Arc<Mutex<HashMap<u64, PendingAck>>>;
 
-async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64, is_adminbot: bool) {
+async fn handle_ws(
+    socket: WebSocket,
+    state: AppState,
+    device_pk: i64,
+    subscribes_account_joined: bool,
+) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsPush>();
 
     state.ws_connections.write().await.insert(device_pk, tx.clone());
-    if is_adminbot {
-        *state.adminbot_session.write().await = Some(tx.clone());
-        tracing::info!(device_pk, "ws: adminbot session connected");
+    if subscribes_account_joined {
+        state
+            .account_joined_subscribers
+            .write()
+            .await
+            .insert(device_pk, tx.clone());
+        tracing::info!(device_pk, "ws: account_joined subscriber connected");
     }
 
     let pending: PendingAcks = Arc::new(Mutex::new(HashMap::new()));
@@ -211,18 +233,18 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64, is_adminb
                             })),
                         }
                     }
-                    WsPush::AccountJoined { did, joined_at_ms } => {
+                    WsPush::AccountJoined { did, joined_at_ms, invite_token } => {
                         tracing::info!(
                             device_pk,
-                            is_adminbot,
                             new_did = %did,
-                            "ws: forwarding AccountJoined to client"
+                            "ws: forwarding AccountJoined to subscriber"
                         );
                         WsFrame {
                             id: 0,
                             body: Some(Body::AccountJoined(AccountJoinedEvent {
                                 did,
                                 joined_at_ms,
+                                invite_token,
                             })),
                         }
                     }
@@ -267,12 +289,14 @@ async fn handle_ws(socket: WebSocket, state: AppState, device_pk: i64, is_adminb
     }
 
     state.ws_connections.write().await.remove(&device_pk);
-    if is_adminbot {
-        let mut slot = state.adminbot_session.write().await;
-        if let Some(existing) = slot.as_ref() {
+    if subscribes_account_joined {
+        let mut subs = state.account_joined_subscribers.write().await;
+        // Only remove if it's still our channel (a later reconnect for the
+        // same device may have overwritten it).
+        if let Some(existing) = subs.get(&device_pk) {
             if existing.same_channel(&tx) {
-                *slot = None;
-                tracing::info!(device_pk, "ws: adminbot session disconnected");
+                subs.remove(&device_pk);
+                tracing::info!(device_pk, "ws: account_joined subscriber disconnected");
             }
         }
     }

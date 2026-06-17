@@ -2,75 +2,52 @@
 //!
 //! The blob is a server-side cache that lets a recovering device skip
 //! re-registration friction. It holds the device identity keypair, the
-//! server list, and profile data. **It does NOT contain the rotation key** —
-//! the rotation key is deterministically re-derived from the passkey on every
-//! recovery via [`derive_recovery_keys_from_prf`], so the blob never needs to
-//! carry DID-controlling authority.
+//! server list, profile data, and the user's group master keys. **It does
+//! NOT contain the rotation key** — that's deterministically re-derived from
+//! the passkey on every recovery via [`derive_recovery_keys_from_prf`], so
+//! the blob never carries DID-controlling authority.
 //!
-//! Encryption: AES-256-GCM with a random 12-byte nonce, using the blob key
-//! derived from the passkey PRF output via HKDF (label `"actnet-blob-v1"`).
-//! Wire format: `version (1 byte) || nonce (12 bytes) || ciphertext || tag (16 bytes)`
+//! Wire format (v4):
+//!   `version(1) || nonce(12) || AES-256-GCM(RecoveryBlob proto || tag)`
 //!
-//! Always bump [`RECOVERY_BLOB_VERSION`] when changing the plaintext schema
-//! or the wire format.
+//! Earlier formats (v2, v3 JSON) are not accepted — this project has no
+//! deployed users to migrate.
+//!
+//! Always bump [`RECOVERY_BLOB_VERSION`] when changing the wire format.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use base64::prelude::*;
-use serde::{Deserialize, Serialize};
+use prost::Message as _;
 
 use crate::error::AppError;
+use crate::proto::recovery as proto;
+
+/// Public re-export so callers don't have to reach into `crate::proto`.
+pub use crate::proto::recovery::{RecoveredGroup, RecoveryBlob, ServerEntry};
 
 const NONCE_LEN: usize = 12;
 
-/// Current recovery-blob wire-format version. Bump whenever the byte layout
-/// or plaintext schema changes in a non-backward-compatible way. Decryption
-/// rejects unknown versions so old clients fail loudly rather than parsing
-/// garbage.
-///
-/// v2 dropped the `rotation_key` field — the rotation key is now derived
-/// from the passkey via HKDF at recovery time, not stored in the blob.
-pub const RECOVERY_BLOB_VERSION: u8 = 2;
+/// Current recovery-blob wire-format version. v4 is protobuf-encoded with
+/// homeserver URLs interned in a top-level `servers` table and groups
+/// referencing them by index (so N groups on the same homeserver pay one
+/// URL plus N varints instead of N×len(url) bytes).
+pub const RECOVERY_BLOB_VERSION: u8 = 4;
 
-/// Plaintext contents of a recovery blob (v2 schema).
-#[derive(Serialize, Deserialize)]
-pub struct RecoveryBlobPlaintext {
-    /// libsignal identity keypair (serialized bytes, base64). Generated
-    /// randomly per device at signup; restored from the blob to preserve
-    /// safety numbers across device migrations.
-    pub identity_keypair: String,
-    /// List of homeserver URLs the user is registered on.
-    pub servers: Vec<String>,
-    /// 32-byte profile key (base64). Used to encrypt the user's display
-    /// name into the server-stored profile blob. Restoring it on recovery
-    /// keeps existing contacts pointed at the same profile blob, so their
-    /// cached display name stays valid.
-    #[serde(default)]
-    pub profile_key: String,
-    /// User's display name in plaintext (mirrors what the server-side
-    /// encrypted profile blob decrypts to). Stored locally as
-    /// `own_profile.display_name`; carried in the recovery blob so a
-    /// fresh device can restore it without prompting.
-    #[serde(default)]
-    pub display_name: String,
-}
-
-/// Encrypt a recovery blob with a 32-byte symmetric key.
+/// Encrypt the v4 protobuf blob with a 32-byte symmetric key.
 pub fn encrypt_recovery_blob(
-    plaintext: &RecoveryBlobPlaintext,
+    plaintext: &RecoveryBlob,
     symmetric_key: &[u8; 32],
 ) -> Result<Vec<u8>, AppError> {
-    let json = serde_json::to_vec(plaintext)
-        .map_err(|e| AppError::Protocol(format!("failed to serialize recovery blob: {e}")))?;
+    let body = plaintext.encode_to_vec();
 
     let cipher = Aes256Gcm::new(symmetric_key.into());
     let nonce_bytes: [u8; NONCE_LEN] = rand::Rng::random(&mut rand::rng());
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(nonce, json.as_slice())
+        .encrypt(nonce, body.as_slice())
         .map_err(|e| AppError::Protocol(format!("recovery blob encryption failed: {e}")))?;
 
     // version || nonce || ciphertext (includes GCM tag)
@@ -81,11 +58,11 @@ pub fn encrypt_recovery_blob(
     Ok(blob)
 }
 
-/// Decrypt a recovery blob with a 32-byte symmetric key.
+/// Decrypt and parse a recovery blob with a 32-byte symmetric key.
 pub fn decrypt_recovery_blob(
     blob: &[u8],
     symmetric_key: &[u8; 32],
-) -> Result<RecoveryBlobPlaintext, AppError> {
+) -> Result<RecoveryBlob, AppError> {
     if blob.len() < 1 + NONCE_LEN + 16 {
         return Err(AppError::Protocol("recovery blob too short".into()));
     }
@@ -101,12 +78,25 @@ pub fn decrypt_recovery_blob(
     let nonce = Nonce::from_slice(nonce_bytes);
 
     let cipher = Aes256Gcm::new(symmetric_key.into());
-    let plaintext = cipher
+    let body = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| AppError::Protocol("recovery blob decryption failed (wrong key?)".into()))?;
 
-    serde_json::from_slice(&plaintext)
-        .map_err(|e| AppError::Protocol(format!("recovery blob JSON parse failed: {e}")))
+    let parsed = RecoveryBlob::decode(body.as_slice())
+        .map_err(|e| AppError::Protocol(format!("recovery blob proto parse failed: {e}")))?;
+
+    // Defensive: every group index must point inside `servers`. We refuse
+    // to surface garbage here so the caller can assume indices are valid.
+    let n = parsed.servers.len() as u32;
+    for (i, g) in parsed.groups.iter().enumerate() {
+        if g.server_index >= n {
+            return Err(AppError::Protocol(format!(
+                "recovery blob group[{i}].server_index {} out of range (servers.len = {n})",
+                g.server_index
+            )));
+        }
+    }
+    Ok(parsed)
 }
 
 /// HKDF labels used to split the passkey PRF output into purpose-bound keys.
@@ -172,7 +162,7 @@ pub fn derive_rotation_key_from_seed(seed: &[u8; 32]) -> (Vec<u8>, Vec<u8>) {
 /// passkey creation — without a passkey there is no PRF output to derive
 /// from, so the rotation key has no recoverable user-held source. The
 /// identity is effectively unrecoverable on device loss; surfaces in the
-/// "skip recovery" path documented in `33-identity-auth-recovery.md`.
+/// "skip recovery" path documented in `50-identity-auth-recovery.md`.
 pub fn generate_rotation_key() -> (Vec<u8>, Vec<u8>) {
     use p256::ecdsa::SigningKey;
     let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
@@ -198,27 +188,80 @@ pub fn sign_with_rotation_key(
     Ok(sig.to_der().as_bytes().to_vec())
 }
 
-/// Build a recovery blob plaintext from the current account state.
+/// A single group's worth of input to the blob builder.
+pub struct GroupBlobEntry {
+    pub master_key: Vec<u8>,
+    pub hosting_server_url: String,
+}
+
+/// Build a recovery blob from the current account state, interning the
+/// homeserver URLs across `account_servers` and `groups` into a single
+/// table referenced by index.
+///
+/// `account_servers[0]` is treated as the primary and always lands at
+/// `servers[0]`. Group server URLs get added to the table in first-seen
+/// order. Each group's `server_index` is set to its position in the
+/// resulting table.
 ///
 /// `profile_key` is the 32-byte symmetric key that encrypts the user's
 /// profile blob on each homeserver. Pass `&[]` to omit (e.g. for bot
 /// accounts that have no profile).
-pub fn build_recovery_plaintext(
+///
+/// `storage_key` is the 32-byte identity-level storage key (docs/05 §11). Pass
+/// `&[]` to omit. Carrying it here is what lets a recovering/linking device
+/// read the identity's durable-state records.
+pub fn build_recovery_blob(
     identity_keypair_bytes: &[u8],
-    servers: &[String],
+    account_servers: &[String],
     profile_key: &[u8],
     display_name: &str,
-) -> RecoveryBlobPlaintext {
-    RecoveryBlobPlaintext {
-        identity_keypair: BASE64_STANDARD.encode(identity_keypair_bytes),
-        servers: servers.to_vec(),
-        profile_key: if profile_key.is_empty() {
-            String::new()
-        } else {
-            BASE64_STANDARD.encode(profile_key)
-        },
-        display_name: display_name.to_string(),
+    groups: &[GroupBlobEntry],
+    storage_key: &[u8],
+) -> RecoveryBlob {
+    let mut servers: Vec<ServerEntry> = Vec::new();
+    let mut intern = |url: &str| -> u32 {
+        if let Some(idx) = servers.iter().position(|s| s.url == url) {
+            return idx as u32;
+        }
+        servers.push(ServerEntry { url: url.to_string() });
+        (servers.len() - 1) as u32
+    };
+
+    for s in account_servers {
+        intern(s);
     }
+    let recovered: Vec<proto::RecoveredGroup> = groups
+        .iter()
+        .map(|g| proto::RecoveredGroup {
+            master_key: g.master_key.clone(),
+            server_index: intern(&g.hosting_server_url),
+        })
+        .collect();
+
+    RecoveryBlob {
+        identity_keypair: identity_keypair_bytes.to_vec(),
+        servers,
+        profile_key: profile_key.to_vec(),
+        display_name: display_name.to_string(),
+        groups: recovered,
+        storage_key: storage_key.to_vec(),
+    }
+}
+
+/// Snapshot every locally-known group into the shape the blob builder
+/// expects. Called by write sites (`update_recovery_blob`, signup,
+/// auto-upload triggers) so the blob always reflects current membership.
+pub async fn collect_group_blob_entries(
+    store: &store::IdentityStore,
+) -> Result<Vec<GroupBlobEntry>, AppError> {
+    let rows = store.list_groups().await?;
+    Ok(rows
+        .into_iter()
+        .map(|g| GroupBlobEntry {
+            master_key: g.master_key,
+            hosting_server_url: g.hosting_server_url,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -228,50 +271,88 @@ mod tests {
     #[test]
     fn round_trip_recovery_blob() {
         let key = [42u8; 32];
-        let plaintext = RecoveryBlobPlaintext {
-            identity_keypair: BASE64_STANDARD.encode(b"fake-identity-keypair"),
-            servers: vec!["https://server1.example".into(), "https://server2.example".into()],
-            profile_key: BASE64_STANDARD.encode([7u8; 32]),
-            display_name: "Sam".into(),
-        };
+        let plaintext = build_recovery_blob(
+            b"fake-identity-keypair",
+            &["https://server1.example".into(), "https://server2.example".into()],
+            &[7u8; 32],
+            "Sam",
+            &[GroupBlobEntry {
+                master_key: vec![1u8; 32],
+                hosting_server_url: "https://server1.example".into(),
+            }],
+            &[9u8; 32],
+        );
 
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         let decrypted = decrypt_recovery_blob(&blob, &key).unwrap();
 
-        assert_eq!(decrypted.identity_keypair, plaintext.identity_keypair);
+        assert_eq!(decrypted.identity_keypair, b"fake-identity-keypair");
+        assert_eq!(decrypted.profile_key, vec![7u8; 32]);
+        assert_eq!(decrypted.display_name, "Sam");
         assert_eq!(decrypted.servers, plaintext.servers);
-        assert_eq!(decrypted.profile_key, plaintext.profile_key);
-        assert_eq!(decrypted.display_name, plaintext.display_name);
+        assert_eq!(decrypted.groups.len(), 1);
+        // Group's server URL already in account_servers, so index reuses 0.
+        assert_eq!(decrypted.groups[0].server_index, 0);
+        assert_eq!(decrypted.groups[0].master_key, vec![1u8; 32]);
+        assert_eq!(decrypted.storage_key, vec![9u8; 32]);
     }
 
     #[test]
-    fn unknown_version_byte_rejected() {
+    fn server_urls_are_interned() {
+        // Three groups, two distinct homeservers, and an account_server
+        // that overlaps one of them — should produce exactly 2 entries in
+        // `servers`, not 4.
+        let blob = build_recovery_blob(
+            b"id",
+            &["https://hs-a".into()],
+            &[],
+            "",
+            &[
+                GroupBlobEntry { master_key: vec![1u8; 32], hosting_server_url: "https://hs-a".into() },
+                GroupBlobEntry { master_key: vec![2u8; 32], hosting_server_url: "https://hs-b".into() },
+                GroupBlobEntry { master_key: vec![3u8; 32], hosting_server_url: "https://hs-a".into() },
+            ],
+            &[],
+        );
+        let urls: Vec<&str> = blob.servers.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(urls, vec!["https://hs-a", "https://hs-b"]);
+        assert_eq!(blob.groups[0].server_index, 0);
+        assert_eq!(blob.groups[1].server_index, 1);
+        assert_eq!(blob.groups[2].server_index, 0);
+    }
+
+    #[test]
+    fn out_of_range_server_index_rejected() {
+        // Hand-build a malicious blob with a dangling server_index and
+        // ensure the decoder refuses it (rather than panicking later).
         let key = [42u8; 32];
-        let plaintext = RecoveryBlobPlaintext {
-            identity_keypair: "dGVzdA==".into(),
-            servers: vec![],
-            profile_key: String::new(),
+        let bad = RecoveryBlob {
+            identity_keypair: b"id".to_vec(),
+            servers: vec![ServerEntry { url: "https://hs".into() }],
+            profile_key: vec![],
             display_name: String::new(),
+            groups: vec![RecoveredGroup { master_key: vec![1u8; 32], server_index: 99 }],
+            storage_key: vec![],
         };
+        let blob = encrypt_recovery_blob(&bad, &key).unwrap();
+        assert!(decrypt_recovery_blob(&blob, &key).is_err());
+    }
+
+    #[test]
+    fn wrong_version_rejected() {
+        let key = [42u8; 32];
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let mut blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         blob[0] = 0xFF;
-        let result = decrypt_recovery_blob(&blob, &key);
-        let err_msg = match result {
-            Err(e) => format!("{e:?}"),
-            Ok(_) => panic!("expected version rejection"),
-        };
-        assert!(err_msg.contains("unsupported recovery blob version"), "got: {err_msg}");
+        assert!(decrypt_recovery_blob(&blob, &key).is_err());
+        blob[0] = 3; // old JSON version
+        assert!(decrypt_recovery_blob(&blob, &key).is_err());
     }
 
     #[test]
     fn encoded_blob_starts_with_version_byte() {
         let key = [42u8; 32];
-        let plaintext = RecoveryBlobPlaintext {
-            identity_keypair: "dGVzdA==".into(),
-            servers: vec![],
-            profile_key: String::new(),
-            display_name: String::new(),
-        };
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         assert_eq!(blob[0], RECOVERY_BLOB_VERSION);
     }
@@ -280,13 +361,7 @@ mod tests {
     fn wrong_key_fails() {
         let key = [42u8; 32];
         let wrong_key = [99u8; 32];
-        let plaintext = RecoveryBlobPlaintext {
-            identity_keypair: "dGVzdA==".into(),
-            servers: vec![],
-            profile_key: String::new(),
-            display_name: String::new(),
-        };
-
+        let plaintext = build_recovery_blob(b"id", &["https://hs".into()], &[], "", &[], &[]);
         let blob = encrypt_recovery_blob(&plaintext, &key).unwrap();
         assert!(decrypt_recovery_blob(&blob, &wrong_key).is_err());
     }

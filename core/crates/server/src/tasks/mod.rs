@@ -112,6 +112,22 @@ pub fn spawn_all(state: AppState) {
         },
     ));
 
+    tokio::spawn(run_periodic(
+        "server_event_retention",
+        Duration::from_secs(3600),
+        pool.clone(),
+        |pool| async move {
+            let mut conn = pool.acquire().await?;
+            // Catch-up window (docs/22): events older than this are dropped.
+            const RETENTION_SECS: i64 = 30 * 86400;
+            let n = db::server_events::delete_older_than(&mut conn, RETENTION_SECS).await?;
+            if n > 0 {
+                tracing::info!(count = n, "expired server events deleted");
+            }
+            Ok(())
+        },
+    ));
+
 
     let state_pv = state.clone();
     tokio::spawn(async move {

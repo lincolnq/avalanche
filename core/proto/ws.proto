@@ -142,5 +142,10 @@ message GroupDeliverAck {
 message AccountJoinedEvent {
   string did          = 1;
   int64  joined_at_ms = 2;
-  reserved 3 to 10;
+  // The raw invite token the account registered with, if any. Lets a bot
+  // route based on which invite flow / gatekeeper the user came through
+  // (issuer stamp + routing tags inside the token). Absent for direct
+  // registrations. Pushed only to bots holding `subscribe.account_joined`.
+  optional string invite_token = 3;
+  reserved 4 to 10;
 }

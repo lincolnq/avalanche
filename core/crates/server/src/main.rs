@@ -95,6 +95,35 @@ async fn main() {
         (zk, chain)
     };
 
+    // Seed the pinned superuser Project (the anchor for adminbot authority).
+    // Seeded empty: a bot becomes superuser by registering with a bootstrap
+    // token that names this Project's slug while the shared secret is active
+    // (see routes::registration). Idempotent.
+    {
+        let mut conn = pool.acquire().await.expect("failed to acquire db connection");
+        db::projects::ensure_adminbot_project(&mut conn, server::config::ADMINBOT_PROJECT_SLUG)
+            .await
+            .expect("failed to seed superuser project");
+    }
+
+    // Warn loudly if registration is closed but no admission path is
+    // configured — otherwise no one (not even the first admin) can register.
+    if config.registration_mode == server::config::RegistrationMode::Closed
+        && config.registration_shared_secret.is_none()
+    {
+        let mut conn = pool.acquire().await.expect("failed to acquire db connection");
+        let has_gatekeeper = db::capabilities::any_gatekeeper_exists(&mut conn)
+            .await
+            .unwrap_or(false);
+        if !has_gatekeeper {
+            tracing::warn!(
+                "registration is CLOSED and no REGISTRATION_SHARED_SECRET is set and no \
+                 gatekeeper is installed — no one can register. Set REGISTRATION_SHARED_SECRET \
+                 (or REGISTRATION_MODE=open for local dev) to admit accounts."
+            );
+        }
+    }
+
     let state = AppState::new(pool, config.clone(), zkgroup_secret, sender_cert_chain);
     tasks::spawn_all(state.clone());
     let app = routes::router()

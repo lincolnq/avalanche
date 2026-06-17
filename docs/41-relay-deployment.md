@@ -124,7 +124,7 @@ Store).
 ```bash
 cat > /etc/systemd/system/actnet-relay.service <<'EOF'
 [Unit]
-Description=actnet push notification relay
+Description=avalanche push notification relay
 After=network.target
 
 [Service]

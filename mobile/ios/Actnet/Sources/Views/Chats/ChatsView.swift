@@ -59,14 +59,15 @@ struct ChatsView: View {
                 ComposeMessageView()
             }
             .onChange(of: appState.navigateToConversation) {
-                if let conv = appState.navigateToConversation {
-                    appState.navigateToConversation = nil
-                    navigationPath = NavigationPath()
-                    // Push after clearing so we land cleanly at root → conversation.
-                    DispatchQueue.main.async {
-                        navigationPath.append(conv)
-                    }
-                }
+                guard let conv = appState.navigateToConversation else { return }
+                appState.navigateToConversation = nil
+                // Replace the whole path in one atomic update: root → conversation.
+                // The previous reset-to-empty + `DispatchQueue.main.async` append
+                // was two mutations across runloops; on the deep-link path it
+                // raced with the tab switch and the still-dismissing ProjectWebView
+                // sheet, landing on a blank pushed view. A single assignment lands
+                // cleanly at root → conversation with no intermediate empty state.
+                navigationPath = NavigationPath([conv])
             }
         }
     }

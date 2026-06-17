@@ -22,12 +22,16 @@ import {
   initLogging,
   type AdminEvent,
   type IncomingEvent,
+  type SendTarget,
 } from "@actnet/app-core";
 
-// Reserved well-known suffix for the canonical adminbot account on every
-// homeserver. Server-side this is the default value of ADMINBOT_DID.
+// Reserved well-known suffix for the canonical adminbot account. This also
+// matches the server's superuser Project slug (ADMINBOT_PROJECT_SLUG), so the
+// bootstrap token below both registers the bot and links it into the superuser
+// Project — granting admin authority (docs/24).
 const ADMINBOT_DID_SUFFIX = "adminbot";
 const ADMINBOT_DID = `did:local:${ADMINBOT_DID_SUFFIX}`;
+const SUPERUSER_PROJECT_SLUG = "adminbot";
 
 interface AdminbotState {
   adminsGroupId?: string;
@@ -42,6 +46,7 @@ interface Env {
   dbKey: string;
   initialAdmins: string[];
   logLevel: string;
+  sharedSecret?: string;
 }
 
 function readEnv(): Env {
@@ -63,6 +68,9 @@ function readEnv(): Env {
     dbKey: process.env.ADMINBOT_DB_KEY ?? "",
     initialAdmins,
     logLevel: process.env.ADMINBOT_LOG ?? "info",
+    // Bootstrap secret for closed-registration servers (docs/24). Required to
+    // register against a closed server; unset/ignored on an open one.
+    sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
   };
 }
 
@@ -79,36 +87,32 @@ function adminsTitle(serverUrl: string): string {
   return `#admins @ ${new URL(serverUrl).hostname}`;
 }
 
-async function registerOrLogin(env: Env): Promise<AppCore> {
-  // Try login first. A SQLCipher file existing on disk doesn't mean it
-  // contains a registered account (createBotAccount opens the store before
-  // it talks to the server, so a failed registration can leave an empty
-  // DB behind).
-  if (existsSync(env.dbPath)) {
-    try {
-      const core = await AppCore.login(env.dbPath, env.dbKey);
-      if (core.did() !== ADMINBOT_DID) {
-        throw new Error(
-          `local store DID (${core.did()}) is not the reserved adminbot DID ` +
-            `(${ADMINBOT_DID}). This state dir belongs to a different bot.`,
-        );
-      }
-      return core;
-    } catch (e) {
-      if (!/no account found in local store/.test((e as Error).message)) throw e;
-      // Empty store from a previous failed registration — fall through.
-    }
-  }
-  console.log(`adminbot: registering reserved DID ${ADMINBOT_DID} on ${env.serverUrl}`);
-  const core = await AppCore.createBotAccount(
+async function loginOrRegister(env: Env): Promise<AppCore> {
+  // Register on first run, re-login thereafter. app-core decides which based
+  // on whether the store already holds an account (including the empty-DB-from-
+  // a-failed-registration case) — adminbot only supplies the reserved DID.
+  // Bootstrap token naming the superuser Project: registers the bot (against a
+  // closed server) and links it into the superuser Project, granting admin
+  // authority. Only consulted on first-run registration; ignored on re-login.
+  const inviteToken = env.sharedSecret
+    ? AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, SUPERUSER_PROJECT_SLUG)
+    : undefined;
+  const core = await AppCore.loginOrCreateBot(
     env.serverUrl,
     env.dbPath,
     env.dbKey,
     "Adminbot",
     ADMINBOT_DID_SUFFIX,
+    inviteToken,
   );
+  // Identity policy is ours, not the core's: the store must belong to the
+  // reserved adminbot DID. A mismatch means this state dir was created by a
+  // different bot, or the server handed back an unexpected DID.
   if (core.did() !== ADMINBOT_DID) {
-    throw new Error(`server returned unexpected DID ${core.did()}; expected ${ADMINBOT_DID}`);
+    throw new Error(
+      `local store DID (${core.did()}) is not the reserved adminbot DID ` +
+        `(${ADMINBOT_DID}); this state dir belongs to a different bot`,
+    );
   }
   return core;
 }
@@ -166,9 +170,21 @@ async function handleMessage(
   groupId: string,
   event: IncomingEvent,
 ): Promise<void> {
-  if (event.kind === "message" && event.message.groupId === groupId) {
-    await handleCommand(core, groupId, event.message.senderDid, event.message.body.trim());
-  }
+  if (event.kind !== "message") return;
+  const msg = event.message;
+  if (msg.senderDid === ADMINBOT_DID) return;
+  // Slash commands are accepted in #admins and in 1:1 DMs with the bot.
+  // Replies always go back through the same channel (group → group send,
+  // DM → DM).
+  const inAdminsGroup = msg.groupId === groupId;
+  const isDm = msg.groupId == null;
+  if (!inAdminsGroup && !isDm) return;
+  await handleCommand(
+    core,
+    inAdminsGroup ? { kind: "group", groupId } : { kind: "dm", recipientDid: msg.senderDid },
+    msg.senderDid,
+    msg.body.trim(),
+  );
 }
 
 async function handleAdminEvent(
@@ -176,34 +192,50 @@ async function handleAdminEvent(
   groupId: string,
   event: AdminEvent,
 ): Promise<void> {
-  if (event.kind === "accountJoined") {
-    const { did } = event.accountJoined;
-    if (did === ADMINBOT_DID) return;
-    console.log(`adminbot: new account ${did} — inviting to #admins`);
-    try {
-      await core.inviteMember(groupId, did, "member");
-    } catch (e) {
-      console.error(`adminbot: invite of ${did} failed: ${(e as Error).message}`);
-      return;
-    }
-    // Send a 1:1 welcome DM. Goes over the same sealed-sender channel the
-    // GroupContext invite already opened, so it works regardless of whether
-    // the recipient has accepted the group invite yet.
-    try {
-      await core.sendDm(
-        did,
-        "Welcome! You've been added to #admins. Type /help to see what I can do.",
-      );
-      console.log(`adminbot: sent welcome DM to ${did}`);
-    } catch (e) {
-      console.error(`adminbot: welcome DM to ${did} failed: ${(e as Error).message}`);
-    }
+  if (event.kind !== "accountJoined") return;
+  const { did } = event.accountJoined;
+  if (did === ADMINBOT_DID) return;
+
+  // Only humans belong in #admins. Every account registration fires this
+  // event — including bots (e.g. testbot spins up a fresh bot account on each
+  // "Text Me"). Inviting them would fill #admins with bots and fan a Sender
+  // Key out to every member on each invite, so skip any bot account.
+  let isBot: boolean;
+  try {
+    isBot = (await core.getAccountInfo(did)).isBot;
+  } catch (e) {
+    console.error(`adminbot: getAccountInfo(${did}) failed: ${(e as Error).message}; skipping`);
+    return;
+  }
+  if (isBot) {
+    console.log(`adminbot: new account ${did} is a bot — not inviting to #admins`);
+    return;
+  }
+
+  console.log(`adminbot: new account ${did} — inviting to #admins`);
+  try {
+    await core.inviteMember(groupId, did, "member");
+  } catch (e) {
+    console.error(`adminbot: invite of ${did} failed: ${(e as Error).message}`);
+    return;
+  }
+  // Send a 1:1 welcome DM. Goes over the same sealed-sender channel the
+  // GroupContext invite already opened, so it works regardless of whether
+  // the recipient has accepted the group invite yet.
+  try {
+    await core.sendDm(
+      did,
+      "Welcome! You've been added to #admins. Type /help to see what I can do.",
+    );
+    console.log(`adminbot: sent welcome DM to ${did}`);
+  } catch (e) {
+    console.error(`adminbot: welcome DM to ${did} failed: ${(e as Error).message}`);
   }
 }
 
 async function handleCommand(
   core: AppCore,
-  groupId: string,
+  channel: SendTarget,
   senderDid: string,
   body: string,
 ): Promise<void> {
@@ -211,16 +243,16 @@ async function handleCommand(
   const [cmd] = body.split(/\s+/, 1);
   switch (cmd) {
     case "/whoami":
-      await core.sendGroupMessage(groupId, `${senderDid} (admin)`);
+      await core.send(channel, `${senderDid} (admin)`);
       break;
     case "/help":
-      await core.sendGroupMessage(
-        groupId,
+      await core.send(
+        channel,
         ["Available commands:", "  /whoami    echo your DID", "  /help      show this help"].join("\n"),
       );
       break;
     default:
-      await core.sendGroupMessage(groupId, `unknown command: ${cmd}. Try /help.`);
+      await core.send(channel, `unknown command: ${cmd}. Try /help.`);
   }
 }
 
@@ -229,7 +261,7 @@ async function run(): Promise<void> {
   initLogging(env.logLevel);
 
   const state: AdminbotState = loadState(env.statePath) ?? {};
-  const core = await withRetry("register/login", () => registerOrLogin(env));
+  const core = await withRetry("login/register", () => loginOrRegister(env));
   console.log(`adminbot: started (did=${core.did()})`);
 
   const groupId = await withRetry("ensure #admins group", () =>

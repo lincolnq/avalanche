@@ -8,7 +8,7 @@
 
 ## 1. Overview and Motivation
 
-actnet's threat model names homeserver seizure and disrupted connectivity as primary risks. The default transport — HTTP + WebSocket over TLS to a homeserver — has no fallback if the server is unreachable. This document specifies how the [BitChat](https://github.com/permissionlesstech/bitchat) mesh protocol can serve as a fallback transport layer for DMs, group messages, and a broadcast channel for local communication.
+avalanche's threat model names homeserver seizure and disrupted connectivity as primary risks. The default transport — HTTP + WebSocket over TLS to a homeserver — has no fallback if the server is unreachable. This document specifies how the [BitChat](https://github.com/permissionlesstech/bitchat) mesh protocol can serve as a fallback transport layer for DMs, group messages, and a broadcast channel for local communication.
 
 **What BitChat's protocol designs for:**
 - Bluetooth LE mesh networking with multi-hop relay (up to 7 hops)
@@ -18,7 +18,7 @@ actnet's threat model names homeserver seizure and disrupted connectivity as pri
 - Public domain (Unlicense) — can be freely adapted
 - Swift + iOS native.
 
-**What actnet adds on top:**
+**What avalanche adds on top:**
 - For DMs and group chats: the existing Signal ciphertext is flooded through the BitChat mesh. Relay nodes see only opaque encrypted bytes — the same security guarantee as the homeserver path. No new encryption layer needed.
 - For broadcast: a plaintext local mesh channel, visible to all mesh participants. Useful for open coordination when E2E encryption isn't needed.
 
@@ -34,11 +34,11 @@ actnet's threat model names homeserver seizure and disrupted connectivity as pri
 
 BitChat uses a flood protocol: every message is broadcast to all connected peers, who re-broadcast it (decrementing TTL, deduplicating via bloom filter). Recipients check if a message is addressed to them; relay nodes forward blindly.
 
-actnet adopts this model directly. There's no requirement to know whether a recipient is reachable before sending. Messages are flooded into the mesh and either arrive or don't. This matches BitChat's design and avoids the fragile liveness-tracking problem.
+avalanche adopts this model directly. There's no requirement to know whether a recipient is reachable before sending. Messages are flooded into the mesh and either arrive or don't. This matches BitChat's design and avoids the fragile liveness-tracking problem.
 
 ### 2.2 Identity
 
-BitChat identifies nodes by a SHA-256 fingerprint of a Curve25519 public key. actnet derives this key deterministically from the existing Ed25519 identity key so that no separate keypair needs to be managed:
+BitChat identifies nodes by a SHA-256 fingerprint of a Curve25519 public key. avalanche derives this key deterministically from the existing Ed25519 identity key so that no separate keypair needs to be managed:
 
 ```
 HKDF-SHA256(
@@ -48,7 +48,7 @@ HKDF-SHA256(
 ) → 32-byte Curve25519 scalar
 ```
 
-Note: BitChat uses a Noise_XX handshake for transport-layer encryption between directly connected BLE peers. actnet does not use this in the initial implementation — DM/Group payloads are already Signal-encrypted end-to-end, and broadcast messages are intentionally plaintext. Noise_XX is listed as a deferred item for metadata protection (hiding sender DID from relay nodes).
+Note: BitChat uses a Noise_XX handshake for transport-layer encryption between directly connected BLE peers. avalanche does not use this in the initial implementation — DM/Group payloads are already Signal-encrypted end-to-end, and broadcast messages are intentionally plaintext. Noise_XX is listed as a deferred item for metadata protection (hiding sender DID from relay nodes).
 
 ### 2.3 Bluetooth mode is user-activated
 
@@ -130,7 +130,7 @@ When the server comes back while mesh is active, DMs and group messages resume g
 
 ## 4. Implementation Approach: Fork BitChat
 
-BitChat is Unlicense (public domain). Rather than reimplementing BLE mesh networking from scratch, actnet forks the relevant BitChat source files directly and modifies them:
+BitChat is Unlicense (public domain). Rather than reimplementing BLE mesh networking from scratch, avalanche forks the relevant BitChat source files directly and modifies them:
 
 **Copied from BitChat** (stripped of BitChat UI, Nostr, and Tor code):
 - `BluetoothMeshManager` — BLE scanning, advertising, L2CAP CoC connection management, peer tracking
@@ -138,7 +138,7 @@ BitChat is Unlicense (public domain). Rather than reimplementing BLE mesh networ
 - Bloom filter — deduplication logic
 - Relay loop — receive, check bloom, decrement TTL, rebroadcast
 
-**Added by actnet:**
+**Added by avalanche:**
 - `ACTNET_DM`, `ACTNET_GROUP`, and `ACTNET_BROADCAST` payload types (three new type bytes in BitChat's packet format)
 - `MeshTransportManager` — coordinator that routes inbound DMs and group messages to the Rust core for decryption, manages broadcast channel, exposes `send(...)` for outbound
 

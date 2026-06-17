@@ -1,0 +1,56 @@
+syntax = "proto3";
+package actnet.recovery;
+
+// v4 recovery-blob plaintext. Wire format inside the AES-GCM envelope is:
+//   version(1) || nonce(12) || ciphertext(RecoveryBlob proto || tag)
+//
+// Design notes:
+//   - Homeserver URLs are interned in `servers` and referenced from `groups`
+//     by index. Two groups on the same homeserver cost one URL plus a
+//     varint per group.
+//   - `servers` is a message-typed table rather than a `repeated string`
+//     so per-server fields (label, last-sync timestamp, primary flag, etc.)
+//     can land later without another blob-format bump.
+message RecoveryBlob {
+  // libsignal identity keypair, serialized bytes. Restored as-is so safety
+  // numbers survive device migration.
+  bytes identity_keypair = 1;
+
+  // Interned list of homeservers. Index 0 is the primary; subsequent
+  // entries cover groups hosted elsewhere and additional account servers.
+  repeated ServerEntry servers = 2;
+
+  // 32-byte profile key, empty for bot accounts that have no profile.
+  bytes profile_key = 3;
+
+  // User's display name in plaintext. Mirror of `own_profile.display_name`.
+  string display_name = 4;
+
+  // Group memberships. Each entry's `server_index` is into `servers`.
+  repeated RecoveredGroup groups = 5;
+
+  // 32-byte identity-level storage key (docs/05-device-data-sync.md §4/§11).
+  // Encrypts the durable-state store; never sent to any server in the clear.
+  // Carried here so a recovering/linking device gets the same key and can
+  // read the identity's storage records. Empty on the no-passkey path (no
+  // blob is written) and on blobs predating this field.
+  bytes storage_key = 6;
+}
+
+message ServerEntry {
+  // Homeserver URL (origin, no trailing slash).
+  string url = 1;
+  // Field numbers 2-15 reserved for near-future per-server fields
+  // (operator-supplied label, last_sync_at_ms, primary flag, cached
+  // device_id, etc.). Pick from this block when extending; never reuse 1
+  // even if dropped.
+  reserved 2 to 15;
+}
+
+message RecoveredGroup {
+  // 32-byte zkgroup master key. The only thing the server can't supply.
+  bytes master_key = 1;
+
+  // Index into the parent blob's `servers` list. Must be valid.
+  uint32 server_index = 2;
+}

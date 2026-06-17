@@ -63,11 +63,16 @@ pub enum WsPush {
         one_time_remaining: i64,
         kyber_remaining: i64,
     },
-    /// A new account just registered on this server. Only pushed to the
-    /// adminbot session (see [`AppState::adminbot_session`]).
+    /// A new account just registered on this server. Pushed to every
+    /// connected bot session that holds the `subscribe.account_joined`
+    /// capability (see [`AppState::account_joined_subscribers`]).
     AccountJoined {
         did: String,
         joined_at_ms: i64,
+        /// The raw invite token the account registered with, if any. Carries
+        /// the issuer stamp + routing tags a bot uses to route the new member
+        /// (docs/22 join-event API, docs/24 post-join hand-off).
+        invite_token: Option<String>,
     },
 }
 
@@ -93,13 +98,15 @@ pub struct AppState {
     /// sign per-message `SenderCertificate`s in the sealed-sender group
     /// flow. Trust root pubkey is published via `/v1/groups/server-params`.
     pub sender_cert_chain: Arc<SenderCertChain>,
-    /// Single slot holding the push channel of the currently-connected
-    /// adminbot WebSocket session (if any). Set by the WS handler when a
-    /// session whose authed DID matches `config.adminbot_did` connects;
-    /// cleared on disconnect. Server-pushed admin events (e.g.
-    /// `AccountJoinedEvent`) route through this slot; if it's `None`, the
-    /// event is dropped (v1 — no catch-up).
-    pub adminbot_session: Arc<RwLock<Option<mpsc::UnboundedSender<WsPush>>>>,
+    /// Connected bot sessions that hold the `subscribe.account_joined`
+    /// capability: internal device PK -> sender channel. Populated by the WS
+    /// handler at connect time after resolving the account's capabilities
+    /// (the pinned adminbot Project's bots get it via the superuser
+    /// short-circuit); cleared on disconnect. `AccountJoinedEvent` pushes fan
+    /// out to every entry. Live pushes are best-effort — durable catch-up is
+    /// via `server_events` + `GET /v1/admin/events`, so a disconnected bot
+    /// misses nothing.
+    pub account_joined_subscribers: Arc<RwLock<HashMap<i64, mpsc::UnboundedSender<WsPush>>>>,
 }
 
 impl AppState {
@@ -116,7 +123,7 @@ impl AppState {
             group_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             zkgroup_secret: Arc::new(zkgroup_secret),
             sender_cert_chain: Arc::new(sender_cert_chain),
-            adminbot_session: Arc::new(RwLock::new(None)),
+            account_joined_subscribers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }

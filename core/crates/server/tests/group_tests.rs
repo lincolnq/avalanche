@@ -58,20 +58,38 @@ async fn test_state() -> AppState {
         relay_url: None,
         server_name: "Test".into(),
         invite_domain: "go.example.test".into(),
-        adminbot_did: String::new(),
+        registration_mode: server::config::RegistrationMode::Open,
+        registration_shared_secret: None,
         privacy_policy_url: None,
     };
+    // Load (or seed) the group crypto bundle exactly as `main.rs` does — a
+    // bincoded `GroupCryptoBundle` under the current version. Seeding the raw
+    // `ServerSecretParams` here instead would collide with a real server's row
+    // on a shared DB (same `version` key, incompatible bytes), so this must
+    // mirror production to work against any database, not just a pristine one.
     let mut conn = pool.acquire().await.expect("acquire");
     let bytes = db::zkgroup_params::load_or_init(
         &mut conn,
         db::zkgroup_params::CURRENT_VERSION,
-        || ServerSecretParams::generate().to_bytes(),
+        || {
+            db::zkgroup_params::GroupCryptoBundle {
+                zkgroup_secret: ServerSecretParams::generate().to_bytes(),
+                sender_cert_chain: SenderCertChain::generate()
+                    .expect("generate sender cert chain")
+                    .to_bytes(),
+            }
+            .to_bytes()
+        },
     )
     .await
     .expect("load zkgroup params");
     drop(conn);
-    let zkgroup_secret = ServerSecretParams::from_bytes(&bytes).expect("decode params");
-    let sender_cert_chain = SenderCertChain::generate().expect("sender cert chain");
+    let bundle = db::zkgroup_params::GroupCryptoBundle::from_bytes(&bytes)
+        .expect("stored group crypto bundle is corrupt");
+    let zkgroup_secret =
+        ServerSecretParams::from_bytes(&bundle.zkgroup_secret).expect("decode params");
+    let sender_cert_chain =
+        SenderCertChain::from_bytes(&bundle.sender_cert_chain).expect("decode sender cert chain");
     AppState::new(pool, config, zkgroup_secret, sender_cert_chain)
 }
 

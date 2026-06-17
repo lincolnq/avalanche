@@ -18,7 +18,7 @@ struct IdentityDetailView: View {
     private var contactURL: String? {
         guard let server = homeServer else { return nil }
         let token = makeInviteToken(serverUrl: server.url.absoluteString, inviterDid: account.id)
-        return "https://go.theavalanche.net/invite/\(token)"
+        return "https://go.theavalanche.net/i/\(token)"
     }
 
     var body: some View {
@@ -94,6 +94,25 @@ struct IdentityDetailView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
 
+                VStack(spacing: 12) {
+                    NavigationLink {
+                        BlockedContactsView(account: account)
+                    } label: {
+                        HStack {
+                            Label("Blocked Contacts", systemImage: "hand.raised")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
@@ -131,8 +150,9 @@ struct IdentityDetailView: View {
     }
 
     private func makeInviteToken(serverUrl: String, inviterDid: String) -> String {
+        // Single-char wire keys (s=server_url, d=inviter_did) keep the QR low-density.
         let json = """
-        {"server_url":"\(serverUrl)","inviter_did":"\(inviterDid)"}
+        {"s":"\(serverUrl)","d":"\(inviterDid)"}
         """
         return Data(json.utf8)
             .base64EncodedString()

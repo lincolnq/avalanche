@@ -17,6 +17,9 @@ pub enum AppError {
 
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    #[error("contact is blocked: {0}")]
+    Blocked(String),
 }
 
 /// UniFFI-exported error type. Flattened to strings since UniFFI can't
@@ -37,6 +40,9 @@ pub enum AppErrorFfi {
 
     #[error("{reason}")]
     Protocol { reason: String },
+
+    #[error("{reason}")]
+    Blocked { reason: String },
 }
 
 impl From<AppError> for AppErrorFfi {
@@ -47,6 +53,7 @@ impl From<AppError> for AppErrorFfi {
             AppError::Net(e) => AppErrorFfi::Net { reason: e.to_string() },
             AppError::NoAccount => AppErrorFfi::NoAccount,
             AppError::Protocol(s) => AppErrorFfi::Protocol { reason: s },
+            AppError::Blocked(s) => AppErrorFfi::Blocked { reason: s },
         }
     }
 }

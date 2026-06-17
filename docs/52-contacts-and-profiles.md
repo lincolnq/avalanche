@@ -108,7 +108,7 @@ For stage 4, the profile contains only `display_name` (required, set at account 
 
 ### Profile key
 
-A 32-byte random symmetric key generated at account creation. Stored alongside the account's identity keys in the local SQLCipher DB. The profile key is the single secret that controls who can read your profile.
+A 32-byte random symmetric key generated at account creation. Stored alongside the identity's identity keys in the local SQLCipher DB. The profile key is the single secret that controls who can read your profile.
 
 It does NOT rotate when you update your profile. It only rotates when you want to revoke access (e.g., after blocking someone), which forces re-distribution to all remaining contacts. Profile key rotation is out of scope for stage 4.
 
@@ -147,21 +147,43 @@ For dormant contacts (nobody has sent or received in a while), version signal do
 
 ### When the client fetches
 
-Three triggers, in order of how often they fire:
+There are two server endpoints a client hits to learn a name, and they cover disjoint DID sets:
 
-1. **Version mismatch on inbound** — an inbound message carries a `profile_version` that differs from `cached_profile_version` (or there's no cached profile yet). Fetch the blob, decrypt with `profile_key`, update cache. This is the primary path and handles all active contacts sending messages into any group you're in.
-2. **Dormant-contact opportunistic fetch** — when the user opens a conversation, if both (a) the most recent inbound message from any contact in that group is older than ~1 week and (b) the last opportunistic fetch for this contact was more than ~1 week ago, refetch the blob. This is the safety net for contacts who changed their profile during a long silent period — nothing in the message stream signaled it.
-3. **Cold-cache render** — UI needs to render a name for a contact with no cached profile. Fetch, rate-limited to once per 30 min per DID.
+- **Encrypted profile blob** (`get_profile`) — for **humans**. Decrypted client-side with the contact's `profile_key`. This is the substrate profile described above.
+- **Public account record** (`get_account_info`) — for **bots**. Humans publish no plaintext name server-side, so this returns a name only for bot accounts. Cached locally in `account_info_cache` (display name + `is_bot`) so bot DM titles and hexagon avatars resolve offline.
+
+Both are governed by the same trigger + throttle policy below. A given DID is reachable through exactly one of them (a human has a profile blob and no useful account record; a bot is the reverse), so a single per-DID throttle key covers both without cross-talk.
+
+Triggers, in order of how often they fire:
+
+1. **Version mismatch on inbound** — an inbound message carries a `profile_version` that differs from `cached_profile_version` (or there's no cached profile yet). Fetch the blob, decrypt with `profile_key`, update cache. This is the primary path and handles all active contacts sending messages into any group you're in. Driven by genuine evidence of change, so it bypasses the rate limit below.
+2. **Dormant-contact opportunistic fetch** — when the user opens a conversation, refetch if the throttle permits (see below). This is the safety net for contacts who changed their profile during a long silent period — nothing in the message stream signaled it.
+3. **Cold-cache render** — UI needs to render a name for a contact/bot with no cached name. Fetch, subject to the throttle.
 
 No daily background sweep. The version-in-envelope mechanism makes one unnecessary for active contacts; the conversation-open dormancy fetch covers the inactive ones at the moment the user actually cares.
 
 ### Client-side rate limiting
 
-- **Dormancy threshold for conversation-open opportunistic fetch:** ~1 week (configurable). Tunable later if staleness shows up as a real UX problem.
-- **Cold-cache fetch dedup:** once per 30 min per DID.
-- **In-flight dedup:** only one fetch in flight at a time per DID, regardless of trigger.
+Modeled on Signal's `ProfileFetcher` (`docs/signal-research/profile-key-transmission.md` §"Caching and Rate Limiting"). The decision is keyed on the **outcome of the last attempt**, not a single flat interval — a negative outcome (not-found, not-authorized) is cached just like a success, which is what stops an unnameable DID from re-fetching on every render:
 
-Version-mismatch fetches don't get a separate rate limit — they're driven by genuine evidence of change, so suppressing them would defeat their purpose.
+| Last outcome | Skip window |
+|---|---|
+| Success | 5 min |
+| Network failure | 1 min |
+| Not authorized | 30 min |
+| Not found | 6 hours |
+| Rate limited | 5 min |
+| Other failure | 30 min |
+
+**Persisted across launches.** Signal's cache is an in-memory LRU that dies on app kill; ours stores `(did → last_attempt_at, outcome)` in SQLCipher (`profile_fetch_state`), so relaunching the app and reopening the same chat is a local no-op rather than a fresh server round-trip. This is a deliberate improvement over Signal — our in-memory name caches reset every launch, so an un-persisted throttle would re-fetch everything on each cold start.
+
+**Decided in core, not in the client.** The "should I actually hit the server?" gate lives in app-core (`refresh_contact_profile`, `get_account_info`, the name resolver), reading the persisted throttle. The UI keeps calling on every conversation `onAppear`; core no-ops when the entry is fresh. This mirrors Signal's split (the view controller always fetches in `viewDidAppear`; `ProfileFetcher` decides to skip) and keeps the policy shared with the node bots and unit-testable.
+
+- **In-flight dedup:** only one fetch in flight at a time per DID, regardless of trigger.
+- **Group-open fan-out:** opening a group resolves member names through the same throttle; fetches are shuffled and spaced (~100 ms) rather than fired in a simultaneous burst (Signal's `ProfileFetcher.swift:294-323`).
+- **Negative-row hygiene:** a failed/empty bot lookup records a throttle *outcome*, it does not write an empty-name row into `account_info_cache` — the cache holds only rows carrying a real name or `is_bot`.
+
+Version-mismatch fetches (trigger 1) don't get a separate rate limit — they're driven by genuine evidence of change, so suppressing them would defeat their purpose.
 
 ### Authoritative storage and cross-server fetches
 
@@ -281,6 +303,7 @@ Build:
 - [partial] Row creation wired into receive, send, group co-membership, profile-key receipt — DM send / inbound DM / inbound group message / group invite all touch the row; profile-key receipt still only writes to `contact_profiles` (not `contacts`), and group co-membership doesn't yet auto-create rows on `fetch_group_state`.
 - [not started] Migration of `blocked_dids` callers to `is_blocked` (no blocking table exists yet)
 - [not started] `profile_version` counter on outbound profile updates and in the `ContentMessage` envelope; fetch + decrypt on version mismatch; conversation-open dormancy fetch (~1 week threshold); local cache on the contact row
+- [done] Per-outcome fetch throttle persisted in `profile_fetch_state` (success/not-found/etc. skip windows), shared by the human-profile and bot account-record fetch paths, decided in app-core. `account_info_cache` for offline bot-name/`is_bot` resolution; write gated on `is_bot || name present`.
 - [done] Edit display name in iOS settings
 - [done] Show cached names in conversation list and message bubbles
 - [not started] Nicknames, notes, favorites — the user-edit gestures are headline goals; ship the editing UX with the contact row

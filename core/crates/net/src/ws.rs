@@ -44,6 +44,15 @@ pub struct InboundAccountJoined {
     pub joined_at_ms: i64,
 }
 
+/// A server-pushed `PrekeyLowNotification`: this device's one-time prekey
+/// pool(s) dropped below the server's threshold. Fire-and-forget; the client
+/// should refill via `PUT /v1/prekeys`. Counts are the server-side remaining
+/// totals at vacuum time.
+pub struct InboundPrekeyLow {
+    pub one_time_remaining: i64,
+    pub kyber_remaining: i64,
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -86,6 +95,8 @@ struct Inner {
     group_deliveries: Mutex<mpsc::UnboundedReceiver<InboundGroupDelivery>>,
     /// Incoming `AccountJoinedEvent`s, drained by `next_account_joined`.
     account_joined: Mutex<mpsc::UnboundedReceiver<InboundAccountJoined>>,
+    /// Incoming `PrekeyLowNotification`s, drained by `next_prekey_low`.
+    prekey_low: Mutex<mpsc::UnboundedReceiver<InboundPrekeyLow>>,
     /// Pending `SendRequest`s awaiting a response, keyed by frame.id.
     correlations: Mutex<HashMap<u64, oneshot::Sender<SendResponse>>>,
     /// Client-side correlation id counter. Starts at 1; 0 is reserved for
@@ -113,12 +124,14 @@ impl WsConnection {
             mpsc::unbounded_channel::<InboundGroupDelivery>();
         let (account_joined_tx, account_joined_rx) =
             mpsc::unbounded_channel::<InboundAccountJoined>();
+        let (prekey_low_tx, prekey_low_rx) = mpsc::unbounded_channel::<InboundPrekeyLow>();
 
         let inner = Arc::new(Inner {
             outbound: outbound_tx.clone(),
             deliveries: Mutex::new(delivery_rx),
             group_deliveries: Mutex::new(group_delivery_rx),
             account_joined: Mutex::new(account_joined_rx),
+            prekey_low: Mutex::new(prekey_low_rx),
             correlations: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         });
@@ -130,6 +143,7 @@ impl WsConnection {
             delivery_tx,
             group_delivery_tx,
             account_joined_tx,
+            prekey_low_tx,
             inner.clone(),
         );
 
@@ -164,6 +178,12 @@ impl WsConnection {
     /// pinned `ADMINBOT_DID` will ever receive these.
     pub async fn next_account_joined(&self) -> Result<Option<InboundAccountJoined>, NetError> {
         Ok(self.inner.account_joined.lock().await.recv().await)
+    }
+
+    /// Wait for the next inbound `PrekeyLowNotification`. Returns `Ok(None)`
+    /// once the connection has closed.
+    pub async fn next_prekey_low(&self) -> Result<Option<InboundPrekeyLow>, NetError> {
+        Ok(self.inner.prekey_low.lock().await.recv().await)
     }
 
     pub async fn group_ack(&self, ack_token: u64) -> Result<(), NetError> {
@@ -261,6 +281,7 @@ fn spawn_reader(
     delivery_tx: mpsc::UnboundedSender<InboundDelivery>,
     group_delivery_tx: mpsc::UnboundedSender<InboundGroupDelivery>,
     account_joined_tx: mpsc::UnboundedSender<InboundAccountJoined>,
+    prekey_low_tx: mpsc::UnboundedSender<InboundPrekeyLow>,
     state: Arc<Inner>,
 ) {
     tokio::spawn(async move {
@@ -320,10 +341,12 @@ fn spawn_reader(
                         joined_at_ms: e.joined_at_ms,
                     });
                 }
-                // Server-side notifications without a response. Surface to
-                // the delivery channel later if we add a typed event API;
-                // ignored for now since no client consumer exists.
-                Body::PrekeyLow(_) => {}
+                Body::PrekeyLow(e) => {
+                    let _ = prekey_low_tx.send(InboundPrekeyLow {
+                        one_time_remaining: e.one_time_remaining,
+                        kyber_remaining: e.kyber_remaining,
+                    });
+                }
                 // Variants the client should never receive from the server.
                 Body::SendRequest(_)
                 | Body::DeliverAck(_)
@@ -338,6 +361,7 @@ fn spawn_reader(
         drop(delivery_tx);
         drop(group_delivery_tx);
         drop(account_joined_tx);
+        drop(prekey_low_tx);
         let mut map = state.correlations.lock().await;
         for (_, tx) in map.drain() {
             drop(tx);

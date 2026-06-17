@@ -40,11 +40,29 @@ Each row shows:
 - Recency of activity on that server — last sent or received message timestamp, formatted relatively ("active today", "3 days ago").
 - A short activity count for context (e.g., messages exchanged via this server in the last 7 days). Exact metric TBD; intent is one glanceable signal.
 
+### Reachability state on the row
+
+A server that's been continuously unreachable past the short blip window stops
+being a transient banner and becomes a property of its row here. The state comes
+from the per-membership reachability tier owned by the core
+(`34-connection-state.md` §"Layer 2"):
+
+- **Online / Retrying** — normal row (activity recency as above). A brief outage
+  shows in the global connection banner, not here.
+- **ServerDown** (unreachable ≳ 2 min) — the row replaces activity recency with
+  a warning glyph + "Unreachable since X". No banner.
+- **Abandoned** (unreachable > 7 days) — same, plus the detail screen surfaces a
+  **Remove from this device** action (below).
+- **Removed by server** — if the server actively refused the membership (HTTP
+  403, `34` §"Auth rejection"), a non-discovery row is auto-removed with a
+  one-time "You were removed from [Server]" notice; a discovery row instead shows
+  "[Home] removed this identity" and routes to **Change home server**.
+
 ### Sign in to another account
 
 A single entry point at the bottom of the list. Tapping it offers two paths:
 
-- **Recover an identity** — restore an identity that isn't in the list from a saved passkey / recovery key. Creates a new identity group. See `33-identity-auth-recovery.md`.
+- **Recover an identity** — restore an identity that isn't in the list from a saved passkey / recovery key. Creates a new identity group. See `50-identity-auth-recovery.md`.
 - **Add a server to an existing identity** — paste or scan an invite link, then pick which existing identity to join the server as. Adds a new row to that identity's group. The standard server trust-delta screen (`13-federation.md` §Server-join trust-delta screen) gates the join.
 
 The branch between these is presented as two buttons inside the sheet; the user is not asked to disambiguate before tapping the entry point.
@@ -109,3 +127,49 @@ Tapping Leave shows a confirmation sheet:
 > [Leave] [Cancel]
 
 On confirm, the client sends courtesy leave events for the affected groups and Projects, then deletes the membership on the server. If the user is offline or the server is uncooperative, the server tombstones the user from its hosted groups/Projects on its own schedule. Either path converges. See `13-federation.md` for the protocol-level cascade.
+
+Leave is the **graceful** path and assumes the server is (eventually) reachable.
+It is the normal way to drop a non-discovery membership.
+
+### Remove from this device (unreachable server)
+
+Distinct from Leave. This is the "the server is gone and isn't coming back" path,
+available on a non-discovery row once it reaches the **Abandoned** tier
+(unreachable > 7 days, `34-connection-state.md` §"Layer 2"), and triggered
+automatically when a server refuses the membership (HTTP 403, `34`
+§"Auth rejection").
+
+Because the server is unreachable, there is no courtesy cascade — this is a
+**local-only de-routing**. Confirmation sheet:
+
+> **Remove [Server]?**
+>
+> We haven't been able to reach [Server] in [N days]. Removing it here stops the
+> app from retrying and hides its connection status. You may still appear as a
+> member there if it comes back — this only affects this device.
+>
+> [Remove] [Cancel]
+
+Two constraints, both load-bearing (`34` §"Removal, migration & the crypto
+constraint"):
+
+- **Preserve crypto.** Removal drops the server **membership and routing** but
+  must **keep the Signal session and sender-key state** for that membership's
+  conversations. A future BLE-mesh transport (`14-bitchat-fallback.md`) carries
+  DM/group traffic off exactly that local crypto state; wiping it on removal
+  would silently kill conversations that still function offline. Removal is
+  *de-routing*, not *de-provisioning*.
+- **Groups stay in the list.** Groups hosted on the removed server
+  (`groups.hosting_server_url`) are **not** deleted — they remain in the
+  conversation list as permanently-unreachable rows (and stay mesh-reachable in
+  the future). They represent real memberships the user hasn't left.
+
+### Why the discovery server has no removal path
+
+A 403 or long outage on the **discovery (home)** server cannot be resolved by
+local removal — new contacts resolve the identity there via PLC. Both cases route
+to **Change home server** (`13-federation.md` §Discovery-server migration), which
+is PLC-signed with the rotation key and completes even when the old home is
+unreachable. The discovery server's detail screen continues to point at the
+identity detail screen for **Change home server** / **Delete identity**, never a
+local remove.

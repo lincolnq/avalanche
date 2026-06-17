@@ -92,7 +92,7 @@ If the sender is not yet accepted (message request pending), do NOT send read re
 
 ### User preference
 
-Read receipts are opt-in per account. Stored in the local SQLCipher `account` table:
+Read receipts are opt-in per identity. Stored in the local SQLCipher `account` table:
 
 ```sql
 ALTER TABLE account ADD COLUMN send_read_receipts INTEGER NOT NULL DEFAULT 0;

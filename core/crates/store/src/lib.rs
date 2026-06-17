@@ -37,6 +37,7 @@
 
 pub mod account;
 pub mod contacts;
+pub mod conversations;
 pub mod db;
 pub mod error;
 pub mod groups;
@@ -44,8 +45,12 @@ pub mod messages;
 pub mod prekeys;
 pub mod profiles;
 pub mod push;
+pub mod recovery;
 pub mod schema;
 pub mod session;
+pub mod storage_sync;
 
-pub use db::{DatabaseKey, Store};
+pub use db::{
+    open_in_memory_split, open_split, DatabaseKey, DeviceStore, IdentityStore,
+};
 pub use error::StoreError;

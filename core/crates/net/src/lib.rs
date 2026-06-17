@@ -218,6 +218,7 @@ impl Client {
             "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "encrypted_profile": req.encrypted_profile.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "identity_key_signature": req.identity_key_signature,
+            "invite_token": req.invite_token,
         });
 
         let resp = self.http
@@ -491,6 +492,26 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    // ── Abuse ────────────────────────────────────────────────────────────
+
+    /// Submit an abuse report to the caller's own homeserver (docs/12 §3). The
+    /// report carries no message content — only the reported DID and a reason
+    /// enum (`spam` | `harassment` | `impersonation` | `other`). The server
+    /// authenticates and rate-limits the reporter, then persists the report for
+    /// operator review.
+    pub async fn report_abuse(&self, reported_did: &str, reason: &str) -> Result<(), NetError> {
+        let body = serde_json::json!({"reported_did": reported_did, "reason": reason});
+        let resp = self
+            .send_authed(reqwest::Method::POST, "/v1/abuse/report", |b| b.json(&body))
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(())
+    }
+
     // ── Push ─────────────────────────────────────────────────────────────
 
     /// Register a push pseudonym with the homeserver.
@@ -614,6 +635,32 @@ impl Client {
         }
         let body: Resp = resp.json().await?;
         Ok(body.device_ids)
+    }
+
+    /// Like [`fetch_devices`], but returns each device paired with its current
+    /// `registration_id`. The group sealed-sender send path uses this to
+    /// reconcile stale sessions before fanning out (the send endpoint can't
+    /// report a stale device, since sealed sender hides the sender).
+    pub async fn fetch_device_registrations(
+        &self,
+        did: &str,
+    ) -> Result<Vec<crate::types::DeviceRegistration>, NetError> {
+        let path = format!("/v1/accounts/{}/devices", did);
+        let resp = self
+            .send_authed(reqwest::Method::GET, &path, |b| b)
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            devices: Vec<crate::types::DeviceRegistration>,
+        }
+        let body: Resp = resp.json().await?;
+        Ok(body.devices)
     }
 
     // ── DID ──────────────────────────────────────────────────────────────
@@ -759,4 +806,156 @@ impl Client {
             .map_err(|e| NetError::Base64(e.to_string()))?;
         Ok(Some(blob))
     }
+
+    // ── Storage service (docs/05-device-data-sync.md §5) ──────────────────
+
+    /// Delta-pull durable-state records with `seq > since` (authenticated).
+    pub async fn storage_pull(&self, since: i64, limit: i64) -> Result<StoragePullPage, NetError> {
+        let path = format!("/v1/storage/items?since={since}&limit={limit}");
+        let resp = self.send_authed(reqwest::Method::GET, &path, |b| b).await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawItem {
+            record_id: String,
+            version: i64,
+            seq: i64,
+            deleted: bool,
+            ciphertext: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            items: Vec<RawItem>,
+            next_cursor: i64,
+            has_more: bool,
+        }
+        let body: Raw = resp.json().await?;
+        let mut items = Vec::with_capacity(body.items.len());
+        for it in body.items {
+            items.push(StorageItem {
+                record_id: BASE64_STANDARD
+                    .decode(&it.record_id)
+                    .map_err(|e| NetError::Base64(e.to_string()))?,
+                version: it.version,
+                seq: it.seq,
+                deleted: it.deleted,
+                ciphertext: BASE64_STANDARD
+                    .decode(&it.ciphertext)
+                    .map_err(|e| NetError::Base64(e.to_string()))?,
+            });
+        }
+        Ok(StoragePullPage {
+            items,
+            next_cursor: body.next_cursor,
+            has_more: body.has_more,
+        })
+    }
+
+    /// Batch-write durable-state records with per-item CAS (authenticated).
+    pub async fn storage_push(
+        &self,
+        writes: &[StorageWrite],
+    ) -> Result<StoragePushResult, NetError> {
+        let body = serde_json::json!({
+            "writes": writes.iter().map(|w| serde_json::json!({
+                "record_id": BASE64_STANDARD.encode(&w.record_id),
+                "expected_version": w.expected_version,
+                "deleted": w.deleted,
+                "ciphertext": BASE64_STANDARD.encode(&w.ciphertext),
+            })).collect::<Vec<_>>(),
+        });
+        let resp = self
+            .send_authed(reqwest::Method::PUT, "/v1/storage/items", |b| b.json(&body))
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawApplied {
+            record_id: String,
+            version: i64,
+            seq: i64,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawConflict {
+            record_id: String,
+            current_version: i64,
+        }
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            applied: Vec<RawApplied>,
+            conflicts: Vec<RawConflict>,
+        }
+        let body: Raw = resp.json().await?;
+        let decode = |s: &str| BASE64_STANDARD.decode(s).map_err(|e| NetError::Base64(e.to_string()));
+        let mut applied = Vec::with_capacity(body.applied.len());
+        for a in &body.applied {
+            applied.push(StorageApplied {
+                record_id: decode(&a.record_id)?,
+                version: a.version,
+                seq: a.seq,
+            });
+        }
+        let mut conflicts = Vec::with_capacity(body.conflicts.len());
+        for c in &body.conflicts {
+            conflicts.push(StorageConflict {
+                record_id: decode(&c.record_id)?,
+                current_version: c.current_version,
+            });
+        }
+        Ok(StoragePushResult { applied, conflicts })
+    }
+}
+
+// ── Storage service value types ──────────────────────────────────────────────
+
+/// One record returned by a delta pull. Binary fields are already base64-decoded.
+pub struct StorageItem {
+    pub record_id: Vec<u8>,
+    pub version: i64,
+    pub seq: i64,
+    pub deleted: bool,
+    pub ciphertext: Vec<u8>,
+}
+
+/// A page of pulled records plus the cursor to resume from.
+pub struct StoragePullPage {
+    pub items: Vec<StorageItem>,
+    pub next_cursor: i64,
+    pub has_more: bool,
+}
+
+/// A single CAS write. `expected_version = 0` means create-if-absent;
+/// `deleted = true` is a tombstone (ciphertext should be empty).
+pub struct StorageWrite {
+    pub record_id: Vec<u8>,
+    pub expected_version: i64,
+    pub deleted: bool,
+    pub ciphertext: Vec<u8>,
+}
+
+/// A write the server accepted, with its freshly assigned version/seq.
+pub struct StorageApplied {
+    pub record_id: Vec<u8>,
+    pub version: i64,
+    pub seq: i64,
+}
+
+/// A write the server rejected on CAS; carries the current server version.
+pub struct StorageConflict {
+    pub record_id: Vec<u8>,
+    pub current_version: i64,
+}
+
+/// Result of a batch push: applied writes and CAS conflicts, split per §5.
+pub struct StoragePushResult {
+    pub applied: Vec<StorageApplied>,
+    pub conflicts: Vec<StorageConflict>,
 }

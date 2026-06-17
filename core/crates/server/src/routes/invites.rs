@@ -16,7 +16,10 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct InviteTokenPayload {
+    // Single-char wire keys keep tokens (and QR codes) compact (docs/24, 51).
+    #[serde(rename = "s")]
     server_url: String,
+    #[serde(rename = "d")]
     inviter_did: Option<String>,
 }
 

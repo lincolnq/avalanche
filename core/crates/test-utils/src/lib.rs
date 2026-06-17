@@ -5,14 +5,15 @@
 //! `store` can be written concisely without repeating setup boilerplate.
 
 use crypto::{self, IdentityKeyPair};
-use store::Store;
-use types::{AccountId, DeviceId};
+use store::account::DeviceAccount;
+use store::DeviceStore;
+use types::{AccountId, DeviceId, Timestamp};
 
-/// A test client: an identity, a local store, and addressing info.
+/// A test client: an identity, a local device store, and addressing info.
 pub struct TestClient {
     pub identity: IdentityKeyPair,
     pub registration_id: u32,
-    pub store: Store,
+    pub store: DeviceStore,
     pub address: crypto::DeviceAddress,
 }
 
@@ -22,12 +23,22 @@ impl TestClient {
     pub async fn new(name: &str, device_id: u32) -> Self {
         let identity = IdentityKeyPair::generate();
         let registration_id = rand::random::<u32>() & 0x3FFF; // 14-bit, per Signal spec
-        let store = Store::open_in_memory().await.expect("open in-memory store");
+        let store = DeviceStore::open_in_memory().await.expect("open in-memory store");
 
+        // keypair → identity.db; registration_id → device.db (device_account).
         store
-            .save_identity(&identity, registration_id)
+            .save_identity_keypair(&identity)
             .await
-            .expect("save identity");
+            .expect("save identity keypair");
+        store
+            .save_device_account(&DeviceAccount {
+                server_url: String::new(),
+                device_id,
+                registered_at: Timestamp(0),
+                registration_id,
+            })
+            .await
+            .expect("save device account");
 
         let address = crypto::DeviceAddress::new(
             AccountId::new(name),

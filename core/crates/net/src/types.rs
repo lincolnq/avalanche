@@ -37,6 +37,11 @@ pub struct RegisterRequest {
     /// Ed25519 signature of `"register:{did}"` proving identity key possession.
     /// Required when `did` is provided.
     pub identity_key_signature: Option<String>,
+    /// Opaque registration token (docs/24): a Project-signed gatekeeper invite
+    /// or the operator's bootstrap token. Forwarded verbatim to the server,
+    /// which evaluates it; the client never parses it. `None` for unauthenticated
+    /// (open-registration) signups.
+    pub invite_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +58,16 @@ pub struct AccountInfoResponse {
     pub did: String,
     pub display_name: Option<String>,
     pub is_bot: bool,
+}
+
+/// One of a recipient account's active devices, with the registration id the
+/// server currently holds for it. Senders compare this against the
+/// registration id baked into their local session to detect a peer that
+/// re-registered the device (and thus a stale session to re-establish).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceRegistration {
+    pub device_id: i32,
+    pub registration_id: i32,
 }
 
 // ── Authentication ───────────────────────────────────────────────────────────

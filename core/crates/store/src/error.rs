@@ -13,6 +13,9 @@ pub enum StoreError {
     #[error("database error: {0}")]
     Db(#[from] tokio_rusqlite::Error),
 
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("no local identity found; account not yet created")]
     NoIdentity,
 

@@ -11,7 +11,10 @@
 use rusqlite::OptionalExtension as _;
 use types::{MessageId, Timestamp};
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
 /// An encrypted message held in the outbound queue pending delivery.
 #[derive(Debug, Clone)]
@@ -25,7 +28,7 @@ pub struct QueuedMessage {
     pub enqueued_at: Timestamp,
 }
 
-impl Store {
+impl DeviceStore {
     /// Add a message to the outbound queue.
     pub async fn enqueue(&self, msg: &QueuedMessage) -> Result<(), StoreError> {
         let id = msg.id.to_string();
@@ -103,6 +106,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl IdentityStore {
     // ── Message history ─────────────────────────────────────────────────
 
     /// Save a decrypted message to the local history.
@@ -118,10 +124,23 @@ impl Store {
 
         self.conn
             .call(move |conn| {
+                // UPSERT (not INSERT OR REPLACE) so the Rust-managed columns
+                // edit_count and deleted_at survive a re-save of an existing
+                // row (e.g. an outgoing message's status transitions). Those
+                // columns are owned by apply_edit / tombstone_message, never by
+                // the caller of save_message.
                 conn.execute(
-                    "INSERT OR REPLACE INTO message_history
+                    "INSERT INTO message_history
                      (id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(id) DO UPDATE SET
+                         conversation_id = excluded.conversation_id,
+                         sender_did      = excluded.sender_did,
+                         body            = excluded.body,
+                         sent_at         = excluded.sent_at,
+                         edited_at       = excluded.edited_at,
+                         read_at         = excluded.read_at,
+                         delivery_status = excluded.delivery_status",
                     rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status],
                 )?;
                 Ok(())
@@ -139,7 +158,7 @@ impl Store {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at
                      FROM message_history
                      WHERE conversation_id = ?1
                      ORDER BY sent_at ASC",
@@ -154,6 +173,8 @@ impl Store {
                         edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
                         read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
                         delivery_status: row.get::<_, i64>(7)? as u8,
+                        edit_count: row.get::<_, i64>(8)? as u32,
+                        deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                     })
                 })?;
                 rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -180,7 +201,7 @@ impl Store {
                 // 1. Latest message per conversation that has any messages.
                 let mut stmt = conn.prepare(
                     "SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
-                            m.edited_at, m.read_at, m.delivery_status
+                            m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at
                      FROM message_history m
                      JOIN (
                          SELECT conversation_id, MAX(sent_at) AS max_sent
@@ -204,6 +225,8 @@ impl Store {
                                 edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
                                 read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
                                 delivery_status: row.get::<_, i64>(7)? as u8,
+                                edit_count: row.get::<_, i64>(8)? as u32,
+                                deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                             }),
                         })
                     })?
@@ -252,7 +275,7 @@ impl Store {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at
                      FROM message_history
                      WHERE conversation_id = ?1
                      ORDER BY sent_at DESC
@@ -268,6 +291,8 @@ impl Store {
                             edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
                             read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
                             delivery_status: row.get::<_, i64>(7)? as u8,
+                            edit_count: row.get::<_, i64>(8)? as u32,
+                            deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                         })
                     },
                 )
@@ -356,6 +381,330 @@ impl Store {
             .await
             .map_err(StoreError::Db)
     }
+
+    // ── Editing & deletion (docs/36-message-editing-deletion.md) ──────────
+
+    /// Find a message by its wire identity `(conversation_id, author, sent_at)`.
+    /// Used to verify a target exists and to read its `edit_count` before
+    /// enforcing the human edit cap on send.
+    pub async fn find_message(
+        &self,
+        conversation_id: &str,
+        author: &str,
+        sent_at: Timestamp,
+    ) -> Result<Option<HistoryMessage>, StoreError> {
+        let conv = conversation_id.to_string();
+        let author = author.to_string();
+        let sent = sent_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at
+                     FROM message_history
+                     WHERE conversation_id = ?1 AND sender_did = ?2 AND sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                    |row| {
+                        Ok(HistoryMessage {
+                            id: row.get(0)?,
+                            conversation_id: row.get(1)?,
+                            sender_did: row.get(2)?,
+                            body: row.get(3)?,
+                            sent_at: Timestamp(row.get(4)?),
+                            edited_at: row.get::<_, Option<i64>>(5)?.map(Timestamp),
+                            read_at: row.get::<_, Option<i64>>(6)?.map(Timestamp),
+                            delivery_status: row.get::<_, i64>(7)? as u8,
+                            edit_count: row.get::<_, i64>(8)? as u32,
+                            deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Apply an in-place edit to `(conversation_id, author, target_sent_at)`.
+    /// Last-writer-wins on `edited_at`: an edit older than the one already
+    /// applied is ignored. A tombstoned message absorbs edits (no-op). When
+    /// `store_revision` is true the superseded body is pushed to
+    /// `message_revisions` for the history sheet (skipped for bot authors).
+    /// Returns true if the target exists (whether or not the edit was newer).
+    pub async fn apply_edit(
+        &self,
+        conversation_id: &str,
+        author: &str,
+        target_sent_at: Timestamp,
+        new_body: &str,
+        edited_at: Timestamp,
+        store_revision: bool,
+    ) -> Result<bool, StoreError> {
+        let conv = conversation_id.to_string();
+        let author = author.to_string();
+        let sent = target_sent_at.as_millis();
+        let new_body = new_body.to_string();
+        let edited = edited_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                let existing: Option<(String, Option<i64>, Option<i64>)> = conn
+                    .query_row(
+                        "SELECT body, edited_at, deleted_at FROM message_history
+                         WHERE conversation_id = ?1 AND sender_did = ?2 AND sent_at = ?3",
+                        rusqlite::params![conv, author, sent],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                let Some((old_body, cur_edited, deleted_at)) = existing else {
+                    // Target not yet arrived — out-of-order edit, dropped.
+                    return Ok(false);
+                };
+                // Tombstone is absorbing; never un-delete via an edit.
+                if deleted_at.is_some() {
+                    return Ok(true);
+                }
+                // LWW: ignore an edit not newer than the applied one.
+                if cur_edited.is_some_and(|c| edited <= c) {
+                    return Ok(true);
+                }
+                if store_revision {
+                    conn.execute(
+                        "INSERT INTO message_revisions
+                         (conversation_id, author_did, target_sent_at, body, replaced_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![conv, author, sent, old_body, edited],
+                    )?;
+                }
+                conn.execute(
+                    "UPDATE message_history
+                     SET body = ?1, edited_at = ?2, edit_count = edit_count + 1
+                     WHERE conversation_id = ?3 AND sender_did = ?4 AND sent_at = ?5",
+                    rusqlite::params![new_body, edited, conv, author, sent],
+                )?;
+                Ok(true)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Tombstone a message FOR_EVERYONE: clear its body, mark `deleted_at`,
+    /// and drop its reactions and revisions. If the target hasn't arrived yet,
+    /// insert a tombstone placeholder so the delete is terminal/absorbing.
+    /// Idempotent: re-tombstoning an already-deleted message is a no-op.
+    pub async fn tombstone_message(
+        &self,
+        conversation_id: &str,
+        target_author: &str,
+        target_sent_at: Timestamp,
+        deleted_at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let conv = conversation_id.to_string();
+        let author = target_author.to_string();
+        let sent = target_sent_at.as_millis();
+        let deleted = deleted_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                // Tombstone the row if present. A FOR_EVERYONE delete causally
+                // follows its own message, so the target is essentially always
+                // already stored; an out-of-order delete-before-receive is
+                // dropped here (we still clear any early-arriving reactions
+                // below). `deleted_at IS NULL` keeps it idempotent.
+                conn.execute(
+                    "UPDATE message_history
+                     SET body = '', edited_at = NULL, deleted_at = ?1
+                     WHERE conversation_id = ?2 AND sender_did = ?3 AND sent_at = ?4
+                       AND deleted_at IS NULL",
+                    rusqlite::params![deleted, conv, author, sent],
+                )?;
+                conn.execute(
+                    "DELETE FROM reactions
+                     WHERE conversation_id = ?1 AND target_author = ?2 AND target_sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                )?;
+                conn.execute(
+                    "DELETE FROM message_revisions
+                     WHERE conversation_id = ?1 AND author_did = ?2 AND target_sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Delete a message FOR_ME: remove the row and its reactions/revisions from
+    /// this device only. Any message, no authorship check (only mutates the
+    /// local view).
+    pub async fn delete_message_for_me(
+        &self,
+        conversation_id: &str,
+        target_author: &str,
+        target_sent_at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let conv = conversation_id.to_string();
+        let author = target_author.to_string();
+        let sent = target_sent_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM message_history
+                     WHERE conversation_id = ?1 AND sender_did = ?2 AND sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                )?;
+                conn.execute(
+                    "DELETE FROM reactions
+                     WHERE conversation_id = ?1 AND target_author = ?2 AND target_sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                )?;
+                conn.execute(
+                    "DELETE FROM message_revisions
+                     WHERE conversation_id = ?1 AND author_did = ?2 AND target_sent_at = ?3",
+                    rusqlite::params![conv, author, sent],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Delete an entire conversation's local history — every message plus its
+    /// reactions and edit revisions. Local-only (this device's view); used by
+    /// "Delete" on a message request (docs/12 §1). The contact row is left
+    /// intact so a later inbound message starts a fresh request.
+    pub async fn delete_conversation(&self, conversation_id: &str) -> Result<(), StoreError> {
+        let conv = conversation_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM message_history WHERE conversation_id = ?1",
+                    rusqlite::params![conv],
+                )?;
+                conn.execute(
+                    "DELETE FROM reactions WHERE conversation_id = ?1",
+                    rusqlite::params![conv],
+                )?;
+                conn.execute(
+                    "DELETE FROM message_revisions WHERE conversation_id = ?1",
+                    rusqlite::params![conv],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load the prior bodies of an edited message, oldest first, for the
+    /// edit-history sheet.
+    pub async fn load_revisions(
+        &self,
+        conversation_id: &str,
+        author: &str,
+        target_sent_at: Timestamp,
+    ) -> Result<Vec<MessageRevision>, StoreError> {
+        let conv = conversation_id.to_string();
+        let author = author.to_string();
+        let sent = target_sent_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT body, replaced_at FROM message_revisions
+                     WHERE conversation_id = ?1 AND author_did = ?2 AND target_sent_at = ?3
+                     ORDER BY replaced_at ASC",
+                )?;
+                let rows = stmt.query_map(rusqlite::params![conv, author, sent], |row| {
+                    Ok(MessageRevision {
+                        body: row.get(0)?,
+                        replaced_at: Timestamp(row.get(1)?),
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    // ── Reactions (docs/33-reactions.md) ──────────────────────────────────
+
+    /// Upsert a reactor's reaction on a target message. The PK enforces one
+    /// reaction per (target, reactor), so this replaces any prior emoji from
+    /// the same reactor (Signal's one-per-person rule).
+    pub async fn upsert_reaction(&self, r: &ReactionRow) -> Result<(), StoreError> {
+        let conv = r.conversation_id.clone();
+        let author = r.target_author.clone();
+        let sent = r.target_sent_at.as_millis();
+        let reactor = r.reactor_did.clone();
+        let emoji = r.emoji.clone();
+        let reacted = r.reacted_at.as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO reactions
+                     (conversation_id, target_author, target_sent_at, reactor_did, emoji, reacted_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![conv, author, sent, reactor, emoji, reacted],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Remove a reactor's reaction from a target message (tapping their own
+    /// emoji again). No-op if none exists.
+    pub async fn remove_reaction(
+        &self,
+        conversation_id: &str,
+        target_author: &str,
+        target_sent_at: Timestamp,
+        reactor_did: &str,
+    ) -> Result<(), StoreError> {
+        let conv = conversation_id.to_string();
+        let author = target_author.to_string();
+        let sent = target_sent_at.as_millis();
+        let reactor = reactor_did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM reactions
+                     WHERE conversation_id = ?1 AND target_author = ?2 AND target_sent_at = ?3 AND reactor_did = ?4",
+                    rusqlite::params![conv, author, sent, reactor],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load all reactions in a conversation. The UI clusters them by target
+    /// `(target_author, target_sent_at)`.
+    pub async fn load_reactions(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ReactionRow>, StoreError> {
+        let conv = conversation_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT conversation_id, target_author, target_sent_at, reactor_did, emoji, reacted_at
+                     FROM reactions
+                     WHERE conversation_id = ?1
+                     ORDER BY reacted_at ASC",
+                )?;
+                let rows = stmt.query_map([&conv], |row| {
+                    Ok(ReactionRow {
+                        conversation_id: row.get(0)?,
+                        target_author: row.get(1)?,
+                        target_sent_at: Timestamp(row.get(2)?),
+                        reactor_did: row.get(3)?,
+                        emoji: row.get(4)?,
+                        reacted_at: Timestamp(row.get(5)?),
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
 }
 
 /// One row per conversation: the conversation identifier plus the most
@@ -382,4 +731,27 @@ pub struct HistoryMessage {
     pub read_at: Option<Timestamp>,
     /// 0 = sending, 1 = sent, 2 = delivered, 3 = read.
     pub delivery_status: u8,
+    /// Number of times this message has been edited (drives the human edit cap).
+    pub edit_count: u32,
+    /// Some = FOR_EVERYONE tombstone (body cleared, reactions dropped),
+    /// carrying the unix-millis deletion time. None = live message.
+    pub deleted_at: Option<Timestamp>,
+}
+
+/// A reaction on a message, keyed by the target's wire identity.
+#[derive(Debug, Clone)]
+pub struct ReactionRow {
+    pub conversation_id: String,
+    pub target_author: String,
+    pub target_sent_at: Timestamp,
+    pub reactor_did: String,
+    pub emoji: String,
+    pub reacted_at: Timestamp,
+}
+
+/// A prior body of an edited message, for the edit-history sheet.
+#[derive(Debug, Clone)]
+pub struct MessageRevision {
+    pub body: String,
+    pub replaced_at: Timestamp,
 }

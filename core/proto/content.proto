@@ -1,6 +1,10 @@
 syntax = "proto3";
 package actnet;
 
+message TimerChangeMessage {
+  uint32 expiry_secs = 1; // seconds; 0 = disable expiry
+}
+
 message ContentMessage {
   oneof body {
     TextMessage             text                      = 1;
@@ -8,13 +12,17 @@ message ContentMessage {
     GroupContext            group_context             = 3;
     SenderKeyDistribution   sender_key_distribution   = 4;
     GroupMessage            group_message             = 5;
+    TimerChangeMessage      timer_change              = 6;
+    EditMessage             edit                      = 7;
+    DeleteMessage           delete                    = 8;
+    ReactionMessage         reaction                  = 9;
   }
-  // Reserved for upcoming body variants (typing, timer-change, group
-  // control, call signaling, etc.). Field numbers inside a `oneof` share
-  // the parent message's number space, so reservations live here at the
-  // message level. Pick a number from this block when adding a new
-  // variant; never reuse 1-5 even if removed.
-  reserved 6 to 14;
+  // Reserved for upcoming body variants (typing, group control, call
+  // signaling, etc.). Field numbers inside a `oneof` share the parent
+  // message's number space, so reservations live here at the message
+  // level. Pick a number from this block when adding a new variant;
+  // never reuse 1-9 even if removed.
+  reserved 10 to 14;
   uint64 timestamp_ms = 15;
   // Sender's profile key (32 bytes, AES-256-GCM). When present, recipients
   // can fetch and decrypt the sender's encrypted profile blob. Attached to
@@ -31,6 +39,54 @@ message TextMessage {
   string body = 1;
   // Future: attachments, mentions, reply_to, formatting.
   reserved 2 to 10;
+}
+
+// In-place edit of a prior message (docs/36-message-editing-deletion.md).
+// Targets the sender's own earlier message by its `sent_at`; the operation's
+// cryptographically-authenticated sender must equal the target's author, so
+// no author field is needed (an edit can only touch your own message).
+// Last-writer-wins by the edit's own `timestamp_ms` (the outer envelope).
+message EditMessage {
+  // `sent_at` (ContentMessage.timestamp_ms) of the message being edited.
+  uint64      target_sent_at = 1;
+  // Full replacement body. `replacement.body` supersedes the original text.
+  TextMessage replacement    = 2;
+  reserved 3 to 10;
+}
+
+// Retraction of a prior message (docs/36-message-editing-deletion.md). Two
+// scopes: FOR_EVERYONE tombstones the message for all recipients (authorship-
+// gated — sender must equal `target_author`); FOR_ME removes it from the
+// sender's own devices only (any message, no authorship check). Delete is the
+// absorbing state in the LWW lattice — a tombstone wins over any edit.
+message DeleteMessage {
+  enum Scope {
+    FOR_EVERYONE = 0;
+    FOR_ME       = 1;
+  }
+  // `sent_at` of the target message.
+  uint64 target_sent_at = 1;
+  // DID of the target message's author. For FOR_EVERYONE this must equal the
+  // authenticated sender; for FOR_ME it identifies which message (needed
+  // because (sent_at) alone isn't unique across authors in a group).
+  string target_author  = 2;
+  Scope  scope          = 3;
+  reserved 4 to 10;
+}
+
+// A reaction to a prior message (docs/33-reactions.md). One reaction per
+// person per message: sending a new `emoji` replaces the reactor's previous
+// one; `remove = true` clears it. Keyed on (target_author, target_sent_at,
+// reactor) so it converges regardless of arrival order.
+message ReactionMessage {
+  // Identity of the target message: (author, sent_at).
+  uint64 target_sent_at = 1;
+  string target_author  = 2;
+  // The reaction emoji. Ignored when `remove` is true.
+  string emoji          = 3;
+  // True = remove this reactor's reaction from the target.
+  bool   remove         = 4;
+  reserved 5 to 10;
 }
 
 // Invite-flow group bootstrap DM (docs/03-groups.md §3.10). The admin's

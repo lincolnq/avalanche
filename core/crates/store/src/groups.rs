@@ -18,7 +18,10 @@
 use rusqlite::OptionalExtension as _;
 use types::Timestamp;
 
-use crate::{db::Store, error::StoreError};
+use crate::{
+    db::{DeviceStore, IdentityStore},
+    error::StoreError,
+};
 
 /// Stored per-group row. Mirrors the columns in the `groups` table.
 #[derive(Debug, Clone)]
@@ -78,7 +81,7 @@ impl PolicyRow {
     }
 }
 
-impl Store {
+impl IdentityStore {
     /// Insert a new group row. Replaces any existing row with the same
     /// `group_id` — useful for re-joining a group after leaving.
     pub async fn save_group(&self, row: &GroupRow) -> Result<(), StoreError> {
@@ -236,6 +239,9 @@ impl Store {
             .map_err(StoreError::Db)
     }
 
+}
+
+impl DeviceStore {
     // ── credentials ─────────────────────────────────────────────────────
 
     pub async fn save_group_credential(

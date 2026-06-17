@@ -32,6 +32,9 @@ pub enum ServerError {
     #[error("unauthorized")]
     Unauthorized,
 
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error("bad request: {0}")]
     BadRequest(String),
 
@@ -65,6 +68,7 @@ impl IntoResponse for ServerError {
             }
             ServerError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
             ServerError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+            ServerError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg).into_response(),
             ServerError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             ServerError::RateLimited => {
                 (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response()

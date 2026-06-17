@@ -1,8 +1,10 @@
 # Deferred TODOs
 
-## Next
-- iOS app defaults to mock `ActnetService` mode instead of the live one, which is confusing — a fresh install looks like it's working but isn't actually talking to a homeserver. Default to live mode and make mock an explicit opt-in (debug menu toggle, env-var, or build config).
-- Rename everything to avalanche
+## Build samples of the following projects
+- $ Gatekeeper project + onboarding flow (see 24-vetted-onboarding-project); the infra should be there but there's no project yet. `#approvals` group, approve/decline review flow, invite tokens.
+- $ Chatbot to answer questions
+- $ Full participant CRM project: list everyone who has signed up & oversee them
+- $ Training modules inside CRM: browse to the training site via Network tab, complete modules
 
 ## Mobile app
 - Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)
@@ -12,46 +14,46 @@
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
 - Account switcher UI for multi-account support
 - My QR Code screen uses `accounts.first` — should use the active/selected account once multi-account is implemented
+- Consider whether we should hit `validateInvite` endpoint during 'compose recipient' scan/paste for a server invite token.
 
 ## Privacy / identity
 - Consider allowing `did:local:` DIDs for human (non-bot) accounts, not just bots. Allowing `did:local:` for humans would let small orgs run a homeserver without publishing identities globally.
 - PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
 - DID update operation for key rotation after recovery (submit new signing key to PLC directory, signed by rotation key)
-- Re-encrypt and re-upload recovery blob to all servers when joining a new server (update server list)
-- Cache recovery derived key in Secure Enclave so re-encryption doesn't require re-prompting passkey/phrase
-- Consider whether we want to bother moving the persisted account list out of UserDefaults into a Secure-Enclave-keyed SQLCipher `manifest.db`. Today the list of accounts (own DID, display name, server URLs, db filename) lives in UserDefaults, which is encrypted at rest by the device data-protection class but not by a user-controlled key. An attacker pulling the iOS sandbox snapshot gets the list of homeservers the user is on plus their own DIDs — enough to link the device to specific orgs. The contact graph and message history are not exposed (they're inside the SQLCipher per-account DBs) so it's maybe not that important. A small manifest DB keyed from the Secure Enclave (same approach as the per-account DBs) could list the other DBs while closing this particular loophole.
+- Re-encrypt and re-upload recovery blob to all servers when joining a new server (update server list). Currently `update_recovery_blob` only writes to the primary; the auto-refresh on group join inherits that limit.
+- Implement the no-blob recovery fallback (docs/50-identity-auth-recovery.md §"Recovering an identity after device loss", step 9). Today `recover_from_blob` errors out if the homeserver can't return a blob; the planned fallback generates a fresh identity key, submits a PLC update replacing the old verification method (signed by the rotation key), and re-registers without the blob's server list — user manually re-enters servers later.
+- Sender-key recovery after device loss: when a recovered device can't decrypt group messages that other members sent under previous Sender Keys, prompt those peers (via a `DecryptionErrorMessage`-style nudge) to redistribute SKDMs. Without this, group history across the recovery boundary is unreadable until peers happen to rotate or send something new.
+- Consider whether we want to bother moving the persisted identity list out of UserDefaults into a Secure-Enclave-keyed SQLCipher `manifest.db`. Today the list of identities (own DID, display name, server URLs, db filename) lives in UserDefaults, which is encrypted at rest by the device data-protection class but not by a user-controlled key. An attacker pulling the iOS sandbox snapshot gets the list of homeservers the user is on plus their own DIDs — enough to link the device to specific orgs. The contact graph and message history are not exposed (they're inside the SQLCipher per-identity DBs) so it's maybe not that important. A small manifest DB keyed from the Secure Enclave (same approach as the per-identity DBs) could list the other DBs while closing this particular loophole.
 - Contact list backup: we're interested in persisting the user's contacts separately from their identity keys, in hopes that if they lose identity keys at least they can reestablish contact with the people they were previously communicating with under a new ID. The contacts aren't that sensitive, but the tricky bit is that each of your contact is attached to one of your own identities and we don't want to mix them up. You might also want to be able to manually export your contacts list in some standard format that can be processed by other apps too.
 
 ## Crypto / protocol
+- Bot edit-history suppression + revision capping (docs/36): recipients currently store a prior-body revision for every inbound edit. The spec says bot-authored messages should retain no edit history (a live-tally bot editing hundreds of times would bloat every recipient's device). Add a cheap local is-bot check on the receive path (or a per-message revision cap) once high-frequency bot editing is in use.
+- Receive-side edit/delete window clamping (docs/36): the authorship rule is enforced on receive (security-critical), but the 24h/30-day windows are only enforced by the sending UI today. Add defense-in-depth clamping of out-of-window inbound edits / FOR_EVERYONE deletes.
+- Legacy raw-text group messages decode heuristically on receive (`process_decrypted` tries `ContentMessage::decode`, falls back to raw text). All new group messages carry the envelope; the fallback only matters for messages sent before this migration. Pre-launch there are none, so the heuristic is effectively dead code — drop the fallback (require the envelope) once there's confidence no pre-migration group messages remain in any store.
 
 ## Server
-- Timer change sync message: add a `TimerChangeMessage` body variant to the ContentMessage protobuf so that when a user changes the conversation expiry timer, a control message is sent to the other participant(s) to update their local setting
+- Adminbot routing config (docs/22): map an `AccountJoinedEvent`'s invite-token issuer + routing tags → channels (declarative rules), now that the event carries `invite_token`.
+- Adminbot node bot: consume the catch-up endpoint `GET /v1/admin/events?since=` on reconnect (events are now persisted in `server_events`); today it only acts on live WS pushes.
+- Future `bots.provision` capability + `purpose = "bot"` registration tokens (docs/24 end state — bots sign up with a token signed by their Project). The token format already carries `purpose` and the redemption table is generic, so this is additive: add the capability string, a `purpose == "bot"` admission arm, and auto-link the new bot to the issuing Project via the token's `iss`.
+
+## Infra
+- Right now foreground apps poll the server every minute for storage updates; implement something that reduces this poll rate -- probably proactive sync of some sort. Part of multi-device implementation.
 
 ## Project-wide
 - Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`
 
 ## Big milestones (not yet started)
-- Groups: action-bound (zkgroup) and cross-server casual (Sender Keys)
-- Invite links & onboarding: QR codes, deep links, auto-enrollment into groups/Projects
-- Projects framework: SDK, scoped bot permissions, JS bridge for webviews
 - First-party Projects: channel directory, team assignment, action-day map, Q&A bot, collab docs, engagement tracking
 - Federation: server-to-server protocol, cross-server DMs, full DID portability (PLC directory), guest access
 - Calls: voice and video (VoIP)
 - Public profiles: client-owned profile blobs (display name, avatar, bio) pushed to servers
-- Multi-account support in mobile app
 
 ## Mesh Fallback / BitChat protocol (optional — implement only after core features are stable)
 
-See `docs/32-bitchat-fallback.md` for the full design. BLE mesh transport as a fallback when the homeserver is unreachable.
+See `docs/14-bitchat-fallback.md` for the full design. BLE mesh transport as a fallback when the homeserver is unreachable.
 
 ## App Store readiness
-- Implement abuse handling per `docs/12-abuse-handling.md`: message-request gate for unknown senders, block list (client-side, multi-device synced), Report Spam in the request UI, homeserver-mediated cross-server abuse report endpoint, account-level enforcement ladder on receiving server.
-- Display-name profanity filter (client-side, on by default, tap-to-reveal). Satisfies the "filter objectionable material" prong of App Store 1.2 at the profile layer.
-- Projects framework App Store 4.7 compliance: (1) maintain a Project index with universal links (4.7.4); (2) per-Project consent prompt before granting data/permissions, re-prompt on permission expansion (4.7.3); (3) age-restriction mechanism for mature Projects with verified or declared age (4.7.5); (4) keep the JS bridge surface conservative — no exposing native APIs without prior Apple approval (4.7.2). Document policy that all in-Project digital-goods purchases route through IAP (4.7.1 / 3.1).
-- Reviewer demo flow: passkey-only signup is hostile to App Review. Either ship a debug build flag that bypasses passkey with a synthetic key, or pre-provision a reviewer account with embedded credentials and document in review notes. Without this, first submission will be rejected for "couldn't complete signup."
-- Support contact info: support email shown in Settings → About (mailto link is fine, no ticketing system needed) and Support URL set in App Store Connect. Required by 1.2 (UGC contact) and 1.5 (developer info).
-- Age rating: aim for 12+ (matching Signal), set via honest answers to the App Store Connect rating questionnaire — acknowledge UGC exists but no shipped objectionable content, no gambling, no unrestricted web. Don't use "Kids" or "Children" anywhere in metadata (2.3.8).
-- Account deletion flow (required by App Store guideline 5.1.1(v)). In-app: Settings → Delete account → confirmation → server deletion → wipe local SQLCipher DB + keychain → return to onboarding. Server-side: cascade delete across accounts/devices/prekeys/signed_prekeys/kyber_prekeys/message_queue/did_documents in a single transaction. Design decisions to make: (1) tombstone row vs hard delete — a tombstone (account_id + deleted_at, no keys/profile) lets the server return a definitive "deleted" signal instead of bare 404, friendlier for clients distinguishing deleted/hiccup/never-existed (Signal does roughly this); (2) client UX for deleted contacts — keep the thread, mark contact as deleted, disable send, don't auto-delete the user's history; (3) group membership propagation — action-bound groups can do server-side membership updates, cross-server Sender Keys groups are messier (no authoritative member list). Federation caveat: other servers may have cached the DID document; staleness window resolves on next fetch (404). Disclose in privacy policy.
+- Privacy policy URL plumbing: homeserver metadata endpoint exposes the operator's privacy policy URL; client displays it during signup alongside the app's own policy. Required because each homeserver is a separate data controller under GDPR.
 
 
 ## Push Notifications

@@ -31,10 +31,18 @@ def main() -> int:
 
     server_url = os.environ.get("SERVER_URL", "http://localhost:3000")
     invite_domain = os.environ.get("INVITE_DOMAIN", "go.theavalanche.net")
+    # The dev server runs CLOSED registration, so the invite must carry the
+    # bootstrap secret (default "CHANGEME", matching dev.py / `make dev`).
+    shared_secret = os.environ.get("REGISTRATION_SHARED_SECRET", "CHANGEME")
 
-    payload = json.dumps({"server_url": server_url}, separators=(",", ":")).encode()
+    # Single-char wire keys (s=server_url, k=bootstrap_secret) keep the token /
+    # QR compact (docs/24, 51).
+    payload_obj = {"s": server_url}
+    if shared_secret:
+        payload_obj["k"] = shared_secret
+    payload = json.dumps(payload_obj, separators=(",", ":")).encode()
     token = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-    invite_url = f"https://{invite_domain}/invite/{token}"
+    invite_url = f"https://{invite_domain}/i/{token}"
 
     print(f"Server URL: {server_url}")
     print(f"Invite URL: {invite_url}")

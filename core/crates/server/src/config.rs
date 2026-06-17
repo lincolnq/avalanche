@@ -17,6 +17,38 @@
 /// safety check in [`Config::from_env`].
 const DEFAULT_DEV_DATABASE_URL: &str = "postgres://actnet:actnet-dev@localhost/actnet";
 
+/// The hard-coded slug of the privileged superuser Project. Superuser
+/// authority is membership in the Project with this slug (resolved via
+/// `project_bots`) — not a pinned DID. The row is seeded empty at startup
+/// (`db::projects::ensure_adminbot_project`); a bot becomes superuser by
+/// registering with a bootstrap token that names this slug while the shared
+/// secret is still active (docs/24). The admin API never mutates this
+/// Project's membership, so superuser can't be granted over the wire.
+pub const ADMINBOT_PROJECT_SLUG: &str = "adminbot";
+
+/// Whether new accounts may register freely or only with a valid credential
+/// (docs/24 closed registration). Defaults to [`Closed`] — fail safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistrationMode {
+    /// Anyone may register (rate-limited by IP). A token, if present, is still
+    /// validated/redeemed; a bootstrap token may still link the new account
+    /// into a Project.
+    Open,
+    /// Registration is refused unless it presents a valid credential: a signed
+    /// gatekeeper invite token, or — while no gatekeeper is installed — the
+    /// configured shared secret. Fails closed.
+    Closed,
+}
+
+impl RegistrationMode {
+    fn from_env_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "open" => RegistrationMode::Open,
+            _ => RegistrationMode::Closed,
+        }
+    }
+}
+
 /// Server configuration, loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -46,14 +78,19 @@ pub struct Config {
     pub server_name: String,
     /// Domain used for deep link URLs in invite redirects (default: go.theavalanche.net).
     pub invite_domain: String,
-    /// Pinned DID of the adminbot account. `/v1/admin/*` endpoints only
-    /// accept callers whose authed account DID matches this. Defaults to the
-    /// reserved well-known DID `did:local:adminbot`; operators can override
-    /// via the `ADMINBOT_DID` env var if they need a non-default identity.
-    pub adminbot_did: String,
     /// Operator's privacy policy URL shown to users during signup.
     /// Set via PRIVACY_POLICY_URL env var. Optional.
     pub privacy_policy_url: Option<String>,
+    /// Whether registration is open to anyone or gated (docs/24). Set via
+    /// `REGISTRATION_MODE=open|closed`; **default closed**.
+    pub registration_mode: RegistrationMode,
+    /// Bootstrap shared secret. While set — and only until a gatekeeper Project
+    /// is installed — a registration presenting a matching `bootstrap_secret`
+    /// is admitted, and may name a Project (incl. the superuser Project) to be
+    /// linked into. This is the operator's setup-time root credential; it
+    /// auto-disables the moment any Project is granted `registration.gatekeeper`.
+    /// Set via `REGISTRATION_SHARED_SECRET`. Unset = no shared-secret path.
+    pub registration_shared_secret: Option<String>,
 }
 
 impl Config {
@@ -102,10 +139,13 @@ impl Config {
                 .unwrap_or_else(|_| "Avalanche Server".to_string()),
             invite_domain: std::env::var("INVITE_DOMAIN")
                 .unwrap_or_else(|_| "go.theavalanche.net".to_string()),
-            adminbot_did: std::env::var("ADMINBOT_DID")
+            registration_mode: std::env::var("REGISTRATION_MODE")
                 .ok()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "did:local:adminbot".to_string()),
+                .map(|s| RegistrationMode::from_env_str(&s))
+                .unwrap_or(RegistrationMode::Closed),
+            registration_shared_secret: std::env::var("REGISTRATION_SHARED_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
             privacy_policy_url: std::env::var("PRIVACY_POLICY_URL").ok().filter(|s| !s.is_empty()),
         }
     }
@@ -205,5 +245,17 @@ mod tests {
         c.database_url = "postgres://prod-user:s3cret@db.internal/avalanche".to_string();
         c.bind_addr = "0.0.0.0:3000".to_string();
         c.assert_safe_to_start(); // should not panic
+    }
+
+    #[test]
+    fn registration_mode_parse() {
+        assert_eq!(RegistrationMode::from_env_str("open"), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str("OPEN"), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str(" open "), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str("closed"), RegistrationMode::Closed);
+        // Anything unrecognized defaults to Closed — fail safe (closed is the
+        // secure default; you must explicitly opt into open registration).
+        assert_eq!(RegistrationMode::from_env_str("garbage"), RegistrationMode::Closed);
+        assert_eq!(RegistrationMode::from_env_str(""), RegistrationMode::Closed);
     }
 }

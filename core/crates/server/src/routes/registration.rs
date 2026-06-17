@@ -22,7 +22,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 
-use crate::{db, error::ServerError, middleware::client_ip::ClientIp, state::AppState};
+use crate::{
+    config::RegistrationMode,
+    db,
+    error::ServerError,
+    invite_token::{self, TokenError, PURPOSE_INVITE},
+    middleware::client_ip::ClientIp,
+    state::{AppState, WsPush},
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/v1/accounts", post(register))
@@ -62,6 +69,11 @@ struct RegisterRequest {
     /// Signs the canonical payload `"register:{did}"` (base64url, no padding).
     /// Required when `did` is provided.
     identity_key_signature: Option<String>, // base64url
+    /// Project-signed invite token (docs/24). Required to register under closed
+    /// registration unless the caller qualifies for a bootstrap admission arm.
+    /// The raw string is passed through to subscribed bots in the
+    /// `AccountJoinedEvent` so they can route by its issuer + routing tags.
+    invite_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -153,9 +165,23 @@ async fn register(
 
     let mut conn = state.db.acquire().await?;
 
+    // Closed-registration gating + invite-token validation (docs/24). The
+    // server validates a signed gatekeeper token locally against the issuing
+    // Project's pinned key, or admits via the operator's shared secret — it
+    // never calls the Project. Fails closed. Returns an optional Project to
+    // link the new account into (a bootstrap token may name one).
+    let link_project = gate_registration(&mut conn, &state, &did, &req).await?;
+
     // Create account.
     let account_id =
         db::accounts::create(&mut conn, &did, req.display_name.as_deref(), req.is_bot).await?;
+
+    // If the (secret-authorized) bootstrap token named a Project, link the new
+    // account into it. Naming the superuser Project is how the operator/adminbot
+    // bootstraps superuser authority.
+    if let Some(project_id) = link_project {
+        db::projects::link_bot(&mut conn, project_id, account_id).await?;
+    }
 
     // Store recovery blob if provided.
     if let Some(blob) = &recovery_blob {
@@ -210,33 +236,35 @@ async fn register(
         db::sessions::create(&mut conn, &token, device_pk, state.config.token_lifetime_secs)
             .await?;
 
-    // Notify adminbot (if connected and not registering itself) so it can
-    // act on the new account. Best-effort: a disconnected adminbot misses
-    // the event in v1.
-    if did != state.config.adminbot_did {
-        let slot = state.adminbot_session.read().await;
-        match slot.as_ref() {
-            Some(tx) => {
-                let joined_at_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                match tx.send(crate::state::WsPush::AccountJoined {
-                    did: did.clone(),
-                    joined_at_ms,
-                }) {
-                    Ok(()) => tracing::info!(%did, "adminbot AccountJoined pushed"),
-                    Err(_) => tracing::warn!(
-                        %did,
-                        "adminbot AccountJoined send failed (receiver dropped)"
-                    ),
-                }
-            }
-            None => tracing::warn!(
-                %did,
-                adminbot_did = %state.config.adminbot_did,
-                "adminbot AccountJoined dropped: no adminbot WS session connected"
-            ),
+    // Announce the new account to bots holding `subscribe.account_joined`.
+    // Two paths: (1) a durable append to `server_events` so a disconnected bot
+    // can catch up via `GET /v1/admin/events`; (2) a best-effort live fan-out
+    // to every currently-subscribed session. The event carries the raw invite
+    // token so bots can route by its issuer + routing tags (docs/22, 24).
+    let joined_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if let Err(e) = db::server_events::append_account_joined(
+        &mut conn,
+        &did,
+        req.invite_token.as_deref(),
+        joined_at_ms,
+    )
+    .await
+    {
+        // Non-fatal: the account exists; only catch-up is degraded.
+        tracing::warn!(%did, "failed to append account_joined server event: {e}");
+    }
+    {
+        let subs = state.account_joined_subscribers.read().await;
+        tracing::info!(%did, subscribers = subs.len(), "fanning out AccountJoined");
+        for tx in subs.values() {
+            let _ = tx.send(WsPush::AccountJoined {
+                did: did.clone(),
+                joined_at_ms,
+                invite_token: req.invite_token.clone(),
+            });
         }
     }
 
@@ -248,6 +276,133 @@ async fn register(
             expires_at: expires_at.to_string(),
         }),
     ))
+}
+
+/// Closed-registration admission + invite-token validation.
+///
+/// Two credentials are accepted:
+///   (a) a **signed gatekeeper token** — verified against the issuing Project's
+///       pinned key, single-use (`jti` redeemed before account creation);
+///   (b) the **bootstrap shared secret** — the operator's setup-time root
+///       credential, honored only while no gatekeeper is installed. A bootstrap
+///       token may name a Project to link the new account into (e.g. the
+///       superuser Project).
+///
+/// In `Closed` mode (the default) registration is refused unless one of these
+/// validates (fail-closed). In `Open` mode (dev) any registration is admitted,
+/// but a supplied token is still validated — and a bootstrap token may still
+/// link the account into a Project, so the operator/adminbot can claim
+/// superuser even in dev.
+///
+/// Returns the id of a Project to link the new account into (`None` if the
+/// token named none or there was no bootstrap token). The server never calls
+/// the Project.
+async fn gate_registration(
+    conn: &mut PgConnection,
+    state: &AppState,
+    did: &str,
+    req: &RegisterRequest,
+) -> Result<Option<i64>, ServerError> {
+    let mut admitted_by_token = false;
+    let mut link_project: Option<i64> = None;
+
+    if let Some(raw) = req.invite_token.as_deref() {
+        match invite_token::parse(raw).map_err(map_token_err)? {
+            // (a) Signed gatekeeper invite — verify against the pinned key.
+            invite_token::ParsedToken::Gatekeeper(envelope) => {
+                let project = db::projects::find_by_slug(conn, &envelope.iss)
+                    .await?
+                    .ok_or_else(|| ServerError::Forbidden("unknown invite token issuer".into()))?;
+                if !db::capabilities::project_has(
+                    conn,
+                    project.id,
+                    db::capabilities::REGISTRATION_GATEKEEPER,
+                )
+                .await?
+                {
+                    return Err(ServerError::Forbidden(
+                        "issuer is not a registration gatekeeper".into(),
+                    ));
+                }
+                let key = project.signing_public_key.ok_or_else(|| {
+                    ServerError::Forbidden("gatekeeper has no registered signing key".into())
+                })?;
+                let claims = invite_token::verify_claims(
+                    &envelope,
+                    &key,
+                    &state.config.server_url,
+                    PURPOSE_INVITE,
+                    invite_token::now_unix(),
+                )
+                .map_err(map_token_err)?;
+
+                // Single-use: INSERT-as-gate before account creation. A replay
+                // conflicts and is rejected. A token consumed here is spent even
+                // if a later step fails — the fail-closed direction.
+                let redeemed = db::token_redemptions::try_redeem(
+                    conn,
+                    &claims.jti,
+                    &claims.iss,
+                    &claims.purpose,
+                    did,
+                )
+                .await?;
+                if !redeemed {
+                    return Err(ServerError::Forbidden("invite token already redeemed".into()));
+                }
+                admitted_by_token = true;
+            }
+
+            // (b) Bootstrap shared secret — honored only while no gatekeeper is
+            // installed (the secret auto-disables once real vetting exists).
+            invite_token::ParsedToken::Bootstrap(boot) => {
+                let configured = state.config.registration_shared_secret.as_deref();
+                let secret_ok = configured
+                    .is_some_and(|s| invite_token::secret_eq(s, &boot.bootstrap_secret));
+                let gatekeeper_installed = db::capabilities::any_gatekeeper_exists(conn).await?;
+
+                if secret_ok && !gatekeeper_installed {
+                    admitted_by_token = true;
+                    // A bootstrap token may name a Project to land in. The admin
+                    // API can't link the superuser Project, so this secret-gated
+                    // path is the only way to bootstrap superuser authority.
+                    if let Some(slug) = boot.project.as_deref() {
+                        let project = db::projects::find_by_slug(conn, slug).await?.ok_or_else(
+                            || ServerError::Forbidden("bootstrap token names unknown project".into()),
+                        )?;
+                        link_project = Some(project.id);
+                    }
+                }
+                // Otherwise (wrong secret, or the secret is retired because a
+                // gatekeeper is installed) the token doesn't admit and names no
+                // project. The mode check below decides the outcome: Closed
+                // rejects; Open still admits (with no Project link).
+            }
+        }
+    }
+
+    match state.config.registration_mode {
+        RegistrationMode::Open => Ok(link_project),
+        RegistrationMode::Closed => {
+            if admitted_by_token {
+                Ok(link_project)
+            } else {
+                Err(ServerError::Forbidden(
+                    "registration is closed: a valid invite token or shared secret is required"
+                        .into(),
+                ))
+            }
+        }
+    }
+}
+
+/// Map an invite-token validation failure to an HTTP status: structural
+/// problems are 400; admission failures are 403 (fail-closed).
+fn map_token_err(e: TokenError) -> ServerError {
+    match e {
+        TokenError::Malformed(m) => ServerError::BadRequest(format!("invalid invite token: {m}")),
+        other => ServerError::Forbidden(other.to_string()),
+    }
 }
 
 async fn store_prekeys(

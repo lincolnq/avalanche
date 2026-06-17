@@ -30,6 +30,10 @@ final class AppState: ObservableObject {
     @Published var isOnboarding: Bool = true
     @Published var conversations: [Conversation] = []
     @Published var messagesByConversation: [String: [Message]] = [:]
+    /// Reactions per conversation (docs/33), keyed by conversation id. Each
+    /// reaction carries its target message's wire identity
+    /// `(targetAuthor, targetSentAtMs)`; the UI clusters by target + emoji.
+    @Published var reactionsByConversation: [String: [ReactionFfi]] = [:]
     @Published var serviceMode: ServiceMode
     @Published var selectedTab: Tab = .chats
     @Published var navigateToConversation: Conversation?
@@ -48,7 +52,7 @@ final class AppState: ObservableObject {
     @Published var connectionStates: [String: ConnectionState] = [:]
 
     enum Tab {
-        case calls, chats, network
+        case chats, network
     }
 
     /// Active AppCore instances, keyed by DID.
@@ -61,6 +65,17 @@ final class AppState: ObservableObject {
     private var displayNameCache: [String: String] = [:]
     /// DIDs currently being fetched (to avoid duplicate requests).
     private var displayNameInFlight: Set<String> = []
+    /// DIDs that resolved to no name this session. Suppresses re-spawning a
+    /// resolve task on every re-render of an unnameable row. The persistent
+    /// per-outcome throttle in core (docs/52) already makes the *server* side
+    /// cheap; this just avoids the per-render Task churn on the client.
+    /// Cleared on reconnect so coming back online retries.
+    private var unresolvedDids: Set<String> = []
+    /// Cached bot status for remote DIDs, keyed by DID. Populated as a
+    /// side-effect of name resolution (same server account record), and read
+    /// by avatar rendering to pick the bot frame + badge
+    /// (docs/54-bot-presentation.md). A missing entry renders as a person.
+    private var isBotCache: [String: Bool] = [:]
     /// Cached group titles, keyed by URL-safe-no-pad base64 group_id.
     /// Populated by `fetchGroupTitle` and consumed by the conversation
     /// list / `Conversation.title`.
@@ -91,7 +106,7 @@ final class AppState: ObservableObject {
     /// Handle a deep link URL.
     /// Supported:
     /// - `https://go.theavalanche.net/conversation/<recipient_did>`
-    /// - `https://go.theavalanche.net/invite/<token>`
+    /// - `https://go.theavalanche.net/i/<token>` (or legacy `/invite/<token>`)
     func handleDeepLink(_ url: URL) {
         print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
         guard Self.isDeepLink(url) else { return }
@@ -111,14 +126,15 @@ final class AppState: ObservableObject {
             selectedTab = .chats
             navigateToConversation = conv
 
-        case "invite":
+        case "i", "invite":
             let token = pathComponents[1]
             print("[DeepLink] handling invite token")
-            // Try to decode the token locally to check if we're already on the server.
+            // Try to decode the token locally to check if we're already on the
+            // server. Single-char wire keys: s=server_url, d=inviter_did.
             if let data = Data(base64URLEncoded: token),
                let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let serverUrl = payload["server_url"] as? String,
-               let inviterDid = payload["inviter_did"] as? String,
+               let serverUrl = payload["s"] as? String,
+               let inviterDid = payload["d"] as? String,
                let account = accounts.first(where: { $0.servers.contains(where: { $0.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }) }) {
                 // Already registered on this server — skip to DM.
                 print("[DeepLink] already on server, opening DM with \(inviterDid)")
@@ -243,6 +259,8 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        unresolvedDids.removeAll()
+        isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
     }
@@ -261,6 +279,8 @@ final class AppState: ObservableObject {
         connectionStates.removeAll()
         displayNameCache.removeAll()
         displayNameInFlight.removeAll()
+        unresolvedDids.removeAll()
+        isBotCache.removeAll()
         Self.clearPersistedAccounts()
         isOnboarding = true
     }
@@ -293,8 +313,12 @@ final class AppState: ObservableObject {
         let svc = _service
         let prf = prfOutput
         let dn = displayName
+        // Forward the raw invite token (the server evaluates it; docs/24). The
+        // dev server runs closed registration, so onboarding via an invite link
+        // carries the bootstrap secret in this token.
+        let token = pendingInviteToken
         let core = try await Task.detached {
-            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prf, displayName: dn)
+            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prf, displayName: dn, inviteToken: token)
         }.value
 
         try await finishAccountRegistration(core: core, serverUrl: serverUrl, serverName: serverName, displayName: displayName, dbFilename: dbFilename)
@@ -333,8 +357,9 @@ final class AppState: ObservableObject {
 
         let svc = _service
         let dn = displayName
+        let token = pendingInviteToken
         let core = try await Task.detached {
-            try svc.finalizeAccount(prepared: prepared, dbPath: dbPath, dbKey: dbKey, displayName: dn)
+            try svc.finalizeAccount(prepared: prepared, dbPath: dbPath, dbKey: dbKey, displayName: dn, inviteToken: token)
         }.value
 
         try await finishAccountRegistration(core: core, serverUrl: serverUrl, serverName: serverName, displayName: displayName, dbFilename: dbFilename)
@@ -459,10 +484,55 @@ final class AppState: ObservableObject {
 
     /// Returns the cached display name for a DID, or the DID itself if unknown.
     /// Kicks off a background fetch if not cached yet.
+    ///
+    /// This is the single client-side name resolver: it unifies the two
+    /// server/client name sources (encrypted profile for humans, server record
+    /// for bots — see `resolveDisplayName`) behind one cache. The DID return is
+    /// an *unresolved* sentinel used by the conversation-title flow; anything
+    /// rendering a name to the user should call `resolvedName(for:)`, which
+    /// never yields a DID.
     func displayName(for did: String, accountId: String) -> String {
+        // Own accounts: the name lives in the `Account` model, not the contact
+        // cache or the server record (humans publish no plaintext name
+        // server-side), so the async resolver would never find it. This is why
+        // self showed as "Unknown" in groups you create.
+        if let account = accounts.first(where: { $0.id == did }) {
+            return account.displayName
+        }
         if let name = displayNameCache[did] { return name }
         resolveDisplayName(did: did, accountId: accountId)
         return did
+    }
+
+    /// UI-facing display name for a DID: the resolved name, or `"Unknown"`
+    /// while it resolves (or if it never does). Never returns a DID — DIDs are
+    /// not a user-visible concept. This is the only accessor UI should use to
+    /// show someone's name, so human and bot names always flow through the
+    /// same path.
+    func resolvedName(for did: String, accountId: String) -> String {
+        let name = displayName(for: did, accountId: accountId)
+        return name == did ? "Unknown" : name
+    }
+
+    /// Whether a DID is a bot account, for avatar/badge presentation
+    /// (docs/54-bot-presentation.md). Sourced from the same server account
+    /// record `resolveDisplayName` consults, cached alongside the name, so it
+    /// adds no extra round-trips for any DID already being named. Returns
+    /// `false` while unresolved or for humans/own accounts — the absence of a
+    /// positive bot signal renders as a person, per the spec.
+    func isBot(_ did: String, accountId: String) -> Bool {
+        if accounts.contains(where: { $0.id == did }) { return false }
+        if let known = isBotCache[did] { return known }
+        resolveDisplayName(did: did, accountId: accountId)
+        return false
+    }
+
+    /// Seed the name cache with a name a caller already holds (e.g. the
+    /// contact-list FFI rows carry the cached profile name), so the async
+    /// resolver doesn't re-fetch it. No-op if empty or already cached.
+    func cacheDisplayName(_ name: String, for did: String) {
+        guard !name.isEmpty, displayNameCache[did] == nil else { return }
+        applyResolvedDisplayName(did: did, name: name)
     }
 
     /// Resolve a display name for a DID. Two sources, in order:
@@ -473,6 +543,8 @@ final class AppState: ObservableObject {
     ///    bot accounts (humans never put a plaintext name on the server).
     private func resolveDisplayName(did: String, accountId: String) {
         guard !displayNameInFlight.contains(did) else { return }
+        // Already resolved-to-empty this session — don't re-spawn until reconnect.
+        guard !unresolvedDids.contains(did) else { return }
         guard let core = cores[accountId] else { return }
         displayNameInFlight.insert(did)
         let targetDid = did
@@ -480,15 +552,25 @@ final class AppState: ObservableObject {
             // Local contact_profiles first — fast, no network.
             let localName = (try? core.contactDisplayName(did: targetDid)) ?? ""
             // Fall back to server lookup (bots) only if the local cache is empty.
-            let serverName: String? = localName.isEmpty
-                ? (try? core.getAccountInfo(did: targetDid))?.displayName
-                : nil
-            let resolved = !localName.isEmpty ? localName : (serverName ?? "")
+            // The same record carries `isBot`, so we learn bot status here too
+            // (docs/54-bot-presentation.md) without a separate round-trip. Core
+            // throttles this call (docs/52) — offline/throttled lookups return
+            // a cached record or throw, never a fresh server hit per render.
+            let serverInfo = localName.isEmpty ? try? core.getAccountInfo(did: targetDid) : nil
+            let resolved = !localName.isEmpty ? localName : (serverInfo?.displayName ?? "")
+            // A resolved local name means a human contact; only the server
+            // record marks bots. Absent info → not a bot.
+            let isBot = serverInfo?.isBot ?? false
 
             await MainActor.run {
                 guard let self else { return }
                 self.displayNameInFlight.remove(targetDid)
-                guard !resolved.isEmpty else { return }
+                self.isBotCache[targetDid] = isBot
+                guard !resolved.isEmpty else {
+                    // Negative-cache so we don't re-spawn this task every render.
+                    self.unresolvedDids.insert(targetDid)
+                    return
+                }
                 self.applyResolvedDisplayName(did: targetDid, name: resolved)
             }
         }
@@ -525,6 +607,53 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Abuse handling (docs/12-abuse-handling.md)
+
+    /// Accept a message request: curate the sender (which clears the gate and
+    /// opens read receipts) and refresh the list so the banner disappears.
+    func acceptRequest(did: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.acceptRequest(did: did) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// Delete a message request: clear the pending flag and drop the local
+    /// conversation. A later inbound message starts a fresh request.
+    func deleteRequest(did: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.deleteRequest(did: did) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// Report Spam and Block: file a content-free report with the homeserver,
+    /// then block locally. Surfaced only in the message-request UI (docs/12 §3).
+    func reportAndBlock(did: String, accountId: String, reason: String = "spam") async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.reportAndBlock(did: did, reason: reason) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// Block a contact (docs/12 §2). Multi-device synced; outbound messages to
+    /// the DID are then refused and inbound ones dropped.
+    func blockContact(did: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.blockContact(did: did) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// Unblock a contact (docs/12 §2).
+    func unblockContact(did: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.unblockContact(did: did) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// The block list for an account — backs Settings → Privacy → Blocked.
+    func listBlocked(accountId: String) async -> [ContactRowFfi] {
+        guard let core = cores[accountId] else { return [] }
+        return (try? await Task.detached { try core.listBlocked() }.value) ?? []
+    }
+
     // MARK: - Messaging
 
     func sendMessage(conversationId: String, text: String, recipientDid: String, senderAccountId: String, messageId: String, sentAtMs: Int64) async throws {
@@ -541,7 +670,9 @@ final class AppState: ObservableObject {
             sentAtMs: nowMs,
             editedAtMs: nil,
             readAtMs: nowMs,
-            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue)
+            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue),
+            editCount: 0,
+            deleted: false
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -553,7 +684,7 @@ final class AppState: ObservableObject {
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -562,7 +693,7 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -666,6 +797,7 @@ final class AppState: ObservableObject {
         }
 
         var newConvs: [Conversation] = []
+        var groupsNeedingRefresh: [(groupId: String, accountId: String)] = []
         for (accountId, summaries) in summariesPerAccount {
             let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
             for s in summaries {
@@ -674,7 +806,18 @@ final class AppState: ObservableObject {
                 }
                 let preview = s.lastMessage?.body
                 if let groupId = Self.groupId(from: s.conversationId) {
+                    // `group_title` comes resolved from local state in
+                    // `loadConversations`; cache it so later rebuilds and
+                    // `findOrCreateGroupConversation` reuse it.
+                    if let t = s.groupTitle, !t.isEmpty {
+                        groupTitleCache[groupId] = t
+                    }
                     let title = groupTitleCache[groupId] ?? "Group"
+                    if groupTitleCache[groupId] == nil {
+                        // No local state yet (e.g. a freshly received invite) —
+                        // pull it from the server in the background.
+                        groupsNeedingRefresh.append((groupId, accountId))
+                    }
                     newConvs.append(Conversation(
                         id: s.conversationId,
                         title: title,
@@ -698,7 +841,9 @@ final class AppState: ObservableObject {
                     recipientDid: recipientDid,
                     lastMessage: preview,
                     lastMessageDate: date,
-                    isGroup: false
+                    isGroup: false,
+                    isRequest: s.isRequest,
+                    isBlocked: s.isBlocked
                 ))
             }
         }
@@ -711,6 +856,12 @@ final class AppState: ObservableObject {
             if let did = conv.recipientDid, conv.title == did {
                 _ = displayName(for: did, accountId: conv.accountId)
             }
+        }
+
+        // For groups with no locally-cached title (e.g. just-received invites),
+        // fetch state from the server so "Group" gets replaced with the real name.
+        for g in groupsNeedingRefresh {
+            refreshGroupTitle(groupId: g.groupId, accountId: g.accountId)
         }
     }
 
@@ -746,7 +897,9 @@ final class AppState: ObservableObject {
                     sentAtMs: m.sentAtMs,
                     editedAtMs: m.editedAtMs,
                     readAtMs: m.readAtMs,
-                    deliveryStatus: DeliveryStatus(rawValue: Int(m.deliveryStatus)) ?? .sent
+                    deliveryStatus: DeliveryStatus(rawValue: Int(m.deliveryStatus)) ?? .sent,
+                    editCount: Int(m.editCount),
+                    isDeleted: m.deleted
                 )
             }
             await MainActor.run {
@@ -908,19 +1061,21 @@ final class AppState: ObservableObject {
             sentAtMs: sentAtMs,
             editedAtMs: nil,
             readAtMs: sentAtMs,
-            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue)
+            deliveryStatus: UInt8(DeliveryStatus.sending.rawValue),
+            editCount: 0,
+            deleted: false
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
         do {
             try await Task.detached {
-                try core.sendGroupMessage(groupId: groupId, plaintext: plaintext)
+                try core.sendGroupMessage(groupId: groupId, plaintext: plaintext, sentAtMs: sentAtMs)
             }.value
             updateMessageStatus(messageId: messageId, conversationId: conversation.id, newStatus: .sent)
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -929,14 +1084,14 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue)
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
         }
     }
 
-    // MARK: - Contacts (docs/35-contacts-and-profiles.md)
+    // MARK: - Contacts (docs/52-contacts-and-profiles.md)
 
     /// Snapshot of the contact list for the given account, joined with
     /// cached display names. The compose autocomplete is built directly
@@ -1068,6 +1223,12 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled else { break }
             last = next
             connectionStates[accountId] = next
+            // Coming back online is a chance to resolve names we gave up on
+            // while offline/throttled — drop the session negative cache so the
+            // next render re-attempts (core still applies its own throttle).
+            if case .connected = next {
+                unresolvedDids.removeAll()
+            }
         }
         stateTasks.removeValue(forKey: accountId)
         AppLog.info("conn", "connection-state listener ended for \(accountId)")
@@ -1097,6 +1258,12 @@ final class AppState: ObservableObject {
                     // Master key already persisted by app-core; just refresh
                     // the chat list so the new group becomes visible.
                     sawGroupInvite = true
+                case let .messageEdited(conversationId, authorDid, sentAtMs, newBody, editedAtMs):
+                    applyInboundEdit(conversationId: conversationId, authorDid: authorDid, sentAtMs: sentAtMs, newBody: newBody, editedAtMs: editedAtMs)
+                case let .messageDeleted(conversationId, authorDid, sentAtMs):
+                    applyInboundDelete(conversationId: conversationId, authorDid: authorDid, sentAtMs: sentAtMs)
+                case let .reactionUpdated(conversationId, targetAuthor, targetSentAtMs, reactorDid, emoji, removed):
+                    applyInboundReaction(conversationId: conversationId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: reactorDid, emoji: emoji, removed: removed)
                 }
             }
             for msg in messages {
@@ -1111,6 +1278,152 @@ final class AppState: ObservableObject {
         }
         eventTasks.removeValue(forKey: accountId)
         AppLog.info("evt", "event listener ended for \(accountId)")
+    }
+
+    // MARK: - Reactions, editing, deletion (docs/33, docs/36)
+
+    /// Reactions currently on a specific message (for the on-bubble cluster).
+    func reactions(for message: Message) -> [ReactionFfi] {
+        (reactionsByConversation[message.conversationId] ?? []).filter {
+            $0.targetAuthor == message.senderAccountId && $0.targetSentAtMs == message.sentAtMs
+        }
+    }
+
+    /// Load a conversation's reactions from the store into memory.
+    func loadReactions(conversationId: String, accountId: String) {
+        guard let core = cores[accountId] else { return }
+        let convId = conversationId
+        Task.detached { [weak self] in
+            guard let rows = try? core.loadReactions(conversationId: convId) else { return }
+            await MainActor.run { self?.reactionsByConversation[convId] = rows }
+        }
+    }
+
+    /// Where a content op for `conversation` is directed — the unified
+    /// `MessageTarget` the core uses for DMs and groups alike.
+    private func messageTarget(for conversation: Conversation) -> MessageTarget? {
+        if let groupId = conversation.groupId { return .group(groupId: groupId) }
+        if let recipientDid = conversation.recipientDid { return .dm(recipientDid: recipientDid) }
+        return nil
+    }
+
+    /// Toggle this account's reaction on a message: tapping the emoji we already
+    /// have removes it; otherwise it replaces any prior one (one per person per
+    /// message, docs/33).
+    func toggleReaction(message: Message, emoji: String, conversation: Conversation) {
+        guard let core = cores[conversation.accountId],
+              let target = messageTarget(for: conversation) else { return }
+        let myDid = conversation.accountId
+        let convId = conversation.id
+        let targetAuthor = message.senderAccountId
+        let targetSentAt = message.sentAtMs
+        let existingMine = (reactionsByConversation[convId] ?? []).first {
+            $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAt && $0.reactorDid == myDid
+        }
+        let remove = existingMine?.emoji == emoji
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        // Optimistic in-memory update.
+        var list = reactionsByConversation[convId] ?? []
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAt && $0.reactorDid == myDid }
+        if !remove {
+            list.append(ReactionFfi(conversationId: convId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, reactorDid: myDid, emoji: emoji, reactedAtMs: nowMs))
+        }
+        reactionsByConversation[convId] = list
+        Task.detached {
+            try? core.sendReaction(target: target, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, emoji: emoji, remove: remove, sentAtMs: nowMs)
+        }
+    }
+
+    /// Edit one of my own messages in place (docs/36). DM only.
+    func editMessage(message: Message, newBody: String, conversation: Conversation) {
+        guard let core = cores[conversation.accountId],
+              let target = messageTarget(for: conversation) else { return }
+        let trimmed = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != message.body else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let convId = conversation.id
+        if var msgs = messagesByConversation[convId], let i = msgs.firstIndex(where: { $0.id == message.id }) {
+            msgs[i].body = trimmed
+            msgs[i].editedAtMs = nowMs
+            msgs[i].editCount += 1
+            messagesByConversation[convId] = msgs
+        }
+        let targetSentAt = message.sentAtMs
+        Task.detached {
+            try? core.sendEdit(target: target, targetSentAtMs: targetSentAt, newBody: trimmed, sentAtMs: nowMs)
+        }
+    }
+
+    /// Delete a message (docs/36). `forEveryone` tombstones for both sides (own
+    /// messages only); otherwise removes it from this device. DM only.
+    func deleteMessage(message: Message, forEveryone: Bool, conversation: Conversation) {
+        guard let core = cores[conversation.accountId],
+              let target = messageTarget(for: conversation) else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let convId = conversation.id
+        if var msgs = messagesByConversation[convId] {
+            if forEveryone {
+                if let i = msgs.firstIndex(where: { $0.id == message.id }) {
+                    msgs[i].body = ""
+                    msgs[i].isDeleted = true
+                    msgs[i].editedAtMs = nil
+                }
+            } else {
+                msgs.removeAll { $0.id == message.id }
+            }
+            messagesByConversation[convId] = msgs
+        }
+        reactionsByConversation[convId]?.removeAll { $0.targetAuthor == message.senderAccountId && $0.targetSentAtMs == message.sentAtMs }
+        let targetAuthor = message.senderAccountId
+        let targetSentAt = message.sentAtMs
+        Task.detached {
+            try? core.sendDelete(target: target, targetAuthor: targetAuthor, targetSentAtMs: targetSentAt, forEveryone: forEveryone, sentAtMs: nowMs)
+        }
+    }
+
+    /// Load the prior bodies of an edited message for the history sheet (docs/36).
+    func loadMessageRevisions(message: Message, conversation: Conversation) async -> [MessageRevisionFfi] {
+        guard let core = cores[conversation.accountId] else { return [] }
+        let convId = conversation.id
+        let author = message.senderAccountId
+        let sentAt = message.sentAtMs
+        return (try? await Task.detached {
+            try core.loadMessageRevisions(conversationId: convId, author: author, sentAtMs: sentAt)
+        }.value) ?? []
+    }
+
+    // Inbound op handlers — the store is already updated by app-core; these
+    // patch the in-memory model so the open conversation refreshes live.
+
+    private func applyInboundEdit(conversationId: String, authorDid: String, sentAtMs: Int64, newBody: String, editedAtMs: Int64) {
+        guard var msgs = messagesByConversation[conversationId],
+              let i = msgs.firstIndex(where: { $0.senderAccountId == authorDid && $0.sentAtMs == sentAtMs }),
+              !msgs[i].isDeleted else { return }
+        msgs[i].body = newBody
+        msgs[i].editedAtMs = editedAtMs
+        msgs[i].editCount += 1
+        messagesByConversation[conversationId] = msgs
+    }
+
+    private func applyInboundDelete(conversationId: String, authorDid: String, sentAtMs: Int64) {
+        if var msgs = messagesByConversation[conversationId],
+           let i = msgs.firstIndex(where: { $0.senderAccountId == authorDid && $0.sentAtMs == sentAtMs }) {
+            msgs[i].body = ""
+            msgs[i].isDeleted = true
+            msgs[i].editedAtMs = nil
+            messagesByConversation[conversationId] = msgs
+        }
+        reactionsByConversation[conversationId]?.removeAll { $0.targetAuthor == authorDid && $0.targetSentAtMs == sentAtMs }
+    }
+
+    private func applyInboundReaction(conversationId: String, targetAuthor: String, targetSentAtMs: Int64, reactorDid: String, emoji: String, removed: Bool) {
+        var list = reactionsByConversation[conversationId] ?? []
+        list.removeAll { $0.targetAuthor == targetAuthor && $0.targetSentAtMs == targetSentAtMs && $0.reactorDid == reactorDid }
+        if !removed {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            list.append(ReactionFfi(conversationId: conversationId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: reactorDid, emoji: emoji, reactedAtMs: nowMs))
+        }
+        reactionsByConversation[conversationId] = list
     }
 
     private func handleIncomingMessage(_ msg: DecryptedMessage, accountId: String) {
@@ -1187,7 +1500,9 @@ final class AppState: ObservableObject {
                 sentAtMs: sentAtMs,
                 editedAtMs: nil,
                 readAtMs: nil,  // unread
-                deliveryStatus: 1  // sent
+                deliveryStatus: 1,  // sent
+                editCount: 0,
+                deleted: false
             )
             Task.detached { try? core.saveMessage(msg: stored) }
         }
@@ -1254,3 +1569,74 @@ final class AppState: ObservableObject {
     }
 
 }
+
+#if DEBUG
+extension AppState {
+    /// Build an `AppState` wired for SwiftUI previews: mock service, the given
+    /// accounts, and an in-memory core per account that serves the supplied
+    /// contact rows. No network, no DB. `botNames` maps a DID to a server-side
+    /// name so previews can exercise the bot resolution path (`resolvedName`),
+    /// just like the real app.
+    static func preview(
+        accounts: [Account],
+        contacts: [ContactRowFfi] = [],
+        botNames: [String: String] = [:],
+        groups: [String: GroupSummaryFfi] = [:]
+    ) -> AppState {
+        let state = AppState(mode: .mock)
+        state.accounts = accounts
+        for account in accounts {
+            state.cores[account.id] = PreviewAppCore(
+                did: account.id, contacts: contacts, botNames: botNames, groups: groups
+            )
+        }
+        return state
+    }
+}
+
+/// Minimal `AppCoreProtocol` for previews: serves canned contacts and resolves
+/// bot names server-side. Everything else falls through to the protocol
+/// defaults in `AppCoreProtocol+Defaults.swift`.
+final class PreviewAppCore: AppCoreProtocol, @unchecked Sendable {
+    private let mockDid: String
+    private let contacts: [ContactRowFfi]
+    private let botNames: [String: String]
+    private let groups: [String: GroupSummaryFfi]
+
+    init(
+        did: String,
+        contacts: [ContactRowFfi],
+        botNames: [String: String],
+        groups: [String: GroupSummaryFfi] = [:]
+    ) {
+        self.mockDid = did
+        self.contacts = contacts
+        self.botNames = botNames
+        self.groups = groups
+    }
+
+    func did() -> String { mockDid }
+    func listContacts() throws -> [ContactRowFfi] { contacts }
+
+    func getAccountInfo(did: String) throws -> AccountInfoFfi {
+        if let name = botNames[did] {
+            return AccountInfoFfi(did: did, displayName: name, isBot: true)
+        }
+        return AccountInfoFfi(did: did, displayName: nil, isBot: false)
+    }
+
+    /// Resolve human member names in previews from the canned contact rows
+    /// (the real core reads its local `contact_profiles` cache here).
+    func contactDisplayName(did: String) throws -> String {
+        contacts.first(where: { $0.did == did })?.displayName ?? ""
+    }
+
+    func fetchGroupState(groupId: String) throws -> GroupSummaryFfi {
+        groups[groupId] ?? GroupSummaryFfi(
+            groupId: groupId, masterKey: Data(count: 32), revision: 0,
+            title: "Group", description: "", expirySeconds: 0,
+            members: [], pendingInvites: [], pendingApprovals: []
+        )
+    }
+}
+#endif

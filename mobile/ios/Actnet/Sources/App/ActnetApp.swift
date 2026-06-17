@@ -2,6 +2,16 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+/// True when the process is hosting a SwiftUI `#Preview`. The preview harness
+/// boots the real app (`@main` → `AppDelegate`) and reuses the process across
+/// runs, so launch-time side effects must be skipped: `initLogging` is a
+/// `try!` FFI call into Rust's global logger, which panics (→ traps) if init'd
+/// twice, and `restoreAccounts` touches the keychain / Secure Enclave and spins
+/// up cores. Neither is wanted in a preview.
+var isRunningInPreview: Bool {
+    ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+}
+
 /// Receives APNs callbacks and forwards the device token to PushManager.
 /// Also acts as the UNUserNotificationCenter delegate, routing local
 /// notification taps back to the right conversation.
@@ -13,6 +23,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        if isRunningInPreview { return true }
         #if DEBUG
         initLogging(filter: "app_core=debug,net=info,store=info,crypto=info")
         #else
@@ -134,19 +145,27 @@ struct ActnetApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .tint(Color.avBrand)
-                .environmentObject(appState)
-                .task {
-                    appDelegate.appState = appState
-                    await appState.restoreAccounts()
-                }
-                .onOpenURL { url in
-                    appState.handleDeepLink(url)
-                }
-                .onChange(of: scenePhase) { _, newPhase in
-                    appState.isAppActive = (newPhase == .active)
-                }
+            if isRunningInPreview {
+                // The preview harness boots the real app to host a `#Preview`.
+                // Render nothing here so the launch scene does no work
+                // (no RootView, window gestures, banners, or restore) — each
+                // `#Preview` supplies its own view and `AppState`.
+                Color.clear
+            } else {
+                RootView()
+                    .tint(Color.avBrand)
+                    .environmentObject(appState)
+                    .task {
+                        appDelegate.appState = appState
+                        await appState.restoreAccounts()
+                    }
+                    .onOpenURL { url in
+                        appState.handleDeepLink(url)
+                    }
+                    .onChange(of: scenePhase) { _, newPhase in
+                        appState.isAppActive = (newPhase == .active)
+                    }
+            }
         }
     }
 }

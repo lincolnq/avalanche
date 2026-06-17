@@ -36,13 +36,14 @@ use net::groups::{
     CreateGroupRequest as NetCreateGroupRequest, GroupActionsWire, GroupPolicyWire,
     InviteMemberWire, JoinViaLinkWire, PromoteSelfWire, RoleAssignmentWire, SubmitChangeRequest,
 };
+use std::collections::HashMap;
 use store::groups::{GroupRow, PolicyRow};
 use types::Timestamp;
 
 use crate::error::{AppError, AppErrorFfi};
 use crate::proto::{self, content_message::Body, groups as gproto, ContentMessage};
 use crate::{
-    ffi_runtime, AppCore, AppCoreInner, CreatedGroupFfi, GroupSummaryFfi, JoinResultFfi,
+    ffi_runtime, AppCore, CreatedGroupFfi, GroupSummaryFfi, JoinResultFfi,
     summary_to_ffi,
 };
 
@@ -178,7 +179,7 @@ pub enum JoinResult {
 /// root, reusing the local cached copy if its `version` matches what the
 /// server advertises.
 pub async fn ensure_server_params(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
 ) -> Result<ServerPublicParams, AppError> {
@@ -205,7 +206,7 @@ pub async fn ensure_server_params(
 /// populating the cache via [`ensure_server_params`] if it isn't there yet.
 /// Used by the sealed-sender group decrypt path to validate sender certs.
 pub async fn load_sender_cert_trust_root(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
 ) -> Result<Vec<u8>, AppError> {
@@ -225,7 +226,7 @@ pub async fn load_sender_cert_trust_root(
 /// `zkgroup::auth::AuthCredentialWithPniZkc` per §2.3; the carried
 /// identity is `Aci::from(UUID(did))`.
 pub async fn ensure_credential(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     did: &str,
@@ -376,7 +377,7 @@ pub struct CreatedGroup {
 /// The founder is themselves the only member; the group starts in `Closed`
 /// state (admin-only) with no link password.
 pub async fn create_group(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     founder_did: &str,
@@ -453,7 +454,7 @@ pub async fn create_group(
 
 /// Pull the current encrypted state, decrypt, and update the local cache.
 pub async fn fetch_group_state(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     did: &str,
@@ -497,63 +498,95 @@ pub async fn fetch_group_state(
 /// Load the group row + key from the store, fetch credential/presentation,
 /// and call `submit_group_changes` with the supplied actions.
 async fn submit_actions(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
-    apply_to_state: impl FnOnce(&mut gproto::GroupState, &GroupKey) -> Result<GroupActionsWire, AppError>,
+    apply_to_state: impl Fn(&mut gproto::GroupState, &GroupKey) -> Result<GroupActionsWire, AppError>,
 ) -> Result<net::groups::SubmitChangeResponse, AppError> {
-    let row = store
-        .load_group(group_id_b64_s)
-        .await?
-        .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?;
-    let group_key = GroupKey::from_bytes(
-        row.master_key
-            .clone()
-            .try_into()
-            .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
-    );
+    // We retry once on stale-revision (HTTP 409). The cached revision can
+    // lag the server's whenever another party submits a change (e.g. a
+    // new member accepts an invite while we're inviting somebody else).
+    // After the retry, if we still race, the second 409 is propagated and
+    // the caller can re-invoke.
+    let mut attempt = 0;
+    loop {
+        let row = store
+            .load_group(group_id_b64_s)
+            .await?
+            .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?;
+        let group_key = GroupKey::from_bytes(
+            row.master_key
+                .clone()
+                .try_into()
+                .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
+        );
 
-    let public = ensure_server_params(store, client, &row.hosting_server_url).await?;
-    let credential =
-        ensure_credential(store, client, &row.hosting_server_url, did, &public).await?;
-    let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
+        let public = ensure_server_params(store, client, &row.hosting_server_url).await?;
+        let credential =
+            ensure_credential(store, client, &row.hosting_server_url, did, &public).await?;
+        let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
 
-    // Compute optimistic new state from the cached plaintext.
-    let mut state = if row.encrypted_state_plaintext.is_empty() {
-        return Err(AppError::Protocol(
-            "no cached group state; call fetch_group_state first".into(),
-        ));
-    } else {
-        gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
-            .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?
-    };
-    let actions = apply_to_state(&mut state, &group_key)?;
-    state.revision = (row.revision as u64) + 1;
-    let new_plaintext = state.encode_to_vec();
-    let new_encrypted_state = group_key.encrypt_state(&new_plaintext);
+        // Compute optimistic new state from the cached plaintext.
+        let mut state = if row.encrypted_state_plaintext.is_empty() {
+            return Err(AppError::Protocol(
+                "no cached group state; call fetch_group_state first".into(),
+            ));
+        } else {
+            gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?
+        };
+        let actions = apply_to_state(&mut state, &group_key)?;
+        state.revision = (row.revision as u64) + 1;
+        let new_plaintext = state.encode_to_vec();
+        let new_encrypted_state = group_key.encrypt_state(&new_plaintext);
 
-    let req = SubmitChangeRequest {
-        revision: row.revision + 1,
-        new_encrypted_state: b64(&new_encrypted_state),
-        actions,
-    };
-    let resp = client
-        .submit_group_changes(group_id_b64_s, &req, &presentation)
-        .await?;
+        let req = SubmitChangeRequest {
+            revision: row.revision + 1,
+            new_encrypted_state: b64(&new_encrypted_state),
+            actions,
+        };
+        let resp = client
+            .submit_group_changes(group_id_b64_s, &req, &presentation)
+            .await;
 
-    // Persist the optimistic state on success.
-    store
-        .update_group_state(group_id_b64_s, resp.revision, new_plaintext, row.policy)
-        .await?;
-
-    Ok(resp)
+        match resp {
+            Ok(resp) => {
+                store
+                    .update_group_state(
+                        group_id_b64_s,
+                        resp.revision,
+                        new_plaintext,
+                        row.policy,
+                    )
+                    .await?;
+                return Ok(resp);
+            }
+            Err(net::error::NetError::Server(409, ref body)) if attempt == 0 => {
+                attempt += 1;
+                tracing::info!(
+                    "[groups] stale revision on submit (body={body}); \
+                     refreshing state and retrying once"
+                );
+                fetch_group_state(
+                    store,
+                    client,
+                    &row.hosting_server_url,
+                    did,
+                    group_id_b64_s,
+                )
+                .await?;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 // ── invite / accept / decline ────────────────────────────────────────────
 
 pub async fn invite_member(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -589,7 +622,7 @@ pub async fn invite_member(
 }
 
 pub async fn accept_invite(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -641,7 +674,7 @@ pub async fn accept_invite(
 }
 
 pub async fn decline_invite(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -672,7 +705,7 @@ pub async fn decline_invite(
 /// must persist the group row locally *before* calling this so the
 /// presentation can be built against the right group key.
 pub async fn join_via_link(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -697,7 +730,7 @@ pub async fn join_via_link(
                 join_via_link: Some(JoinViaLinkWire {
                     encrypted_profile_key: b64(&own_profile_key),
                     group_push_pseudonym: b64(&pseudonym_for_state),
-                    invite_link_password: pw_b64,
+                    invite_link_password: pw_b64.clone(),
                 }),
                 ..Default::default()
             })
@@ -717,7 +750,7 @@ pub async fn join_via_link(
 }
 
 pub async fn cancel_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -745,7 +778,7 @@ pub async fn cancel_join_request(
 // ── admin-class actions ──────────────────────────────────────────────────
 
 pub async fn approve_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -778,7 +811,7 @@ pub async fn approve_join_request(
 }
 
 pub async fn deny_join_request(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -803,7 +836,7 @@ pub async fn deny_join_request(
 }
 
 pub async fn remove_member(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -830,7 +863,7 @@ pub async fn remove_member(
 }
 
 pub async fn change_role(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -867,7 +900,7 @@ pub async fn change_role(
 /// Pull `/changes` since the last applied revision, decrypt each blob, and
 /// fast-forward the local cache.
 pub async fn apply_pending_changes(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -911,7 +944,7 @@ pub async fn apply_pending_changes(
 /// (§3.7 rotation.) Returns the new pseudonym bytes for caller-side relay
 /// registration.
 pub async fn rotate_group_pseudonym(
-    store: &store::Store,
+    store: &store::DeviceStore,
     client: &net::Client,
     did: &str,
     group_id_b64_s: &str,
@@ -952,7 +985,7 @@ pub async fn rotate_group_pseudonym(
 /// the wire bytes the caller should ship to every other member.
 /// Idempotent — repeated calls within one chain return matching bytes.
 pub async fn seed_own_sender_key(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     did: &str,
     device_id: u32,
     master_key: &[u8; 32],
@@ -967,7 +1000,7 @@ pub async fn seed_own_sender_key(
 /// `SenderKeyStore`. After this completes, `decrypt_group_content` calls
 /// for messages from `(sender_did, sender_device_id)` will succeed.
 pub async fn process_inbound_skdm(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     sender_did: &str,
     sender_device_id: u32,
     skdm_bytes: &[u8],
@@ -981,7 +1014,7 @@ pub async fn process_inbound_skdm(
 /// a serialized `SenderKeyMessage` ready to ship inside a
 /// `proto::GroupMessage`.
 pub async fn encrypt_group_content(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     did: &str,
     device_id: u32,
     master_key: &[u8; 32],
@@ -996,7 +1029,7 @@ pub async fn encrypt_group_content(
 /// Decrypt a `SenderKeyMessage` (received inside a `proto::GroupMessage`)
 /// using the locally cached sender key for `(sender_did, sender_device_id)`.
 pub async fn decrypt_group_content(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     sender_did: &str,
     sender_device_id: u32,
     ciphertext: &[u8],
@@ -1027,7 +1060,7 @@ pub struct ReceivedGroupMessage {
 /// `/v1/groups/{id}/send`. Caller-supplied `plaintext` is the inner payload
 /// (typically a `ContentMessage` proto with `body = Text/Receipt/...`).
 pub async fn send_group_message(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     sender_did: &str,
@@ -1035,16 +1068,20 @@ pub async fn send_group_message(
     group_id_b64: &str,
     plaintext: &[u8],
 ) -> Result<Vec<i64>, AppError> {
-    let mk = master_key_for(store, group_id_b64).await?;
+    // Master key is stable; derive it (and the per-day auth material) once. The
+    // member/recipient sets may be stale, so the endorsement step below refreshes
+    // group state and retries on a whole-set MAC failure.
+    let mk: [u8; 32] = {
+        let row = store
+            .load_group(group_id_b64)
+            .await?
+            .ok_or_else(|| AppError::Protocol("group not found".into()))?;
+        row.master_key
+            .clone()
+            .try_into()
+            .map_err(|_| AppError::Protocol("master_key length != 32".into()))?
+    };
     let group_key = GroupKey::from_bytes(mk);
-    let other_dids = other_member_dids(store, group_id_b64, sender_did).await?;
-    if other_dids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Inner SenderKey ciphertext over the caller's payload.
-    let senderkey_ct =
-        encrypt_group_content(store, sender_did, sender_device_id, &mk, plaintext).await?;
 
     // Today's credential + sender cert (cached together in group_credentials).
     let public = ensure_server_params(store, client, server_url).await?;
@@ -1054,35 +1091,109 @@ pub async fn send_group_message(
         .load_group_credential(server_url, sender_did, today)
         .await?
         .ok_or_else(|| AppError::Protocol("sender cert not cached after refresh".into()))?;
-
-    // Fresh endorsements for this group (one MAC over the full member set).
     let presentation = build_presentation_bytes(&public, &cred, &group_key)?;
-    let endo = client
-        .get_group_endorsements(group_id_b64, &presentation)
-        .await?;
-    let mut all_dids: Vec<String> = Vec::with_capacity(other_dids.len() + 1);
-    all_dids.push(sender_did.to_string());
-    all_dids.extend(other_dids.iter().cloned());
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system time before epoch")
-        .as_secs();
-    let endorsements_in_order = crypto::groups::endorsements::receive_endorsements(
-        &endo.response,
-        &all_dids,
-        &group_key,
-        &public,
-        now_secs,
-    )
-    .map_err(|e| AppError::Protocol(format!("receive endorsements: {e}")))?;
-    // Drop our own (index 0) — token covers only the recipients.
-    let recipient_endorsements: Vec<Vec<u8>> = endorsements_in_order.into_iter().skip(1).collect();
+
+    // Validate the server's endorsement response over the group's *full* member
+    // ciphertext set. EMIs come from cached state — present even for members
+    // whose DID we don't know (invite-link joins are stored with an empty DID by
+    // `approve_join_request`), so unlike a DID-derived set they don't silently
+    // drop members. If cached membership is stale (a member we invited has since
+    // accepted server-side, or one was removed), the whole-set MAC fails with
+    // `InvalidCiphertext`; refresh group state from the server and retry once.
+    // (Historically this surfaced as "receive endorsements: unexpected ciphertext
+    // type" once a group accrued unknown-DID / not-yet-synced members.)
+    let (recipient_endorsements, other_dids, expiration) = {
+        let mut attempt = 0;
+        loop {
+            let row = store
+                .load_group(group_id_b64)
+                .await?
+                .ok_or_else(|| AppError::Protocol("group not found".into()))?;
+            if row.encrypted_state_plaintext.is_empty() {
+                return Err(AppError::Protocol(
+                    "no cached group state; call fetch_group_state first".into(),
+                ));
+            }
+            let state = gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?;
+            let member_emis: Vec<Vec<u8>> = state
+                .members
+                .iter()
+                .map(|m| m.encrypted_member_id.clone())
+                .collect();
+            // Addressable recipients = members whose DID we know, excluding self
+            // (a sealed-sender envelope / session can only be built for those).
+            let other_dids: Vec<String> = state
+                .members
+                .iter()
+                .filter(|m| !m.did.is_empty() && m.did != sender_did)
+                .map(|m| m.did.clone())
+                .collect();
+            if other_dids.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let endo = client
+                .get_group_endorsements(group_id_b64, &presentation)
+                .await?;
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before epoch")
+                .as_secs();
+            tracing::debug!(
+                "group send: endorsing over {} members, {} addressable recipients (attempt {})",
+                member_emis.len(),
+                other_dids.len(),
+                attempt
+            );
+            match crypto::groups::endorsements::receive_endorsements_by_ciphertexts(
+                &endo.response,
+                &member_emis,
+                &public,
+                now_secs,
+            ) {
+                // Result aligned to `member_emis` (== `state.members`) order; keep
+                // only the addressable recipients' endorsements so the token's set
+                // matches the sealed-sender fanout the server verifies against.
+                Ok(endorsements_in_order) => {
+                    let recip: Vec<Vec<u8>> = state
+                        .members
+                        .iter()
+                        .zip(endorsements_in_order)
+                        .filter(|(m, _)| !m.did.is_empty() && m.did != sender_did)
+                        .map(|(_, e)| e)
+                        .collect();
+                    break (recip, other_dids, endo.expiration_unix_seconds);
+                }
+                Err(_) if attempt == 0 => {
+                    attempt += 1;
+                    tracing::debug!(
+                        "group send: endorsement set stale at {} cached members; \
+                         refreshing group state and retrying once",
+                        member_emis.len()
+                    );
+                    fetch_group_state(store, client, server_url, sender_did, group_id_b64).await?;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(AppError::Protocol(format!("receive endorsements: {e}")));
+                }
+            }
+        }
+    };
+
     let token = crypto::groups::endorsements::token_for_recipients(
         &recipient_endorsements,
         &group_key,
-        endo.expiration_unix_seconds,
+        expiration,
     )
     .map_err(|e| AppError::Protocol(format!("token_for_recipients: {e}")))?;
+
+    // Inner SenderKey ciphertext over the caller's payload (member-independent,
+    // so it's built after the endorsement set is settled to avoid re-ratcheting
+    // on a refresh+retry).
+    let senderkey_ct =
+        encrypt_group_content(store, sender_did, sender_device_id, &mk, plaintext).await?;
 
     // One ProtocolAddress per (recipient, device); per-recipient wire entries
     // pair the ServiceId with the EMI we precompute so the server can resolve
@@ -1095,14 +1206,20 @@ pub async fn send_group_message(
         let sid_name = sid.service_id_string();
         let sid_fixed = sid.service_id_fixed_width_binary().to_vec();
         let emi_bytes = zkgroup::serialize(&group_key.encrypt_member_id(did));
-        let device_ids = client.fetch_devices(did).await?;
-        if device_ids.is_empty() {
-            return Err(AppError::Protocol(format!(
-                "no active devices for recipient {did}"
-            )));
-        }
+        // Establish/refresh a session with every device of this member before
+        // we encrypt. Without this, `encrypt_group_envelope` fails with
+        // `NoSession` for any member we never DM'd (e.g. someone an admin added
+        // after us) or whose device set has since changed.
+        let device_ids = crate::messaging::ensure_group_recipient_sessions(
+            store,
+            client,
+            sender_did,
+            sender_device_id,
+            did,
+        )
+        .await?;
         for dev_id in device_ids {
-            let dev = DeviceId::try_from(dev_id as u32)
+            let dev = DeviceId::try_from(dev_id)
                 .map_err(|_| AppError::Protocol("device_id 0 is reserved".into()))?;
             destinations.push(ProtocolAddress::new(sid_name.clone(), dev));
         }
@@ -1141,7 +1258,7 @@ pub async fn send_group_message(
 /// `sender_keys::group_decrypt`), and ack them server-side. Returns the
 /// validated, decrypted messages in delivery order.
 pub async fn fetch_group_messages(
-    store: &mut store::Store,
+    store: &mut store::DeviceStore,
     client: &net::Client,
     server_url: &str,
     recipient_did: &str,
@@ -1228,7 +1345,7 @@ pub async fn fetch_group_messages(
 /// return the DIDs of every current full member except `excluding_did`.
 /// Used to enumerate SKDM-distribution and group-send recipients.
 pub async fn other_member_dids(
-    store: &store::Store,
+    store: &store::DeviceStore,
     group_id_b64_s: &str,
     excluding_did: &str,
 ) -> Result<Vec<String>, AppError> {
@@ -1254,10 +1371,41 @@ pub async fn other_member_dids(
         .collect())
 }
 
+/// Resolve every known group's title from locally-persisted state in a
+/// single query, with no network round trip. The chat list uses this at
+/// startup so group rows render with their real names immediately instead of
+/// falling back to a placeholder.
+///
+/// Returns a map keyed by url-safe-no-pad base64 group_id. Groups whose state
+/// hasn't been fetched yet (empty `encrypted_state_plaintext`, e.g. a freshly
+/// received invite) are omitted; the caller falls back to `fetch_group_state`
+/// for those. A group whose state fails to decode is skipped (logged) rather
+/// than failing the whole list.
+pub async fn local_group_titles(
+    store: &store::DeviceStore,
+) -> Result<HashMap<String, String>, AppError> {
+    let rows = store.list_groups().await?;
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        if row.encrypted_state_plaintext.is_empty() {
+            continue;
+        }
+        match gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice()) {
+            Ok(state) => {
+                out.insert(row.group_id, state.title);
+            }
+            Err(e) => {
+                tracing::warn!("[groups] decode GroupState for {}: {e}", row.group_id);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Master-key bytes for a stored group. Convenience: most call sites need
 /// the 32-byte array form, not the raw `Vec`.
 pub async fn master_key_for(
-    store: &store::Store,
+    store: &store::DeviceStore,
     group_id_b64_s: &str,
 ) -> Result<[u8; 32], AppError> {
     let row = store
@@ -1279,7 +1427,7 @@ pub async fn master_key_for(
 /// once it's ready to render the pending list. (Keeping these separate
 /// lets the inbound message hot path stay synchronous-ish.)
 pub async fn store_inbound_group_context(
-    store: &store::Store,
+    identity: &store::IdentityStore,
     master_key: &[u8],
     hosting_server_url: &str,
 ) -> Result<String, AppError> {
@@ -1291,7 +1439,7 @@ pub async fn store_inbound_group_context(
     let group_key = GroupKey::from_bytes(mk);
     let group_id_b64_s = b64(&group_key.group_id().0);
 
-    if store.load_group(&group_id_b64_s).await?.is_some() {
+    if identity.load_group(&group_id_b64_s).await?.is_some() {
         // Already known — silently drop. The invitee may have stored the
         // master key on a sibling device and synced over.
         return Ok(group_id_b64_s);
@@ -1307,7 +1455,7 @@ pub async fn store_inbound_group_context(
         group_push_pseudonym: None,
         created_at: Timestamp::now(),
     };
-    store.save_group(&row).await?;
+    identity.save_group(&row).await?;
     Ok(group_id_b64_s)
 }
 
@@ -1329,6 +1477,7 @@ impl AppCore {
         expiry_seconds: u32,
     ) -> Result<CreatedGroupFfi, AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
             let did = inner.did.clone();
             let device_id = inner.device_id;
@@ -1343,6 +1492,25 @@ impl AppCore {
                 expiry_seconds,
             )
             .await?;
+            // Subscribe to the new group's push pseudonym so reply messages
+            // (e.g. from invitees) get pushed live without a fetch poll.
+            if let (Some(ws), Some(pseudonym)) = (
+                ws.as_ref(),
+                inner
+                    .store
+                    .load_group(&created.group_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|g| g.group_push_pseudonym),
+            ) {
+                if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
+                    tracing::warn!(
+                        "[groups] subscribe to new group pseudonym for {} failed: {e}",
+                        created.group_id
+                    );
+                }
+            }
             // Seed our own sender key for this group locally. No other
             // members exist yet, so there's no SKDM to ship — the
             // recipients of future invites will receive it as part of
@@ -1353,6 +1521,8 @@ impl AppCore {
                 .try_into()
                 .map_err(|_| AppError::Protocol("master_key length != 32".into()))?;
             let _ = seed_own_sender_key(&mut inner.store, &did, device_id, &mk).await?;
+            // Sync server-side blob so a future recovery can rejoin this group.
+            inner.refresh_recovery_blob_best_effort().await;
             Ok::<_, AppError>(CreatedGroupFfi {
                 group_id: created.group_id,
                 master_key: created.master_key,
@@ -1633,39 +1803,24 @@ impl AppCore {
         .map_err(AppErrorFfi::from)
     }
 
-    /// Send a group message to every other current member. Encrypted
-    /// once under our Sender Key for the group, then fanned out as a
-    /// per-recipient DM carrying the same `proto::GroupMessage` body.
-    ///
-    /// This Stage 5 path uses the existing /v1/messages transport. The
-    /// sealed-sender wrapping and dedicated send endpoint (§3.11) layer
-    /// in at PR 2.
+    /// Send a group text message to every other current member. The text is
+    /// wrapped in a `ContentMessage` envelope (with `sent_at_ms` and our
+    /// profile key), encrypted once under our Sender Key, and fanned out over
+    /// the sealed-sender path. Carrying the envelope (rather than raw text) is
+    /// what lets reactions/edits/deletes/receipts work in groups, and gives
+    /// every member the same sender-assigned `sent_at` to target by.
     pub fn send_group_message(
         &self,
         group_id: String,
         plaintext: Vec<u8>,
+        sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let mut inner = self.inner.lock().await;
-            let did = inner.did.clone();
-            let device_id = inner.device_id;
-            let server_url = inner.client.server_url().to_string();
-            let AppCoreInner {
-                ref mut store,
-                ref client,
-                ..
-            } = *inner;
-            send_group_message(
-                store,
-                client,
-                &server_url,
-                &did,
-                device_id,
-                &group_id,
-                &plaintext,
-            )
-            .await?;
-            Ok::<_, AppError>(())
+            let body = String::from_utf8_lossy(&plaintext).into_owned();
+            inner
+                .send_group_content(&group_id, Body::Text(proto::TextMessage { body }), sent_at_ms as u64)
+                .await
         })
         .map_err(AppErrorFfi::from)
     }

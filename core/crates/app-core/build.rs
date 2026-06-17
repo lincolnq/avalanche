@@ -6,7 +6,11 @@ fn main() {
         std::env::set_var("PROTOC", protoc);
     }
     prost_build::compile_protos(
-        &["../../proto/content.proto", "../../proto/groups.proto"],
+        &[
+            "../../proto/content.proto",
+            "../../proto/groups.proto",
+            "../../proto/recovery.proto",
+        ],
         &["../../proto"],
     )
     .unwrap();

@@ -3,7 +3,7 @@
 //! Stores the current pseudonym, device token, and platform so they survive
 //! app restarts. Only one row ever exists (id = 1).
 
-use crate::{db::Store, error::StoreError};
+use crate::{db::DeviceStore, error::StoreError};
 
 /// Push registration state for the local device.
 pub struct PushState {
@@ -15,7 +15,7 @@ pub struct PushState {
     pub registered_at: i64,
 }
 
-impl Store {
+impl DeviceStore {
     /// Persist the current push registration. Replaces any prior state.
     /// The `registered_at` field on `state` is ignored — the current time
     /// is always written, since save = fresh registration.

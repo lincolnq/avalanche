@@ -10,10 +10,13 @@ members = [
     "crates/federation",
     "crates/project-sdk",
     "crates/test-utils",
-    "crates/testbot",
     "crates/app-core-node",
 ]
 resolver = "2"
+
+[workspace.package]
+# AGPL-3.0-only to match libsignal (our pinned crypto dependency). See LICENSE.
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 # Internal crates
@@ -49,6 +52,16 @@ rand = "0.9"
 p256        = { version = "0.13", features = ["ecdsa"] }
 aes-gcm     = "0.10"
 sha2        = "0.10"
+# Standard Ed25519 for verifying Project-signed invite/registration tokens
+# (docs/24 gatekeeper). Standard (not libsignal's XEd25519) so a future TS
+# gatekeeper can sign with any off-the-shelf Ed25519 library. The server only
+# verifies; test signing goes through `SigningKey::from_bytes` so we don't pull
+# a second rand_core into the graph. Uses the same patched curve25519-dalek 4.x
+# fork as zkgroup (API-compatible), so no diamond.
+ed25519-dalek = "2"
+# HMAC-SHA256 for deriving opaque storage record ids (docs/05 §4). digest 0.10
+# family, matching sha2 0.10; no rand_core, so it doesn't widen the graph.
+hmac        = "0.12"
 
 # Async
 tokio      = { version = "1", features = ["full"] }
@@ -57,7 +70,7 @@ async-trait = "0.1"
 # Storage
 # rusqlite is listed explicitly to control the bundled-sqlcipher feature.
 # tokio-rusqlite wraps it with an async interface.
-rusqlite       = { version = "0.31", features = ["bundled-sqlcipher"] }
+rusqlite       = { version = "0.31", features = ["bundled-sqlcipher", "hooks"] }
 tokio-rusqlite = "0.5"
 
 # HTTP client

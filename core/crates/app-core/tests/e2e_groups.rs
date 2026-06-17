@@ -11,26 +11,26 @@
 //! Requires a homeserver at `SERVER_URL` (default
 //! `http://localhost:3000`). Run via `make test-e2e`.
 
+mod common;
+
 use app_core::AppCore;
 
 fn server_url() -> String {
     std::env::var("SERVER_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
 }
 
-async fn test_store() -> store::Store {
-    let store = store::Store::open_in_memory().await.unwrap();
-    store.migrate().await.unwrap();
-    store
+async fn test_store() -> store::DeviceStore {
+    store::DeviceStore::open_in_memory().await.unwrap()
 }
 
 #[tokio::test]
 async fn create_invite_accept_promote_remove_roundtrip() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
 
@@ -127,13 +127,13 @@ async fn create_invite_accept_promote_remove_roundtrip() {
 async fn three_member_fanout_roundtrip() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
 
@@ -226,4 +226,81 @@ async fn three_member_fanout_roundtrip() {
     assert_eq!(bob_msgs2[0].plaintext, reply);
     assert_eq!(alice_msgs[0].sender_did, carol_did);
     assert_eq!(bob_msgs2[0].sender_did, carol_did);
+}
+
+/// A member can group-send even to a peer it has never exchanged a DM with:
+/// the send path establishes the missing Double Ratchet session on the fly
+/// (X3DH from a fetched prekey bundle) instead of aborting with `NoSession`.
+///
+/// Bob joins while he is the only invitee, so his accept-time SKDM fan-out
+/// reaches only alice. Carol joins afterwards, and bob never drains carol's
+/// SKDM DM — so bob's store has no session with carol. Before lazy
+/// establishment, bob's group send would fail outright; now it must go
+/// through, and alice (a recipient bob was already set up for) decrypts it.
+#[tokio::test]
+async fn group_send_establishes_missing_session() {
+    let url = server_url();
+
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+
+    let bob_did = bob.did_async().await;
+    let carol_did = carol.did_async().await;
+
+    let created = alice
+        .create_group_async("Trio", "lazy-session e2e", 0)
+        .await
+        .unwrap();
+
+    // Bob joins first, while he is the only invitee.
+    alice
+        .invite_member_async(&created.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    let _ = bob.receive_messages_async().await.unwrap();
+    let _ = bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    bob.accept_invite_async(&created.group_id).await.unwrap();
+
+    // Carol joins afterwards. Bob deliberately never drains carol's accept-time
+    // SKDM DM, so bob's store holds no session with carol.
+    alice
+        .invite_member_async(&created.group_id, &carol_did, 0)
+        .await
+        .unwrap();
+    let _ = carol.receive_messages_async().await.unwrap();
+    let _ = carol
+        .fetch_group_state_async(&created.group_id)
+        .await
+        .unwrap();
+    carol.accept_invite_async(&created.group_id).await.unwrap();
+
+    // Alice drains both invitees' SKDMs so she can decrypt their group messages.
+    let _ = alice.receive_messages_async().await.unwrap();
+
+    // Bob refreshes state and now sees carol as a member, but has no session
+    // with her. The send must establish one on the fly rather than fail.
+    let bob_state = bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    assert_eq!(bob_state.members.len(), 3);
+
+    let plaintext = b"bob to the group";
+    bob.send_group_message_async(&created.group_id, plaintext)
+        .await
+        .expect("group send should establish the missing carol session, not fail with NoSession");
+
+    // Alice receives and decrypts — proving the fan-out actually went out
+    // instead of erroring midway on the missing carol session.
+    let alice_msgs = alice
+        .fetch_group_messages_async(&created.group_id)
+        .await
+        .unwrap();
+    assert_eq!(alice_msgs.len(), 1);
+    assert_eq!(alice_msgs[0].plaintext, plaintext);
+    assert_eq!(alice_msgs[0].sender_did, bob_did);
 }

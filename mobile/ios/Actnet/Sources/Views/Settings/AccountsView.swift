@@ -12,6 +12,15 @@ struct AccountsView: View {
         appState.accounts
     }
 
+    /// Marketing version + build number from the app bundle, e.g.
+    /// "Avalanche 1.0 (42)". Shown in the About footer.
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "Avalanche \(version) (\(build))"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -51,6 +60,21 @@ struct AccountsView: View {
                     } label: {
                         Label("Add an account", systemImage: "plus")
                     }
+                }
+
+                Section {
+                    Link(destination: URL(string: "https://github.com/lincolnq/avalanche/issues")!) {
+                        Label("Get Help", systemImage: "questionmark.circle")
+                    }
+                } header: {
+                    Text("About")
+                } footer: {
+                    VStack(spacing: 4) {
+                        Text(appVersion)
+                        Link("Open Source License", destination: URL(string: "https://github.com/lincolnq/avalanche/blob/main/LICENSE")!)
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
             

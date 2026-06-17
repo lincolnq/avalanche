@@ -10,10 +10,21 @@ struct ConversationRow: View {
         appState.unreadCount(for: conversation)
     }
 
+    /// A DM with a bot renders in the hexagon frame + badge, like every other
+    /// bot avatar surface (docs/54-bot-presentation.md). Groups and human DMs
+    /// stay circular.
+    private var isBotConversation: Bool {
+        guard !conversation.isGroup, let did = conversation.recipientDid else { return false }
+        return appState.isBot(did, accountId: conversation.accountId)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            // Group/DM avatar placeholder
-            Circle()
+            // Group/DM avatar placeholder. Hexagon + badge when the DM partner
+            // is a bot; circle otherwise.
+            let isBot = isBotConversation
+            let frame: AnyShape = isBot ? AnyShape(Hexagon()) : AnyShape(Circle())
+            frame
                 .fill(Color.sand200)
                 .frame(width: 48, height: 48)
                 .overlay {
@@ -37,7 +48,14 @@ struct ConversationRow: View {
                 }
 
                 HStack {
-                    if let lastMessage = conversation.lastMessage {
+                    if conversation.isRequest {
+                        // First contact from an un-curated DID (docs/12 §1).
+                        Text("Message request")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.avBrand)
+                            .lineLimit(1)
+                    } else if let lastMessage = conversation.lastMessage {
                         Text(lastMessage)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)

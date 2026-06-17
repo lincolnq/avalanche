@@ -17,6 +17,12 @@ struct Conversation: Identifiable, Hashable {
     var lastMessage: String?
     var lastMessageDate: Date?
     var isGroup: Bool = false
+    /// True for a DM from an un-curated, un-blocked sender — an unaccepted
+    /// message request (docs/12 §1). Drives the "Message request" label and
+    /// the Accept/Delete/Report gate in `ConversationView`.
+    var isRequest: Bool = false
+    /// True for a DM with a blocked contact (docs/12 §2).
+    var isBlocked: Bool = false
 }
 
 /// Build a stable conversation id from a server-visible group id (URL-safe

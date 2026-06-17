@@ -43,9 +43,9 @@ PROJECTS = [
     {
         "name": "Testbot",
         "description": "Chat with an AI bot",
-        "package": "testbot",
+        "dist": "packages/testbot/dist/index.js",
         "bind_env": "TESTBOT_BIND_ADDR",
-        "rust_log": "actnet_testbot=debug,app_core=debug",
+        "log_env": "TESTBOT_LOG",
     },
 ]
 
@@ -56,6 +56,9 @@ INFRA_DIR = os.path.join(REPO_DIR, "infra")
 INFRA_COMPOSE = os.path.join(INFRA_DIR, "docker-compose.yml")
 DB_URL = "postgresql://actnet:actnet-dev@localhost:5432/actnet"
 ADMINBOT_STATE_DIR = os.path.join(REPO_DIR, "dev-state", "adminbot")
+# Bootstrap secret for dev's closed-registration server. The homeserver accepts
+# it; testbot/adminbot present it (as a bootstrap token) to register.
+DEV_SHARED_SECRET = os.environ.get("REGISTRATION_SHARED_SECRET", "CHANGEME")
 
 
 def node_cmd(args):
@@ -106,21 +109,22 @@ def run_migrations():
     )
 
 
-def build_adminbot():
-    """Build the Node adminbot package (and its native @actnet/app-core dep)."""
-    print("Building adminbot...")
-    subprocess.run(["make", "adminbot-build"], cwd=REPO_DIR, check=True)
+def build_node_bots():
+    """Build the first-party Node bots (adminbot + testbot). Both depend on the
+    shared `node-app-core` binding; a single `make` invocation rebuilds that
+    dep just once (and only when the Rust/TS sources changed)."""
+    print("Building node bots (adminbot + testbot)...")
+    subprocess.run(["make", "node-adminbot-build", "node-testbot-build"], cwd=REPO_DIR, check=True)
 
 
 def main():
     start_postgres()
 
-    # Build all crates in parallel while Postgres starts up
+    # Build the server while Postgres starts up. Project services are Node
+    # packages, built alongside the bots below.
     print("Building...")
-    subprocess.run(["cargo", "build", "-p", "server"] +
-                   [f"-p{p['package']}" for p in PROJECTS],
-                   cwd=CORE_DIR, check=True)
-    build_adminbot()
+    subprocess.run(["cargo", "build", "-p", "server"], cwd=CORE_DIR, check=True)
+    build_node_bots()
 
     wait_for_postgres()
     run_migrations()
@@ -155,15 +159,27 @@ def main():
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
-        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1"},
+        # Dev runs CLOSED registration (the prod default) so the dev clients
+        # exercise the same admission path prod uses. Clients present the shared
+        # secret below; testbot/adminbot read DEV_SHARED_SECRET to build a
+        # bootstrap token. Override REGISTRATION_MODE=open for quick hacking.
+        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET},
     ))
 
     for project, port in project_launches:
         print(f"  {project['name']} -> {host}:{port}")
         processes.append(subprocess.Popen(
-            ["cargo", "run", "-p", project["package"]],
-            cwd=CORE_DIR,
-            env={**os.environ, project["bind_env"]: f"0.0.0.0:{port}", "RUST_LOG": project["rust_log"]},
+            node_cmd([project["dist"]]),
+            cwd=NODE_DIR,
+            env={
+                **os.environ,
+                project["bind_env"]: f"0.0.0.0:{port}",
+                "HOMESERVER_URL": os.environ.get("HOMESERVER_URL", "http://localhost:3000"),
+                project["log_env"]: os.environ.get(project["log_env"], "info"),
+                # Present the bootstrap secret so the bot can register against
+                # the closed-registration dev server.
+                "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
+            },
         ))
 
     # Adminbot — auto-registers as did:local:adminbot on first launch (matches
@@ -187,6 +203,9 @@ def main():
             "ADMINBOT_STATE_DIR": ADMINBOT_STATE_DIR,
             "ADMINBOT_DB_KEY": os.environ.get("ADMINBOT_DB_KEY", "dev-adminbot-key"),
             "ADMINBOT_LOG": os.environ.get("ADMINBOT_LOG", "info"),
+            # Bootstrap secret: registers adminbot against the closed dev server
+            # and links it into the superuser Project (it names that Project).
+            "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
         },
     ))
 

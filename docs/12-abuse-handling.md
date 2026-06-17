@@ -4,7 +4,7 @@
 
 How blocking, spam reporting, and account-level enforcement work in an E2E-encrypted, federated system where the server cannot read message content.
 
-The contact record itself — the local row that carries block state and other per-DID state described below — is specified in `35-contacts-and-profiles.md`. This doc owns the abuse-handling semantics; storage layout lives there.
+The contact record itself — the local row that carries block state and other per-DID state described below — is specified in `52-contacts-and-profiles.md`. This doc owns the abuse-handling semantics; storage layout lives there.
 
 ## Goals
 
@@ -50,7 +50,7 @@ The primary filter. A message from a DID the recipient has never accepted appear
 The conversation list shows the thread with the sender's claimed display name and a preview of the first message — same as any other conversation. A subtle indicator ("Message request" label or similar) distinguishes it.
 
 When the recipient opens the conversation, instead of the normal compose UI they see:
-- Sender's DID, claimed display name, and profile avatar (all client-trusted; see `35-contacts-and-profiles.md`)
+- Sender's DID, claimed display name, and profile avatar (all client-trusted; see `52-contacts-and-profiles.md`)
 - The message thread, read-only
 - Three actions at the bottom: **Accept**, **Delete**, **Report Spam and Block**
 
@@ -268,7 +268,7 @@ This means reports propagate two ways: locally on P (account-level enforcement a
 
 ## 6. Profile-level abuse
 
-Display names, avatars, and bios are user-supplied profile fields visible to anyone who can fetch the profile (see `35-contacts-and-profiles.md`). These are abuse vectors distinct from message content because they're broadcast, not addressed.
+Display names, avatars, and bios are user-supplied profile fields visible to anyone who can fetch the profile (see `52-contacts-and-profiles.md`). These are abuse vectors distinct from message content because they're broadcast, not addressed.
 
 Mitigations:
 - Client-side display-name profanity filter (configurable, on by default). Filtered names render as "[name hidden]" with a tap-to-reveal.
@@ -305,7 +305,7 @@ For Apple review, the four requirements map cleanly:
 |---|---|
 | Method for filtering objectionable material | Message Requests (gates first contact); client-side profile name filter |
 | Mechanism to report offensive content + timely response | Report Spam in Message Request UI → homeserver-mediated report → operator action ladder |
-| Ability to block abusive users | Per-account block list, client-enforced |
+| Ability to block abusive users | Per-identity block list, client-enforced |
 | Published contact info | Support email in app and App Store listing |
 
 In review notes, explicitly call out: "This is an end-to-end encrypted messaging app. The server cannot read message content. Abuse handling is account-level, following the model used by Signal, WhatsApp, and other E2E messengers."

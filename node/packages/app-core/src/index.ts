@@ -75,6 +75,17 @@ export type DeliveryStatus = "sending" | "sent" | "delivered" | "read";
 export type GroupRole = "member" | "admin";
 
 /**
+ * Where a plain-text {@link AppCore.send} is directed: a DM with a peer, or a
+ * group. Discriminated by `kind`. Lets a caller route a reply back through
+ * whichever channel a message arrived on without branching on the transport.
+ *
+ * @category Types
+ */
+export type SendTarget =
+  | { kind: "dm"; recipientDid: string }
+  | { kind: "group"; groupId: string };
+
+/**
  * Liveness of the connection to the homeserver. Discriminated by `state`.
  *
  * The reconnect task transitions:
@@ -437,6 +448,11 @@ const connStateToNative = (s: ConnectionState): native.ConnectionStateJs => {
   return { state: s.state };
 };
 
+const sendTargetToNative = (t: SendTarget): native.MessageTargetJs =>
+  t.kind === "dm"
+    ? { kind: "dm", recipientDid: t.recipientDid }
+    : { kind: "group", groupId: t.groupId };
+
 const decryptedMessageFromNative = (m: native.DecryptedMessageJs): DecryptedMessage => {
   const plaintext = asU8(m.plaintext);
   return {
@@ -483,7 +499,12 @@ const deliveryStatusUpdateFromNative = (u: native.DeliveryStatusUpdateJs): Deliv
   deliveryStatus: deliveryFromNum(u.deliveryStatus),
 });
 
-const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
+// Returns `null` for event kinds this SDK version doesn't surface (today:
+// reactionUpdated / messageEdited / messageDeleted — docs/33, docs/36 — whose
+// store side-effects are already applied in the core), and for any future kind
+// added in Rust. Skipping rather than throwing keeps node consumers (adminbot,
+// testbot) resilient: a new event variant must not crash a bot that ignores it.
+const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent | null => {
   if (e.kind === "message" && e.message) {
     return { kind: "message", message: decryptedMessageFromNative(e.message) };
   }
@@ -500,7 +521,7 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent => {
       },
     };
   }
-  throw new Error(`malformed incoming event: ${JSON.stringify(e)}`);
+  return null;
 };
 
 const adminEventFromNative = (e: native.AdminEventJs): AdminEvent => {
@@ -621,9 +642,10 @@ export class AppCore {
     dbKey: string,
     recoveryKey: Uint8Array,
     displayName: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
-      await native.AppCore.createAccount(serverUrl, dbPath, dbKey, asBuf(recoveryKey), displayName),
+      await native.AppCore.createAccount(serverUrl, dbPath, dbKey, asBuf(recoveryKey), displayName, inviteToken),
     );
   }
 
@@ -646,6 +668,7 @@ export class AppCore {
     dbKey: string,
     displayName: string,
     didSuffix?: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.createBotAccount(
@@ -654,6 +677,7 @@ export class AppCore {
         dbKey,
         displayName,
         didSuffix,
+        inviteToken,
       ),
     );
   }
@@ -675,10 +699,11 @@ export class AppCore {
     dbPath: string,
     dbKey: string,
     displayName: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.finalizeAccount(
-        prepared._native, dbPath, dbKey, displayName,
+        prepared._native, dbPath, dbKey, displayName, inviteToken,
       ),
     );
   }
@@ -724,6 +749,56 @@ export class AppCore {
     return new AppCore(await native.AppCore.login(dbPath, dbKey));
   }
 
+  /**
+   * Open a bot account, registering it on first run and re-logging-in
+   * thereafter — the idempotent bootstrap an operator-run bot needs.
+   *
+   * If the store at `dbPath` already holds an account, this logs in and
+   * `serverUrl` / `displayName` / `didSuffix` are ignored (they were fixed by
+   * the original registration). Otherwise — a fresh deploy, or an empty DB
+   * left by a registration that failed after opening the store — it registers
+   * a new {@link createBotAccount bot account}.
+   *
+   * The "is the store empty?" decision is made inside the core, so callers no
+   * longer pattern-match on error strings to tell a first run from a real
+   * failure. Layer identity policy on top by checking {@link AppCore.did}
+   * against the DID you expect.
+   *
+   * @category Constructors
+   */
+  static async loginOrCreateBot(
+    serverUrl: string,
+    dbPath: string,
+    dbKey: string,
+    displayName: string,
+    didSuffix?: string,
+    inviteToken?: string,
+  ): Promise<AppCore> {
+    return new AppCore(
+      await native.AppCore.loginOrCreateBot(serverUrl, dbPath, dbKey, displayName, didSuffix, inviteToken),
+    );
+  }
+
+  /**
+   * Build a bootstrap registration token from a shared secret (docs/24).
+   *
+   * Pass the result as `inviteToken` to {@link createBotAccount} /
+   * {@link loginOrCreateBot} to register against a closed-registration server.
+   * Naming `project` links the new account into that Project — e.g. the
+   * superuser Project (slug `"adminbot"`) to bootstrap admin authority.
+   *
+   * @category Constructors
+   */
+  static bootstrapToken(serverUrl: string, secret: string, project?: string): string {
+    // Single-char wire keys keep the token (and QR) compact: s=server_url,
+    // k=bootstrap_secret, p=project (docs/24, 51).
+    const payload: Record<string, string> = { s: serverUrl, k: secret };
+    if (project) payload.p = project;
+    return Buffer.from(JSON.stringify(payload), "utf8")
+      .toString("base64")
+      .replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  }
+
   // ── identity ────────────────────────────────────────────────────────────
 
   /**
@@ -760,6 +835,67 @@ export class AppCore {
   async sendDm(recipientDid: string, body: string, sentAt?: Temporal.Instant): Promise<void> {
     const ts = sentAt ?? Temporal.Now.instant();
     await this._native.sendDm(recipientDid, encodeBody(body), instantToMs(ts));
+  }
+
+  /**
+   * Send a text message to a {@link SendTarget} — a DM or a group — without
+   * branching on the transport yourself. A `"dm"` target behaves exactly like
+   * {@link sendDm} (envelope + per-device fan-out + marks the contact
+   * curated); a `"group"` target behaves like {@link sendGroupMessage} (Sender
+   * Key encryption + per-member fan-out).
+   *
+   * Handy for replying back through whichever channel a message arrived on:
+   *
+   * ```ts
+   * const target: SendTarget = msg.groupId
+   *   ? { kind: "group", groupId: msg.groupId }
+   *   : { kind: "dm", recipientDid: msg.senderDid };
+   * await core.send(target, "got it");
+   * ```
+   *
+   * @param body   Text body. Sent verbatim — UTF-8 on the wire.
+   * @param sentAt Send-time stamped into the envelope. Defaults to
+   *               `Temporal.Now.instant()`.
+   *
+   * @category Direct Messages
+   */
+  async send(target: SendTarget, body: string, sentAt?: Temporal.Instant): Promise<void> {
+    const ts = sentAt ?? Temporal.Now.instant();
+    await this._native.sendMessage(sendTargetToNative(target), encodeBody(body), instantToMs(ts));
+  }
+
+  /**
+   * React to a message in a DM or group (docs/33-reactions.md). One reaction
+   * per account per message: a fresh `emoji` replaces any prior one; `remove`
+   * clears it. Applies locally and sends a reaction control message to the
+   * conversation.
+   *
+   * @param target       Where the reacted-to message lives (DM peer or group).
+   * @param targetAuthor DID of the reacted-to message's author.
+   * @param targetSentAt `sentAt` of the reacted-to message — its wire identity.
+   * @param emoji        The reaction emoji (ignored when `remove` is `true`).
+   * @param remove       `true` to clear this account's reaction on the target.
+   * @param sentAt       This reaction op's timestamp. Defaults to now.
+   *
+   * @category Direct Messages
+   */
+  async sendReaction(
+    target: SendTarget,
+    targetAuthor: string,
+    targetSentAt: Temporal.Instant,
+    emoji: string,
+    remove: boolean,
+    sentAt?: Temporal.Instant,
+  ): Promise<void> {
+    const ts = sentAt ?? Temporal.Now.instant();
+    await this._native.sendReaction(
+      sendTargetToNative(target),
+      targetAuthor,
+      instantToMs(targetSentAt),
+      emoji,
+      remove,
+      instantToMs(ts),
+    );
   }
 
   /**
@@ -836,7 +972,10 @@ export class AppCore {
       } catch {
         return;
       }
-      for (const e of batch) yield incomingEventFromNative(e);
+      for (const e of batch) {
+        const ev = incomingEventFromNative(e);
+        if (ev) yield ev;
+      }
     }
   }
 
@@ -852,7 +991,9 @@ export class AppCore {
    */
   async nextEvents(): Promise<IncomingEvent[]> {
     const events = await this._native.nextEvents();
-    return events.map(incomingEventFromNative);
+    return events
+      .map(incomingEventFromNative)
+      .filter((e): e is IncomingEvent => e !== null);
   }
 
   /**

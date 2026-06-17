@@ -2,6 +2,7 @@
 name    = "app-core"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -29,7 +30,9 @@ uuid               = { workspace = true }
 p256               = { workspace = true }
 aes-gcm            = { workspace = true }
 sha2               = { workspace = true }
+hmac               = { workspace = true }
 hkdf               = "0.12"
+async-trait        = { workspace = true }
 base32             = { workspace = true }
 bs58               = { workspace = true }
 serde_ipld_dagcbor = { workspace = true }

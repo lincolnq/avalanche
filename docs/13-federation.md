@@ -61,7 +61,7 @@ The client picks which of its member servers to send through; that server then m
 1. **Is R a local member of S?** → queue locally on S. R's devices connected to S receive it. **No federation.**
 2. **Otherwise** → resolve R's DID to R's discovery server H. Federate the ciphertext to H. R's devices connected to H receive it.
 
-**Learned route.** When the client receives a message from contact C via a websocket to server X, and X is one of the client's member servers, the client records "for C, route via X." Subsequent sends to C go via X instead of the discovery server. If a send via the learned route fails because R is no longer a member of X, the client falls back to the discovery server and forgets the learned route. Storage lives on the contact row (see `35-contacts-and-profiles.md`).
+**Learned route.** When the client receives a message from contact C via a websocket to server X, and X is one of the client's member servers, the client records "for C, route via X." Subsequent sends to C go via X instead of the discovery server. If a send via the learned route fails because R is no longer a member of X, the client falls back to the discovery server and forgets the learned route. Storage lives on the contact row (see `52-contacts-and-profiles.md`).
 
 ### Why this converges
 
@@ -152,7 +152,7 @@ https://go.theavalanche.net/invite/<base64url_token>    → server-join flow
 https://go.theavalanche.net/project/<base64url_token>   → Project-join flow (joins server first if needed)
 ```
 
-Each token is an opaque base64url-encoded payload that the appropriate server endpoint resolves to the data the client needs (DID + discovery hint for contacts, server metadata + invite-gate info for servers, Project descriptor for Projects). Token resolution happens server-side so the URL stays short enough to QR-encode comfortably and the client doesn't need to parse structured payloads from the URL itself. See `docs/34-invite-tokens.md` for the invite-token format.
+Each token is an opaque base64url-encoded payload that the appropriate server endpoint resolves to the data the client needs (DID + discovery hint for contacts, server metadata + invite-gate info for servers, Project descriptor for Projects). Token resolution happens server-side so the URL stays short enough to QR-encode comfortably and the client doesn't need to parse structured payloads from the URL itself. See `docs/51-invite-tokens.md` for the invite-token format.
 
 ### Defaults by path
 
