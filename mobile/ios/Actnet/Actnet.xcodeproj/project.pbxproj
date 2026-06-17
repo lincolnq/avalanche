@@ -62,6 +62,7 @@
 		F190F9612C0145941313B183 /* AccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7313225243535C7C945AD8D7 /* AccountsView.swift */; };
 		F583E622D4499CAC0D0472FF /* MockActnetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649CF0CE439034C4B30F81F5 /* MockActnetService.swift */; };
 		FA8DF8441A2584B4F6FFFDFE /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32115C1BD46227602D3C5A71 /* RootView.swift */; };
+		FCDD84F343F062EC3CA19A62 /* PublicServerInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A7ADA2108567E95D845EF1 /* PublicServerInfo.swift */; };
 		FE24D043CB770E44A2F5F3EE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C83A54ACCB386940D8E4689 /* ConversationView.swift */; };
 /* End PBXBuildFile section */
 
@@ -113,6 +114,7 @@
 		B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectWebView.swift; sourceTree = "<group>"; };
 		C0BC2191A5A534D46806501B /* ConversationRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRow.swift; sourceTree = "<group>"; };
 		C175D8D86EA1A357FB1515A9 /* RecoveryConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryConsoleView.swift; sourceTree = "<group>"; };
+		C7A7ADA2108567E95D845EF1 /* PublicServerInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicServerInfo.swift; sourceTree = "<group>"; };
 		C9F568020569E5B672851351 /* BlockedContactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedContactsView.swift; sourceTree = "<group>"; };
 		CA3B34B7A3FF40359D732B62 /* OfflineBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineBanner.swift; sourceTree = "<group>"; };
 		D0B344D75428AFD0B731E724 /* AccountAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountAvatar.swift; sourceTree = "<group>"; };
@@ -157,6 +159,7 @@
 				661A952A0D325A00D0F054E9 /* DevServerActnetService.swift */,
 				649CF0CE439034C4B30F81F5 /* MockActnetService.swift */,
 				B6168BA4AD89E27656AE0A59 /* PasskeyManager.swift */,
+				C7A7ADA2108567E95D845EF1 /* PublicServerInfo.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -425,6 +428,7 @@
 				C239EC74DDDF816075F9D6C2 /* PasskeyManager.swift in Sources */,
 				32CE74DAA7C93CB87BEDAD15 /* ProjectInfo.swift in Sources */,
 				766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */,
+				FCDD84F343F062EC3CA19A62 /* PublicServerInfo.swift in Sources */,
 				A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */,
 				ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */,
 				13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */,

@@ -8,6 +8,10 @@ struct JoiningServerView: View {
 
     @State private var isJoining = false
     @State private var errorMessage: String?
+    /// The operator's privacy policy URL, fetched from the server's public
+    /// `/v1/info` endpoint when the screen appears. nil until loaded, or if the
+    /// operator hasn't configured one.
+    @State private var privacyPolicyURL: URL?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -16,6 +20,11 @@ struct JoiningServerView: View {
             Text("Join \(inviteToken.serverName) as \(existingAccount.displayName)?")
                 .font(.headline)
                 .multilineTextAlignment(.center)
+
+            if let url = privacyPolicyURL {
+                Link("View \(inviteToken.serverName)'s privacy policy", destination: url)
+                    .font(.callout)
+            }
 
             if let error = errorMessage {
                 Text(error)
@@ -46,6 +55,13 @@ struct JoiningServerView: View {
         .background(Color.avPaper)
         .navigationTitle("Join Server")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadServerInfo() }
+    }
+
+    /// Fetch the operator's privacy policy (best-effort) so the user can review
+    /// it before joining; a failure just leaves the link hidden.
+    private func loadServerInfo() async {
+        privacyPolicyURL = await PublicServerInfo.privacyPolicyURL(forServer: inviteToken.serverUrl)
     }
 
     private func joinServer() {

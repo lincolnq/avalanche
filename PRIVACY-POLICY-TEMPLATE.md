@@ -5,9 +5,7 @@ OPERATOR NOTE — READ BEFORE PUBLISHING (delete this whole comment block once d
 
 This is a DEFAULT privacy policy for anyone running a homeserver built on the
 Avalanche codebase. It is written to be accurate to how the software behaves and
-to be strong on privacy by default. You may modify it, but do not weaken a claim
-unless your deployment actually behaves differently — false statements about data
-handling create legal liability.
+to be strong on privacy by default.
 
 1. Fill in every {{PLACEHOLDER}}. At minimum:
    {{OPERATOR_NAME}}, {{OPERATOR_LEGAL_ENTITY}}, {{JURISDICTION}},
@@ -18,11 +16,6 @@ handling create legal liability.
 2. Verify against YOUR deployment. Several privacy-protective features are
    stage-gated in the codebase. Confirm what your build actually ships before
    relying on the corresponding sentence below, and edit if needed:
-     - End-to-end encryption of 1:1 messages — core, on by default.
-     - Encrypted profiles (name/avatar/bio) — confirm your build encrypts these.
-     - Group sealed-sender / membership opacity — confirm if you run groups.
-     - Federation — only relevant once you federate with other servers; the
-       "Federation" section can be removed if you run a closed, single server.
      - Projects and bots — remove the "Projects and bots" section if your
        server offers neither. If it does, that section is accurate as written:
        Projects are sandboxed and bots are always-visible participants.
@@ -59,7 +52,7 @@ is metadata the service needs to deliver your messages.
 - **We cannot read your messages.** They are end-to-end encrypted on your device
   before they reach us. We only ever hold unreadable ciphertext.
 - **We do not collect a phone number, email address, or real name to use the
-  service.** Your identity is a cryptographic key (a "DID") that you control.
+  service.** Your identity is a cryptographic key that you control.
 - **We can see limited delivery metadata** — who is sending to whom in direct
   messages, message timing, and message size — because we have to route and
   deliver messages. We do not sell, rent, or share this for advertising.
@@ -67,7 +60,7 @@ is metadata the service needs to deliver your messages.
 - **We do not run ads or trackers** and we do not profile you for marketing.
 - **Optional add-on services ("Projects") and automated participants ("bots")
   can receive information** — but only what you choose to share with them or
-  send while they are present. Bots are never hidden (see Section 7).
+  send while they are present.
 
 ## 1. Information we store
 
@@ -75,16 +68,12 @@ is metadata the service needs to deliver your messages.
 When you register, we store:
 - Your **decentralized identifier (DID)** and its public key material. This is
   your portable identity; it is not tied to a phone number or email.
-- One or more **device records** for your account — a device identifier, a
-  registration identifier, and the **public** half of each device's identity key.
-- **Public prekey bundles** (signed prekey, one-time prekeys, post-quantum
-  prekey) — public key material only — used so others can start an encrypted
-  session with you. One-time prekeys are deleted as they are used.
+- One or more **device records** for your account, plus the **public keys and
+  authentication tokens** needed so your devices can sign in and so other people
+  can start an encrypted conversation with you. We only ever hold *public* key
+  material — the private keys that decrypt your messages never leave your device.
 - An optional **encrypted recovery blob**, which we store as opaque ciphertext we
   cannot read.
-
-We never receive the private halves of your keys; those stay encrypted on your
-device.
 
 ### Messages
 - We store **only the encrypted ciphertext** of messages that are waiting to be
@@ -106,8 +95,6 @@ your profile key with.
 ### Technical and security data
 - We may record limited **registration metadata** (such as the IP address and
   time of signup) to detect fraudulent or automated signups.
-- We keep **rate-limiting counters** to prevent abuse; these are content-free and
-  cleared automatically.
 - Our servers may keep short-lived operational logs (for example, connection
   errors and authentication failures) for security and reliability. We retain
   these for {{LOG_RETENTION}} and do not use them to build profiles of users.
@@ -120,11 +107,7 @@ anyone who compromised or seized it — **cannot** obtain:
 - the **plaintext of your profile** (display name, avatar, bio);
 - the **membership lists of groups** (we may see that a group exists and its
   approximate size, but not who is in it);
-- your **contact list / social graph**, which is stored only on your own devices
-  and is never uploaded to us in readable form.
-
-A seizure of this server would yield encrypted blobs and the list of DIDs
-registered here — not your conversations, your contacts, or your real identity.
+- your **contact list**, which is stored only on your own devices.
 
 ## 3. How we use information
 
@@ -143,12 +126,9 @@ To wake your app when a message is waiting, we use a push relay together with
 Apple Push Notification service (APNs) and/or Google's Firebase Cloud Messaging
 (FCM).
 
-- The push relay maps a rotating, **opaque pseudonym** to your device's push
-  token. It does **not** receive your identity, your messages, or which server
-  you use beyond what is needed to send a wake-up ping.
-- The notifications we send are **silent/empty** — they tell your device to
-  fetch new data itself. **Apple and Google see only that your app was pinged**,
-  not who messaged you or what was said.
+- The push relay maps a rotating, opaque pseudonym to your device. It does not receive your identity, your messages, or other server information beyond what is needed to send a wake-up ping.
+- The notifications we send are **empty** — they tell your device to
+  fetch new data itself.
 - Push pseudonyms rotate periodically and stale entries expire automatically.
 
 Apple and Google process this data under their own privacy policies.
@@ -163,38 +143,18 @@ and a reason category.
 Based on content-free signals (such as the number of distinct servers reporting
 an account and sending-rate metrics), we may rate-limit, suspend, or ban an
 account. {{OPERATOR_NAME}}'s current thresholds and process are: {{ABUSE_POLICY}}.
-We do not perform algorithmic scanning of message content — we cannot.
 
 You can block other users; your block list is stored encrypted and synced across
 your own devices.
 
-## 6. Federation with other servers
+## 6. Projects and bots
 
-<!-- Remove this section if you operate a closed, single server that does not federate. -->
+The app may offer optional add-on services called **Projects** (that open in a window inside the app) and automated participants called **bots**. These may be operated by us, by the people who administer this server, or by third parties. **This policy does not govern what a Project or bot does with information you give it** — those services have their own data practices, and we are not responsible for third-party ones.
 
-This server may exchange messages with other servers in the network so that you
-can communicate with people who registered elsewhere. When that happens, the
-**content stays end-to-end encrypted**, but the other server necessarily learns
-routing metadata for those conversations (such as the DIDs involved and timing).
-No single server, including ours, holds the full picture of your activity across
-the network.
-
-## 7. Projects and bots
-
-<!-- Remove this section if your server offers neither Projects nor bots. -->
-
-The app may offer optional add-on services called **Projects** (for example,
-mini-apps that open in a window inside the app) and automated participants called
-**bots**. These may be operated by us, by the people who administer this server,
-or by third parties. **This policy does not govern what a Project or bot does
-with information you give it** — those services have their own data practices,
-and we are not responsible for third-party ones.
-
-Two things are true by design, and worth understanding:
+Principles governing Projects and bots:
 
 - **You decide what you share with a Project.** A Project cannot silently reach
-  your messages, contacts, keys, or stored profile. It receives only the
-  information you choose to give it — what you type or send into it, and the
+  any of your information. It receives only the information you choose to give it — what you type or send into it, and the
   specific details (such as your identifier or profile) that you agree to share
   when you use it. A Project may collect information about your interaction with
   it, so treat anything you put into a Project the way you would treat using any
@@ -204,16 +164,13 @@ Two things are true by design, and worth understanding:
   full participant, like any other member of a chat. Messages remain end-to-end
   encrypted in transit, but a bot you are talking to — or one that has been added
   to a group you are in — is a legitimate recipient and can read what is sent in
-  that conversation, just as a human participant can. **Bots are never hidden:**
-  a bot's presence is always visible to everyone in the conversation, and there
-  is no silent-observer mode. If you do not want a bot to receive your messages,
-  do not send them in a conversation that includes one.
+  that conversation, just as a human participant can. If you do not want a bot to receive your messages, do not send them in a conversation that includes one.
 
 (This is separate from what *we, the server,* can see: as described in Section 2,
 we still cannot read your message content. A bot reads messages because it is an
 endpoint in the conversation, not because the server decrypts them.)
 
-## 8. Data retention
+## 7. Data retention
 
 - **Undelivered messages:** deleted automatically after {{MESSAGE_RETENTION_DAYS}}
   days (the software default is 30 days), or sooner if a conversation sets a
@@ -224,9 +181,7 @@ endpoint in the conversation, not because the server decrypts them.)
 - **Logs:** retained for {{LOG_RETENTION}}.
 - **Backups:** {{BACKUP_POLICY}}.
 
-## 9. Your rights and choices
-
-Your DID is portable — your identity is not locked to this server.
+## 8. Your rights and choices
 
 Depending on where you live, you may have rights to access, correct, export, or
 delete your personal data (for example, under the GDPR or CCPA). Because your
@@ -235,44 +190,40 @@ device, the personal data we actually hold is limited (see Section 1).
 
 - **Deletion:** You can request deletion of your account on this server. When you
   delete your account, we remove your account records and key material from this
-  server. Your DID can be tombstoned in the public directory. Messages already
-  delivered to other people's devices, and data held by other servers you have
-  communicated with, are outside our control.
+  server. Messages already delivered to other people's devices, and data held by other servers you have communicated with, are outside our control.
 - **Access / export:** You may request a copy of the data we hold that is
   associated with your account.
 
 To exercise any of these rights, contact us at {{CONTACT}}.
 
-## 10. Law enforcement and legal requests
+## 9. Law enforcement and legal requests
 
 We respond to valid legal requests as required by the law of {{JURISDICTION}}.
 Our process is: {{LE_PROCESS}}. We can only provide data we actually hold (see
 Sections 1 and 2): we **cannot** provide message content, profile contents, or
-group membership lists, because we do not have access to them. We have no
-backdoor and the software is designed so that we cannot add one without users
-being able to detect it.
+group membership lists, because we do not have access to them.
 
-## 11. Security
+## 10. Security
 
 We take reasonable technical and organizational measures to protect the data we
 hold. No system is perfectly secure. If we become aware of a breach affecting
 your personal data, we will notify affected users and relevant authorities as
-required by applicable law{{BREACH_TIMELINE}}.
+required by applicable law.
 
-## 12. Children
+## 11. Children
 
 This service is not directed to children under the age required by the law of
 {{JURISDICTION}} (for example, under 13 in the United States, or the applicable
 age in your country). We do not knowingly collect personal data from children
 below that age.
 
-## 13. Changes to this policy
+## 12. Changes to this policy
 
 We may update this policy from time to time. We will post the updated version
 with a new effective date and, where required by law, notify users of material
 changes.
 
-## 14. Contact
+## 13. Contact
 
 Questions about this policy or your data: {{CONTACT}}.
 
