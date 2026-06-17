@@ -25,10 +25,13 @@ import {
   type SendTarget,
 } from "@actnet/app-core";
 
-// Reserved well-known suffix for the canonical adminbot account on every
-// homeserver. Server-side this is the default value of ADMINBOT_DID.
+// Reserved well-known suffix for the canonical adminbot account. This also
+// matches the server's superuser Project slug (ADMINBOT_PROJECT_SLUG), so the
+// bootstrap token below both registers the bot and links it into the superuser
+// Project — granting admin authority (docs/24).
 const ADMINBOT_DID_SUFFIX = "adminbot";
 const ADMINBOT_DID = `did:local:${ADMINBOT_DID_SUFFIX}`;
+const SUPERUSER_PROJECT_SLUG = "adminbot";
 
 interface AdminbotState {
   adminsGroupId?: string;
@@ -43,6 +46,7 @@ interface Env {
   dbKey: string;
   initialAdmins: string[];
   logLevel: string;
+  sharedSecret?: string;
 }
 
 function readEnv(): Env {
@@ -64,6 +68,9 @@ function readEnv(): Env {
     dbKey: process.env.ADMINBOT_DB_KEY ?? "",
     initialAdmins,
     logLevel: process.env.ADMINBOT_LOG ?? "info",
+    // Bootstrap secret for closed-registration servers (docs/24). Required to
+    // register against a closed server; unset/ignored on an open one.
+    sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
   };
 }
 
@@ -84,12 +91,19 @@ async function loginOrRegister(env: Env): Promise<AppCore> {
   // Register on first run, re-login thereafter. app-core decides which based
   // on whether the store already holds an account (including the empty-DB-from-
   // a-failed-registration case) — adminbot only supplies the reserved DID.
+  // Bootstrap token naming the superuser Project: registers the bot (against a
+  // closed server) and links it into the superuser Project, granting admin
+  // authority. Only consulted on first-run registration; ignored on re-login.
+  const inviteToken = env.sharedSecret
+    ? AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, SUPERUSER_PROJECT_SLUG)
+    : undefined;
   const core = await AppCore.loginOrCreateBot(
     env.serverUrl,
     env.dbPath,
     env.dbKey,
     "Adminbot",
     ADMINBOT_DID_SUFFIX,
+    inviteToken,
   );
   // Identity policy is ours, not the core's: the store must belong to the
   // reserved adminbot DID. A mismatch means this state dir was created by a

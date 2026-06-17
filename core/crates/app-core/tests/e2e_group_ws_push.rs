@@ -9,6 +9,8 @@
 //! Requires a homeserver at `SERVER_URL` (default `http://localhost:3000`).
 //! Run via `make test-e2e`.
 
+mod common;
+
 use app_core::{AppCore, IncomingEvent, MessageTarget};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +26,7 @@ async fn test_store() -> store::DeviceStore {
 /// Create a bot account and start its reconnect task. Mirrors production
 /// FFI constructors: returns an `Arc<AppCore>` with a running WS loop.
 async fn live_account(url: &str) -> Arc<AppCore> {
-    let core = AppCore::create_account_with_store(url, test_store().await, None, true)
+    let core = AppCore::create_account_with_store(url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
     let arc = Arc::new(core);

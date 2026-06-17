@@ -17,33 +17,34 @@
 /// safety check in [`Config::from_env`].
 const DEFAULT_DEV_DATABASE_URL: &str = "postgres://actnet:actnet-dev@localhost/actnet";
 
-/// The hard-coded slug of the privileged adminbot Project. Adminbot authority
-/// is membership in the Project with this slug (resolved via `project_bots`),
-/// not a pinned DID — so adminbot may use any DID(s) and rotate freely. The
-/// row is seeded at startup (`db::projects::ensure_adminbot_project`) and its
-/// bot membership is set only from operator config (`ADMINBOT_DIDS`), never via
-/// the admin API, which preserves the "superuser only via config" invariant
-/// (docs/22 §Project-capabilities).
+/// The hard-coded slug of the privileged superuser Project. Superuser
+/// authority is membership in the Project with this slug (resolved via
+/// `project_bots`) — not a pinned DID. The row is seeded empty at startup
+/// (`db::projects::ensure_adminbot_project`); a bot becomes superuser by
+/// registering with a bootstrap token that names this slug while the shared
+/// secret is still active (docs/24). The admin API never mutates this
+/// Project's membership, so superuser can't be granted over the wire.
 pub const ADMINBOT_PROJECT_SLUG: &str = "adminbot";
 
-/// Whether new accounts may register freely or only with a valid gatekeeper
-/// invite token (docs/24 closed registration). Defaults to [`Open`].
+/// Whether new accounts may register freely or only with a valid credential
+/// (docs/24 closed registration). Defaults to [`Closed`] — fail safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationMode {
-    /// Anyone may register (rate-limited by IP). The token, if present, is
-    /// still validated when supplied, but is not required.
+    /// Anyone may register (rate-limited by IP). A token, if present, is still
+    /// validated/redeemed; a bootstrap token may still link the new account
+    /// into a Project.
     Open,
-    /// Registration is refused unless it satisfies one of the admission arms
-    /// (valid gatekeeper token, bootstrap-suffix bot, or a configured adminbot
-    /// DID). Fails closed.
+    /// Registration is refused unless it presents a valid credential: a signed
+    /// gatekeeper invite token, or — while no gatekeeper is installed — the
+    /// configured shared secret. Fails closed.
     Closed,
 }
 
 impl RegistrationMode {
     fn from_env_str(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
-            "closed" => RegistrationMode::Closed,
-            _ => RegistrationMode::Open,
+            "open" => RegistrationMode::Open,
+            _ => RegistrationMode::Closed,
         }
     }
 }
@@ -77,21 +78,16 @@ pub struct Config {
     pub server_name: String,
     /// Domain used for deep link URLs in invite redirects (default: go.theavalanche.net).
     pub invite_domain: String,
-    /// DIDs seeded as members of the adminbot Project at startup (and admitted
-    /// under closed registration). These are the server's superusers: a caller
-    /// is adminbot iff its account is linked to the [`ADMINBOT_PROJECT_SLUG`]
-    /// Project, and the only way into that membership is this config list
-    /// (never the admin API). Set via `ADMINBOT_DIDS` (comma-separated);
-    /// defaults to the reserved well-known DID `did:local:adminbot`.
-    pub adminbot_dids: Vec<String>,
-    /// Whether registration is open to anyone or gated on a gatekeeper invite
-    /// token (docs/24). Set via `REGISTRATION_MODE=open|closed`; default open.
+    /// Whether registration is open to anyone or gated (docs/24). Set via
+    /// `REGISTRATION_MODE=open|closed`; **default closed**.
     pub registration_mode: RegistrationMode,
-    /// Reserved `did:local:` bot suffixes admitted under closed registration
-    /// without a token (bootstrap allowlist — e.g. first-party bots like the
-    /// adminbot). Set via `REGISTRATION_BOOTSTRAP_SUFFIXES` (comma-separated);
-    /// defaults to `["adminbot"]`.
-    pub registration_bootstrap_suffixes: Vec<String>,
+    /// Bootstrap shared secret. While set — and only until a gatekeeper Project
+    /// is installed — a registration presenting a matching `bootstrap_secret`
+    /// is admitted, and may name a Project (incl. the superuser Project) to be
+    /// linked into. This is the operator's setup-time root credential; it
+    /// auto-disables the moment any Project is granted `registration.gatekeeper`.
+    /// Set via `REGISTRATION_SHARED_SECRET`. Unset = no shared-secret path.
+    pub registration_shared_secret: Option<String>,
 }
 
 impl Config {
@@ -140,14 +136,13 @@ impl Config {
                 .unwrap_or_else(|_| "Avalanche Server".to_string()),
             invite_domain: std::env::var("INVITE_DOMAIN")
                 .unwrap_or_else(|_| "go.theavalanche.net".to_string()),
-            adminbot_dids: parse_csv_env("ADMINBOT_DIDS")
-                .unwrap_or_else(|| vec!["did:local:adminbot".to_string()]),
             registration_mode: std::env::var("REGISTRATION_MODE")
                 .ok()
                 .map(|s| RegistrationMode::from_env_str(&s))
-                .unwrap_or(RegistrationMode::Open),
-            registration_bootstrap_suffixes: parse_csv_env("REGISTRATION_BOOTSTRAP_SUFFIXES")
-                .unwrap_or_else(|| vec!["adminbot".to_string()]),
+                .unwrap_or(RegistrationMode::Closed),
+            registration_shared_secret: std::env::var("REGISTRATION_SHARED_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -187,24 +182,6 @@ impl Config {
              - set ACTNET_ALLOW_DEV_DB=1 (LAN-accessible dev with dev DB).\n",
             self.bind_addr,
         );
-    }
-}
-
-/// Parse a comma-separated env var into a list of trimmed, non-empty values.
-/// Returns `None` if the var is unset or empty (so callers can apply a
-/// default), `Some(vec)` otherwise.
-fn parse_csv_env(name: &str) -> Option<Vec<String>> {
-    let raw = std::env::var(name).ok()?;
-    let items: Vec<String> = raw
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
-    if items.is_empty() {
-        None
-    } else {
-        Some(items)
     }
 }
 
@@ -268,13 +245,13 @@ mod tests {
 
     #[test]
     fn registration_mode_parse() {
-        assert_eq!(RegistrationMode::from_env_str("closed"), RegistrationMode::Closed);
-        assert_eq!(RegistrationMode::from_env_str("CLOSED"), RegistrationMode::Closed);
-        assert_eq!(RegistrationMode::from_env_str(" closed "), RegistrationMode::Closed);
         assert_eq!(RegistrationMode::from_env_str("open"), RegistrationMode::Open);
-        // Anything unrecognized defaults to Open (fail-safe for availability,
-        // not security — closing registration is the deliberate opt-in).
-        assert_eq!(RegistrationMode::from_env_str("garbage"), RegistrationMode::Open);
-        assert_eq!(RegistrationMode::from_env_str(""), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str("OPEN"), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str(" open "), RegistrationMode::Open);
+        assert_eq!(RegistrationMode::from_env_str("closed"), RegistrationMode::Closed);
+        // Anything unrecognized defaults to Closed — fail safe (closed is the
+        // secure default; you must explicitly opt into open registration).
+        assert_eq!(RegistrationMode::from_env_str("garbage"), RegistrationMode::Closed);
+        assert_eq!(RegistrationMode::from_env_str(""), RegistrationMode::Closed);
     }
 }

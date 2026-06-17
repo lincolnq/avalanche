@@ -95,31 +95,33 @@ async fn main() {
         (zk, chain)
     };
 
-    // Seed the pinned adminbot Project (the anchor for adminbot authority) and
-    // link any already-registered adminbot accounts. Idempotent. New adminbot
-    // accounts are linked lazily at registration (see routes::registration).
+    // Seed the pinned superuser Project (the anchor for adminbot authority).
+    // Seeded empty: a bot becomes superuser by registering with a bootstrap
+    // token that names this Project's slug while the shared secret is active
+    // (see routes::registration). Idempotent.
     {
         let mut conn = pool.acquire().await.expect("failed to acquire db connection");
-        let pid = db::projects::ensure_adminbot_project(
-            &mut conn,
-            server::config::ADMINBOT_PROJECT_SLUG,
-        )
-        .await
-        .expect("failed to seed adminbot project");
-        for did in &config.adminbot_dids {
-            if let Some(acct) = db::accounts::find_by_did(&mut conn, did)
-                .await
-                .expect("failed to look up adminbot account")
-            {
-                db::projects::link_bot(&mut conn, pid, acct.id)
-                    .await
-                    .expect("failed to link adminbot account");
-            }
+        db::projects::ensure_adminbot_project(&mut conn, server::config::ADMINBOT_PROJECT_SLUG)
+            .await
+            .expect("failed to seed superuser project");
+    }
+
+    // Warn loudly if registration is closed but no admission path is
+    // configured — otherwise no one (not even the first admin) can register.
+    if config.registration_mode == server::config::RegistrationMode::Closed
+        && config.registration_shared_secret.is_none()
+    {
+        let mut conn = pool.acquire().await.expect("failed to acquire db connection");
+        let has_gatekeeper = db::capabilities::any_gatekeeper_exists(&mut conn)
+            .await
+            .unwrap_or(false);
+        if !has_gatekeeper {
+            tracing::warn!(
+                "registration is CLOSED and no REGISTRATION_SHARED_SECRET is set and no \
+                 gatekeeper is installed — no one can register. Set REGISTRATION_SHARED_SECRET \
+                 (or REGISTRATION_MODE=open for local dev) to admit accounts."
+            );
         }
-        tracing::info!(
-            adminbot_dids = ?config.adminbot_dids,
-            "adminbot project seeded"
-        );
     }
 
     let state = AppState::new(pool, config.clone(), zkgroup_secret, sender_cert_chain);

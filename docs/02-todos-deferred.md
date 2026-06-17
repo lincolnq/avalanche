@@ -4,10 +4,10 @@
 - Rename everything to avalanche
 
 ## Build samples of the following projects
-- Gatekeeper project + onboarding flow (see 24-vetted-onboarding-project); the infra should be there but there's no project yet. `#approvals` group, approve/decline review flow, invite tokens.
-- Chatbot to answer questions
-- Full participant CRM project: list everyone who has signed up & oversee them
-- Training modules inside CRM: browse to the training site via Network tab, complete modules
+- $ Gatekeeper project + onboarding flow (see 24-vetted-onboarding-project); the infra should be there but there's no project yet. `#approvals` group, approve/decline review flow, invite tokens.
+- $ Chatbot to answer questions
+- $ Full participant CRM project: list everyone who has signed up & oversee them
+- $ Training modules inside CRM: browse to the training site via Network tab, complete modules
 
 ## Mobile app
 - Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)

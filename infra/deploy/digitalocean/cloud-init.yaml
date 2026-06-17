@@ -44,6 +44,10 @@ write_files:
       SERVER_URL="https://av.example.org"
       SERVER_NAME="Your Org's Homeserver"
       RELAY_URL="https://relay.avalanche.example"
+      # Bootstrap registration secret (configure.html generates a random one).
+      # Registration is closed by default; this secret admits accounts until a
+      # gatekeeper Project is installed, after which it auto-disables.
+      REGISTRATION_SHARED_SECRET="CHANGEME-random-secret"
 
   # ──────────────────────────────────────────────────────────────────────
   #  PostgreSQL tuning for a 1 GB droplet.
@@ -286,6 +290,7 @@ write_files:
       RELAY_URL=$RELAY_URL
       BIND_ADDR=127.0.0.1:3000
       DATABASE_URL=postgresql:///avalanche?host=/var/run/postgresql
+      REGISTRATION_SHARED_SECRET=$REGISTRATION_SHARED_SECRET
       EOF
       chown root:avalanche /etc/avalanche/avalanche.env
       chmod 640 /etc/avalanche/avalanche.env

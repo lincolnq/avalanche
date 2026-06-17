@@ -38,32 +38,105 @@ use serde::{Deserialize, Serialize};
 /// registration path today).
 pub const PURPOSE_INVITE: &str = "invite";
 
-/// The untrusted outer envelope.
+/// A bootstrap token: the operator's setup-time shared secret, optionally
+/// naming a Project to link the new account into (e.g. the superuser Project).
+/// Unsigned — the secret itself is the credential. Honored only while the
+/// shared secret is configured and no gatekeeper is installed (docs/24).
+#[derive(Debug, Deserialize)]
+pub struct BootstrapToken {
+    #[allow(dead_code)]
+    #[serde(rename = "s")]
+    pub server_url: String,
+    #[serde(rename = "k")]
+    pub bootstrap_secret: String,
+    /// Slug of a Project to link the new account into. `None` = register as a
+    /// plain account. Naming the superuser Project is how the operator/adminbot
+    /// bootstraps superuser authority.
+    #[serde(rename = "p", default)]
+    pub project: Option<String>,
+}
+
+/// A registration token, in one of its two shapes.
+pub enum ParsedToken {
+    /// A Project-signed gatekeeper invite (verified against a pinned key).
+    Gatekeeper(InviteEnvelope),
+    /// The operator's shared-secret bootstrap token.
+    Bootstrap(BootstrapToken),
+}
+
+/// Decode and classify a registration token. Wire keys are single-char to keep
+/// tokens (and their QR codes) compact: a signed gatekeeper envelope is
+/// recognized by its `g` (sig) / `c` (claims) fields; a bootstrap token by `k`
+/// (bootstrap_secret). Anything else is malformed.
+pub fn parse(token: &str) -> Result<ParsedToken, TokenError> {
+    let bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(token.trim())
+        .map_err(|_| TokenError::Malformed("invalid base64url".into()))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| TokenError::Malformed("invalid JSON".into()))?;
+
+    if value.get("g").is_some() && value.get("c").is_some() {
+        let env: InviteEnvelope = serde_json::from_value(value)
+            .map_err(|_| TokenError::Malformed("invalid gatekeeper envelope".into()))?;
+        Ok(ParsedToken::Gatekeeper(env))
+    } else if value.get("k").is_some() {
+        let boot: BootstrapToken = serde_json::from_value(value)
+            .map_err(|_| TokenError::Malformed("invalid bootstrap token".into()))?;
+        Ok(ParsedToken::Bootstrap(boot))
+    } else {
+        Err(TokenError::Malformed("unrecognized token shape".into()))
+    }
+}
+
+/// Constant-time string comparison, to avoid leaking the shared secret via
+/// timing. Length difference short-circuits (lengths aren't secret).
+pub fn secret_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// The untrusted outer envelope. Wire keys are single-char (see [`parse`]).
 #[derive(Debug, Deserialize)]
 pub struct InviteEnvelope {
     #[allow(dead_code)]
+    #[serde(rename = "s")]
     pub server_url: String,
+    #[serde(rename = "i")]
     pub iss: String,
     /// base64url(claims JSON) — the exact bytes the signature covers.
+    #[serde(rename = "c")]
     pub claims: String,
     /// base64url(Ed25519 signature over the `claims` string bytes).
+    #[serde(rename = "g")]
     pub sig: String,
 }
 
-/// The signed claims — the authoritative content.
+/// The signed claims — the authoritative content. Wire keys are single-char.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InviteClaims {
+    #[serde(rename = "s")]
     pub server_url: String,
+    #[serde(rename = "i")]
     pub iss: String,
     /// Expiry, unix epoch seconds.
+    #[serde(rename = "e")]
     pub exp: i64,
     /// Unique token id; single-use redemption key.
+    #[serde(rename = "j")]
     pub jti: String,
+    #[serde(rename = "u")]
     pub purpose: String,
     /// Opaque routing payload the gatekeeper controls; carried through to the
     /// `AccountJoinedEvent` for the post-join router. The server does not
     /// interpret it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "r", default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<serde_json::Value>,
 }
 
@@ -166,10 +239,10 @@ pub fn issue(signing_key: &ed25519_dalek::SigningKey, claims: &InviteClaims) -> 
     let claims_b64 = BASE64_URL_SAFE_NO_PAD.encode(&claims_json);
     let sig = signing_key.sign(claims_b64.as_bytes());
     let envelope = serde_json::json!({
-        "server_url": claims.server_url,
-        "iss": claims.iss,
-        "claims": claims_b64,
-        "sig": BASE64_URL_SAFE_NO_PAD.encode(sig.to_bytes()),
+        "s": claims.server_url,
+        "i": claims.iss,
+        "c": claims_b64,
+        "g": BASE64_URL_SAFE_NO_PAD.encode(sig.to_bytes()),
     });
     BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).expect("envelope serialize"))
 }
@@ -281,5 +354,42 @@ mod tests {
             parse_envelope("!!!not base64!!!"),
             Err(TokenError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn parse_classifies_gatekeeper_vs_bootstrap() {
+        // Gatekeeper: has sig + claims.
+        let sk = signer();
+        let gk = issue(&sk, &claims(1_000, PURPOSE_INVITE));
+        assert!(matches!(parse(&gk).unwrap(), ParsedToken::Gatekeeper(_)));
+
+        // Bootstrap: has `k` (bootstrap_secret).
+        let boot = BASE64_URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "s": SERVER, "k": "s3cret", "p": "adminbot"
+            }))
+            .unwrap(),
+        );
+        match parse(&boot).unwrap() {
+            ParsedToken::Bootstrap(b) => {
+                assert_eq!(b.bootstrap_secret, "s3cret");
+                assert_eq!(b.project.as_deref(), Some("adminbot"));
+            }
+            _ => panic!("expected bootstrap token"),
+        }
+
+        // Neither shape → malformed.
+        let other = BASE64_URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&serde_json::json!({ "s": SERVER })).unwrap());
+        assert!(matches!(parse(&other), Err(TokenError::Malformed(_))));
+    }
+
+    #[test]
+    fn secret_eq_compares_values() {
+        assert!(secret_eq("abc", "abc"));
+        assert!(!secret_eq("abc", "abd"));
+        assert!(!secret_eq("abc", "abcd")); // length differs
+        assert!(!secret_eq("", "x"));
+        assert!(secret_eq("", ""));
     }
 }

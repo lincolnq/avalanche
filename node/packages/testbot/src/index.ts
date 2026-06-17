@@ -34,6 +34,7 @@ interface Env {
   bindHost: string;
   bindPort: number;
   logLevel: string;
+  sharedSecret?: string;
 }
 
 function readEnv(): Env {
@@ -52,6 +53,9 @@ function readEnv(): Env {
     bindHost,
     bindPort,
     logLevel: process.env.TESTBOT_LOG ?? "info",
+    // Bootstrap secret for closed-registration servers (docs/24). Unset on an
+    // open server, where it isn't needed.
+    sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
   };
 }
 
@@ -182,7 +186,12 @@ async function spawnBot(env: Env, userDid: string): Promise<BotInfo> {
   // Throwaway SQLCipher store in a temp dir — the bot identity is meant to die
   // with the process. Empty passphrase is fine for a disposable store.
   const dbPath = join(mkdtempSync(join(tmpdir(), "actnet-testbot-")), "store.db");
-  const core = await AppCore.createBotAccount(env.homeserverUrl, dbPath, "", "Testbot");
+  // Present the bootstrap secret (as a plain-member token, no project) so the
+  // bot can register against a closed-registration server.
+  const inviteToken = env.sharedSecret
+    ? AppCore.bootstrapToken(env.homeserverUrl, env.sharedSecret)
+    : undefined;
+  const core = await AppCore.createBotAccount(env.homeserverUrl, dbPath, "", "Testbot", undefined, inviteToken);
   const botDid = core.did();
   const deviceId = core.deviceId();
 

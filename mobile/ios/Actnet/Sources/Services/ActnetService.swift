@@ -11,7 +11,7 @@ protocol ActnetService: Sendable {
     /// key, no blob — identity is unrecoverable on device loss).
     /// `displayName` is the user's chosen display name; encrypted under a
     /// freshly generated profile key and uploaded alongside registration.
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String) throws -> any AppCoreProtocol
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol
     func login(dbPath: String, dbKey: String) throws -> any AppCoreProtocol
 
     /// Two-stage account creation for the passkey flow. Stage 1: pass the
@@ -23,7 +23,7 @@ protocol ActnetService: Sendable {
     /// Stage 2: consume the prepared handle, submit the PLC ops, encrypt the
     /// recovery blob with the same passkey-derived key, and register the
     /// account with the homeserver.
-    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol
+    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol
 
     /// Recover an account from a passkey-protected recovery blob. Downloads
     /// the blob, decrypts with the PRF-derived key, replaces the old device

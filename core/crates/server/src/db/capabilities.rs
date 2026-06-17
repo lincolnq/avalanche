@@ -69,6 +69,17 @@ pub async fn list(conn: &mut PgConnection, project_id: i64) -> Result<Vec<String
     Ok(rows.into_iter().map(|r| r.get("capability")).collect())
 }
 
+/// Whether any Project currently holds `registration.gatekeeper`. This is the
+/// shared-secret kill switch: once a real gatekeeper is installed, the
+/// bootstrap shared-secret registration path auto-disables (docs/24).
+pub async fn any_gatekeeper_exists(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query("SELECT 1 AS ok FROM project_capabilities WHERE capability = $1 LIMIT 1")
+        .bind(REGISTRATION_GATEKEEPER)
+        .fetch_optional(&mut *conn)
+        .await?;
+    Ok(row.is_some())
+}
+
 /// Whether a Project (by id) holds a capability via an explicit grant. Does
 /// NOT apply the superuser short-circuit — use [`account_has_capability`] for
 /// the account-level check.

@@ -10,9 +10,11 @@ struct InviteToken: Identifiable, Hashable {
 
     /// Parse a go.theavalanche.net invite URL and validate the token with the server.
     static func from(url: URL) async throws -> InviteToken {
-        // Extract token from path: /invite/<token>
+        // Extract token from path: /i/<token> (short form; "invite" still
+        // accepted for any older links).
         let pathComponents = url.pathComponents.filter { $0 != "/" }
-        guard pathComponents.first == "invite", pathComponents.count >= 2 else {
+        guard let action = pathComponents.first, action == "i" || action == "invite",
+              pathComponents.count >= 2 else {
             throw InviteError.invalidURL
         }
         let token = pathComponents[1]

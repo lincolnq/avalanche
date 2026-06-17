@@ -42,15 +42,14 @@ async fn ensure_setup(url: &str) {
 }
 
 async fn test_state() -> AppState {
-    test_state_with(vec![], server::config::RegistrationMode::Open, vec![]).await
+    test_state_with(server::config::RegistrationMode::Open, None).await
 }
 
-/// Like [`test_state`] but with explicit adminbot DIDs, registration mode, and
-/// bootstrap suffix allowlist, for the capability / closed-registration tests.
+/// Like [`test_state`] but with an explicit registration mode and shared
+/// secret, for the capability / closed-registration tests.
 async fn test_state_with(
-    adminbot_dids: Vec<String>,
     registration_mode: server::config::RegistrationMode,
-    bootstrap_suffixes: Vec<String>,
+    registration_shared_secret: Option<String>,
 ) -> AppState {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("TEST_DATABASE_URL must be set to run server tests");
@@ -70,9 +69,8 @@ async fn test_state_with(
         relay_url: None,
         server_name: "Test".into(),
         invite_domain: "go.example.test".into(),
-        adminbot_dids,
         registration_mode,
-        registration_bootstrap_suffixes: bootstrap_suffixes,
+        registration_shared_secret,
     };
     // Load (or seed) the group crypto bundle exactly as `main.rs` does — a
     // bincoded `GroupCryptoBundle` under the current version. Seeding the raw
@@ -829,6 +827,17 @@ async fn storage_snapshot_empty_blob_rejected() {
 
 // ── Capability framework + closed registration (docs/22, 24) ────────────────
 
+/// The dev/test bootstrap shared secret.
+const SECRET: &str = "test-bootstrap-secret";
+
+/// Serializes the tests that depend on the *global* "is any gatekeeper
+/// installed?" state. The shared-secret bootstrap path auto-disables once any
+/// Project holds `registration.gatekeeper` — a global condition — so on the
+/// shared dev DB one test installing a gatekeeper would otherwise break another
+/// test's superuser bootstrap. Holding this lock for the whole test keeps each
+/// one's gatekeeper window exclusive.
+static GATEKEEPER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn nanos() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -836,14 +845,35 @@ fn nanos() -> u128 {
         .as_nanos()
 }
 
-/// Register a bot account, optionally with a reserved suffix and/or an invite
-/// token. Returns the response status and parsed body (Null for non-JSON error
-/// bodies).
-async fn register_bot(
-    app: &axum::Router,
-    suffix: Option<&str>,
-    invite_token: Option<&str>,
-) -> (StatusCode, Value) {
+/// A process-unique, cross-run-unique id. Combines wall-clock nanos (distinct
+/// across test runs on the shared DB) with a monotonic counter (distinct across
+/// concurrent tasks within a run — `nanos()` alone collides under parallelism,
+/// which was the source of an earlier flaky DID-collision failure).
+fn unique_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!("{}-{}", nanos(), COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Build a bootstrap registration token: base64url({s, k, p?}) with single-char
+/// wire keys (s=server_url, k=bootstrap_secret, p=project). Naming a project
+/// links the new account into it.
+fn bootstrap_token(secret: &str, project: Option<&str>) -> String {
+    let mut payload = serde_json::json!({
+        "s": "http://localhost:3000",
+        "k": secret,
+    });
+    if let Some(p) = project {
+        payload["p"] = serde_json::json!(p);
+    }
+    BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+}
+
+/// Register a bot account, optionally presenting an invite/bootstrap token.
+/// Returns the response status and parsed body (Null for non-JSON error
+/// bodies). The random identity key yields a unique server-generated DID, so
+/// concurrent registrations never collide.
+async fn register_bot(app: &axum::Router, invite_token: Option<&str>) -> (StatusCode, Value) {
     use rand::TryRngCore as _;
     let mut ik = [0u8; 32];
     rand::rngs::OsRng.unwrap_err().try_fill_bytes(&mut ik).unwrap();
@@ -856,9 +886,6 @@ async fn register_bot(
         "kyber_prekey":     { "id": 1, "public_key": BASE64_STANDARD.encode([5u8; 32]), "signature": BASE64_STANDARD.encode([6u8; 64]) },
         "is_bot": true,
     });
-    if let Some(s) = suffix {
-        body["did_suffix"] = serde_json::json!(s);
-    }
     if let Some(t) = invite_token {
         body["invite_token"] = serde_json::json!(t);
     }
@@ -905,32 +932,49 @@ async fn admin_req(
     (status, v)
 }
 
-/// Build a fresh adminbot identity, register it, and return (app, did, token).
-/// The adminbot DID is unique per test (random suffix) so parallel tests on the
-/// shared DB don't collide; it is added to `adminbot_dids` so registration
-/// auto-links it into the pinned adminbot Project.
+/// Stand up a server in the given mode with [`SECRET`] configured, seed the
+/// (empty) superuser Project the way `main.rs` does, then bootstrap a superuser
+/// by registering a bot with a bootstrap token naming the superuser Project.
+/// Returns (app, superuser_did, superuser_session_token). The superuser's DID
+/// is server-generated from a random key, so concurrent tests never collide.
 async fn setup_adminbot(
     registration_mode: server::config::RegistrationMode,
 ) -> (axum::Router, String, String) {
-    let suffix = format!("ab{}", nanos());
-    let did = format!("did:local:{suffix}");
-    let state = test_state_with(vec![did.clone()], registration_mode, vec![]).await;
+    let state = test_state_with(registration_mode, Some(SECRET.to_string())).await;
+    {
+        let mut conn = state.db.acquire().await.unwrap();
+        // Clear any committed gatekeeper grants so the shared-secret bootstrap
+        // path is active for this (lock-serialized) test — the global
+        // auto-disable check would otherwise observe rows committed by the
+        // matrix test or a crashed prior run.
+        sqlx::query("DELETE FROM project_capabilities WHERE capability = 'registration.gatekeeper'")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        // main.rs seeds the superuser Project at startup; tests build AppState
+        // directly, so seed it here.
+        server::db::projects::ensure_adminbot_project(&mut conn, "adminbot")
+            .await
+            .unwrap();
+    }
     let app = routes::router().with_state(state);
-    let (status, body) = register_bot(&app, Some(&suffix), None).await;
-    assert_eq!(status, StatusCode::CREATED, "adminbot registration: {body:?}");
-    let token = body["session_token"].as_str().unwrap().to_string();
-    (app, did, token)
+    let token = bootstrap_token(SECRET, Some("adminbot"));
+    let (status, body) = register_bot(&app, Some(&token)).await;
+    assert_eq!(status, StatusCode::CREATED, "superuser bootstrap: {body:?}");
+    let did = body["did"].as_str().unwrap().to_string();
+    let session = body["session_token"].as_str().unwrap().to_string();
+    (app, did, session)
 }
 
 #[tokio::test]
-async fn admin_endpoints_require_adminbot_membership() {
+async fn admin_endpoints_require_superuser_membership() {
+    let _guard = GATEKEEPER_LOCK.lock().await;
     let (app, _admin_did, admin_token) =
         setup_adminbot(server::config::RegistrationMode::Open).await;
 
-    // Adminbot can list projects.
+    // The superuser (bootstrapped into the adminbot Project) can list projects.
     let (status, body) = admin_req(&app, "GET", "/v1/admin/projects", &admin_token, None).await;
     assert_eq!(status, StatusCode::OK);
-    // The pinned adminbot Project is present and flagged superuser.
     let projects = body["projects"].as_array().unwrap();
     let adminbot_proj = projects
         .iter()
@@ -940,11 +984,11 @@ async fn admin_endpoints_require_adminbot_membership() {
     assert_eq!(
         adminbot_proj["capabilities"].as_array().unwrap().len(),
         0,
-        "adminbot holds authority via the pin, not capability rows"
+        "superuser holds authority via membership, not capability rows"
     );
 
-    // A non-adminbot bot is rejected (401).
-    let (status, body) = register_bot(&app, None, None).await;
+    // A plain bot (no project link) is rejected from admin endpoints (401).
+    let (status, body) = register_bot(&app, None).await;
     assert_eq!(status, StatusCode::CREATED);
     let other_token = body["session_token"].as_str().unwrap().to_string();
     let (status, _) = admin_req(&app, "GET", "/v1/admin/projects", &other_token, None).await;
@@ -952,11 +996,13 @@ async fn admin_endpoints_require_adminbot_membership() {
 }
 
 #[tokio::test]
-async fn adminbot_project_membership_is_config_only() {
+async fn superuser_project_not_api_mutable() {
+    let _guard = GATEKEEPER_LOCK.lock().await;
     let (app, _admin_did, admin_token) =
         setup_adminbot(server::config::RegistrationMode::Open).await;
 
-    // Cannot link a bot into the adminbot Project via the API.
+    // The superuser Project's membership can't be changed via the admin API —
+    // only the secret-gated bootstrap path grants superuser.
     let (status, _) = admin_req(
         &app,
         "POST",
@@ -967,7 +1013,7 @@ async fn adminbot_project_membership_is_config_only() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // Cannot uninstall the adminbot Project.
+    // Nor can it be uninstalled.
     let (status, _) =
         admin_req(&app, "DELETE", "/v1/admin/projects/adminbot", &admin_token, None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -978,15 +1024,25 @@ async fn closed_registration_admission_matrix() {
     use ed25519_dalek::SigningKey;
     use server::invite_token::{issue, now_unix, InviteClaims};
 
+    let _guard = GATEKEEPER_LOCK.lock().await;
     let (app, _admin_did, admin_token) =
         setup_adminbot(server::config::RegistrationMode::Closed).await;
 
-    // A bot with no token / non-bootstrap suffix is rejected (fail-closed).
-    let (status, _) = register_bot(&app, None, None).await;
+    // No credential → rejected (fail-closed).
+    let (status, _) = register_bot(&app, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // Install a gatekeeper Project + signing key, then issue a token.
-    let slug = format!("gk{}", nanos());
+    // Wrong shared secret → rejected.
+    let (status, _) = register_bot(&app, Some(&bootstrap_token("wrong-secret", None))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Correct shared secret (no project) → admitted as a plain member, while no
+    // gatekeeper is installed yet.
+    let (status, _) = register_bot(&app, Some(&bootstrap_token(SECRET, None))).await;
+    assert_eq!(status, StatusCode::CREATED, "shared secret must admit");
+
+    // Install a gatekeeper Project + signing key.
+    let slug = format!("gk{}", unique_id());
     let signing = SigningKey::from_bytes(&[42u8; 32]);
     let pubkey_b64 = BASE64_STANDARD.encode(signing.verifying_key().to_bytes());
 
@@ -1014,6 +1070,14 @@ async fn closed_registration_admission_matrix() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
+    // Auto-disable: installing a gatekeeper retires the shared secret.
+    let (status, _) = register_bot(&app, Some(&bootstrap_token(SECRET, None))).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "shared secret must auto-disable once a gatekeeper exists"
+    );
+
     let issue_token = |jti: &str, exp: i64, purpose: &str, iss: &str| {
         let claims = InviteClaims {
             server_url: "http://localhost:3000".into(),
@@ -1026,32 +1090,33 @@ async fn closed_registration_admission_matrix() {
         issue(&signing, &claims)
     };
 
-    // Valid token → admitted.
-    let jti = format!("jti-{}", nanos());
+    // Valid gatekeeper token → admitted.
+    let jti = unique_id();
     let token = issue_token(&jti, now_unix() + 3600, "invite", &slug);
-    let (status, _) = register_bot(&app, None, Some(&token)).await;
+    let (status, _) = register_bot(&app, Some(&token)).await;
     assert_eq!(status, StatusCode::CREATED, "valid token must admit");
 
-    // Same token replayed → single-use rejection.
-    let (status, _) = register_bot(&app, None, Some(&token)).await;
+    // Replay → single-use rejection.
+    let (status, _) = register_bot(&app, Some(&token)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replayed token must be rejected");
 
-    // Expired token → rejected.
-    let token_exp = issue_token(&format!("jti-{}", nanos()), now_unix() - 10, "invite", &slug);
-    let (status, _) = register_bot(&app, None, Some(&token_exp)).await;
+    // Expired → rejected.
+    let token_exp = issue_token(&unique_id(), now_unix() - 10, "invite", &slug);
+    let (status, _) = register_bot(&app, Some(&token_exp)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Wrong purpose → rejected.
-    let token_bot = issue_token(&format!("jti-{}", nanos()), now_unix() + 3600, "bot", &slug);
-    let (status, _) = register_bot(&app, None, Some(&token_bot)).await;
+    let token_bot = issue_token(&unique_id(), now_unix() + 3600, "bot", &slug);
+    let (status, _) = register_bot(&app, Some(&token_bot)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Unknown issuer → rejected.
-    let token_unknown = issue_token(&format!("jti-{}", nanos()), now_unix() + 3600, "invite", "nope");
-    let (status, _) = register_bot(&app, None, Some(&token_unknown)).await;
+    let token_unknown = issue_token(&unique_id(), now_unix() + 3600, "invite", "nope");
+    let (status, _) = register_bot(&app, Some(&token_unknown)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // Revoking the gatekeeper capability retires the key → tokens stop working.
+    // Revoke the gatekeeper capability → its tokens stop working (fail-closed),
+    // and the shared secret comes back (no gatekeeper installed any more).
     let (status, _) = admin_req(
         &app,
         "DELETE",
@@ -1061,41 +1126,28 @@ async fn closed_registration_admission_matrix() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let token_after = issue_token(&format!("jti-{}", nanos()), now_unix() + 3600, "invite", &slug);
-    let (status, _) = register_bot(&app, None, Some(&token_after)).await;
+
+    let token_after = issue_token(&unique_id(), now_unix() + 3600, "invite", &slug);
+    let (status, _) = register_bot(&app, Some(&token_after)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "revoked gatekeeper must fail closed");
-}
 
-#[tokio::test]
-async fn closed_registration_admits_bootstrap_suffix() {
-    // A unique bootstrap suffix in the allowlist is admitted under closed
-    // registration without any token (arm (b)).
-    let suffix = format!("boot{}", nanos());
-    let state = test_state_with(
-        vec![],
-        server::config::RegistrationMode::Closed,
-        vec![suffix.clone()],
-    )
-    .await;
-    let app = routes::router().with_state(state);
-
-    let (status, _) = register_bot(&app, Some(&suffix), None).await;
-    assert_eq!(status, StatusCode::CREATED, "bootstrap-suffix bot must be admitted");
-
-    // A different suffix not in the allowlist is rejected.
-    let other = format!("nope{}", nanos());
-    let (status, _) = register_bot(&app, Some(&other), None).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = register_bot(&app, Some(&bootstrap_token(SECRET, None))).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "shared secret re-enables when no gatekeeper remains"
+    );
 }
 
 #[tokio::test]
 async fn account_joined_catch_up() {
+    let _guard = GATEKEEPER_LOCK.lock().await;
     let (app, _admin_did, admin_token) =
         setup_adminbot(server::config::RegistrationMode::Open).await;
 
     // Snapshot the current max event id directly so a shared DB with many prior
     // events doesn't push our new one past the fetch cap.
-    let state = test_state_with(vec![], server::config::RegistrationMode::Open, vec![]).await;
+    let state = test_state_with(server::config::RegistrationMode::Open, None).await;
     let mut conn = state.db.acquire().await.unwrap();
     let before_max: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM server_events")
@@ -1105,11 +1157,11 @@ async fn account_joined_catch_up() {
     drop(conn);
 
     // A new registration appends an account_joined event.
-    let (status, body) = register_bot(&app, None, None).await;
+    let (status, body) = register_bot(&app, None).await;
     assert_eq!(status, StatusCode::CREATED);
     let new_did = body["did"].as_str().unwrap().to_string();
 
-    // Adminbot (subscribe.account_joined via the superuser pin) can read it.
+    // The superuser (subscribe.account_joined via the pin) can read it.
     let (status, body) = admin_req(
         &app,
         "GET",
@@ -1126,7 +1178,7 @@ async fn account_joined_catch_up() {
     );
 
     // A bot without the capability is forbidden from the catch-up endpoint.
-    let (status, body) = register_bot(&app, None, None).await;
+    let (status, body) = register_bot(&app, None).await;
     assert_eq!(status, StatusCode::CREATED);
     let plain_token = body["session_token"].as_str().unwrap().to_string();
     let (status, _) =

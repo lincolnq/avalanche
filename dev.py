@@ -56,6 +56,9 @@ INFRA_DIR = os.path.join(REPO_DIR, "infra")
 INFRA_COMPOSE = os.path.join(INFRA_DIR, "docker-compose.yml")
 DB_URL = "postgresql://actnet:actnet-dev@localhost:5432/actnet"
 ADMINBOT_STATE_DIR = os.path.join(REPO_DIR, "dev-state", "adminbot")
+# Bootstrap secret for dev's closed-registration server. The homeserver accepts
+# it; testbot/adminbot present it (as a bootstrap token) to register.
+DEV_SHARED_SECRET = os.environ.get("REGISTRATION_SHARED_SECRET", "CHANGEME")
 
 
 def node_cmd(args):
@@ -156,7 +159,11 @@ def main():
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
-        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1"},
+        # Dev runs CLOSED registration (the prod default) so the dev clients
+        # exercise the same admission path prod uses. Clients present the shared
+        # secret below; testbot/adminbot read DEV_SHARED_SECRET to build a
+        # bootstrap token. Override REGISTRATION_MODE=open for quick hacking.
+        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET},
     ))
 
     for project, port in project_launches:
@@ -169,6 +176,9 @@ def main():
                 project["bind_env"]: f"0.0.0.0:{port}",
                 "HOMESERVER_URL": os.environ.get("HOMESERVER_URL", "http://localhost:3000"),
                 project["log_env"]: os.environ.get(project["log_env"], "info"),
+                # Present the bootstrap secret so the bot can register against
+                # the closed-registration dev server.
+                "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
             },
         ))
 
@@ -193,6 +203,9 @@ def main():
             "ADMINBOT_STATE_DIR": ADMINBOT_STATE_DIR,
             "ADMINBOT_DB_KEY": os.environ.get("ADMINBOT_DB_KEY", "dev-adminbot-key"),
             "ADMINBOT_LOG": os.environ.get("ADMINBOT_LOG", "info"),
+            # Bootstrap secret: registers adminbot against the closed dev server
+            # and links it into the superuser Project (it names that Project).
+            "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
         },
     ))
 

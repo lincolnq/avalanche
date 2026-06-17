@@ -642,9 +642,10 @@ export class AppCore {
     dbKey: string,
     recoveryKey: Uint8Array,
     displayName: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
-      await native.AppCore.createAccount(serverUrl, dbPath, dbKey, asBuf(recoveryKey), displayName),
+      await native.AppCore.createAccount(serverUrl, dbPath, dbKey, asBuf(recoveryKey), displayName, inviteToken),
     );
   }
 
@@ -667,6 +668,7 @@ export class AppCore {
     dbKey: string,
     displayName: string,
     didSuffix?: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.createBotAccount(
@@ -675,6 +677,7 @@ export class AppCore {
         dbKey,
         displayName,
         didSuffix,
+        inviteToken,
       ),
     );
   }
@@ -696,10 +699,11 @@ export class AppCore {
     dbPath: string,
     dbKey: string,
     displayName: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
       await native.AppCore.finalizeAccount(
-        prepared._native, dbPath, dbKey, displayName,
+        prepared._native, dbPath, dbKey, displayName, inviteToken,
       ),
     );
   }
@@ -768,10 +772,31 @@ export class AppCore {
     dbKey: string,
     displayName: string,
     didSuffix?: string,
+    inviteToken?: string,
   ): Promise<AppCore> {
     return new AppCore(
-      await native.AppCore.loginOrCreateBot(serverUrl, dbPath, dbKey, displayName, didSuffix),
+      await native.AppCore.loginOrCreateBot(serverUrl, dbPath, dbKey, displayName, didSuffix, inviteToken),
     );
+  }
+
+  /**
+   * Build a bootstrap registration token from a shared secret (docs/24).
+   *
+   * Pass the result as `inviteToken` to {@link createBotAccount} /
+   * {@link loginOrCreateBot} to register against a closed-registration server.
+   * Naming `project` links the new account into that Project — e.g. the
+   * superuser Project (slug `"adminbot"`) to bootstrap admin authority.
+   *
+   * @category Constructors
+   */
+  static bootstrapToken(serverUrl: string, secret: string, project?: string): string {
+    // Single-char wire keys keep the token (and QR) compact: s=server_url,
+    // k=bootstrap_secret, p=project (docs/24, 51).
+    const payload: Record<string, string> = { s: serverUrl, k: secret };
+    if (project) payload.p = project;
+    return Buffer.from(JSON.stringify(payload), "utf8")
+      .toString("base64")
+      .replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
   }
 
   // ── identity ────────────────────────────────────────────────────────────

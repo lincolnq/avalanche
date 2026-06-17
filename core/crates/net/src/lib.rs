@@ -218,6 +218,7 @@ impl Client {
             "recovery_blob": req.recovery_blob.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "encrypted_profile": req.encrypted_profile.as_ref().map(|b| BASE64_STANDARD.encode(b)),
             "identity_key_signature": req.identity_key_signature,
+            "invite_token": req.invite_token,
         });
 
         let resp = self.http

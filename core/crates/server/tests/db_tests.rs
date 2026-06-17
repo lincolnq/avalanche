@@ -1175,6 +1175,12 @@ async fn adminbot_superuser_short_circuit() {
     assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::REGISTRATION_GATEKEEPER).await.unwrap());
 }
 
+// Note: `any_gatekeeper_exists` is a *global* existence check, so it can't be
+// asserted under the transaction-rollback pattern on the shared dev DB
+// (http_tests commits gatekeeper grants that this would observe). Its behavior
+// — and the shared-secret auto-disable/re-enable it drives — is covered
+// end-to-end by `closed_registration_admission_matrix` in http_tests.rs.
+
 #[tokio::test]
 async fn gatekeeper_signing_key_set_and_clear() {
     let pool = test_pool().await;
@@ -1210,15 +1216,22 @@ async fn server_events_append_and_fetch() {
     let id2 = server_events::append_account_joined(&mut *tx, "did:plc:ev2", None, 2000).await.unwrap();
     assert!(id2 > id1);
 
-    let since_first = server_events::fetch_since(&mut *tx, id1, server_events::KIND_ACCOUNT_JOINED, 500).await.unwrap();
-    assert_eq!(since_first.len(), 1);
-    assert_eq!(since_first[0].did, "did:plc:ev2");
-    assert!(since_first[0].invite_token.is_none());
+    // Filter to our own events rather than asserting raw counts — the shared
+    // dev DB carries many committed events from other tests. Window from just
+    // below id1 so the LIMIT can't truncate ours (they're the lowest ids in it).
+    let kind = server_events::KIND_ACCOUNT_JOINED;
+    let window = server_events::fetch_since(&mut *tx, id1 - 1, kind, 500).await.unwrap();
+    let e1 = window.iter().find(|e| e.id == id1).expect("ev1 present");
+    let e2 = window.iter().find(|e| e.id == id2).expect("ev2 present");
+    assert_eq!(e1.did, "did:plc:ev1");
+    assert_eq!(e1.invite_token.as_deref(), Some("tok-1"));
+    assert_eq!(e2.did, "did:plc:ev2");
+    assert!(e2.invite_token.is_none());
 
-    let from_zero = server_events::fetch_since(&mut *tx, 0, server_events::KIND_ACCOUNT_JOINED, 500).await.unwrap();
-    let mine: Vec<_> = from_zero.iter().filter(|e| e.id == id1 || e.id == id2).collect();
-    assert_eq!(mine.len(), 2);
-    assert_eq!(mine.iter().find(|e| e.id == id1).unwrap().invite_token.as_deref(), Some("tok-1"));
+    // fetch_since is strictly-greater-than: id1 is excluded, id2 included.
+    let after = server_events::fetch_since(&mut *tx, id1, kind, 500).await.unwrap();
+    assert!(after.iter().any(|e| e.id == id2), "id2 after id1");
+    assert!(!after.iter().any(|e| e.id == id1), "id1 excluded by since=id1");
 }
 
 #[tokio::test]

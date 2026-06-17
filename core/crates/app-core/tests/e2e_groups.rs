@@ -11,6 +11,8 @@
 //! Requires a homeserver at `SERVER_URL` (default
 //! `http://localhost:3000`). Run via `make test-e2e`.
 
+mod common;
+
 use app_core::AppCore;
 
 fn server_url() -> String {
@@ -25,10 +27,10 @@ async fn test_store() -> store::DeviceStore {
 async fn create_invite_accept_promote_remove_roundtrip() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
 
@@ -125,13 +127,13 @@ async fn create_invite_accept_promote_remove_roundtrip() {
 async fn three_member_fanout_roundtrip() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
 
@@ -239,13 +241,13 @@ async fn three_member_fanout_roundtrip() {
 async fn group_send_establishes_missing_session() {
     let url = server_url();
 
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
-    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let carol = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
 

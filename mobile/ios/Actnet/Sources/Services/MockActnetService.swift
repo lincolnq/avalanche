@@ -289,7 +289,7 @@ final class MockPreparedAccount: PreparedAccountProtocol, @unchecked Sendable {
 
 /// Mock service that creates fake accounts and seeds initial conversations.
 struct MockActnetService: ActnetService {
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String) throws -> any AppCoreProtocol {
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5) // simulate network
         return MockAppCore(displayName: displayName)
     }
@@ -302,7 +302,7 @@ struct MockActnetService: ActnetService {
         MockPreparedAccount()
     }
 
-    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
+    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.5)
         return MockAppCore(did: prepared.did(), displayName: displayName)
     }

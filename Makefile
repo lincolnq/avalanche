@@ -164,7 +164,7 @@ ci: check clippy test-server
 # ----------------------------------------------------------------------------
 
 dev:
-	cd core && ACTNET_ALLOW_DEV_DB=1 ACTNET_DISABLE_IP_RATE_LIMITS=1 RUST_LOG=tower_http=debug,server=debug cargo run -p server
+	cd core && ACTNET_ALLOW_DEV_DB=1 ACTNET_DISABLE_IP_RATE_LIMITS=1 REGISTRATION_SHARED_SECRET=$(or $(REGISTRATION_SHARED_SECRET),CHANGEME) RUST_LOG=tower_http=debug,server=debug cargo run -p server
 
 db-up:
 	docker compose -f infra/docker-compose.yml up -d --wait

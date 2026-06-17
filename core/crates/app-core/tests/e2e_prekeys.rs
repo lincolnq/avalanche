@@ -6,6 +6,8 @@
 //!
 //! Run via `make test-e2e`. Each test creates fresh accounts.
 
+mod common;
+
 use app_core::AppCore;
 
 fn server_url() -> String {
@@ -45,7 +47,7 @@ async fn first_contact_decrypts_after_exhaustion_then_replenishes() {
 
     // Recipient. `create_account_with_store` does not start the reconnect task,
     // so sends/receives use the HTTP path — deterministic for the test.
-    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
     let alice_did = alice.did_async().await;
@@ -55,7 +57,7 @@ async fn first_contact_decrypts_after_exhaustion_then_replenishes() {
     // of each, so by the end both one-time pools are empty and the server is
     // handing out the signed-EC + last-resort-Kyber fallback.
     for i in 0..25 {
-        let sender = AppCore::create_account_with_store(&url, test_store().await, None, true)
+        let sender = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
             .await
             .unwrap();
         sender
@@ -66,7 +68,7 @@ async fn first_contact_decrypts_after_exhaustion_then_replenishes() {
 
     // The decisive sender, created after exhaustion: its bundle carries the
     // last-resort Kyber. Its first-contact message must decrypt on Alice.
-    let late = AppCore::create_account_with_store(&url, test_store().await, None, true)
+    let late = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
         .await
         .unwrap();
     let late_did = late.did_async().await;

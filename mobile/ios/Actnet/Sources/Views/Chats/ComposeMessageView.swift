@@ -311,7 +311,7 @@ struct ComposeMessageView: View {
     /// recipient it points at as a chip and report success. Both link shapes
     /// another user's app can produce carry a DID:
     ///   `https://go.theavalanche.net/conversation/<did>`
-    ///   `https://go.theavalanche.net/invite/<base64url {"inviter_did":…}>`
+    ///   `https://go.theavalanche.net/i/<base64url {"d":…}>`  (d = inviter_did)
     @discardableResult
     private func handleContactLink(_ raw: String) -> Bool {
         guard let did = Self.recipientDid(fromContactLink: raw) else { return false }
@@ -331,10 +331,10 @@ struct ComposeMessageView: View {
         switch parts[0] {
         case "conversation":
             return parts[1].hasPrefix("did:") ? parts[1] : nil
-        case "invite":
+        case "i", "invite":
             guard let data = Data(base64URLEncoded: parts[1]),
                   let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let did = payload["inviter_did"] as? String,
+                  let did = payload["d"] as? String,
                   did.hasPrefix("did:") else { return nil }
             return did
         default:

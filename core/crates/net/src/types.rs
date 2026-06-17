@@ -37,6 +37,11 @@ pub struct RegisterRequest {
     /// Ed25519 signature of `"register:{did}"` proving identity key possession.
     /// Required when `did` is provided.
     pub identity_key_signature: Option<String>,
+    /// Opaque registration token (docs/24): a Project-signed gatekeeper invite
+    /// or the operator's bootstrap token. Forwarded verbatim to the server,
+    /// which evaluates it; the client never parses it. `None` for unauthenticated
+    /// (open-registration) signups.
+    pub invite_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

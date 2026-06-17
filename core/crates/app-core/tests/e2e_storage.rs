@@ -15,6 +15,8 @@
 //! Requires a homeserver at `SERVER_URL` (default `http://localhost:3000`).
 //! Run via `make test-e2e`.
 
+mod common;
+
 use app_core::storage_sync::{TYPE_CONTACT, TYPE_CONTACT_PROFILE, TYPE_CONV_SETTINGS};
 use app_core::AppCore;
 use store::profiles::ContactProfile;
@@ -46,7 +48,7 @@ async fn storage_push_then_pull_restores_group_key() {
     let url = server_url();
     // Keep a handle on the store so we can simulate device loss directly.
     let store = test_store().await;
-    let alice = AppCore::create_account_with_store(&url, store.clone(), None, true)
+    let alice = AppCore::create_account_with_store(&url, store.clone(), None, true, common::invite_token())
         .await
         .unwrap();
     enable_storage_sync(&store).await;
@@ -99,7 +101,7 @@ async fn storage_push_then_pull_restores_group_key() {
 async fn contact_profile_and_settings_round_trip() {
     let url = server_url();
     let store = test_store().await;
-    let alice = AppCore::create_account_with_store(&url, store.clone(), None, true)
+    let alice = AppCore::create_account_with_store(&url, store.clone(), None, true, common::invite_token())
         .await
         .unwrap();
     enable_storage_sync(&store).await;

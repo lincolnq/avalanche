@@ -54,11 +54,12 @@ struct InviteLinkEntryView: View {
         }
     }
 
-    /// Base64url-encoded JSON payload `{"server_url": "http://localhost:3000"}`.
-    /// The dev homeserver accepts any token whose embedded server_url matches
-    /// its own — no admin-issued secret needed. Debug-only convenience.
+    /// Base64url-encoded bootstrap token for the local dev server, with
+    /// single-char wire keys (s=server_url, k=bootstrap_secret). The dev server
+    /// runs closed registration with the `CHANGEME` secret (see dev.py / `make
+    /// dev`), so the token carries it. Debug-only convenience.
     private static let localhostDevToken: String = {
-        let json = #"{"server_url":"http://localhost:3000"}"#
+        let json = #"{"s":"http://localhost:3000","k":"CHANGEME"}"#
         let data = Data(json.utf8)
         // base64url, no padding
         return data.base64EncodedString()
@@ -75,7 +76,7 @@ struct InviteLinkEntryView: View {
             do {
                 let token: InviteToken
                 if let url = URL(string: linkText), url.host == "go.theavalanche.net" {
-                    // Full URL: https://go.theavalanche.net/invite/<token>
+                    // Full URL: https://go.theavalanche.net/i/<token>
                     token = try await InviteToken.from(url: url)
                 } else {
                     // Bare token string

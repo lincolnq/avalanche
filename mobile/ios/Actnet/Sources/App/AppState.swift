@@ -106,7 +106,7 @@ final class AppState: ObservableObject {
     /// Handle a deep link URL.
     /// Supported:
     /// - `https://go.theavalanche.net/conversation/<recipient_did>`
-    /// - `https://go.theavalanche.net/invite/<token>`
+    /// - `https://go.theavalanche.net/i/<token>` (or legacy `/invite/<token>`)
     func handleDeepLink(_ url: URL) {
         print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
         guard Self.isDeepLink(url) else { return }
@@ -126,14 +126,15 @@ final class AppState: ObservableObject {
             selectedTab = .chats
             navigateToConversation = conv
 
-        case "invite":
+        case "i", "invite":
             let token = pathComponents[1]
             print("[DeepLink] handling invite token")
-            // Try to decode the token locally to check if we're already on the server.
+            // Try to decode the token locally to check if we're already on the
+            // server. Single-char wire keys: s=server_url, d=inviter_did.
             if let data = Data(base64URLEncoded: token),
                let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let serverUrl = payload["server_url"] as? String,
-               let inviterDid = payload["inviter_did"] as? String,
+               let serverUrl = payload["s"] as? String,
+               let inviterDid = payload["d"] as? String,
                let account = accounts.first(where: { $0.servers.contains(where: { $0.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }) }) {
                 // Already registered on this server — skip to DM.
                 print("[DeepLink] already on server, opening DM with \(inviterDid)")
@@ -312,8 +313,12 @@ final class AppState: ObservableObject {
         let svc = _service
         let prf = prfOutput
         let dn = displayName
+        // Forward the raw invite token (the server evaluates it; docs/24). The
+        // dev server runs closed registration, so onboarding via an invite link
+        // carries the bootstrap secret in this token.
+        let token = pendingInviteToken
         let core = try await Task.detached {
-            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prf, displayName: dn)
+            try svc.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prf, displayName: dn, inviteToken: token)
         }.value
 
         try await finishAccountRegistration(core: core, serverUrl: serverUrl, serverName: serverName, displayName: displayName, dbFilename: dbFilename)
@@ -352,8 +357,9 @@ final class AppState: ObservableObject {
 
         let svc = _service
         let dn = displayName
+        let token = pendingInviteToken
         let core = try await Task.detached {
-            try svc.finalizeAccount(prepared: prepared, dbPath: dbPath, dbKey: dbKey, displayName: dn)
+            try svc.finalizeAccount(prepared: prepared, dbPath: dbPath, dbKey: dbKey, displayName: dn, inviteToken: token)
         }.value
 
         try await finishAccountRegistration(core: core, serverUrl: serverUrl, serverName: serverName, displayName: displayName, dbFilename: dbFilename)

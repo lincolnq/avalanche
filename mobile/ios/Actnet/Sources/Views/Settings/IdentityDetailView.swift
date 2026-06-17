@@ -18,7 +18,7 @@ struct IdentityDetailView: View {
     private var contactURL: String? {
         guard let server = homeServer else { return nil }
         let token = makeInviteToken(serverUrl: server.url.absoluteString, inviterDid: account.id)
-        return "https://go.theavalanche.net/invite/\(token)"
+        return "https://go.theavalanche.net/i/\(token)"
     }
 
     var body: some View {
@@ -131,8 +131,9 @@ struct IdentityDetailView: View {
     }
 
     private func makeInviteToken(serverUrl: String, inviterDid: String) -> String {
+        // Single-char wire keys (s=server_url, d=inviter_did) keep the QR low-density.
         let json = """
-        {"server_url":"\(serverUrl)","inviter_did":"\(inviterDid)"}
+        {"s":"\(serverUrl)","d":"\(inviterDid)"}
         """
         return Data(json.utf8)
             .base64EncodedString()

@@ -762,6 +762,7 @@ impl AppCore {
         db_key: String,
         prf_output: Vec<u8>,
         display_name: String,
+        invite_token: Option<String>,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -772,7 +773,7 @@ impl AppCore {
 
         let prepared = PreparedAccountState::prepare(server_url, &prf_output, true)
             .map_err(AppErrorFfi::from)?;
-        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), false, None))
+        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), false, None, invite_token))
             .map_err(AppErrorFfi::from)?;
 
         {
@@ -801,6 +802,7 @@ impl AppCore {
         db_key: String,
         display_name: String,
         did_suffix: Option<String>,
+        invite_token: Option<String>,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -811,7 +813,7 @@ impl AppCore {
 
         let prepared = PreparedAccountState::prepare(server_url, &[], false)
             .map_err(AppErrorFfi::from)?;
-        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), true, did_suffix))
+        let inner = rt.block_on(Self::create_inner(prepared, store, Some(display_name), true, did_suffix, invite_token))
             .map_err(AppErrorFfi::from)?;
 
         let core = Arc::new(Self::build(inner));
@@ -835,6 +837,7 @@ impl AppCore {
         db_path: String,
         db_key: String,
         display_name: String,
+        invite_token: Option<String>,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -850,7 +853,7 @@ impl AppCore {
             &store::DatabaseKey::from_passphrase(db_key),
         )).map_err(AppError::from).map_err(AppErrorFfi::from)?;
 
-        let inner = rt.block_on(Self::create_inner(state, store, Some(display_name), false, None))
+        let inner = rt.block_on(Self::create_inner(state, store, Some(display_name), false, None, invite_token))
             .map_err(AppErrorFfi::from)?;
 
         {
@@ -1245,6 +1248,7 @@ impl AppCore {
         db_key: String,
         display_name: String,
         did_suffix: Option<String>,
+        invite_token: Option<String>,
     ) -> Result<Arc<Self>, AppErrorFfi> {
         let rt = ffi_runtime();
 
@@ -1260,7 +1264,7 @@ impl AppCore {
                 Ok(inner) => Ok(inner),
                 Err(AppError::NoAccount) => {
                     let prepared = PreparedAccountState::prepare(server_url, &[], false)?;
-                    Self::create_inner(prepared, store, Some(display_name), true, did_suffix).await
+                    Self::create_inner(prepared, store, Some(display_name), true, did_suffix, invite_token).await
                 }
                 Err(e) => Err(e),
             }
@@ -2400,6 +2404,7 @@ impl AppCore {
         display_name: Option<String>,
         is_bot: bool,
         did_suffix: Option<String>,
+        invite_token: Option<String>,
     ) -> Result<AppCoreInner, AppError> {
         let PreparedAccountState {
             server_url,
@@ -2521,6 +2526,9 @@ impl AppCore {
             recovery_blob,
             encrypted_profile: encrypted_profile.clone(),
             identity_key_signature,
+            // Opaque registration credential (gatekeeper invite or bootstrap
+            // token). Forwarded verbatim; the server evaluates it (docs/24).
+            invite_token,
         }).await?;
 
         // keypair → identity.db; registration_id → device.db (save_device_account below).
@@ -2665,9 +2673,10 @@ impl AppCore {
         store: store::DeviceStore,
         display_name: Option<String>,
         is_bot: bool,
+        invite_token: Option<String>,
     ) -> Result<Self, AppError> {
         let prepared = PreparedAccountState::prepare(server_url.to_string(), &[], false)?;
-        let inner = Self::create_inner(prepared, store, display_name, is_bot, None).await?;
+        let inner = Self::create_inner(prepared, store, display_name, is_bot, None, invite_token).await?;
         Ok(Self::build(inner))
     }
 

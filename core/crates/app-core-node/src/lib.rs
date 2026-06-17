@@ -507,10 +507,11 @@ impl AppCore {
         db_key: String,
         prf_output: Buffer,
         display_name: String,
+        invite_token: Option<String>,
     ) -> napi::Result<AppCore> {
         let prf = prf_output.to_vec();
         let inner = tokio::task::spawn_blocking(move || {
-            core::AppCore::create_account(server_url, db_path, db_key, prf, display_name)
+            core::AppCore::create_account(server_url, db_path, db_key, prf, display_name, invite_token)
         })
         .await
         .map_err(join_err)?
@@ -529,9 +530,10 @@ impl AppCore {
         db_key: String,
         display_name: String,
         did_suffix: Option<String>,
+        invite_token: Option<String>,
     ) -> napi::Result<AppCore> {
         let inner = tokio::task::spawn_blocking(move || {
-            core::AppCore::create_bot_account(server_url, db_path, db_key, display_name, did_suffix)
+            core::AppCore::create_bot_account(server_url, db_path, db_key, display_name, did_suffix, invite_token)
         })
         .await
         .map_err(join_err)?
@@ -552,9 +554,10 @@ impl AppCore {
         db_key: String,
         display_name: String,
         did_suffix: Option<String>,
+        invite_token: Option<String>,
     ) -> napi::Result<AppCore> {
         let inner = tokio::task::spawn_blocking(move || {
-            core::AppCore::login_or_create_bot(server_url, db_path, db_key, display_name, did_suffix)
+            core::AppCore::login_or_create_bot(server_url, db_path, db_key, display_name, did_suffix, invite_token)
         })
         .await
         .map_err(join_err)?
@@ -568,10 +571,11 @@ impl AppCore {
         db_path: String,
         db_key: String,
         display_name: String,
+        invite_token: Option<String>,
     ) -> napi::Result<AppCore> {
         let prepared = prepared.inner.clone();
         let inner = tokio::task::spawn_blocking(move || {
-            core::AppCore::finalize_account(prepared, db_path, db_key, display_name)
+            core::AppCore::finalize_account(prepared, db_path, db_key, display_name, invite_token)
         })
         .await
         .map_err(join_err)?

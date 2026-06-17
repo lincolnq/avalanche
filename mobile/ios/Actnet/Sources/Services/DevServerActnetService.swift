@@ -4,8 +4,8 @@ import Foundation
 struct DevServerActnetService: ActnetService {
     static let defaultServerUrl = "http://localhost:3000"
 
-    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String) throws -> any AppCoreProtocol {
-        try AppCore.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prfOutput, displayName: displayName)
+    func createAccount(serverUrl: String, dbPath: String, dbKey: String, prfOutput: Data, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
+        try AppCore.createAccount(serverUrl: serverUrl, dbPath: dbPath, dbKey: dbKey, prfOutput: prfOutput, displayName: displayName, inviteToken: inviteToken)
     }
 
     func login(dbPath: String, dbKey: String) throws -> any AppCoreProtocol {
@@ -16,11 +16,11 @@ struct DevServerActnetService: ActnetService {
         try PreparedAccount(serverUrl: serverUrl, prfOutput: prfOutput)
     }
 
-    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
+    func finalizeAccount(prepared: any PreparedAccountProtocol, dbPath: String, dbKey: String, displayName: String, inviteToken: String?) throws -> any AppCoreProtocol {
         guard let concrete = prepared as? PreparedAccount else {
             throw ActnetServiceError.preparedAccountTypeMismatch
         }
-        return try AppCore.finalizeAccount(prepared: concrete, dbPath: dbPath, dbKey: dbKey, displayName: displayName)
+        return try AppCore.finalizeAccount(prepared: concrete, dbPath: dbPath, dbKey: dbKey, displayName: displayName, inviteToken: inviteToken)
     }
 
     func recoverFromBlob(serverUrl: String, did: String, prfOutput: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
