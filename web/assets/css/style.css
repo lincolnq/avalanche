@@ -225,6 +225,13 @@ th { background: var(--card); }
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 .configure button:hover { background: var(--accent); color: var(--bg); }
+.configure button:disabled,
+.configure button:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--accent);
+}
 /* Advanced lives inside the form card, so it reads as a section of the form
    (a divider rule + a disclosure row) rather than a nested box. */
 .configure .advanced {

@@ -44,6 +44,23 @@ function applyRegion(text, name, keep) {
   return text.replace(re, keep ? '$1' : '');
 }
 
+// True while the Server URL is empty, unparseable, or still an example
+// placeholder — we keep the copy buttons disabled so nobody deploys with
+// av.example.org baked in. Matches the hostname so a real domain that merely
+// contains "example" (e.g. myexample.org) isn't caught.
+function isPlaceholderServer(u) {
+  const raw = (u || '').trim();
+  if (!raw) return true;
+  let host;
+  try {
+    host = new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  return host === 'example.org' || host === 'example.com'
+    || host.endsWith('.example.org') || host.endsWith('.example.com');
+}
+
 function render() {
   const values = Object.fromEntries(
     TEXT_FIELDS.map(f => [f, document.getElementById(f).value.trim()])
@@ -76,6 +93,13 @@ function render() {
   qr.addData(url);
   qr.make();
   document.getElementById('qr').innerHTML = qr.createSvgTag({cellSize: 5, margin: 2});
+
+  // Both copy buttons embed the Server URL, so gate them on a real domain.
+  const placeholder = isPlaceholderServer(values.server_url);
+  document.getElementById('copy_cloudinit').disabled = placeholder;
+  document.getElementById('copy_invite').disabled = placeholder;
+  document.getElementById('copy_cloudinit_status').textContent =
+    placeholder ? 'Enter your real Server URL above' : '';
 }
 
 function wireCopy(btnId, statusId, getValue) {

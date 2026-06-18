@@ -39,7 +39,7 @@
   <h2>1. Cloud-init for DigitalOcean</h2>
   <p class="hint">Paste this entire block into "Add Initial Scripts (user data)" on the droplet creation page.</p>
   <div class="copy-row">
-    <button type="button" id="copy_cloudinit">Copy cloud-init</button>
+    <button type="button" id="copy_cloudinit" disabled>Copy cloud-init</button>
     <span id="copy_cloudinit_status" class="hint"></span>
   </div>
   <textarea id="cloudinit_out" rows="20" readonly></textarea>
@@ -60,7 +60,7 @@
       <p style="margin-top:0"><strong>Invite URL</strong></p>
       <p><a id="invite_link" target="_blank" style="word-break:break-all"></a></p>
       <div class="copy-row">
-        <button type="button" id="copy_invite">Copy URL</button>
+        <button type="button" id="copy_invite" disabled>Copy URL</button>
         <span id="copy_invite_status" class="hint"></span>
       </div>
     </div>
