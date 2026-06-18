@@ -17,11 +17,13 @@ Display the full list of commits that are in `upstream/main` but not yet in your
 
 Label each commit with its author so it's clear which commits are from lincolnq vs. other contributors.
 
+**Important:** treat this commit list as attribution context only — not as the unit of analysis. A single feature often materialises across many commits (model first, then view, then bug fixes). Feature detection happens in Step 3 on the cumulative diff, which sees the final state of all those commits combined.
+
 ---
 
 ## Step 2 — Identify iOS-relevant changes
 
-Run:
+Run the following against the **cumulative diff** — the total change between your current HEAD and upstream/main, regardless of how many commits it spans:
 ```
 git diff HEAD..upstream/main --name-only
 ```
@@ -38,21 +40,29 @@ If there are no iOS source files changed, report "No iOS source changes in upstr
 
 ## Step 3 — Understand what changed on iOS
 
-For each iOS source file that changed, run:
+Read the **cumulative diff** for all iOS source files at once:
 ```
-git diff HEAD..upstream/main -- <file>
+git diff HEAD..upstream/main -- mobile/ios/
 ```
 
-Read the diffs and reason about what **user-facing features or behaviors** were added, changed, or removed. You are looking for:
+Do not split this by commit. You are reading the net result of everything lincolnq shipped since your last sync — a feature built across five commits appears here as one coherent set of additions, which is exactly what you want.
+
+Reason about what **user-facing features or behaviors** were added, changed, or removed across the whole diff. You are looking for:
 
 - New SwiftUI views or screens
 - New FFI calls (`core.methodName()`) — these expose new Rust functionality to the UI
 - New model fields or state in `AppState.swift`
 - Changed onboarding flows, navigation, or settings
 
-Group the changes into a list of **feature descriptions** — plain-English summaries like "account recovery from written-down phrase" or "block/report contact". One feature may span multiple files.
+For each feature you identify, also assess its **completeness** in the diff:
+- **Complete** — the full user-facing flow is present (view + state + FFI wired up)
+- **Partial** — scaffolding or stubs exist but the feature isn't fully wired (e.g. view exists, FFI call is `// TODO`)
 
-Display the feature list with the files that back each one, so the user can verify your interpretation before you act on it.
+Mark partial features as 🚧 in the parity matrix (Step 4) rather than adding a TODO — they're not yet something Android/Desktop needs to implement.
+
+Group the complete features into a list of **feature descriptions** — plain-English summaries like "account recovery from written-down phrase" or "block/report contact". One feature will often span multiple files; that's expected.
+
+Display the feature list with completeness status and the files that back each one, so the user can verify your interpretation before you act on it.
 
 ---
 
@@ -94,9 +104,11 @@ Report which gaps already have TODOs and which are genuinely new.
 For each genuinely new gap, add entries to `docs/02-todos-deferred.md` under an appropriate section heading. Use this format:
 
 ```
-- Android parity: [feature description] (lincolnq added iOS in upstream commit <short-sha>)
-- Desktop parity: [feature description] (lincolnq added iOS in upstream commit <short-sha>)
+- Android parity: [feature description] (iOS landed upstream <old-HEAD-sha>..<upstream-sha>)
+- Desktop parity: [feature description] (iOS landed upstream <old-HEAD-sha>..<upstream-sha>)
 ```
+
+Use the SHA range rather than a single commit SHA — since a feature may span multiple commits, the range is the accurate citation and lets anyone run `git log <range> -- mobile/ios/` to see exactly what was shipped.
 
 If Android is done but Desktop is not (or vice versa), add only the missing one.
 
