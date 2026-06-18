@@ -2366,16 +2366,19 @@ pub fn validate_invite(token: String) -> Result<InviteInfo, AppErrorFfi> {
             .decode(&token)
             .map_err(|_| AppError::Protocol("invalid base64url invite token".into()))?;
 
+        // Wire keys are single-char to keep tokens / QR codes compact, matching
+        // every producer (peer invites emit `s`/`d`; bootstrap tokens add `k`/`p`;
+        // signed gatekeeper envelopes use `s`/`i`/`c`/`g`) — see
+        // server::invite_token and the iOS generators. We only need to read the
+        // untrusted `s` (server_url) hint locally to know which server to call;
+        // the server re-validates the full token. `d` (inviter_did) is carried on
+        // peer invites so onboarding can auto-DM the inviter.
         #[derive(serde::Deserialize)]
         struct TokenPayload {
+            #[serde(rename = "s")]
             server_url: String,
-            #[serde(default)]
+            #[serde(rename = "d", default)]
             inviter_did: Option<String>,
-            #[serde(default)]
-            inviter_display_name: Option<String>,
-            /// base64url-encoded 32-byte profile key.
-            #[serde(default)]
-            inviter_profile_key: Option<String>,
         }
 
         let payload: TokenPayload = serde_json::from_slice(&json_bytes)
@@ -2384,20 +2387,15 @@ pub fn validate_invite(token: String) -> Result<InviteInfo, AppErrorFfi> {
         let client = net::Client::new(&payload.server_url);
         let resp = client.validate_invite(&token).await?;
 
-        let inviter_profile_key = payload.inviter_profile_key
-            .as_deref()
-            .map(|b| BASE64_URL_SAFE_NO_PAD.decode(b))
-            .transpose()
-            .map_err(|_| AppError::Protocol("invalid base64url inviter_profile_key".into()))?
-            .filter(|b| b.len() == profile::PROFILE_KEY_LEN);
-
         Ok::<_, AppError>(InviteInfo {
             server_url: payload.server_url,
             server_name: resp.server_name,
             inviter_did: payload.inviter_did,
             post_onboarding_redirect: resp.post_onboarding_redirect,
-            inviter_display_name: payload.inviter_display_name,
-            inviter_profile_key,
+            // No producer emits the inviter's display name / profile key in the
+            // compact token format; these stay None until a wire key is defined.
+            inviter_display_name: None,
+            inviter_profile_key: None,
         })
     }).map_err(AppErrorFfi::from)
 }
