@@ -1,8 +1,6 @@
-# actnet
+# Avalanche
 
 The online+offline social network. We help people organize.
-
-(`actnet` is a temporary name. We're accepting suggestions for a new one!)
 
 Anyone can build a social network these days, but who will use it? Our answer is that we'll build great tools for organizing, and people will install the app because a specific action they're participating in (a rescue, a canvass, etc) requires it. They'll stick around because the network captures and represents the real social connections they formed.
 
