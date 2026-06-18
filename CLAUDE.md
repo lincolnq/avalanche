@@ -93,12 +93,25 @@ Pinned to commit `4c460615` (not branch main). This is a git dependency in Cargo
 - Remove after pushing: `git worktree remove <path>`
 - Worktrees share the same `target/` directory issues on Windows (Application Control policy); if `cargo check` fails in a worktree, fall back to checking in the main working tree.
 
+## Cross-Platform Parity Rule
+
+The app has three UI platforms sharing one Rust core:
+
+- **iOS** — Swift/SwiftUI, UniFFI bindings. Reference implementation.
+- **Android** — Kotlin/Jetpack Compose, UniFFI bindings. See `docs/android-implementation.md`.
+- **Desktop** — Electron/React/TypeScript, napi-rs bindings. See `docs/desktop-implementation.md`.
+
+**Any feature added or changed on one platform must be implemented on all three
+in the same session.** iOS is the reference — when behavior is ambiguous, check
+the iOS source. See `mobile/CLAUDE.md` and `desktop/CLAUDE.md` for platform-specific
+workflows and per-platform checklists.
+
 ## Subsystem docs
 
 Each subsystem has its own CLAUDE.md with workflow and conventions specific to that layer:
 
-- `node/CLAUDE.md` — napi-rs Node.js bindings, TypeScript wrapper, adminbot
-- `mobile/CLAUDE.md` — UniFFI / iOS workflow, FFI constraints, `make ios`
+- `desktop/CLAUDE.md` — Electron app workflow, napi-rs bridge, Desktop parity rule
+- `mobile/CLAUDE.md` — iOS + Android workflows, FFI constraints, parity rule
 - `core/CLAUDE.md` — server endpoint workflow, error handling conventions
 
 ## Behavior Rules
@@ -106,6 +119,34 @@ Each subsystem has its own CLAUDE.md with workflow and conventions specific to t
 - **Cite sources.** When making a claim about the codebase (what a module does, whether something exists, how a pattern works), cite the file and line range (e.g. `path/to/file.rs:42-57`). Do not state things as fact without having read them. Do not rely solely on CLAUDE.md descriptions — read the actual source and cite it.
 - **Spec before code.** Before writing implementation code for a new feature, write a spec covering what changes, what files are touched, what assumptions are being made, and a test plan. Use `/new-feature` to run the full workflow. Wait for explicit approval before implementing.
 - **Assumptions audit.** After completing an implementation, list what was assumed but not explicitly verified.
+
+## UniFFI / Mobile Workflow
+
+The full cycle for adding a new feature that involves Rust + all platforms:
+
+1. Add Rust FFI method to `core/crates/app-core/src/lib.rs` (sync, `#[uniffi::export]`)
+2. `make bindings` — regenerates Swift + Kotlin UniFFI glue
+3. `make ios` — rebuilds XCFramework + regenerates Xcode project
+4. **iOS:** add to `AppCoreProtocol` in `ActnetService.swift`, stub in `MockActnetService.swift`, call from `AppState.swift` via `Task.detached { try core.methodName() }.value`
+5. **Android:** add to `ActnetService.kt` interface, stub in `MockActnetService.kt`, call from `AppViewModel.kt` via `withContext(Dispatchers.IO)`
+6. **Desktop:** add IPC handler in `desktop/src/main/ipc.ts`, add typed wrapper in `DevServerActnetService.ts`, stub in `MockActnetService.ts`
+
+Use `/new-ffi-method <name>` to scaffold steps 1, 4, 5, 6 as a single command.
+
+FFI constraints (do not violate):
+- FFI exports must be **synchronous** — they block on a global tokio runtime (`OnceLock<Runtime>`)
+- All FFI types must be UniFFI-compatible: `String`, `i64`, `bool`, `Vec<T>`, `Option<T>`, custom Record/Enum
+- Never hold an async lock across an FFI boundary
+
+## Error Handling Conventions (Server)
+
+- `ServerError::Db` — propagate via `?` from `sqlx::Error` (auto via `From` impl)
+- `ServerError::NotFound` — when `fetch_optional` returns `None`
+- `ServerError::Unauthorized` — missing/invalid auth token; never reveal why
+- `ServerError::BadRequest(msg)` — invalid input (bad base64, missing field, etc.)
+- `ServerError::RateLimited` — rate limit exceeded (HTTP 429)
+- `ServerError::Internal(msg)` — unexpected server-side failure; log with `tracing::error!`
+- Never expose DB details or internal state to the client; only log server-side
 
 ## Contributing workflow
 
