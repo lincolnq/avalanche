@@ -1772,7 +1772,7 @@ impl AppCore {
                 // the inbound delivery path uses, so the two can't drift (see
                 // SenderGate::is_request). Non-DM rows (peer == None) are never
                 // requests.
-                let is_request = peer.map_or(false, |p| {
+                let is_request = peer.is_some_and(|p| {
                     crate::messaging::SenderGate {
                         is_curated: contact.map(|c| c.is_curated).unwrap_or(false),
                         is_blocked,
