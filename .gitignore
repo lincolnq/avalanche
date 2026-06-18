@@ -27,3 +27,6 @@ mobile/android/Generated/
 
 # Binaries
 dist/
+
+# adminbot ephemera
+dev-state/

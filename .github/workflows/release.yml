@@ -1,0 +1,154 @@
+name: Release
+
+# Builds all first-party release artifacts for each supported target arch on
+# tag push, then publishes them as separate assets on a single GitHub Release.
+# Cloud-init / systemd units fetch these by URL.
+#
+# All components share ONE version: the git tag. Tag the release `v0.1.2`
+# (any `v*` prefix) and a draft release is created with every artifact below
+# attached as a separately-downloadable asset:
+#
+#   Rust binaries (tarball contains the real compiled binary):
+#     av-server-<target>.tar.gz   → av-server/avalanche-server
+#     av-relay-<target>.tar.gz    → av-relay/relay
+#
+#   Node bots (tarball is self-contained: node_modules + built packages,
+#   entry point at node_modules/.bin/<bot>):
+#     av-adminbot-<target>.tar.gz → av-adminbot/...
+#     av-testbot-<target>.tar.gz  → av-testbot/...
+#
+# To add a component: append to RUST_BINS or NODE_BOTS below — nothing else.
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # "<crate> <compiled-binary-name>" — the crate to `cargo build -p` and the
+  # binary it emits in target/release. Tarball is named av-<crate>.
+  RUST_BINS: |
+    server avalanche-server
+    relay relay
+  # napi-backed bot packages (the @actnet/<bot> workspace). Each is built with
+  # tsc and packaged with a shared node_modules. Tarball is av-<bot>.
+  NODE_BOTS: |
+    adminbot
+    testbot
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      # ── Rust binaries ────────────────────────────────────────────────────
+      # One cargo invocation builds the whole shared dependency graph once;
+      # then we stage each binary into its own arch-suffixed tarball.
+      - name: Build Rust binaries
+        run: |
+          cd core
+          pkgs=$(awk 'NF {printf "-p %s ", $1}' <<< "$RUST_BINS")
+          cargo build --release $pkgs
+
+      - name: Stage Rust tarballs
+        run: |
+          while read -r crate binary; do
+            [ -z "$crate" ] && continue
+            stem="av-$crate"
+            mkdir -p "dist/$stem"
+            cp "core/target/release/$binary" "dist/$stem/$binary"
+            strip "dist/$stem/$binary" || true
+            tar czf "$stem-${{ matrix.target }}.tar.gz" -C dist "$stem"
+            rm -rf "dist/$stem"
+          done <<< "$RUST_BINS"
+
+      # ── Node bots ────────────────────────────────────────────────────────
+      # The native napi module for @actnet/app-core builds for the runner's
+      # host platform, which matches `matrix.target` since we pick arch-specific
+      # runners — so each bot tarball is arch-specific. Build every bot first,
+      # THEN `npm prune --omit=dev` once (prune removes typescript, so it must
+      # run after all tsc builds). Each tarball carries the shared node_modules
+      # plus app-core and that one bot's package.
+      - name: Install + build node packages
+        run: |
+          cd node
+          npm ci
+          npm run build -w @actnet/app-core
+          while read -r bot; do
+            [ -z "$bot" ] && continue
+            npm run build -w "@actnet/$bot"
+          done <<< "$NODE_BOTS"
+
+      - name: Prune dev dependencies
+        run: cd node && npm prune --omit=dev
+
+      - name: Stage bot tarballs
+        run: |
+          while read -r bot; do
+            [ -z "$bot" ] && continue
+            stem="av-$bot"
+            root="dist/$stem"
+            mkdir -p "$root/packages"
+            # Shared runtime deps (includes the native app-core .node module),
+            # plus the built app-core package and the bot itself. The binary
+            # entry is node_modules/.bin/$bot via the package "bin" field.
+            cp -a node/node_modules "$root/node_modules"
+            cp -a node/packages/app-core "$root/packages/app-core"
+            cp -a "node/packages/$bot" "$root/packages/$bot"
+            # Drop source maps from the staged copy.
+            find "$root" -name '*.map' -delete
+            tar czf "$stem-${{ matrix.target }}.tar.gz" -C dist "$stem"
+            rm -rf "$root"
+          done <<< "$NODE_BOTS"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: av-*-${{ matrix.target }}.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create draft release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: av-*.tar.gz
