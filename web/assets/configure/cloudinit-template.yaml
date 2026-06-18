@@ -234,6 +234,19 @@ write_files:
       EOF
       sysctl --system
 
+      # Persistent journald so `journalctl -u <svc>` works (and survives reboots)
+      # -- some minimal images default to volatile or no storage, which leaves
+      # journalctl empty. Done before services start so their logs are captured
+      # from the beginning. Size-capped for the small droplet disk.
+      mkdir -p /etc/systemd/journald.conf.d
+      cat > /etc/systemd/journald.conf.d/persistent.conf <<EOF
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=200M
+      EOF
+      mkdir -p /var/log/journal
+      systemctl restart systemd-journald
+
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
       apt-get install -y -qq \
@@ -299,7 +312,11 @@ write_files:
       rm -rf /tmp/avalanche-server.tar.gz /tmp/av-server
 
       systemctl daemon-reload
-      systemctl enable --now caddy
+      # The caddy apt package already started caddy with its default config, so
+      # `enable --now` would be a no-op and our Caddyfile (and its HTTPS cert)
+      # would never load. Restart so it picks up /etc/caddy/Caddyfile.
+      systemctl enable caddy
+      systemctl restart caddy
       # `sudo -u` does not load EnvironmentFile, so pass DATABASE_URL explicitly.
       sudo -u avalanche env DATABASE_URL='postgresql:///avalanche?host=/var/run/postgresql' \
           /usr/local/lib/avalanche/avalanche-server migrate

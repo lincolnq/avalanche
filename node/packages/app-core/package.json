@@ -33,10 +33,12 @@
     "docs": "typedoc",
     "smoke": "node smoke.mjs"
   },
+  "dependencies": {
+    "temporal-spec": "^0.3.1"
+  },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4",
     "@types/node": "^22.19.19",
-    "temporal-spec": "^0.3.1",
     "typedoc": "^0.28.19",
     "typescript": "^5.9.3"
   },
