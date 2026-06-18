@@ -1,0 +1,32 @@
+#!/bin/bash
+# Add a Project to THIS host: download it into the current deployment, write its
+# env, install + start its unit -- both sides together, so the on-disk set and
+# the systemd units never drift (keeps `reconcile_or_halt` happy). docs/42.
+set -euo pipefail
+SELF="$(readlink -f "$0")"; HERE="$(dirname "$SELF")"
+# shellcheck source=../lib/common.sh
+source "$HERE/../lib/common.sh"
+# shellcheck disable=SC1091
+source "$ETC/bootstrap.env"
+
+name="${1:?usage: avalanche-install-project <name>}"
+[ "$name" = "server" ] && die "use the installer to add the server, not this command"
+
+reconcile_or_halt
+tag="$(readlink "$CURRENT" 2>/dev/null || true)"
+[ -n "$tag" ] || die "no current deployment"
+[ -d "$CURRENT/$name" ] && die "$name is already installed"
+
+if ! command -v node >/dev/null; then
+  log "installing Node.js 26 (bot runtime)"
+  curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
+  apt-get install -y -qq nodejs
+fi
+
+fetch_component "$tag" "$name" "$CURRENT/$name"
+write_bot_env "$name"
+u="$(component_unit "$name")"
+install -m 644 "$CURRENT/deploy/systemd/$u" "/etc/systemd/system/$u"
+systemctl daemon-reload
+systemctl enable --now "avalanche-$name"
+log "$name installed and started"

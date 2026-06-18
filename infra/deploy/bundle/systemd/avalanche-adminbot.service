@@ -1,0 +1,23 @@
+[Unit]
+Description=Avalanche adminbot
+After=network-online.target avalanche.service
+Wants=network-online.target
+Requires=avalanche.service
+
+[Service]
+Type=simple
+User=avalanche
+Group=avalanche
+EnvironmentFile=/etc/avalanche/adminbot.env
+ExecStart=/usr/bin/node /opt/avalanche/deployments/current/adminbot/node_modules/.bin/adminbot
+WorkingDirectory=/opt/avalanche/shared/adminbot-state
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/avalanche/shared/adminbot-state
+
+[Install]
+WantedBy=multi-user.target

@@ -135,9 +135,30 @@ jobs:
           name: release-${{ matrix.target }}
           path: av-*-${{ matrix.target }}.tar.gz
 
+  # The deploy bundle is scripts + unit files only — arch-independent, so it's
+  # built once (not in the per-arch matrix) and named without a target suffix.
+  bundle:
+    name: Build deploy bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage av-deploy
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          stem="av-deploy"
+          mkdir -p "dist/$stem"
+          cp -a infra/deploy/bundle/. "dist/$stem/"
+          echo "$tag" > "dist/$stem/VERSION"
+          chmod +x "dist/$stem/install.sh" "dist/$stem/update.sh" "dist/$stem"/bin/*
+          tar czf "av-deploy-$tag.tar.gz" -C dist "$stem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-deploy
+          path: av-deploy-*.tar.gz
+
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, bundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write

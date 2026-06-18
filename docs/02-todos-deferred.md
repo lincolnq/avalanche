@@ -43,6 +43,7 @@
 
 ## Infra
 - Right now foreground apps poll the server every minute for storage updates; implement something that reduces this poll rate -- probably proactive sync of some sort. Part of multi-device implementation.
+- In-place server upgrades (see [`42-server-upgrades.md`](42-server-upgrades.md)). **Phase 1:** rewrite `avalanche-update` to be tag + tarball based and cover the bots (download `av-{server,adminbot,testbot}-$TARGET` for a release tag, migrate, swap all installed components, restart, rollback; stamp the tag into `bootstrap.env` and show it in `avalanche-status`). The shipped updater is still bare-binary/server-only. **Phase 2:** the `av-deploy-<tag>.tar.gz` deploy-bundle model — move the systemd units / Caddyfile / env templates / scripts into `infra/deploy/bundle/`, add the artifact to `release.yml`, thin the configure-page cloud-init down to "fetch bundle + run install.sh", and have `update.sh` refresh the infra glue. **Phase 3:** `#admins` `/upgrade [tag]` command (docs/22) so operators upgrade from inside the app.
 
 ## Project-wide
 - Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`

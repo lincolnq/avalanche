@@ -1,0 +1,23 @@
+[Unit]
+Description=Avalanche homeserver
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=avalanche
+Group=avalanche
+EnvironmentFile=/etc/avalanche/avalanche.env
+ExecStart=/opt/avalanche/deployments/current/server/avalanche-server
+WorkingDirectory=/var/lib/avalanche
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/avalanche
+
+[Install]
+WantedBy=multi-user.target

@@ -42,7 +42,7 @@ Doc filenames follow `NN-description.md`. The first digit is the category:
 | `1x` | Server & protocol | Homeserver implementation, API, abuse, federation |
 | `2x` | Projects framework | Project security model, first-party Projects |
 | `3x` | Messaging & conversation UX | Mobile UX, read tracking, identity, invites, contacts, connection state |
-| `4x` | Deploy & infra | Deployment guides, relay deployment |
+| `4x` | Deploy & infra | Deployment guides, relay deployment, server upgrades |
 | `5x` | Identity & accounts | (reserved for future identity/account docs) |
 
 ## signal-research/

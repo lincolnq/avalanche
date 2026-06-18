@@ -1,0 +1,22 @@
+[Unit]
+Description=Avalanche testbot
+After=network-online.target avalanche.service
+Wants=network-online.target
+Requires=avalanche.service
+
+[Service]
+Type=simple
+User=avalanche
+Group=avalanche
+EnvironmentFile=/etc/avalanche/testbot.env
+ExecStart=/usr/bin/node /opt/avalanche/deployments/current/testbot/node_modules/.bin/testbot
+WorkingDirectory=/var/lib/avalanche
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

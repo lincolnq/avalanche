@@ -1,0 +1,33 @@
+#!/bin/bash
+# Quick health/inventory readout. Standalone (no common.sh) so it can't be
+# tripped by stricter shell options.
+set -e
+
+echo "-- version --------------------------------------"
+readlink /opt/avalanche/deployments/current 2>/dev/null || echo "(no deployment)"
+echo
+echo "-- services -------------------------------------"
+units=""
+for u in avalanche avalanche-adminbot avalanche-testbot caddy postgresql; do
+  if systemctl cat "$u.service" >/dev/null 2>&1; then units="$units $u"; fi
+done
+# shellcheck disable=SC2086
+systemctl is-active $units || true
+echo
+echo "-- public URL -----------------------------------"
+if [ -f /etc/avalanche/avalanche.env ]; then
+  grep '^SERVER_URL=' /etc/avalanche/avalanche.env | cut -d= -f2-
+else
+  echo "(no server on this host)"
+fi
+echo
+echo "-- first invite ---------------------------------"
+if [ -f /var/lib/avalanche/first-invite.txt ]; then
+  cat /var/lib/avalanche/first-invite.txt
+  echo
+  if command -v qrencode >/dev/null; then
+    qrencode -t ANSIUTF8 < /var/lib/avalanche/first-invite.txt
+  fi
+else
+  echo "(not generated yet)"
+fi

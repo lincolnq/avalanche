@@ -1,0 +1,19 @@
+#!/bin/bash
+# Remove a Project from THIS host: stop + disable + delete its unit and its tree
+# from the current deployment -- both sides together. Local state under
+# shared/<name>/ is left intact. docs/42.
+set -euo pipefail
+SELF="$(readlink -f "$0")"; HERE="$(dirname "$SELF")"
+# shellcheck source=../lib/common.sh
+source "$HERE/../lib/common.sh"
+
+name="${1:?usage: avalanche-remove-project <name>}"
+[ "$name" = "server" ] && die "refusing to remove the server with this command"
+
+u="$(component_unit "$name")"
+systemctl disable --now "avalanche-$name" 2>/dev/null || true
+rm -f "/etc/systemd/system/$u"
+systemctl daemon-reload
+rm -rf "${CURRENT:?}/$name"
+rm -f "$ETC/$name.env"
+log "$name removed (state under $SHARED/$name left intact)"

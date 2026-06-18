@@ -33,17 +33,6 @@ function inviteUrl(serverUrl) {
   return `https://${INVITE_DOMAIN}/i/${b64url(payload)}`;
 }
 
-// Keep or drop a `#REGION:NAME:BEGIN ... #REGION:NAME:END` block in the
-// template. When kept we drop just the two marker lines; when dropped we remove
-// the whole block — so unselected bots leave no trace in the cloud-init.
-function applyRegion(text, name, keep) {
-  const re = new RegExp(
-    `^[ \\t]*#REGION:${name}:BEGIN[^\\n]*\\n([\\s\\S]*?)^[ \\t]*#REGION:${name}:END[^\\n]*\\n`,
-    'gm'
-  );
-  return text.replace(re, keep ? '$1' : '');
-}
-
 // True while the Server URL is empty, unparseable, or still an example
 // placeholder — we keep the copy buttons disabled so nobody deploys with
 // av.example.org baked in. Matches the hostname so a real domain that merely
@@ -70,19 +59,18 @@ function render() {
   const testbot = document.getElementById('install_testbot').checked;
   const url = inviteUrl(values.server_url);
 
-  let cloudinit = TEMPLATE;
-  // NODE runtime is only needed when at least one bot is installed.
-  cloudinit = applyRegion(cloudinit, 'NODE', adminbot || testbot);
-  cloudinit = applyRegion(cloudinit, 'ADMINBOT', adminbot);
-  cloudinit = applyRegion(cloudinit, 'TESTBOT', testbot);
-  cloudinit = cloudinit
+  // The cloud-init is a thin bootstrap; bot selection is passed as INSTALL_*
+  // flags to the deploy bundle's install.sh rather than by editing the YAML.
+  const cloudinit = TEMPLATE
     // Release tag appears more than once (header + env), so replace globally.
     .replaceAll('__RELEASE_TAG__', releaseTag)
     .replace('__SERVER_URL__', values.server_url)
     .replace('__SERVER_NAME__', values.server_name)
     .replace('__RELAY_URL__', RELAY_URL)
     .replace('__REGISTRATION_SHARED_SECRET__', SHARED_SECRET)
-    .replace('__INVITE_URL__', url);
+    .replace('__INVITE_URL__', url)
+    .replace('__INSTALL_ADMINBOT__', adminbot ? '1' : '0')
+    .replace('__INSTALL_TESTBOT__', testbot ? '1' : '0');
   document.getElementById('cloudinit_out').value = cloudinit;
 
   const link = document.getElementById('invite_link');

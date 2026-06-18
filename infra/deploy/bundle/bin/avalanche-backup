@@ -1,0 +1,9 @@
+#!/bin/bash
+# Daily operational DB backup (cron) + manual use. Keeps the last 7.
+# (Separate from upgrade-time dumps, which are deferred -- see docs/42.)
+set -euo pipefail
+mkdir -p /var/backups/avalanche
+ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+sudo -u postgres pg_dump --clean --if-exists avalanche \
+    | gzip > "/var/backups/avalanche/$ts.sql.gz"
+ls -1t /var/backups/avalanche/*.sql.gz | tail -n +8 | xargs -r rm --
