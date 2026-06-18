@@ -30,6 +30,7 @@
 #   make test            # Rust unit tests (crypto + store + types + server)
 #   make test-e2e        # app-core integration tests (needs a running server)
 #   make db-up / db-down # start/stop Postgres in docker-compose
+#   make db-reset        # wipe Postgres volume + dev-state/, re-migrate
 #
 # Also available: `make bindings` (regenerate UniFFI Swift/Kotlin glue only,
 # no xcframework or xcodebuild), `make dev` (homeserver only), `make check`,
@@ -59,7 +60,7 @@ APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/d
 APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
 APP_CORE_DIST := node/packages/app-core/dist/index.js
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down migrate ios xcode archive ipa bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -172,6 +173,17 @@ db-up:
 
 db-down:
 	docker compose -f infra/docker-compose.yml down
+
+# Wipe the dev Postgres volume AND the local bot state in lockstep, then bring
+# the DB back up with fresh migrations. The two must reset together: the
+# adminbot/testbot keep their own SQLCipher store under dev-state/, and a
+# server-DB-only reset leaves those bots holding an account whose server-side
+# device row is gone — re-login then 404s on /v1/auth/challenge and the WS
+# never connects. Run this instead of dropping Postgres by hand.
+db-reset:
+	docker compose -f infra/docker-compose.yml down -v
+	rm -rf dev-state
+	$(MAKE) db-up
 
 # Apply embedded schema migrations against the dev Postgres. Idempotent —
 # safe to re-run. Same code path the prod release uses.
