@@ -120,6 +120,8 @@ extension AppCoreProtocol {
     func changeMemberRole(groupId: String, encryptedMemberId: String, newRole: Int16) throws {}
     func setGroupExpiry(groupId: String, expirySeconds: UInt32) throws {}
     func setGroupTitle(groupId: String, newTitle: String) throws {}
+    func groupExpirySeconds(groupId: String) throws -> UInt32 { 0 }
+    func deleteExpiredMessages() throws -> [String] { [] }
     func applyPendingGroupChanges(groupId: String) throws -> Int64 { 0 }
     func listGroups() throws -> [String] { [] }
     func rotateGroupPseudonym(groupId: String) throws -> Data { Data(count: 24) }

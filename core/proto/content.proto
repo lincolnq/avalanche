@@ -30,9 +30,17 @@ message ContentMessage {
   // profile with the recipient. Empty bytes (length 0) means "not sharing
   // this time" — protobuf has no native optional-bytes distinction.
   bytes profile_key = 17;
+  // Disappearing-messages timer for THIS message, in seconds (`0` = no
+  // expiry). Stamped by the sender from the conversation's current timer at
+  // send time (docs/03 §5). The recipient starts the countdown on read and
+  // hard-deletes locally; carrying it per-message (rather than reading the
+  // recipient's synced timer) keeps expiry correct across timer changes and
+  // the group state-vs-message channel split. Only message-creating bodies
+  // (text) set it; control/derivative bodies leave it 0.
+  uint32 expire_timer_secs = 18;
   // Reserved for future cross-cutting envelope metadata (group_id,
-  // conversation_id, ephemeral_ttl_secs, etc.).
-  reserved 18 to 30;
+  // conversation_id, etc.).
+  reserved 19 to 30;
 }
 
 message TextMessage {

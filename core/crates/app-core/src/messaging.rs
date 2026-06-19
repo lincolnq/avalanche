@@ -386,6 +386,9 @@ impl AppCoreInner {
             group_id: Some(group_id_b64),
             plaintext,
             sent_at_ms: None,
+            // Base value; the real timer is read from the inner envelope when
+            // `process_decrypted` unwraps the text body.
+            expire_timer_secs: 0,
         })
     }
 
@@ -450,6 +453,7 @@ impl AppCoreInner {
                 })),
                 timestamp_ms: Timestamp::now().as_millis() as u64,
                 profile_key: Vec::new(),
+                expire_timer_secs: 0,
             };
             if let Err(e) = self
                 .send_dm(ws, &rdid, &skdm_msg.encode_to_vec(), None)
@@ -719,6 +723,18 @@ impl AppCoreInner {
     /// This is the group analogue of the DM envelope wrapping in `send_dm`:
     /// all group content now rides a `ContentMessage`, so receipts/reactions/
     /// edits/deletes work in groups exactly as in DMs.
+    /// The DM conversation's current disappearing-message timer (seconds; 0 =
+    /// off), used to stamp outgoing DM text (docs/03 §5). Keyed by peer DID,
+    /// matching `set_conversation_timer`/`save_conversation_expiry`.
+    pub(crate) async fn dm_expire_timer(&self, recipient_did: &str) -> u32 {
+        self.store
+            .load_conversation_expiry(recipient_did)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
     pub(crate) async fn send_group_content(
         &mut self,
         group_id: &str,
@@ -729,10 +745,19 @@ impl AppCoreInner {
         let device_id = self.device_id;
         let server_url = self.client.server_url().to_string();
         let profile_key = self.own_profile_key().await;
+        // Stamp the disappearing-messages timer (docs/03 §5) only on real
+        // messages; control/derivative bodies (receipts, reactions, edits,
+        // deletes, SKDMs) don't expire.
+        let expire_timer_secs = if matches!(body, Body::Text(_)) {
+            groups::group_expiry_seconds(&self.store, group_id).await
+        } else {
+            0
+        };
         let msg = ContentMessage {
             body: Some(body),
             timestamp_ms: sent_at_ms,
             profile_key,
+            expire_timer_secs,
         };
         let bytes = msg.encode_to_vec();
         let AppCoreInner {
@@ -760,10 +785,16 @@ impl AppCoreInner {
         match target {
             MessageTarget::Dm { recipient_did } => {
                 let profile_key = self.own_profile_key().await;
+                let expire_timer_secs = if matches!(body, Body::Text(_)) {
+                    self.dm_expire_timer(recipient_did).await
+                } else {
+                    0
+                };
                 let msg = ContentMessage {
                     body: Some(body),
                     timestamp_ms: sent_at_ms,
                     profile_key,
+                    expire_timer_secs,
                 };
                 self.send_dm(ws, recipient_did, &msg.encode_to_vec(), None).await
             }
@@ -882,6 +913,7 @@ impl AppCoreInner {
                                     })),
                                     timestamp_ms: 0,
                                     profile_key,
+                                    expire_timer_secs: 0,
                                 };
                                 let _ = self
                                     .send_dm(ws, &raw.sender_did, &delivery.encode_to_vec(), None)
@@ -890,6 +922,7 @@ impl AppCoreInner {
                             decrypted.push(DecryptedMessage {
                                 plaintext: body.into_bytes(),
                                 sent_at_ms: sent_at,
+                                expire_timer_secs: content.expire_timer_secs,
                                 ..raw
                             });
                         }
@@ -1050,6 +1083,9 @@ impl AppCoreInner {
             plaintext,
             sent_at_ms: None,
             group_id: None,
+            // Base value; the real timer is read from the envelope when
+            // `process_decrypted` unwraps the text body.
+            expire_timer_secs: 0,
         })
     }
 }
@@ -1165,6 +1201,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     })),
                     timestamp_ms: 0,
                     profile_key,
+                    expire_timer_secs: 0,
                 };
                 let _ = inner
                     .send_dm(ws.as_ref(), &decrypted.sender_did, &delivery.encode_to_vec(), None)
@@ -1174,6 +1211,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             let out = DecryptedMessage {
                 plaintext: body.into_bytes(),
                 sent_at_ms: sent_at,
+                expire_timer_secs: msg.expire_timer_secs,
                 ..decrypted
             };
             let _ = core.event_tx.send(IncomingEvent::Message { msg: out });
@@ -1362,6 +1400,7 @@ mod tests {
             body: Some(Body::TimerChange(TimerChangeMessage { expiry_secs: 3600 })),
             timestamp_ms: 0,
             profile_key: vec![],
+            expire_timer_secs: 0,
         };
         let encoded = msg.encode_to_vec();
         let decoded = ContentMessage::decode(encoded.as_slice()).unwrap();
@@ -1379,6 +1418,7 @@ mod tests {
             body: Some(Body::TimerChange(TimerChangeMessage { expiry_secs: 0 })),
             timestamp_ms: 0,
             profile_key: vec![],
+            expire_timer_secs: 0,
         };
         let decoded = ContentMessage::decode(msg.encode_to_vec().as_slice()).unwrap();
         match decoded.body {

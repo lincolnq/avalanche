@@ -149,10 +149,12 @@ async fn load_conversations_one_row_per_convo_newest_first() {
             deleted_at: None,
             kind: 0,
             metadata: None,
+            expire_timer_secs: 0,
+            expire_at: None,
         }).await.unwrap();
     }
 
-    let convs = store.load_conversations().await.unwrap();
+    let convs = store.load_conversations(Timestamp(2000)).await.unwrap();
     assert_eq!(convs.len(), 2, "one row per distinct conversation_id");
     assert_eq!(convs[0].conversation_id, "convA");
     assert_eq!(convs[0].last_message.as_ref().unwrap().body, "newest A");
@@ -580,6 +582,8 @@ mod edit_delete_react {
                 deleted_at: None,
                 kind: 0,
                 metadata: None,
+                expire_timer_secs: 0,
+                expire_at: None,
             })
             .await
             .unwrap();
@@ -799,4 +803,81 @@ mod contacts_block_pending {
         assert!(row.is_curated, "curation never rewinds (MAX)");
         assert_eq!(row.last_interaction_at, Timestamp(500), "recency never rewinds (MAX)");
     }
+}
+
+/// docs/03 §5 disappearing-messages: outgoing starts its countdown at send,
+/// incoming starts on read, `timer = 0` never expires, and the sweep returns
+/// the affected conversations.
+#[tokio::test]
+async fn disappearing_messages_expire_lifecycle() {
+    use store::messages::HistoryMessage;
+    use types::Timestamp;
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    let base = 1_000_000i64; // ms
+    let row = |id: &str, sender: &str, read: Option<i64>, timer: i64| HistoryMessage {
+        id: id.into(),
+        conversation_id: "group-g".into(),
+        sender_did: sender.into(),
+        body: "hi".into(),
+        sent_at: Timestamp(base),
+        edited_at: None,
+        read_at: read.map(Timestamp),
+        delivery_status: 1,
+        edit_count: 0,
+        deleted_at: None,
+        kind: 0,
+        metadata: None,
+        expire_timer_secs: timer,
+        expire_at: None,
+    };
+
+    // Outgoing (read at send) with a 30s timer → deadline = base + 30s.
+    store.save_message(&row("out", "me", Some(base), 30)).await.unwrap();
+    // Incoming (unread) with a 30s timer → no deadline until read.
+    store.save_message(&row("in", "bob", None, 30)).await.unwrap();
+    // No timer → never expires.
+    store.save_message(&row("perm", "bob", Some(base), 0)).await.unwrap();
+
+    // Nothing due yet.
+    assert!(store
+        .delete_expired_messages(Timestamp(base + 1_000))
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Past the outgoing deadline: only "out" is swept.
+    let gone = store.delete_expired_messages(Timestamp(base + 31_000)).await.unwrap();
+    assert_eq!(gone, vec!["group-g".to_string()]);
+    let ids: Vec<String> = store
+        .load_messages("group-g", Timestamp(base + 31_000))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert!(!ids.contains(&"out".into()), "outgoing expired");
+    assert!(ids.contains(&"in".into()), "unread incoming has no deadline yet");
+    assert!(ids.contains(&"perm".into()), "no-timer message never expires");
+
+    // Reading the incoming message starts its countdown (deadline = read + 30s).
+    store
+        .mark_messages_read("group-g", Timestamp(base + 31_000), Timestamp(base + 31_000))
+        .await
+        .unwrap();
+    assert!(store
+        .delete_expired_messages(Timestamp(base + 40_000))
+        .await
+        .unwrap()
+        .is_empty(), "incoming not due yet");
+    store.delete_expired_messages(Timestamp(base + 62_000)).await.unwrap();
+    let ids: Vec<String> = store
+        .load_messages("group-g", Timestamp(base + 62_000))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert!(!ids.contains(&"in".into()), "read incoming expired");
+    assert!(ids.contains(&"perm".into()), "no-timer message still present");
 }

@@ -126,6 +126,9 @@ pub struct DecryptedMessage {
     /// URL-safe-no-pad base64 of the group_id when this message arrived as a
     /// `proto::GroupMessage` body. `None` for plain DMs.
     pub group_id: Option<String>,
+    /// Disappearing-messages timer stamped on the envelope (docs/03 §5);
+    /// seconds, `0` = no expiry. The client persists it via `save_message`.
+    pub expire_timer_secs: u32,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -153,6 +156,11 @@ pub struct StoredMessageFfi {
     /// JSON for system rows (`{ "event": <kind>, "actor_did": .., "target_did": ..,
     /// "target_emi": .. }`); `None` for normal chat messages.
     pub metadata: Option<String>,
+    /// Disappearing-messages timer in seconds (docs/03 §5); `0` = no expiry.
+    pub expire_timer_secs: u32,
+    /// Unix-millis deletion deadline once the countdown has started (on read),
+    /// or `None`. The UI schedules the live disappear from this.
+    pub expire_at_ms: Option<i64>,
 }
 
 /// A reaction on a message (docs/33-reactions.md), keyed by the target's wire
@@ -210,6 +218,8 @@ fn stored_to_ffi(m: store::messages::HistoryMessage) -> StoredMessageFfi {
         deleted: m.deleted_at.is_some(),
         kind: m.kind,
         metadata: m.metadata,
+        expire_timer_secs: m.expire_timer_secs as u32,
+        expire_at_ms: m.expire_at.map(|t| t.as_millis()),
     }
 }
 
@@ -432,6 +442,12 @@ pub enum IncomingEvent {
     GroupMetadataChanged {
         event: crate::groups::GroupMetadataEvent,
     },
+    /// The disappearing-messages reaper hard-deleted one or more messages whose
+    /// timer elapsed (docs/03 §5). The store no longer holds them; the UI should
+    /// refresh the listed conversations (timeline + chat-list preview).
+    MessagesExpired {
+        conversation_ids: Vec<String>,
+    },
 }
 
 /// Admin-only events surfaced to a separate queue, drained by
@@ -571,6 +587,7 @@ async fn restore_group(
             )),
             timestamp_ms: Timestamp::now().as_millis() as u64,
             profile_key: Vec::new(),
+            expire_timer_secs: 0,
         };
         if let Err(e) = inner
             .send_dm(ws.as_ref(), &rdid, &prost::Message::encode_to_vec(&skdm_msg), None)
@@ -626,6 +643,13 @@ pub struct AppCore {
     /// the task self-exits when the last `Arc<AppCore>` drops. `None` until
     /// started, and stays `None` for accounts opted out of sync (e.g. bots).
     pub(crate) sync_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Poke source for the disappearing-messages reaper (docs/03 §5). Pulsed
+    /// when a timed message is saved or marked read, so the reaper recomputes
+    /// its next deadline instead of waiting out a stale sleep.
+    pub(crate) expire_notify: Arc<tokio::sync::Notify>,
+    /// Handle to the background reaper task. Held so it isn't detached; the
+    /// task self-exits when the last `Arc<AppCore>` drops.
+    pub(crate) expire_reaper_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// One server-bound account context of an identity (docs/06 §9): a device store,
@@ -702,6 +726,8 @@ impl AppCore {
             ws: std::sync::Mutex::new(None),
             sync_notify: Arc::new(tokio::sync::Notify::new()),
             sync_task: std::sync::Mutex::new(None),
+            expire_notify: Arc::new(tokio::sync::Notify::new()),
+            expire_reaper_task: std::sync::Mutex::new(None),
         }
     }
 
@@ -758,6 +784,26 @@ impl AppCore {
         *slot = Some(handle);
     }
 
+    /// Spawn the background disappearing-messages reaper (docs/03 §5). Idempotent.
+    /// Same `spawn_blocking` + dedicated current-thread runtime as the other
+    /// background loops (store futures aren't `Send`). The FFI constructors call
+    /// this automatically; the task self-exits when the last `Arc<AppCore>` drops.
+    pub fn start_expire_reaper(self: &Arc<Self>) {
+        let mut slot = self.expire_reaper_task.lock().unwrap();
+        if slot.is_some() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let handle = ffi_runtime().spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("expire-reaper runtime build");
+            rt.block_on(expire_reaper_loop(weak));
+        });
+        *slot = Some(handle);
+    }
+
     /// Publish a connection-state change. Uses `send_if_modified` so duplicate
     /// values don't wake waiters.
     pub(crate) fn publish_state(&self, new_state: ConnectionState) {
@@ -769,6 +815,51 @@ impl AppCore {
                 false
             }
         });
+    }
+}
+
+/// Background disappearing-messages reaper (docs/03 §5). Sleeps until the
+/// soonest started deadline, hard-deletes the past-due rows, and emits
+/// `IncomingEvent::MessagesExpired` so every client refreshes uniformly —
+/// keeping expiry enforcement in the substrate rather than each UI. Woken early
+/// by `expire_notify` when a timed message is saved/read (so it recomputes), and
+/// bounded to a 60s max sleep so it re-checks `weak` and self-exits after the
+/// last `Arc<AppCore>` drops.
+pub(crate) async fn expire_reaper_loop(weak: std::sync::Weak<AppCore>) {
+    use std::time::Duration;
+    loop {
+        // Snapshot the handles, then drop the AppCore `Arc` before awaiting so
+        // the reaper never keeps AppCore alive across a sleep.
+        let (store, notify, event_tx) = {
+            let Some(core) = weak.upgrade() else { return };
+            let store = core.inner.lock().await.store.clone();
+            (store, core.expire_notify.clone(), core.event_tx.clone())
+        };
+        match store.next_expire_at().await.ok().flatten() {
+            None => {
+                // Nothing pending; park until a timed message lands, waking
+                // periodically to re-check whether AppCore is gone.
+                let _ = tokio::time::timeout(Duration::from_secs(60), notify.notified()).await;
+            }
+            Some(deadline_ms) => {
+                let now_ms = Timestamp::now().as_millis();
+                // Cap the sleep so a far-future deadline still re-checks `weak`
+                // (and a newly-arrived earlier deadline is picked up) within 60s.
+                let delay = ((deadline_ms - now_ms).max(0) as u64 + 250).min(60_000);
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(delay)) => {
+                        if let Ok(convs) = store.delete_expired_messages(Timestamp::now()).await {
+                            if !convs.is_empty() {
+                                let _ = event_tx.send(IncomingEvent::MessagesExpired {
+                                    conversation_ids: convs,
+                                });
+                            }
+                        }
+                    }
+                    _ = notify.notified() => { /* new/earlier deadline — recompute */ }
+                }
+            }
+        }
     }
 }
 
@@ -813,6 +904,7 @@ impl AppCore {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
             core.start_storage_sync_task();
+            core.start_expire_reaper();
             Ok(core)
         }
     }
@@ -851,6 +943,7 @@ impl AppCore {
 
         let core = Arc::new(Self::build(inner));
         core.start_reconnect_task();
+        core.start_expire_reaper();
         Ok(core)
     }
 
@@ -893,6 +986,7 @@ impl AppCore {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
             core.start_storage_sync_task();
+            core.start_expire_reaper();
             Ok(core)
         }
     }
@@ -1192,6 +1286,7 @@ impl AppCore {
             }));
             core.start_reconnect_task();
             core.start_storage_sync_task();
+            core.start_expire_reaper();
 
             // Restore group memberships carried in the blob (v3+).
             // For each group:
@@ -1253,6 +1348,7 @@ impl AppCore {
             let core = Arc::new(Self::build(inner));
             core.start_reconnect_task();
             core.start_storage_sync_task();
+            core.start_expire_reaper();
             Ok(core)
         }
     }
@@ -1305,6 +1401,7 @@ impl AppCore {
 
         let core = Arc::new(Self::build(inner));
         core.start_reconnect_task();
+        core.start_expire_reaper();
         Ok(core)
     }
 
@@ -1334,10 +1431,12 @@ impl AppCore {
             inner.ensure_not_blocked(&recipient_did).await?;
             let body = String::from_utf8_lossy(&plaintext).into_owned();
             let profile_key = inner.own_profile_key().await;
+            let expire_timer_secs = inner.dm_expire_timer(&recipient_did).await;
             let msg = ContentMessage {
                 body: Some(Body::Text(TextMessage { body })),
                 timestamp_ms: sent_at_ms as u64,
                 profile_key,
+                expire_timer_secs,
             };
             inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await?;
             // Sending a DM is a deliberate gesture (docs/35 §"What changes a row").
@@ -1462,6 +1561,7 @@ impl AppCore {
                 })),
                 timestamp_ms: 0,
                 profile_key,
+                expire_timer_secs: 0,
             };
             inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
@@ -1489,6 +1589,7 @@ impl AppCore {
                 })),
                 timestamp_ms: 0,
                 profile_key,
+                expire_timer_secs: 0,
             };
             inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await
         }).map_err(AppErrorFfi::from)
@@ -1715,6 +1816,7 @@ impl AppCore {
 
     /// Save a message to local history (SQLCipher).
     pub fn save_message(&self, msg: StoredMessageFfi) -> Result<(), AppErrorFfi> {
+        let timed = msg.expire_timer_secs > 0;
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
             inner.store.save_message(&store::messages::HistoryMessage {
@@ -1735,15 +1837,42 @@ impl AppCore {
                 // the group-event path, never through this FFI.
                 kind: 0,
                 metadata: None,
+                // Disappearing-messages timer stamped by the sender (docs/03 §5);
+                // the store computes `expire_at` from `read_at`. `expire_at` is
+                // store-owned (set on read), so it's a placeholder here.
+                expire_timer_secs: msg.expire_timer_secs as i64,
+                expire_at: None,
             }).await.map_err(AppError::from)
-        }).map_err(AppErrorFfi::from)
+        }).map_err(AppErrorFfi::from)?;
+        // Wake the reaper so it schedules this message's deadline (docs/03 §5).
+        if timed {
+            self.expire_notify.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Hard-delete every message whose disappearing-messages deadline has
+    /// passed (docs/03 §5), returning the conversation ids that lost a row so
+    /// the UI can refresh them. The client calls this on app-foreground, on
+    /// conversation open, and on a timer scheduled to the soonest `expire_at`.
+    pub fn delete_expired_messages(&self) -> Result<Vec<String>, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                let inner = self.inner.lock().await;
+                inner
+                    .store
+                    .delete_expired_messages(Timestamp::now())
+                    .await
+                    .map_err(AppError::from)
+            })
+            .map_err(AppErrorFfi::from)
     }
 
     /// Load messages for a conversation from local history.
     pub fn load_messages(&self, conversation_id: String) -> Result<Vec<StoredMessageFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
-            let msgs = inner.store.load_messages(&conversation_id).await
+            let msgs = inner.store.load_messages(&conversation_id, Timestamp::now()).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(msgs.into_iter().map(stored_to_ffi).collect())
         }).map_err(AppErrorFfi::from)
@@ -1756,7 +1885,7 @@ impl AppCore {
     pub fn load_conversations(&self) -> Result<Vec<ConversationSummaryFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
-            let rows = inner.store.load_conversations().await
+            let rows = inner.store.load_conversations(Timestamp::now()).await
                 .map_err(AppError::from)?;
             // Resolve all group titles from locally-persisted state in a single
             // query, so the chat list renders real names on launch without a
@@ -1822,7 +1951,7 @@ impl AppCore {
     pub fn load_last_message(&self, conversation_id: String) -> Result<Option<StoredMessageFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
-            let msg = inner.store.load_last_message(&conversation_id).await
+            let msg = inner.store.load_last_message(&conversation_id, Timestamp::now()).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(msg.map(stored_to_ffi))
         }).map_err(AppErrorFfi::from)
@@ -1831,14 +1960,20 @@ impl AppCore {
     /// Mark messages as read up to a given sent_at timestamp.
     /// Returns the number of messages newly marked.
     pub fn mark_messages_read(&self, conversation_id: String, up_to_sent_at_ms: i64) -> Result<u64, AppErrorFfi> {
-        ffi_runtime().block_on(async {
+        let count = ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
             inner.store.mark_messages_read(
                 &conversation_id,
                 Timestamp(up_to_sent_at_ms),
                 Timestamp::now(),
             ).await.map_err(AppError::from)
-        }).map_err(AppErrorFfi::from)
+        }).map_err(AppErrorFfi::from)?;
+        // Reading a message may have started a disappearing-messages countdown
+        // (docs/03 §5); wake the reaper to (re)schedule its deadline.
+        if count > 0 {
+            self.expire_notify.notify_one();
+        }
+        Ok(count)
     }
 
     /// Count unread messages in a conversation.
@@ -2962,6 +3097,7 @@ impl AppCore {
             })),
             timestamp_ms: 0,
             profile_key,
+            expire_timer_secs: 0,
         };
         inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
     }
@@ -2982,10 +3118,12 @@ impl AppCore {
         inner.ensure_not_blocked(recipient_did).await?;
         let body = String::from_utf8_lossy(plaintext).into_owned();
         let profile_key = inner.own_profile_key().await;
+        let expire_timer_secs = inner.dm_expire_timer(recipient_did).await;
         let msg = ContentMessage {
             body: Some(Body::Text(TextMessage { body })),
             timestamp_ms: sent_at_ms as u64,
             profile_key,
+            expire_timer_secs,
         };
         inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
     }
@@ -3266,6 +3404,7 @@ impl AppCore {
             })),
             timestamp_ms: Timestamp::now().as_millis() as u64,
             profile_key: inner.own_profile_key().await,
+            expire_timer_secs: 0,
         };
         inner
             .send_dm(None, recipient_did, &ctx.encode_to_vec(), None)
@@ -3278,6 +3417,7 @@ impl AppCore {
             })),
             timestamp_ms: Timestamp::now().as_millis() as u64,
             profile_key: Vec::new(),
+            expire_timer_secs: 0,
         };
         inner
             .send_dm(None, recipient_did, &skdm_msg.encode_to_vec(), None)
@@ -3309,6 +3449,7 @@ impl AppCore {
                 )),
                 timestamp_ms: Timestamp::now().as_millis() as u64,
                 profile_key: Vec::new(),
+                expire_timer_secs: 0,
             };
             inner
                 .send_dm(None, &rdid, &skdm_msg.encode_to_vec(), None)

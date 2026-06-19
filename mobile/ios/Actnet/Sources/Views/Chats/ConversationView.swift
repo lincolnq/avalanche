@@ -319,10 +319,14 @@ struct ConversationView: View {
         appState.messagesByConversation[conversation.id, default: []].append(message)
         scrollPosition.scrollTo(edge: .bottom)
 
-        // Update conversation metadata for sorting.
+        // Update conversation metadata for sorting + the chat-list preview.
+        // Clear any stale system-event fields so the preview renders this new
+        // message, not a prior "X joined" / metadata line.
         if let idx = appState.conversations.firstIndex(where: { $0.id == conversation.id }) {
             appState.conversations[idx].lastMessage = text
             appState.conversations[idx].lastMessageDate = message.sentAt
+            appState.conversations[idx].lastMessageSenderDid = conversation.accountId  // "You:"
+            appState.conversations[idx].clearLastMessageEvent()
         }
 
         Task {

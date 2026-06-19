@@ -189,6 +189,14 @@ impl IdentityStore {
                     "INTEGER NOT NULL DEFAULT 0",
                 )?;
                 add_column_if_missing(conn, "message_history", "metadata", "TEXT")?;
+                // docs/03 §5 disappearing-messages enforcement.
+                add_column_if_missing(
+                    conn,
+                    "message_history",
+                    "expire_timer_secs",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )?;
+                add_column_if_missing(conn, "message_history", "expire_at", "INTEGER")?;
                 Ok(())
             })
             .await

@@ -160,7 +160,9 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 editCount: msgs[i].editCount,
                 deleted: msgs[i].deleted,
                 kind: msgs[i].kind,
-                metadata: msgs[i].metadata
+                metadata: msgs[i].metadata,
+                expireTimerSecs: msgs[i].expireTimerSecs,
+                expireAtMs: msgs[i].expireAtMs
             )
             count += 1
         }
@@ -270,7 +272,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             senderDeviceId: 1,
             plaintext: Data(text.utf8),
             sentAtMs: now,
-            groupId: nil
+            groupId: nil,
+            expireTimerSecs: 0
         )
         nextMessageId += 1
         pendingMessages.append(msg)

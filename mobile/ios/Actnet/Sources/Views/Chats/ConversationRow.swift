@@ -23,20 +23,34 @@ struct ConversationRow: View {
     /// from "You made Unknown an admin" to the real name once profiles resolve —
     /// the same path the conversation view uses. Normal messages show the body.
     private var previewText: String? {
-        guard conversation.lastMessageKind > 0 else { return conversation.lastMessage }
-        let m = Message(
-            id: conversation.id,
-            conversationId: conversation.id,
-            senderAccountId: conversation.lastMessageSenderDid ?? "",
-            body: conversation.lastMessage ?? "",
-            sentAtMs: 0,
-            editedAtMs: nil,
-            readAtMs: nil,
-            deliveryStatus: .sent,
-            kind: conversation.lastMessageKind,
-            metadata: conversation.lastMessageMetadata
-        )
-        return appState.groupEventText(m, accountId: conversation.accountId)
+        // System/metadata events render as a full sentence with no sender prefix.
+        if conversation.lastMessageKind > 0 {
+            let m = Message(
+                id: conversation.id,
+                conversationId: conversation.id,
+                senderAccountId: conversation.lastMessageSenderDid ?? "",
+                body: conversation.lastMessage ?? "",
+                sentAtMs: 0,
+                editedAtMs: nil,
+                readAtMs: nil,
+                deliveryStatus: .sent,
+                kind: conversation.lastMessageKind,
+                metadata: conversation.lastMessageMetadata
+            )
+            return appState.groupEventText(m, accountId: conversation.accountId)
+        }
+        guard let body = conversation.lastMessage else { return nil }
+        // Prefix the sender: "You:" for our own messages, the sender's name in
+        // groups. Inbound DMs need no prefix — the conversation title is the
+        // sender.
+        let sender = conversation.lastMessageSenderDid
+        if let sender, sender == conversation.accountId {
+            return "You: \(body)"
+        }
+        if conversation.isGroup, let sender, !sender.isEmpty {
+            return "\(appState.resolvedName(for: sender, accountId: conversation.accountId)): \(body)"
+        }
+        return body
     }
 
     var body: some View {

@@ -1414,6 +1414,10 @@ async fn persist_group_event(
             deleted_at: None,
             kind: kind_code(ev.kind),
             metadata: Some(metadata),
+            // System/metadata rows never disappear (they persist like Signal's
+            // update messages).
+            expire_timer_secs: 0,
+            expire_at: None,
         })
         .await?;
     Ok(())
@@ -1986,6 +1990,21 @@ pub async fn local_group_titles(
     Ok(out)
 }
 
+/// The group's current disappearing-message timer (seconds; 0 = off), read
+/// from cached state. Used to stamp outgoing group messages (docs/03 §5).
+/// Returns 0 if the group/state isn't cached or fails to decode — i.e. no
+/// expiry rather than erroring the send.
+pub async fn group_expiry_seconds(store: &store::DeviceStore, group_id_b64_s: &str) -> u32 {
+    match store.load_group(group_id_b64_s).await {
+        Ok(Some(row)) if !row.encrypted_state_plaintext.is_empty() => {
+            gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                .map(|s| s.expiry_seconds)
+                .unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
 /// Master-key bytes for a stored group. Convenience: most call sites need
 /// the 32-byte array form, not the raw `Vec`.
 pub async fn master_key_for(
@@ -2225,6 +2244,7 @@ impl AppCore {
                 })),
                 timestamp_ms: Timestamp::now().as_millis() as u64,
                 profile_key: inner.own_profile_key().await,
+                expire_timer_secs: 0,
             };
             if let Err(e) = inner
                 .send_dm(ws.as_ref(), &recipient_did, &ctx.encode_to_vec(), None)
@@ -2245,6 +2265,7 @@ impl AppCore {
                 })),
                 timestamp_ms: Timestamp::now().as_millis() as u64,
                 profile_key: Vec::new(),
+                expire_timer_secs: 0,
             };
             if let Err(e) = inner
                 .send_dm(ws.as_ref(), &recipient_did, &skdm_msg.encode_to_vec(), None)
@@ -2406,6 +2427,18 @@ impl AppCore {
                 };
                 self.emit_group_events(events);
                 Ok::<_, AppError>(())
+            })
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// The group's current disappearing-message timer (seconds; 0 = off). The
+    /// client reads this to stamp the local copy of an outgoing message with the
+    /// same timer the send path puts on the wire (docs/03 §5).
+    pub fn group_expiry_seconds(&self, group_id: String) -> Result<u32, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                let inner = self.inner.lock().await;
+                Ok::<_, AppError>(group_expiry_seconds(&inner.store, &group_id).await)
             })
             .map_err(AppErrorFfi::from)
     }

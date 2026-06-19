@@ -730,6 +730,12 @@ final class AppState: ObservableObject {
         guard let core = cores[senderAccountId] else { return }
         let plaintext = Data(text.utf8)
         let nowMs = sentAtMs
+        // Stamp the local copy with the same disappearing-messages timer the
+        // send path puts on the wire (docs/03 §5), so the sender's copy expires
+        // too. The DM timer is keyed by peer DID.
+        let timer = ((try? await Task.detached {
+            try core.getConversationTimer(conversationId: recipientDid)
+        }.value) ?? nil) ?? 0
 
         // Persist as "sending" up front so failures are recoverable across launches.
         let pending = StoredMessageFfi(
@@ -744,7 +750,9 @@ final class AppState: ObservableObject {
             editCount: 0,
             deleted: false,
             kind: 0,
-            metadata: nil
+            metadata: nil,
+            expireTimerSecs: timer,
+            expireAtMs: nil
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -756,7 +764,8 @@ final class AppState: ObservableObject {
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
+                expireTimerSecs: timer, expireAtMs: nil
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -765,7 +774,8 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
+                expireTimerSecs: timer, expireAtMs: nil
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -853,6 +863,9 @@ final class AppState: ObservableObject {
     ///
     /// Conversation IDs follow the format `dm-<accountId>-<recipientDid>`.
     private func loadConversationsFromStore() async {
+        // Expired messages (docs/03 §5) are excluded by the store reads
+        // themselves, so the preview can't reflect a disappeared message; the
+        // app-core reaper handles physical deletion + refresh events.
         let pairs: [(String, any AppCoreProtocol)] = accounts.compactMap { acct in
             cores[acct.id].map { (acct.id, $0) }
         }
@@ -970,8 +983,15 @@ final class AppState: ObservableObject {
     /// the row anyway; we must not seed a partial array here, or the load-once
     /// guard would then hide the rest of the history.)
     func reloadGroupTimelineIfLoaded(groupId: String, accountId: String) {
+        reloadMessagesIfLoaded(conversationId: groupConversationId(groupId), accountId: accountId)
+    }
+
+    /// Re-read a conversation's timeline from the store, but only if it's
+    /// already loaded in memory. (If not loaded, the next `loadMessagesFromStore`
+    /// reads it fresh; seeding a partial array here would trip the load-once
+    /// guard and hide the rest of the history.)
+    func reloadMessagesIfLoaded(conversationId convId: String, accountId: String) {
         guard let core = cores[accountId] else { return }
-        let convId = groupConversationId(groupId)
         guard messagesByConversation[convId] != nil else { return }
         Task.detached { [weak self] in
             guard let msgs = try? core.loadMessages(conversationId: convId) else { return }
@@ -979,6 +999,7 @@ final class AppState: ObservableObject {
             await MainActor.run { self?.messagesByConversation[convId] = messages }
         }
     }
+
 
     /// Map a stored FFI message row to the view `Message` model. `nonisolated`
     /// so it can run inside the detached store-read tasks.
@@ -995,7 +1016,9 @@ final class AppState: ObservableObject {
             editCount: Int(m.editCount),
             isDeleted: m.deleted,
             kind: Int(m.kind),
-            metadata: m.metadata
+            metadata: m.metadata,
+            expireTimerSecs: m.expireTimerSecs,
+            expireAtMs: m.expireAtMs
         )
     }
 
@@ -1164,6 +1187,11 @@ final class AppState: ObservableObject {
         guard let groupId = conversation.groupId else { return }
         guard let core = cores[conversation.accountId] else { return }
         let plaintext = Data(text.utf8)
+        // Stamp the local copy with the group's current disappearing-messages
+        // timer (docs/03 §5) so the sender's copy expires like everyone else's.
+        let timer = (try? await Task.detached {
+            try core.groupExpirySeconds(groupId: groupId)
+        }.value) ?? 0
 
         let pending = StoredMessageFfi(
             id: messageId,
@@ -1177,7 +1205,9 @@ final class AppState: ObservableObject {
             editCount: 0,
             deleted: false,
             kind: 0,
-            metadata: nil
+            metadata: nil,
+            expireTimerSecs: timer,
+            expireAtMs: nil
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -1189,7 +1219,8 @@ final class AppState: ObservableObject {
             let sent = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil
+                deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
+                expireTimerSecs: timer, expireAtMs: nil
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -1198,7 +1229,8 @@ final class AppState: ObservableObject {
             let failed = StoredMessageFfi(
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
-                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil
+                deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
+                expireTimerSecs: timer, expireAtMs: nil
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -1392,6 +1424,14 @@ final class AppState: ObservableObject {
                     applyInboundDelete(conversationId: conversationId, authorDid: authorDid, sentAtMs: sentAtMs)
                 case let .reactionUpdated(conversationId, targetAuthor, targetSentAtMs, reactorDid, emoji, removed):
                     applyInboundReaction(conversationId: conversationId, targetAuthor: targetAuthor, targetSentAtMs: targetSentAtMs, reactorDid: reactorDid, emoji: emoji, removed: removed)
+                case let .messagesExpired(conversationIds):
+                    // The app-core reaper hard-deleted disappearing messages
+                    // (docs/03 §5). Refresh each affected conversation's open
+                    // timeline; the chat-list preview rebuilds below.
+                    for convId in conversationIds {
+                        reloadMessagesIfLoaded(conversationId: convId, accountId: accountId)
+                    }
+                    needsConversationReload = true
                 }
             }
             for msg in messages {
@@ -1579,6 +1619,7 @@ final class AppState: ObservableObject {
             if let idx = conversations.firstIndex(where: { $0.id == convId }) {
                 conversations[idx].lastMessage = text
                 conversations[idx].lastMessageDate = Date()
+                conversations[idx].lastMessageSenderDid = senderDid
                 conversations[idx].clearLastMessageEvent()
             }
             // Ensure we render the right title once state has been fetched.
@@ -1589,6 +1630,7 @@ final class AppState: ObservableObject {
             convId = conversations[idx].id
             conversations[idx].lastMessage = text
             conversations[idx].lastMessageDate = Date()
+            conversations[idx].lastMessageSenderDid = senderDid
             conversations[idx].clearLastMessageEvent()
         } else {
             // Auto-create a new conversation for this DID.
@@ -1603,6 +1645,7 @@ final class AppState: ObservableObject {
                 recipientDid: senderDid,
                 lastMessage: text,
                 lastMessageDate: Date(),
+                lastMessageSenderDid: senderDid,
                 isGroup: false
             )
             conversations.append(conv)
@@ -1611,7 +1654,9 @@ final class AppState: ObservableObject {
         // Use sender's timestamp if available, otherwise fall back to local time.
         let sentAtMs: Int64 = msg.sentAtMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         let messageId = UUID().uuidString
-        // Incoming messages are unread (readAtMs = nil).
+        // Incoming messages are unread (readAtMs = nil). Carry the sender's
+        // disappearing-messages timer (docs/03 §5) so the live-expiry scheduler
+        // sees it once the message is read.
         let message = Message(
             id: messageId,
             conversationId: convId,
@@ -1619,7 +1664,8 @@ final class AppState: ObservableObject {
             body: text,
             sentAtMs: sentAtMs,
             readAtMs: nil,
-            deliveryStatus: .sent
+            deliveryStatus: .sent,
+            expireTimerSecs: msg.expireTimerSecs
         )
         messagesByConversation[convId, default: []].append(message)
 
@@ -1637,7 +1683,11 @@ final class AppState: ObservableObject {
                 editCount: 0,
                 deleted: false,
                 kind: 0,
-                metadata: nil
+                metadata: nil,
+                // Carry the sender-stamped timer (docs/03 §5); the store starts
+                // the countdown when this message is marked read.
+                expireTimerSecs: msg.expireTimerSecs,
+                expireAtMs: nil
             )
             Task.detached { try? core.saveMessage(msg: stored) }
         }

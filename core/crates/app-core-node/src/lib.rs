@@ -120,6 +120,10 @@ impl From<StoredMessageJs> for StoredMessageFfi {
             // are produced by app-core's group-event path.
             kind: 0,
             metadata: None,
+            // Disappearing-messages timers are a substrate concern stamped by
+            // the send path; bots don't set them via the JS save path.
+            expire_timer_secs: 0,
+            expire_at_ms: None,
         }
     }
 }
@@ -504,6 +508,15 @@ impl From<IncomingEvent> for IncomingEventJs {
                     occurred_at_ms: event.occurred_at_ms,
                     summary: event.summary,
                 }),
+            },
+            // Disappearing-messages reaper deleted timed-out messages. Bots
+            // don't render conversations, so surface a bare kind for parity.
+            IncomingEvent::MessagesExpired { .. } => Self {
+                kind: "messagesExpired".into(),
+                message: None,
+                receipt: None,
+                group_invite: None,
+                group_metadata: None,
             },
         }
     }

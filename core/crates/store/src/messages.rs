@@ -121,6 +121,17 @@ impl IdentityStore {
         let edited_at = msg.edited_at.map(|t| t.as_millis());
         let read_at = msg.read_at.map(|t| t.as_millis());
         let delivery_status = msg.delivery_status as i64;
+        let expire_timer_secs = msg.expire_timer_secs;
+        // Disappearing-messages deadline (docs/03 §5): the countdown starts when
+        // the message is read, so compute `expire_at` only once `read_at` is set
+        // and a timer applies. Outgoing rows are saved read (`read_at = sent_at`)
+        // so they get a deadline here; incoming rows start NULL and get theirs in
+        // `mark_messages_read`.
+        let expire_at: Option<i64> = if expire_timer_secs > 0 {
+            read_at.map(|r| r + expire_timer_secs * 1000)
+        } else {
+            None
+        };
 
         self.conn
             .call(move |conn| {
@@ -131,13 +142,13 @@ impl IdentityStore {
                 // the caller of save_message.
                 // Normal chat messages are kind=0 with no metadata; system
                 // timeline entries go through `save_group_event` instead. We
-                // don't touch kind/metadata in the conflict clause so a re-save
-                // of an existing row (status transitions) can't downgrade a
-                // system row to kind 0.
+                // don't touch kind/metadata/expire_* in the conflict clause so a
+                // re-save of an existing row (status transitions) can't downgrade
+                // a system row to kind 0 or recompute a started countdown.
                 conn.execute(
                     "INSERT INTO message_history
-                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, kind, metadata)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, NULL)
+                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, kind, metadata, expire_timer_secs, expire_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, NULL, ?9, ?10)
                      ON CONFLICT(id) DO UPDATE SET
                          conversation_id = excluded.conversation_id,
                          sender_did      = excluded.sender_did,
@@ -146,7 +157,7 @@ impl IdentityStore {
                          edited_at       = excluded.edited_at,
                          read_at         = excluded.read_at,
                          delivery_status = excluded.delivery_status",
-                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status],
+                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, expire_timer_secs, expire_at],
                 )?;
                 Ok(())
             })
@@ -187,17 +198,22 @@ impl IdentityStore {
     pub async fn load_messages(
         &self,
         conversation_id: &str,
+        now: Timestamp,
     ) -> Result<Vec<HistoryMessage>, StoreError> {
         let conv_id = conversation_id.to_string();
+        let now_ms = now.as_millis();
         self.conn
             .call(move |conn| {
+                // Exclude messages past their disappearing-messages deadline
+                // (docs/03 §5): "expired" is invisible immediately, independent
+                // of when the background reaper physically deletes the row.
                 let mut stmt = conn.prepare(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at
                      FROM message_history
-                     WHERE conversation_id = ?1
+                     WHERE conversation_id = ?1 AND (expire_at IS NULL OR expire_at > ?2)
                      ORDER BY sent_at ASC",
                 )?;
-                let rows = stmt.query_map([&conv_id], |row| {
+                let rows = stmt.query_map(rusqlite::params![&conv_id, now_ms], |row| {
                     Ok(HistoryMessage {
                         id: row.get(0)?,
                         conversation_id: row.get(1)?,
@@ -211,6 +227,8 @@ impl IdentityStore {
                         deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                         kind: row.get::<_, i64>(10)?,
                         metadata: row.get::<_, Option<String>>(11)?,
+                        expire_timer_secs: row.get::<_, i64>(12)?,
+                        expire_at: row.get::<_, Option<i64>>(13)?.map(Timestamp),
                     })
                 })?;
                 rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -231,25 +249,30 @@ impl IdentityStore {
     /// - Every group we know about (master key persisted via
     ///   `store_inbound_group_context` or `create_group`), even if no
     ///   messages have arrived yet, so a fresh invite is visible.
-    pub async fn load_conversations(&self) -> Result<Vec<ConversationSummary>, StoreError> {
+    pub async fn load_conversations(&self, now: Timestamp) -> Result<Vec<ConversationSummary>, StoreError> {
+        let now_ms = now.as_millis();
         self.conn
-            .call(|conn| {
-                // 1. Latest message per conversation that has any messages.
+            .call(move |conn| {
+                // 1. Latest non-expired message per conversation. Expired
+                //    messages (docs/03 §5) are excluded so a disappeared message
+                //    never surfaces as a preview, regardless of reaper timing.
                 let mut stmt = conn.prepare(
                     "SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
-                            m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata
+                            m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata, m.expire_timer_secs, m.expire_at
                      FROM message_history m
                      JOIN (
                          SELECT conversation_id, MAX(sent_at) AS max_sent
                          FROM message_history
+                         WHERE expire_at IS NULL OR expire_at > ?1
                          GROUP BY conversation_id
                      ) latest
                        ON m.conversation_id = latest.conversation_id
                       AND m.sent_at = latest.max_sent
+                      AND (m.expire_at IS NULL OR m.expire_at > ?1)
                      ORDER BY m.sent_at DESC",
                 )?;
                 let with_msgs: Vec<ConversationSummary> = stmt
-                    .query_map([], |row| {
+                    .query_map([now_ms], |row| {
                         Ok(ConversationSummary {
                             conversation_id: row.get(0)?,
                             last_message: Some(HistoryMessage {
@@ -265,6 +288,8 @@ impl IdentityStore {
                                 deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                                 kind: row.get::<_, i64>(10)?,
                                 metadata: row.get::<_, Option<String>>(11)?,
+                            expire_timer_secs: row.get::<_, i64>(12)?,
+                            expire_at: row.get::<_, Option<i64>>(13)?.map(Timestamp),
                             }),
                         })
                     })?
@@ -308,17 +333,19 @@ impl IdentityStore {
     pub async fn load_last_message(
         &self,
         conversation_id: &str,
+        now: Timestamp,
     ) -> Result<Option<HistoryMessage>, StoreError> {
         let conv_id = conversation_id.to_string();
+        let now_ms = now.as_millis();
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at
                      FROM message_history
-                     WHERE conversation_id = ?1
+                     WHERE conversation_id = ?1 AND (expire_at IS NULL OR expire_at > ?2)
                      ORDER BY sent_at DESC
                      LIMIT 1",
-                    [&conv_id],
+                    rusqlite::params![&conv_id, now_ms],
                     |row| {
                         Ok(HistoryMessage {
                             id: row.get(0)?,
@@ -333,6 +360,8 @@ impl IdentityStore {
                             deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                             kind: row.get::<_, i64>(10)?,
                             metadata: row.get::<_, Option<String>>(11)?,
+                            expire_timer_secs: row.get::<_, i64>(12)?,
+                            expire_at: row.get::<_, Option<i64>>(13)?.map(Timestamp),
                         })
                     },
                 )
@@ -359,11 +388,65 @@ impl IdentityStore {
             .call(move |conn| {
                 let count = conn.execute(
                     "UPDATE message_history
-                     SET read_at = ?1
+                     SET read_at = ?1,
+                         -- Start the disappearing-messages countdown on read
+                         -- (docs/03 §5): set the deadline for timed messages
+                         -- that haven't started one yet.
+                         expire_at = CASE
+                             WHEN expire_timer_secs > 0 AND expire_at IS NULL
+                             THEN ?1 + expire_timer_secs * 1000
+                             ELSE expire_at
+                         END
                      WHERE conversation_id = ?2 AND sent_at <= ?3 AND read_at IS NULL",
                     rusqlite::params![read_at, conv_id, up_to],
                 )?;
                 Ok(count as u64)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Hard-delete every message whose disappearing-messages deadline has passed
+    /// (docs/03 §5), returning the distinct conversation ids that lost a row so
+    /// the UI can refresh them. Unlike a user delete this leaves no tombstone —
+    /// the row simply ceases to exist. `now` is unix millis.
+    pub async fn delete_expired_messages(&self, now: Timestamp) -> Result<Vec<String>, StoreError> {
+        let now_ms = now.as_millis();
+        self.conn
+            .call(move |conn| {
+                // Collect affected conversations first, then delete (broad
+                // SQLite support — avoids relying on DELETE ... RETURNING).
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT conversation_id FROM message_history
+                     WHERE expire_at IS NOT NULL AND expire_at <= ?1",
+                )?;
+                let convs: Vec<String> = stmt
+                    .query_map([now_ms], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                conn.execute(
+                    "DELETE FROM message_history WHERE expire_at IS NOT NULL AND expire_at <= ?1",
+                    [now_ms],
+                )?;
+                Ok(convs)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// The soonest disappearing-messages deadline still pending (docs/03 §5),
+    /// or `None` if no timed message has a started countdown. The background
+    /// reaper uses this to schedule its next wakeup precisely.
+    pub async fn next_expire_at(&self) -> Result<Option<i64>, StoreError> {
+        self.conn
+            .call(|conn| {
+                conn.query_row(
+                    "SELECT MIN(expire_at) FROM message_history WHERE expire_at IS NOT NULL",
+                    [],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map(|opt| opt.flatten())
+                .map_err(Into::into)
             })
             .await
             .map_err(StoreError::Db)
@@ -439,7 +522,7 @@ impl IdentityStore {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata
+                    "SELECT id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at
                      FROM message_history
                      WHERE conversation_id = ?1 AND sender_did = ?2 AND sent_at = ?3",
                     rusqlite::params![conv, author, sent],
@@ -457,6 +540,8 @@ impl IdentityStore {
                             deleted_at: row.get::<_, Option<i64>>(9)?.map(Timestamp),
                             kind: row.get::<_, i64>(10)?,
                             metadata: row.get::<_, Option<String>>(11)?,
+                            expire_timer_secs: row.get::<_, i64>(12)?,
+                            expire_at: row.get::<_, Option<i64>>(13)?.map(Timestamp),
                         })
                     },
                 )
@@ -786,6 +871,12 @@ pub struct HistoryMessage {
     /// UI re-render localized text from structured data after a restart. NULL
     /// for normal chat messages.
     pub metadata: Option<String>,
+    /// Disappearing-messages timer for this message in seconds (docs/03 §5);
+    /// `0` = no expiry. Stamped from the conversation timer at send time.
+    pub expire_timer_secs: i64,
+    /// Unix-millis deletion deadline once the countdown has started (on read),
+    /// or `None` if not started / no timer. The row is hard-deleted past this.
+    pub expire_at: Option<Timestamp>,
 }
 
 /// A reaction on a message, keyed by the target's wire identity.

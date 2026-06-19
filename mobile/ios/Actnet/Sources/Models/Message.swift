@@ -72,6 +72,11 @@ struct Message: Identifiable {
     var kind: Int = 0
     /// JSON payload for system rows (`metadata` from the store); nil otherwise.
     var metadata: String? = nil
+    /// Disappearing-messages timer in seconds (docs/03 §5); 0 = no expiry.
+    var expireTimerSecs: UInt32 = 0
+    /// Unix-millis deletion deadline once the countdown started (on read), or
+    /// nil. The UI schedules the live disappear from this.
+    var expireAtMs: Int64? = nil
 
     var sentAt: Date { Date(timeIntervalSince1970: Double(sentAtMs) / 1000.0) }
     var isEdited: Bool { editedAtMs != nil }

@@ -32,12 +32,12 @@ struct Conversation: Identifiable, Hashable {
     /// True for a DM with a blocked contact (docs/12 §2).
     var isBlocked: Bool = false
 
-    /// Reset the system-event fields when the latest message becomes a normal
-    /// chat message, so the preview stops rendering a stale event line.
+    /// Clear the system-event overlay when the latest message becomes a normal
+    /// chat message, so the preview stops rendering a stale event line. The
+    /// sender is set separately (it's needed for the "You:"/name preview prefix).
     mutating func clearLastMessageEvent() {
         lastMessageKind = 0
         lastMessageMetadata = nil
-        lastMessageSenderDid = nil
     }
 }
 
