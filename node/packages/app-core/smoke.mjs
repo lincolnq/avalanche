@@ -17,11 +17,13 @@ try {
 
 // Surface check for the listGroups() API (full exercise needs a server +
 // account, which this offline smoke can't set up).
-if (typeof AppCore.prototype.listGroups !== "function") {
-  console.error("unexpected: AppCore.prototype.listGroups is not a function");
-  process.exit(1);
+for (const method of ["listGroups", "setGroupExpiry"]) {
+  if (typeof AppCore.prototype[method] !== "function") {
+    console.error(`unexpected: AppCore.prototype.${method} is not a function`);
+    process.exit(1);
+  }
 }
-console.log("listGroups present on AppCore");
+console.log("listGroups + setGroupExpiry present on AppCore");
 
 if (typeof globalThis.Temporal === "undefined") {
   console.warn(

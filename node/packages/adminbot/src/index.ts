@@ -8,7 +8,11 @@
 //   - Auto-invite every new human account (AccountJoinedEvent WS push) to
 //     every group adminbot is currently an admin of — `#admins` and any
 //     other group it's been added to as admin.
-//   - Respond to `/whoami` and `/help` in `#admins`.
+//   - Cap the disappearing-messages timer at 4 weeks on any group it's an
+//     admin of, enforced when it's added to the group (0/"off" is clamped
+//     too). Enforcing on a later timer change awaits a group-state push.
+//   - Respond to `/whoami`, `/audit` (refresh+report every group, enforce the
+//     timer cap), and `/help` in `#admins`.
 //
 // Persistent state:
 //   - SQLCipher DB at ADMINBOT_STATE_DIR/store.db — owned by app-core.
@@ -22,6 +26,7 @@ import {
   AppCore,
   initLogging,
   type AdminEvent,
+  type GroupSummary,
   type IncomingEvent,
   type SendTarget,
 } from "@actnet/app-core";
@@ -33,6 +38,12 @@ import {
 const ADMINBOT_DID_SUFFIX = "adminbot";
 const ADMINBOT_DID = `did:local:${ADMINBOT_DID_SUFFIX}`;
 const SUPERUSER_PROJECT_SLUG = "adminbot";
+
+// Maximum disappearing-messages timer adminbot will tolerate on a group it
+// admins: 4 weeks. A group's timer of 0 ("off" — messages never expire) is
+// treated as exceeding this and clamped down too, so every group adminbot
+// admins keeps messages for at most this long.
+const MAX_GROUP_EXPIRY_SECS = 4 * 7 * 24 * 60 * 60;
 
 interface AdminbotState {
   adminsGroupId?: string;
@@ -174,10 +185,12 @@ async function handleMessage(
   // Being added to a group is interesting on its own: app-core auto-accepts
   // the invite (so we're already a full member by the time this fires), and
   // any group we're an admin of becomes an auto-invite target for new
-  // server-joiners (see handleAdminEvent). Just log it — no accept needed.
+  // server-joiners (see handleAdminEvent). We also enforce the expiry cap
+  // here — no accept needed.
   if (event.kind === "groupInvite") {
     const { groupId: gid, inviterDid } = event.groupInvite;
     console.log(`adminbot: added to group ${gid} by ${inviterDid}`);
+    await enforceExpiryCap(core, gid);
     return;
   }
   if (event.kind !== "message") return;
@@ -270,6 +283,107 @@ async function inviteToAdminGroups(core: AppCore, did: string): Promise<void> {
   }
 }
 
+// Clamp a group's disappearing-messages timer to MAX_GROUP_EXPIRY_SECS if it
+// exceeds it (including "off" / 0, which means never-expire).
+function expiryExceedsCap(seconds: number): boolean {
+  // 0 = off (never expires) → longer than any finite max, so it exceeds too.
+  return seconds === 0 || seconds > MAX_GROUP_EXPIRY_SECS;
+}
+
+// Clamp a group's timer to the cap when adminbot is an admin (modify_expiry
+// defaults to admin-only) and the current timer exceeds it. Operates on an
+// already-fetched summary so callers don't double-fetch. Returns true iff a
+// clamp was applied.
+async function clampExpiryIfNeeded(core: AppCore, summary: GroupSummary): Promise<boolean> {
+  const me = summary.members.find((m) => m.did === ADMINBOT_DID);
+  if (me?.role !== "admin") return false;
+  if (!expiryExceedsCap(summary.expirySeconds)) return false;
+  try {
+    console.log(
+      `adminbot: clamping expiry of ${summary.groupId} ("${summary.title}") ` +
+        `from ${summary.expirySeconds}s to ${MAX_GROUP_EXPIRY_SECS}s`,
+    );
+    await core.setGroupExpiry(summary.groupId, MAX_GROUP_EXPIRY_SECS);
+    return true;
+  } catch (e) {
+    console.error(`adminbot: clamping expiry of ${summary.groupId} failed: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+// Refresh a single group and clamp its timer if needed. Called when adminbot is
+// added to a group; enforcing on a *later* timer change needs a group-state
+// push that doesn't exist yet (see docs/02-todos-deferred.md).
+async function enforceExpiryCap(core: AppCore, groupId: string): Promise<void> {
+  let summary: GroupSummary;
+  try {
+    summary = await core.fetchGroupState(groupId);
+  } catch (e) {
+    console.error(`adminbot: fetchGroupState(${groupId}) failed: ${(e as Error).message}; skipping expiry cap`);
+    return;
+  }
+  await clampExpiryIfNeeded(core, summary);
+}
+
+// Render a disappearing-messages timer (seconds) as a short human label,
+// e.g. 0 -> "off", 604800 -> "1 week".
+function formatTimer(seconds: number): string {
+  if (seconds === 0) return "off";
+  const units: Array<[number, string]> = [
+    [7 * 24 * 60 * 60, "week"],
+    [24 * 60 * 60, "day"],
+    [60 * 60, "hour"],
+    [60, "minute"],
+    [1, "second"],
+  ];
+  for (const [size, name] of units) {
+    if (seconds % size === 0) {
+      const n = seconds / size;
+      return `${n} ${name}${n === 1 ? "" : "s"}`;
+    }
+  }
+  return `${seconds} seconds`;
+}
+
+// `/audit`: refresh every group adminbot is in and report, per group, whether
+// it sees itself as admin, member/admin counts, and the timer — clamping the
+// timer to the 4-week cap where it's an admin and the timer exceeds it.
+async function runAudit(core: AppCore, channel: SendTarget): Promise<void> {
+  let groupIds: string[];
+  try {
+    groupIds = await core.listGroups();
+  } catch (e) {
+    await core.send(channel, `audit failed: couldn't list groups (${(e as Error).message})`);
+    return;
+  }
+  if (groupIds.length === 0) {
+    await core.send(channel, "audit: I'm not in any groups.");
+    return;
+  }
+  const lines = [`Audit — ${groupIds.length} group${groupIds.length === 1 ? "" : "s"}:`];
+  for (const gid of groupIds) {
+    let s: GroupSummary;
+    try {
+      s = await core.fetchGroupState(gid); // refresh from server
+    } catch (e) {
+      lines.push(`• ${gid}: fetch failed (${(e as Error).message})`);
+      continue;
+    }
+    const isAdmin = s.members.find((m) => m.did === ADMINBOT_DID)?.role === "admin";
+    const adminCount = s.members.filter((m) => m.role === "admin").length;
+    const before = s.expirySeconds;
+    const clamped = await clampExpiryIfNeeded(core, s);
+    const timer = clamped ? formatTimer(MAX_GROUP_EXPIRY_SECS) : formatTimer(before);
+    const clampNote = clamped ? ` (clamped from ${formatTimer(before)})` : "";
+    lines.push(
+      `• "${s.title || "(untitled)"}" — admin: ${isAdmin ? "yes" : "no"} | ` +
+        `members: ${s.members.length} (${adminCount} admin${adminCount === 1 ? "" : "s"}) | ` +
+        `timer: ${timer}${clampNote}`,
+    );
+  }
+  await core.send(channel, lines.join("\n"));
+}
+
 async function handleCommand(
   core: AppCore,
   channel: SendTarget,
@@ -282,10 +396,18 @@ async function handleCommand(
     case "/whoami":
       await core.send(channel, `${senderDid} (admin)`);
       break;
+    case "/audit":
+      await runAudit(core, channel);
+      break;
     case "/help":
       await core.send(
         channel,
-        ["Available commands:", "  /whoami    echo your DID", "  /help      show this help"].join("\n"),
+        [
+          "Available commands:",
+          "  /whoami    echo your DID",
+          "  /audit     get status of all groups",
+          "  /help      show this help",
+        ].join("\n"),
       );
       break;
     default:

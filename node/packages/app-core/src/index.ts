@@ -1437,6 +1437,17 @@ export class AppCore {
   }
 
   /**
+   * Set the group's disappearing-messages timer in seconds (`0` = off).
+   * Admin-gated by the group's `modify_expiry` policy role (default admin),
+   * so the caller must be an admin of the group.
+   *
+   * @category Group Admin
+   */
+  async setGroupExpiry(groupId: string, expirySeconds: number): Promise<void> {
+    await this._native.setGroupExpiry(groupId, expirySeconds);
+  }
+
+  /**
    * Apply any pending changes from `/changes` since the last applied
    * revision.
    *
