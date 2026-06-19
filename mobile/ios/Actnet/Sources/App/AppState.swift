@@ -1015,14 +1015,16 @@ final class AppState: ObservableObject {
         serverUrl: String,
         title: String,
         recipientDids: [String],
+        expirySeconds: UInt32,
         firstMessage: String?
     ) async throws -> Conversation {
         guard let core = cores[accountId] else {
             throw NSError(domain: "AppState", code: 1, userInfo: [NSLocalizedDescriptionKey: "No core for account"])
         }
         let titleForCreate = title
+        let expiry = expirySeconds
         let created = try await Task.detached {
-            try core.createGroup(title: titleForCreate, description: "", expirySeconds: 0)
+            try core.createGroup(title: titleForCreate, description: "", expirySeconds: expiry)
         }.value
         let groupId = created.groupId
 

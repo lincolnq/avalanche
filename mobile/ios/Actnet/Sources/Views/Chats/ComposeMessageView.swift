@@ -1,23 +1,28 @@
 import SwiftUI
 import UIKit
 
-/// New-message composer. Single flow for DMs (1 recipient) and groups (2+
-/// recipients), per `docs/30-mobile-ux.md` §Compose. This is the "core" slice
-/// from that doc: chip field, autocomplete from the local contact table,
-/// direct DID entry. The From pill, server-pinning, and yellow/red chips for
-/// cross-server / unreachable recipients are deferred.
+/// New-conversation composer. A consistent layout — To-field with recipient
+/// pills, an always-browsable (and typing-filtered) contact list, and two
+/// persistent actions: **DM** (enabled at exactly one recipient; opens the
+/// existing or a fresh thread) and **New Group** (always available; routes to
+/// the Name Group screen). See `docs/30-mobile-ux.md` §Compose.
+///
+/// Sending identity comes from the From picker; the header shows that
+/// identity's server. True per-contact identity routing (`preferred_identity`)
+/// and cross-server founding are deferred — see `docs/02-todos-deferred.md`.
 struct ComposeMessageView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     @State private var chips: [Chip] = []
     @State private var query: String = ""
-    @State private var messageText: String = ""
     @State private var selectedAccountId: String?
     @State private var allContacts: [ContactRowFfi] = []
     @State private var sending: Bool = false
     @State private var errorMessage: String?
     @State private var showingContactPicker = false
+    /// Drives the push to the Name Group screen from the New Group button.
+    @State private var showNameGroup = false
     /// Lets the autocomplete / DID-submit paths push a chip into the
     /// `UITextView`-backed recipient field, which owns the chip content.
     @StateObject private var fieldHandle = RecipientFieldHandle()
@@ -41,12 +46,16 @@ struct ComposeMessageView: View {
     private var accounts: [Account] { appState.accounts }
     private var activeAccountId: String? { selectedAccountId ?? accounts.first?.id }
 
-    private var serverUrlForActiveAccount: String {
+    /// Servers the active identity belongs to (home server first).
+    private var activeAccountServers: [ServerInfo] {
         guard let id = activeAccountId,
-              let account = accounts.first(where: { $0.id == id }),
-              let server = account.servers.first else { return "" }
-        return server.id
+              let account = accounts.first(where: { $0.id == id }) else { return [] }
+        return account.servers
     }
+
+    /// The server a conversation founded right now would live on — the active
+    /// identity's home server. Shown in the header and on the Name Group screen.
+    private var activeServer: ServerInfo? { activeAccountServers.first }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,21 +85,10 @@ struct ComposeMessageView: View {
         }
     }
 
-    private var groupNameAutoDefault: String {
-        let names = chips.map(\.label)
-        switch names.count {
-        case 0: return ""
-        case 1: return names[0]
-        case 2: return "\(names[0]), \(names[1])"
-        case 3: return "\(names[0]), \(names[1]), \(names[2])"
-        default:
-            let prefix = names.prefix(2).joined(separator: ", ")
-            return "\(prefix) & \(names.count - 2) others"
-        }
-    }
-
-    private var canSend: Bool {
-        !chips.isEmpty && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sending
+    /// New Group button label: "New Empty Group" with no recipients, otherwise
+    /// "New Group (N)" filled with the recipient count.
+    private var newGroupTitle: String {
+        chips.isEmpty ? "New Empty Group" : "New Group (\(chips.count))"
     }
 
     var body: some View {
@@ -102,20 +100,42 @@ struct ComposeMessageView: View {
                 }
                 recipientField
                 Divider()
-                if chips.isEmpty || !trimmedQuery.isEmpty {
-                    autocompleteList
-                } else {
-                    Spacer()
-                }
-                composerBar
+                // Contacts are always browsable; typing filters them in place.
+                autocompleteList
+                actionBar
             }
             .background(Color.avPaper)
-            .navigationTitle(chips.count >= 2 ? "New Group" : "New Message")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 0) {
+                        Text("New Conversation").font(.headline)
+                        if let server = activeServer {
+                            Text("at \(server.displayHost)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Cancel")
+                }
+            }
+            .navigationDestination(isPresented: $showNameGroup) {
+                NameGroupView(
+                    members: chips,
+                    accountId: activeAccountId ?? "",
+                    servers: activeAccountServers,
+                    onCreated: { conv in
+                        appState.navigateToConversation = conv
+                        dismiss()
+                    }
+                )
             }
         }
         .task { await loadContacts() }
@@ -175,14 +195,6 @@ struct ComposeMessageView: View {
                 }
                 .accessibilityLabel("Add recipient")
             }
-
-            if chips.count >= 2 {
-                HStack {
-                    Text("Group:").font(.caption).foregroundStyle(.secondary)
-                    Text(groupNameAutoDefault).font(.caption).lineLimit(1)
-                }
-                .padding(.top, 2)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
@@ -216,7 +228,7 @@ struct ComposeMessageView: View {
                 }
             }
             if peopleResults.isEmpty && otherResults.isEmpty && !queryLooksLikeDid {
-                Text("Type a DID, or wait — anyone you message will appear here.")
+                Text("No more contacts to add.")
                     .foregroundStyle(.secondary)
                     .font(.footnote)
             }
@@ -260,7 +272,10 @@ struct ComposeMessageView: View {
         return appState.resolvedName(for: c.did, accountId: id)
     }
 
-    private var composerBar: some View {
+    /// Two persistent actions. DM is enabled only at exactly one recipient and
+    /// is primary in that case; New Group is always available and becomes
+    /// primary once there are 2+ recipients (per the redesign).
+    private var actionBar: some View {
         VStack(spacing: 0) {
             if let error = errorMessage {
                 Text(error)
@@ -270,19 +285,39 @@ struct ComposeMessageView: View {
             }
             Divider()
             HStack(spacing: 12) {
-                TextField("Message", text: $messageText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                Button {
-                    sendTapped()
+                styledButton(prominent: chips.count == 1) {
+                    dmTapped()
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                    Text("DM").frame(maxWidth: .infinity)
                 }
-                .disabled(!canSend)
+                .disabled(chips.count != 1 || sending)
+
+                styledButton(prominent: chips.count >= 2) {
+                    showNameGroup = true
+                } label: {
+                    Text(newGroupTitle).frame(maxWidth: .infinity)
+                }
+                .disabled(sending)
             }
+            .controlSize(.large)
+            .tint(Color.avBrand)
             .padding(.horizontal)
             .padding(.vertical, 8)
+        }
+    }
+
+    /// Picks `.borderedProminent` vs `.bordered` — the two are distinct types,
+    /// so the choice can't be made inline on one `Button`.
+    @ViewBuilder
+    private func styledButton<L: View>(
+        prominent: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> L
+    ) -> some View {
+        if prominent {
+            Button(action: action, label: label).buttonStyle(.borderedProminent)
+        } else {
+            Button(action: action, label: label).buttonStyle(.bordered)
         }
     }
 
@@ -350,63 +385,17 @@ struct ComposeMessageView: View {
         }
     }
 
-    private func sendTapped() {
-        guard let accountId = activeAccountId else { return }
-        let body = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty, !chips.isEmpty else { return }
-        sending = true
-        errorMessage = nil
-
-        Task {
-            defer { sending = false }
-            do {
-                if chips.count == 1 {
-                    // DM: reuse the existing thread (or create one) and tail-append.
-                    let conv = appState.findOrCreateDMConversation(
-                        recipientDid: chips[0].did,
-                        accountId: accountId
-                    )
-                    let messageId = UUID().uuidString
-                    let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-                    // Append optimistically so the thread renders mid-flight.
-                    let optimistic = Message(
-                        id: messageId,
-                        conversationId: conv.id,
-                        senderAccountId: accountId,
-                        body: body,
-                        sentAtMs: nowMs,
-                        readAtMs: nowMs,
-                        deliveryStatus: .sending
-                    )
-                    appState.messagesByConversation[conv.id, default: []].append(optimistic)
-                    if let idx = appState.conversations.firstIndex(where: { $0.id == conv.id }) {
-                        appState.conversations[idx].lastMessage = body
-                        appState.conversations[idx].lastMessageDate = Date()
-                    }
-                    try await appState.sendMessage(
-                        conversationId: conv.id,
-                        text: body,
-                        recipientDid: chips[0].did,
-                        senderAccountId: accountId,
-                        messageId: messageId,
-                        sentAtMs: nowMs
-                    )
-                    appState.navigateToConversation = conv
-                } else {
-                    let conv = try await appState.createGroupAndOpen(
-                        accountId: accountId,
-                        serverUrl: serverUrlForActiveAccount,
-                        title: groupNameAutoDefault,
-                        recipientDids: chips.map { $0.did },
-                        firstMessage: body
-                    )
-                    appState.navigateToConversation = conv
-                }
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
+    /// DM action: jump straight to the thread with the single recipient,
+    /// reusing the existing conversation or starting a fresh one. No first
+    /// message is sent — the composer just lands the user in the thread.
+    private func dmTapped() {
+        guard chips.count == 1, let accountId = activeAccountId else { return }
+        let conv = appState.findOrCreateDMConversation(
+            recipientDid: chips[0].did,
+            accountId: accountId
+        )
+        appState.navigateToConversation = conv
+        dismiss()
     }
 
 }
@@ -568,7 +557,7 @@ private func composePreviewState() -> AppState {
         .environmentObject(composePreviewState())
 }
 
-#Preview("One recipient") {
+#Preview("Multiple recipients") {
     ComposeMessageView(initialChips: [
         ComposeMessageView.Chip(id: "did:plc:alice", did: "did:plc:alice", displayName: "Alice Rivera"),
         ComposeMessageView.Chip(id: "did:plc:alice2", did: "did:plc:alice", displayName: "Alice Rivera Two"),
