@@ -9,7 +9,7 @@ Docs are numbered by category. First digit = area, second digit = sequence withi
 | Prefix | Area | Docs |
 |--------|------|------|
 | `0x` | Core design | [`00`](00-design.md) this doc · [`01`](01-technical-implementation.md) technical implementation · [`02`](02-todos-deferred.md) deferred TODOs / backlog · [`03`](03-groups.md) groups · [`04`](04-multi-device.md) multi-device · [`05`](05-device-data-sync.md) device data sync · [`06`](06-identity-device-store-split.md) identity/device store split · [`07`](07-app-core-philosophy.md) app-core philosophy · [`08`](08-supergroups.md) supergroups (large-scale broadcast channels) |
-| `1x` | Server & protocol | [`10`](10-server-implementation.md) server implementation · [`11`](11-core-api-sketch.md) core API sketch · [`12`](12-abuse-handling.md) abuse handling · [`13`](13-federation.md) federation · [`14`](14-bitchat-fallback.md) bitchat fallback |
+| `1x` | Server & protocol | [`10`](10-server-implementation.md) server implementation · [`11`](11-core-api-sketch.md) core API sketch · [`12`](12-abuse-handling.md) abuse handling · [`13`](13-federation.md) federation · [`14`](14-bitchat-fallback.md) bitchat fallback · [`15`](15-push-notifications.md) push notifications |
 | `2x` | Projects | [`20`](20-project-security.md) project security · [`21`](21-chatbot-project.md) chatbot project · [`22`](22-adminbot.md) adminbot · [`23`](23-messaging-extensions.md) messaging extensions (core vs. Project) · [`24`](24-vetted-onboarding-project.md) vetted onboarding (gatekeeper) |
 | `3x` | Messaging & conversation UX | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-threading.md) threading · [`33`](33-reactions.md) reactions · [`34`](34-connection-state.md) connection state · [`35`](35-attachments.md) attachments · [`36`](36-message-editing-deletion.md) message editing & deletion |
 | `4x` | Deployment & infra | [`40`](40-deployment.md) deployment · [`41`](41-relay-deployment.md) relay deployment · [`42`](42-server-upgrades.md) server upgrades |
@@ -192,11 +192,11 @@ One important distinction: the substrate's **private connections graph** (people
 
 ## Push notifications
 
-On iOS and Android, only Apple (APNs) and Google (FCM) can wake a backgrounded app, so every notification has to flow through them. If homeservers held device push tokens directly, they — and Apple/Google — would learn too much. Instead, the app developer runs a **push relay**: homeservers send content-free wakeups addressed to per-(user, server) pseudonyms; the relay maps pseudonyms to device tokens and fires an empty payload; the app wakes and fetches events itself. Apple/Google see only that the app was pinged. The relay sees pseudonym-level timing but no identity, content, or cross-server linkage. Homeservers never see the device token or the user's activity on other servers. Pseudonyms rotate periodically to limit long-term linkability.
+On iOS and standard Android, only Apple (APNs) and Google (FCM) can wake a backgrounded app. If homeservers held device tokens directly, they — and Apple/Google — would learn too much. Instead, the app developer runs a **push relay**: homeservers send content-free wakeups to per-(user, server) pseudonyms; the relay maps pseudonyms to tokens and fires empty payloads. Apple/Google see only a ping; the relay sees pseudonym-level timing but no identity, content, or cross-server linkage. Pseudonyms rotate periodically. High-risk users can opt out and poll manually. Multiple relays are supported so the Avalanche-operated relay is not a privileged singleton.
 
-The relay is operationally critical infrastructure and a metadata target, but far less leaky than any direct-to-APNs design. High-risk users can opt out and rely on manual fetch. The protocol should support multiple relays from day one so the app developer's relay is swappable, not a privileged singleton.
+On degoogled Android (no Google Play Services), FCM is unavailable. The app falls back to **UnifiedPush** if the user has a distributor installed, and to a WebSocket keepalive otherwise. On Desktop, the Electron process is already connected — wakeup is a WebSocket frame that triggers a local OS notification with no external push infrastructure.
 
-The Avalanche-operated relay lives at **`https://relay.theavalanche.net`**. Homeservers point at it via `RELAY_URL` (see `docs/41-relay-deployment.md`); the mobile client picks it up at build time from the same env var.
+The Avalanche-operated relay will live at `https://relay.theavalanche.net` (not yet deployed). See `docs/15-push-notifications.md` for the full per-platform dispatch design and UnifiedPush registration flow, and `docs/41-relay-deployment.md` for ops.
 
 ## Signup and invitations
 
