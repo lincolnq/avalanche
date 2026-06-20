@@ -11,8 +11,11 @@
 //   - Cap the disappearing-messages timer at 4 weeks on any group it's an
 //     admin of, enforced when it's added to the group (0/"off" is clamped
 //     too). Enforcing on a later timer change awaits a group-state push.
+//   - Check daily for a newer Avalanche release (latest GitHub release tag vs
+//     the deployment's VERSION file) and post to `#admins` once per new
+//     version when behind.
 //   - Respond to `/whoami`, `/audit` (refresh+report every group, enforce the
-//     timer cap), and `/help` in `#admins`.
+//     timer cap), `/check` (check for a newer release now), and `/help`.
 //
 // Persistent state:
 //   - SQLCipher DB at ADMINBOT_STATE_DIR/store.db — owned by app-core.
@@ -45,9 +48,19 @@ const SUPERUSER_PROJECT_SLUG = "adminbot";
 // admins keeps messages for at most this long.
 const MAX_GROUP_EXPIRY_SECS = 4 * 7 * 24 * 60 * 60;
 
+// GitHub repo whose releases define "the latest Avalanche version" — the same
+// source the configure page (`web/assets/configure/configure.js`) and the
+// deploy bundle (`infra/deploy/bundle/lib/common.sh`) resolve against.
+const GH_REPO = "lincolnq/avalanche";
+// How often to auto-check for a newer release. Daily is plenty.
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 interface AdminbotState {
   adminsGroupId?: string;
   invitedInitialAdmins?: string[];
+  /// Latest release tag we've already announced in #admins, so the daily
+  /// update check posts once per new version instead of nagging every day.
+  lastUpdateNotifiedTag?: string;
 }
 
 interface Env {
@@ -59,6 +72,10 @@ interface Env {
   initialAdmins: string[];
   logLevel: string;
   sharedSecret?: string;
+  /// Path to the deployment's VERSION file (= the current release tag). The
+  /// deploy bundle writes `/opt/avalanche/deployments/current/VERSION`; override
+  /// for separate-host / dev runs. Missing/unreadable → version checks no-op.
+  versionFile: string;
 }
 
 function readEnv(): Env {
@@ -83,6 +100,7 @@ function readEnv(): Env {
     // Bootstrap secret for closed-registration servers (docs/24). Required to
     // register against a closed server; unset/ignored on an open one.
     sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
+    versionFile: process.env.AVALANCHE_VERSION_FILE ?? "/opt/avalanche/deployments/current/VERSION",
   };
 }
 
@@ -179,6 +197,7 @@ async function inviteInitialAdmins(
 
 async function handleMessage(
   core: AppCore,
+  env: Env,
   groupId: string,
   event: IncomingEvent,
 ): Promise<void> {
@@ -204,6 +223,7 @@ async function handleMessage(
   if (!inAdminsGroup && !isDm) return;
   await handleCommand(
     core,
+    env,
     inAdminsGroup ? { kind: "group", groupId } : { kind: "dm", recipientDid: msg.senderDid },
     msg.senderDid,
     msg.body.trim(),
@@ -384,8 +404,97 @@ async function runAudit(core: AppCore, channel: SendTarget): Promise<void> {
   await core.send(channel, lines.join("\n"));
 }
 
+// Our running release tag, read from the deployment's VERSION file. null if it
+// doesn't exist or is unreadable (dev runs, separate hosts without the file).
+function readCurrentVersion(env: Env): string | null {
+  try {
+    const v = readFileSync(env.versionFile, "utf8").trim();
+    return v.length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// Newest published release tag from GitHub (prereleases included, newest-first
+// — same `/releases` list the configure page and deploy bundle use). null on
+// any network/parse error so callers can degrade gracefully.
+async function fetchLatestRelease(): Promise<string | null> {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${GH_REPO}/releases?per_page=10`, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!r.ok) {
+      console.error(`adminbot: GitHub releases fetch failed: HTTP ${r.status}`);
+      return null;
+    }
+    const releases = (await r.json()) as Array<{ tag_name?: string }>;
+    return releases.find((rel) => typeof rel.tag_name === "string")?.tag_name ?? null;
+  } catch (e) {
+    console.error(`adminbot: GitHub releases fetch error: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+interface UpdateStatus {
+  current: string | null;
+  latest: string | null;
+}
+
+async function checkForUpdate(env: Env): Promise<UpdateStatus> {
+  return { current: readCurrentVersion(env), latest: await fetchLatestRelease() };
+}
+
+// Daily auto-check: if we're behind the latest release, post to #admins — once
+// per new version (deduped via state.lastUpdateNotifiedTag), not every day.
+async function runDailyUpdateCheck(
+  core: AppCore,
+  env: Env,
+  state: AdminbotState,
+  adminsGroupId: string,
+): Promise<void> {
+  const { current, latest } = await checkForUpdate(env);
+  if (!current) {
+    console.log(`adminbot: update check skipped — no readable VERSION at ${env.versionFile}`);
+    return;
+  }
+  if (!latest) return; // couldn't reach GitHub; already logged
+  if (latest === current) return; // up to date
+  if (state.lastUpdateNotifiedTag === latest) return; // already announced this one
+
+  console.log(`adminbot: update available — running ${current}, latest ${latest}; notifying #admins`);
+  try {
+    await core.send(
+      { kind: "group", groupId: adminsGroupId },
+      `A newer Avalanche release is available: ${latest} (running ${current}). ` +
+        "An admin can upgrade the server with `avalanche-update`.",
+    );
+    state.lastUpdateNotifiedTag = latest;
+    saveState(env.statePath, state);
+  } catch (e) {
+    console.error(`adminbot: update notification failed: ${(e as Error).message}`);
+  }
+}
+
+// `/check`: run the version check now and report the result to the invoking
+// channel (always replies, unlike the deduped daily check).
+async function runCheckCommand(core: AppCore, env: Env, channel: SendTarget): Promise<void> {
+  const { current, latest } = await checkForUpdate(env);
+  let msg: string;
+  if (!latest) {
+    msg = "Couldn't reach GitHub to check for the latest release.";
+  } else if (!current) {
+    msg = `Latest Avalanche release is ${latest}. (I can't tell what version I'm running — no readable VERSION file.)`;
+  } else if (current === latest) {
+    msg = `Up to date: running ${current} (the latest release).`;
+  } else {
+    msg = `Update available: latest is ${latest}, I'm running ${current}. An admin can upgrade with \`avalanche-update\`.`;
+  }
+  await core.send(channel, msg);
+}
+
 async function handleCommand(
   core: AppCore,
+  env: Env,
   channel: SendTarget,
   senderDid: string,
   body: string,
@@ -399,6 +508,9 @@ async function handleCommand(
     case "/audit":
       await runAudit(core, channel);
       break;
+    case "/check":
+      await runCheckCommand(core, env, channel);
+      break;
     case "/help":
       await core.send(
         channel,
@@ -406,6 +518,7 @@ async function handleCommand(
           "Available commands:",
           "  /whoami    echo your DID",
           "  /audit     get status of all groups",
+          "  /check     check now for a newer Avalanche release",
           "  /help      show this help",
         ].join("\n"),
       );
@@ -432,7 +545,7 @@ async function run(): Promise<void> {
 
   const messagesLoop = (async () => {
     for await (const event of core.events()) {
-      handleMessage(core, groupId, event).catch((e) => {
+      handleMessage(core, env, groupId, event).catch((e) => {
         console.error(`adminbot: message handler error: ${(e as Error).message}`);
       });
     }
@@ -446,7 +559,20 @@ async function run(): Promise<void> {
     }
   })();
 
-  await Promise.all([messagesLoop, adminLoop]);
+  // Daily Avalanche-update check: runs once at startup, then every 24h. Posts
+  // to #admins once per newly-detected release (see runDailyUpdateCheck).
+  const updateLoop = (async () => {
+    for (;;) {
+      try {
+        await runDailyUpdateCheck(core, env, state, groupId);
+      } catch (e) {
+        console.error(`adminbot: update check error: ${(e as Error).message}`);
+      }
+      await new Promise((r) => setTimeout(r, UPDATE_CHECK_INTERVAL_MS));
+    }
+  })();
+
+  await Promise.all([messagesLoop, adminLoop, updateLoop]);
 }
 
 run().catch((e) => {
