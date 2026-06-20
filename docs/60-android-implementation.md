@@ -16,7 +16,7 @@ See `mobile/CLAUDE.md` for the parity rule and workflow.
 | State management | ViewModel + StateFlow | ObservableObject + @Published |
 | Navigation | Navigation Compose | NavigationStack |
 | Async | Coroutines + Flow | async/await + Task |
-| Camera (QR) | CameraX + ML Kit Barcode | AVFoundation + VisionKit |
+| Camera (QR) | CameraX + ZXing (`zxing-android-embedded`) | AVFoundation + VisionKit |
 | WebView | Android WebView | WKWebView |
 | Rust bridge | UniFFI-generated Kotlin bindings (AAR) | UniFFI-generated Swift bindings (XCFramework) |
 | Persistence (metadata) | SharedPreferences (JSON) | UserDefaults (JSON) |
@@ -213,7 +213,7 @@ Every row maps an iOS file to its Android equivalent. Update status as work land
 ### Phase 4 — Onboarding screens
 
 - `SplashScreen.kt`: logo, scan QR button, enter link button, dev settings icon
-- `QRScannerScreen.kt`: CameraX + ML Kit, parse `actnet://` or `https://…/invite/…`
+- `QRScannerScreen.kt`: CameraX + ZXing (`zxing-android-embedded`), parse `actnet://` or `https://…/invite/…` — ZXing chosen over ML Kit to avoid Google Play Services dependency (works on de-Googled Android)
 - `InviteLinkEntryScreen.kt`: text field, parse on submit
 - `IdentityPickerScreen.kt`: existing accounts list or straight to NewAccount
 - `JoiningServerScreen.kt`: existing account display, join button
