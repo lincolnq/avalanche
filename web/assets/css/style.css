@@ -303,3 +303,56 @@ th { background: var(--card); }
   body { font-size: 16px; }
   .hero .tagline { font-size: 1.35rem; }
 }
+
+/* ---------- Gallery carousel ---------- */
+.gallery {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  margin: 1.75rem 0;
+  padding-bottom: 0.75rem;
+}
+.gallery-item {
+  flex: 0 0 auto;
+  scroll-snap-align: center;
+  display: block;
+  line-height: 0;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  cursor: zoom-in;
+}
+.gallery-item:hover { text-decoration: none; }
+.gallery-item img {
+  display: block;
+  height: 460px;
+  width: auto;
+  max-width: none;
+}
+@media (max-width: 560px) {
+  .gallery-item img { height: 340px; }
+}
+
+/* ---------- Lightbox ---------- */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: rgba(40, 20, 30, 0.92);
+  cursor: zoom-out;
+}
+.lightbox[hidden] { display: none; }
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}

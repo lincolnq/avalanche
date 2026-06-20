@@ -1,0 +1,15 @@
+{{- /* Horizontal scroll-snap carousel. Click an image to open it full-size.
+       Usage: {{< gallery images="/a.jpg,/b.jpg" alts="Alt A|Alt B" >}} */ -}}
+{{- $imgs := split (.Get "images") "," -}}
+{{- $alts := slice -}}
+{{- with .Get "alts" }}{{ $alts = split . "|" }}{{ end -}}
+<div class="gallery" role="group" aria-label="Screenshots">
+{{- range $i, $s := $imgs }}
+  {{- $src := trim $s " " -}}
+  {{- $alt := "" -}}
+  {{- if lt $i (len $alts) }}{{ $alt = trim (index $alts $i) " " }}{{ end -}}
+  <a class="gallery-item" href="{{ $src | relURL }}" data-lightbox aria-label="{{ $alt }}">
+    <img src="{{ $src | relURL }}" alt="{{ $alt }}" loading="lazy">
+  </a>
+{{- end }}
+</div>
