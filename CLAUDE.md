@@ -126,7 +126,7 @@ The full cycle for adding a new feature that involves Rust + all platforms:
 
 1. Add Rust FFI method to `core/crates/app-core/src/lib.rs` (sync, `#[uniffi::export]`)
 2. `make bindings` — regenerates Swift + Kotlin UniFFI glue
-3. `make ios` — rebuilds XCFramework + regenerates Xcode project
+3. `make xcode` — rebuilds XCFramework + regenerates Xcode project
 4. **iOS:** add to `AppCoreProtocol` in `ActnetService.swift`, stub in `MockActnetService.swift`, call from `AppState.swift` via `Task.detached { try core.methodName() }.value`
 5. **Android:** add to `ActnetService.kt` interface, stub in `MockActnetService.kt`, call from `AppViewModel.kt` via `withContext(Dispatchers.IO)`
 6. **Desktop:** add IPC handler in `desktop/src/main/ipc.ts`, add typed wrapper in `DevServerActnetService.ts`, stub in `MockActnetService.ts`
