@@ -111,6 +111,15 @@ fields: `timestamp_ms`(15), `profile_key`(17), `profile_version`. Forward-compat
 WS), STUN/TURN, DTLS-SRTP. Group = LiveKit SFU + WebRTC Insertable Streams (E2E; SFU forwards ciphertext).
 Broadcasts = LiveKit one-to-many, distinct UX from calls. LiveKit is the one extra deployable besides PG.
 
+**app-core philosophy (`07`):** the shared Rust core behind *every* client — bots (napi) and mobile (UniFFI)
+get the **same API, no second-class clients**. Owns: homeserver connection + WS event stream, all crypto/
+ratchet/sender-key state, the SQLCipher store. **Minimal default storage** (invariant): it auto-persists
+**crypto + ephemeral protocol state**, but message content and contacts are **opt-in** — the embedder must
+call `save_message` / `touch_contact` etc.; nothing non-essential is stored implicitly. API is
+**async-oriented**: calls block on network and some (e.g. `next_events`) block until an event arrives — the
+core is a library you *drive*, not a daemon. Scope today: **one app-core per (device, server) connection**;
+multiple accounts → multiple cores. Future: one core per identity with multiple server connections.
+
 ## 4. Federation model (📐 `13`, federation crate is a stub)
 
 People register on a homeserver (their org/campaign/community). Servers federate so users can find each
