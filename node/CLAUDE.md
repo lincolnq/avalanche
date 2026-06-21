@@ -108,9 +108,9 @@ Follow all four steps — skipping any one breaks the layering:
 
 The napi surface must mirror the UniFFI surface exactly — bots and the iOS app must be able to do identical things.
 
-## Electron compatibility
+## Node.js compatibility
 
-The napi addon is a standard Node.js native module and works in Electron. One extra step: recompile the addon against Electron's Node.js ABI using `@electron/rebuild` before packaging, to avoid the ABI mismatch between system Node.js and Electron's bundled Node.js.
+The napi addon is a standard Node.js native module — it works in any Node.js context (bots, scripts, CLI tools). The desktop app uses Tauri (not napi/Electron); the napi layer is for bots and server-side tooling only.
 
 ## Testing
 
