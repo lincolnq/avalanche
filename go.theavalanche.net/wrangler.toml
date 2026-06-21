@@ -1,0 +1,11 @@
+name = "avalanche-go"
+compatibility_date = "2024-12-01"
+
+[assets]
+directory = "./public"
+# Any path (e.g. /i/<token>) that doesn't match a static asset serves
+# index.html, which reads the full URL client-side to render the QR code.
+not_found_handling = "single-page-application"
+
+# The go.theavalanche.net route is managed by hand in the Cloudflare
+# dashboard (Workers route), so it is intentionally not declared here.
