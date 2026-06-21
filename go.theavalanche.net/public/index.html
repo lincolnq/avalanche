@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join on Avalanche</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/favicon-32x32.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=IBM+Plex+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+  <script src="/qrcode.min.js"></script>
+  <style>
+    :root {
+      --bg: #FFF1E9;
+      --ink: #6B3E50;
+      --ink-soft: #6B3E50cc;
+      --ink-faint: #6B3E5099;
+      --card: #FFFFFF;
+      --rule: #6B3E5022;
+      --accent: #6B3E50;
+      --font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-head: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.25rem 3rem;
+    }
+    .wordmark { height: 52px; margin-bottom: 2.25rem; }
+    .wordmark img { height: 100%; display: block; }
+    main {
+      width: 100%;
+      max-width: 460px;
+      text-align: center;
+    }
+    h1 {
+      font-family: var(--font-head);
+      font-weight: 700;
+      font-size: 1.6rem;
+      letter-spacing: -0.01em;
+      margin: 0 0 0.5rem;
+    }
+    .lede { color: var(--ink-soft); margin: 0 0 2rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--rule);
+      border-radius: 16px;
+      padding: 1.5rem;
+      box-shadow: 0 1px 2px #6B3E5014, 0 8px 24px #6B3E500f;
+    }
+    .qr-wrap {
+      width: 248px;
+      height: 248px;
+      margin: 0 auto 1.25rem;
+      padding: 14px;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid var(--rule);
+    }
+    .qr-wrap svg { width: 100%; height: 100%; display: block; }
+    .qr-caption { font-size: 0.95rem; color: var(--ink-soft); margin: 0; }
+    .url-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1.25rem;
+    }
+    .url-box {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      background: var(--bg);
+      border: 1px solid var(--rule);
+      border-radius: 9px;
+      padding: 0.6rem 0.7rem;
+      color: var(--ink-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+    button.copy {
+      flex: 0 0 auto;
+      font-family: var(--font);
+      font-weight: 600;
+      font-size: 0.85rem;
+      background: var(--accent);
+      color: var(--bg);
+      border: 1px solid var(--accent);
+      border-radius: 9px;
+      padding: 0 1rem;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button.copy:hover { opacity: 0.85; }
+    button.copy.done { background: transparent; color: var(--accent); }
+    .steps {
+      list-style: none;
+      counter-reset: step;
+      padding: 0;
+      margin: 2.25rem 0 0;
+      text-align: left;
+    }
+    .steps li {
+      counter-increment: step;
+      position: relative;
+      padding: 0 0 1.1rem 2.4rem;
+      color: var(--ink-soft);
+    }
+    .steps li:last-child { padding-bottom: 0; }
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: -0.1rem;
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--bg);
+      font-family: var(--font-head);
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .steps strong { color: var(--ink); font-weight: 600; }
+    .foot {
+      margin-top: 2.5rem;
+      font-size: 0.85rem;
+      color: var(--ink-faint);
+    }
+    .foot a { color: var(--accent); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="wordmark"><img src="/wordmark_bub.svg" alt="Avalanche"></div>
+
+  <main>
+    <h1>You've been invited to Avalanche</h1>
+    <p class="lede">Avalanche is an encrypted app for organizing collective action.</p>
+
+    <div class="card">
+      <div id="invite-view">
+        <div class="qr-wrap" id="qr"></div>
+        <p class="qr-caption">Scan this code from the Avalanche app to join.</p>
+        <div class="url-row">
+          <div class="url-box" id="url-box" title=""></div>
+          <button class="copy" id="copy-btn" type="button">Copy</button>
+        </div>
+      </div>
+
+      <div id="no-invite-view" class="hidden">
+        <p class="qr-caption">This page opens Avalanche invite links. Open the
+          invite link you were sent on this device, or scan its QR code from
+          the Avalanche app.</p>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li><strong>Install Avalanche</strong> on your phone if you haven't yet.</li>
+      <li>Open the app and choose <strong>Join with an invite</strong>.</li>
+      <li><strong>Scan the QR code</strong> above, or <strong>paste the link</strong> when prompted.</li>
+    </ol>
+
+    <p class="foot">Learn more at <a href="https://theavalanche.net">theavalanche.net</a></p>
+  </main>
+
+  <script>
+    (function () {
+      var url = window.location.href;
+      var path = window.location.pathname;
+      // Treat /i/<token> and the legacy /invite/<token> as invite links.
+      var isInvite = /^\/(i|invite)\/[^/]+/.test(path);
+
+      if (!isInvite) {
+        document.getElementById("invite-view").classList.add("hidden");
+        document.getElementById("no-invite-view").classList.remove("hidden");
+        return;
+      }
+
+      // Render the QR of the exact URL the visitor landed on. typeNumber 0
+      // auto-sizes to fit; "M" error correction balances density and
+      // scan reliability for a URL this long.
+      var qr = qrcode(0, "M");
+      qr.addData(url);
+      qr.make();
+      document.getElementById("qr").innerHTML =
+        qr.createSvgTag({ scalable: true, margin: 0 });
+
+      var box = document.getElementById("url-box");
+      box.textContent = url;
+      box.title = url;
+
+      var btn = document.getElementById("copy-btn");
+      btn.addEventListener("click", function () {
+        function ok() {
+          btn.textContent = "Copied";
+          btn.classList.add("done");
+          setTimeout(function () {
+            btn.textContent = "Copy";
+            btn.classList.remove("done");
+          }, 1800);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(ok, fallback);
+        } else {
+          fallback();
+        }
+        function fallback() {
+          var sel = document.createRange();
+          sel.selectNodeContents(box);
+          var s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(sel);
+          try { document.execCommand("copy"); ok(); } catch (e) {}
+          s.removeAllRanges();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
