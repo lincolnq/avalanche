@@ -141,6 +141,47 @@ impl IdentityStore {
             .await
             .map_err(StoreError::Db)
     }
+
+    /// Irreversibly clear **all** durable per-identity state from identity.db:
+    /// the identity keypair, DID, rotation key, storage key, recovery-blob key,
+    /// contacts, groups (master keys), profiles, message history, and the
+    /// storage-sync sidecar. Used by the Delete-identity flow (docs/53) after the
+    /// server accounts are deleted and the DID is tombstoned. The file itself
+    /// remains (the embedder is responsible for deleting it); after this call no
+    /// key material or readable content survives in it.
+    ///
+    /// Table list must stay in sync with [`crate::schema::IDENTITY_TABLES`] /
+    /// [`crate::schema::IDENTITY_MIGRATIONS`].
+    pub async fn wipe_identity(&self) -> Result<(), StoreError> {
+        self.conn
+            .call(|conn| {
+                // No inter-table FKs in identity.db, so deletion order is
+                // irrelevant; one transaction keeps it all-or-nothing.
+                conn.execute_batch(
+                    "BEGIN;
+                     DELETE FROM identity_keypair;
+                     DELETE FROM account_identity;
+                     DELETE FROM known_identities;
+                     DELETE FROM rotation_key;
+                     DELETE FROM own_profile;
+                     DELETE FROM contact_profiles;
+                     DELETE FROM groups;
+                     DELETE FROM contacts;
+                     DELETE FROM conversation_settings;
+                     DELETE FROM recovery_blob_key;
+                     DELETE FROM message_history;
+                     DELETE FROM message_revisions;
+                     DELETE FROM reactions;
+                     DELETE FROM account_info_cache;
+                     DELETE FROM storage_key_state;
+                     DELETE FROM storage_sync;
+                     COMMIT;",
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
 }
 
 impl DeviceStore {
@@ -183,6 +224,43 @@ impl DeviceStore {
                 )
                 .optional()
                 .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Irreversibly clear **all** per-device transport crypto and server-bound
+    /// caches from device.db: Double Ratchet sessions, prekey pools, sender keys,
+    /// push state, credential/param caches, the outbound queue, the storage
+    /// cursor, and this device's registration. Used by the Delete-identity flow
+    /// (docs/53) per account context. The file itself remains (the embedder
+    /// deletes it); after this call no ratchet or key material survives in it.
+    ///
+    /// Table list must stay in sync with [`crate::schema::DEVICE_TABLES`] /
+    /// [`crate::schema::DEVICE_MIGRATIONS`] (plus `device_account`, which
+    /// post-dates the legacy-migration constant).
+    pub async fn wipe_device(&self) -> Result<(), StoreError> {
+        self.conn
+            .call(|conn| {
+                conn.execute_batch(
+                    "BEGIN;
+                     DELETE FROM sessions;
+                     DELETE FROM prekeys;
+                     DELETE FROM signed_prekeys;
+                     DELETE FROM kyber_prekeys;
+                     DELETE FROM prekey_counters;
+                     DELETE FROM sender_keys;
+                     DELETE FROM sender_key_shared;
+                     DELETE FROM push_state;
+                     DELETE FROM group_credentials;
+                     DELETE FROM group_server_params;
+                     DELETE FROM profile_fetch_state;
+                     DELETE FROM message_queue;
+                     DELETE FROM storage_cursor;
+                     DELETE FROM device_account;
+                     COMMIT;",
+                )?;
+                Ok(())
             })
             .await
             .map_err(StoreError::Db)

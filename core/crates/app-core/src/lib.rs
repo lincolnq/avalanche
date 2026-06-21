@@ -1781,6 +1781,39 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    /// Leave this server (docs/53 §Leave): the graceful drop of a single
+    /// (identity, server) membership. Runs the leave cascade — leave every group
+    /// hosted on this server (best-effort courtesy self-removal), then delete the
+    /// account on the server. Crypto/contacts/identity state are untouched (this
+    /// is one membership of the identity, not the whole identity).
+    ///
+    /// Intended for **non-discovery** memberships; the discovery server is left
+    /// only via Change-home-server or `delete_identity` (the UI enforces this).
+    pub fn leave_server(&self) -> Result<(), AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.leave_server_async())
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Delete this identity from the network as completely as the protocol
+    /// allows (docs/53 §Delete identity). Order is load-bearing:
+    ///
+    /// 1. Leave-cascade every account: leave all groups (best-effort) then
+    ///    delete the account on each server (best-effort — proceed even if a
+    ///    server is uncooperative; the PLC tombstone is authoritative).
+    /// 2. Submit a rotation-key-signed **PLC tombstone**. This MUST succeed; if
+    ///    it fails we return [`AppErrorFfi::IdentityDeletionFailed`] and leave
+    ///    local state intact so the caller can retry.
+    /// 3. Only then wipe all local stores (identity.db + every device.db).
+    ///
+    /// After this returns Ok, the embedder should delete the (now row-empty) DB
+    /// files and drop this identity from its identity list.
+    pub fn delete_identity(&self) -> Result<(), AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.delete_identity_async())
+            .map_err(AppErrorFfi::from)
+    }
+
     /// Cheap snapshot of current connection state. Non-blocking.
     pub fn connection_state(&self) -> ConnectionState {
         self.state_tx.borrow().clone()
@@ -3616,6 +3649,90 @@ impl AppCore {
             batch.push(more);
         }
         Ok(batch)
+    }
+
+    /// Async variant of `leave_group` (for e2e tests / embedders already on the
+    /// runtime).
+    pub async fn leave_group_async(&self, group_id: &str) -> Result<(), AppError> {
+        let inner = self.inner.lock().await;
+        let did = inner.did.clone();
+        groups::leave_group(&inner.store, &inner.client, &did, group_id).await
+    }
+
+    /// Async variant of `is_group_member`.
+    pub async fn is_group_member_async(&self, group_id: &str) -> Result<bool, AppError> {
+        let inner = self.inner.lock().await;
+        let did = inner.did.clone();
+        groups::is_group_member(&inner.store, &did, group_id).await
+    }
+
+    /// Async variant of `leave_server`.
+    pub async fn leave_server_async(&self) -> Result<(), AppError> {
+        let inner = self.inner.lock().await;
+        let did = inner.did.clone();
+        let server = inner.client.server_url().to_string();
+        let groups = inner.store.list_groups().await?;
+        for g in &groups {
+            if g.hosting_server_url == server {
+                if let Err(e) =
+                    groups::leave_group(&inner.store, &inner.client, &did, &g.group_id).await
+                {
+                    tracing::warn!(group = %g.group_id, error = %e, "leave_server: group leave failed; continuing");
+                }
+            }
+        }
+        inner.client.delete_account().await.map_err(AppError::from)
+    }
+
+    /// Async variant of `delete_identity`. See [`AppCore::delete_identity`] for
+    /// the load-bearing ordering (leave-cascade → PLC tombstone → wipe).
+    pub async fn delete_identity_async(&self) -> Result<(), AppError> {
+        let inner = self.inner.lock().await;
+        let did = inner.did.clone();
+
+        let groups = inner.store.list_groups().await?;
+        for g in &groups {
+            if let Err(e) =
+                groups::leave_group(&inner.store, &inner.client, &did, &g.group_id).await
+            {
+                tracing::warn!(group = %g.group_id, error = %e, "delete_identity: group leave failed; continuing");
+            }
+        }
+        if let Err(e) = inner.client.delete_account().await {
+            tracing::warn!(error = %e, "delete_identity: primary account delete failed; continuing to tombstone");
+        }
+        for acct in &inner.backup_accounts {
+            if let Err(e) = acct.client.delete_account().await {
+                tracing::warn!(server = %acct.server_url, error = %e, "delete_identity: backup account delete failed; continuing");
+            }
+        }
+
+        let (rot_priv, _rot_pub) = inner
+            .store
+            .load_rotation_key()
+            .await?
+            .ok_or_else(|| {
+                AppError::IdentityDeletionFailed(
+                    "no rotation key on device; cannot tombstone the DID".into(),
+                )
+            })?;
+        let tip = plc::fetch_tip_cid(&did)
+            .await
+            .map_err(|e| AppError::IdentityDeletionFailed(e.to_string()))?;
+        let signed = plc::sign_tombstone_op(&plc::build_tombstone_op(&tip), &rot_priv)
+            .map_err(|e| AppError::IdentityDeletionFailed(e.to_string()))?;
+        plc::submit_tombstone(&did, &signed)
+            .await
+            .map_err(|e| AppError::IdentityDeletionFailed(e.to_string()))?;
+
+        inner.store.wipe_device().await?;
+        for acct in &inner.backup_accounts {
+            if let Err(e) = acct.device.wipe_device().await {
+                tracing::warn!(server = %acct.server_url, error = %e, "delete_identity: backup device wipe failed");
+            }
+        }
+        inner.identity.wipe_identity().await?;
+        Ok(())
     }
 }
 

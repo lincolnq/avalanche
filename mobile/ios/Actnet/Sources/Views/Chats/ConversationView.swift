@@ -22,6 +22,10 @@ struct ConversationView: View {
     /// The message whose edit-history sheet is showing, plus its loaded revisions.
     @State private var historyMessage: Message?
     @State private var historyRevisions: [MessageRevisionFfi] = []
+    /// Whether we're still a member of this group (docs/53 §Leave). Non-members
+    /// keep the readable transcript but lose the composer. Always true for DMs.
+    /// Loaded on appear and after leaving.
+    @State private var isGroupMember = true
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
@@ -116,6 +120,8 @@ struct ConversationView: View {
                 blockedBar(did: did)
             } else if liveConv.isRequest, let did = liveConv.recipientDid {
                 messageRequestGate(did: did)
+            } else if conversation.isGroup && !isGroupMember {
+                leftGroupBar
             } else {
                 composer
             }
@@ -156,6 +162,11 @@ struct ConversationView: View {
             }
             if let groupId = conversation.groupId {
                 appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
+                Task {
+                    isGroupMember = await appState.isGroupMember(
+                        groupId: groupId, accountId: conversation.accountId
+                    )
+                }
             }
         }
         .onDisappear {
@@ -175,6 +186,18 @@ struct ConversationView: View {
                 scrollPosition.scrollTo(edge: .bottom)
             }
         }
+    }
+
+    /// Shown in place of the composer once you've left the group (docs/53 §Leave).
+    /// The transcript stays readable above; you just can't post. The "You left
+    /// the group" line is the last entry in the transcript itself.
+    @ViewBuilder private var leftGroupBar: some View {
+        Text("You left this group")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+            .padding(.vertical, 12)
     }
 
     /// The normal text composer (with the inline edit bar when editing).

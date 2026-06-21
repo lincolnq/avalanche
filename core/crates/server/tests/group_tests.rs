@@ -527,6 +527,92 @@ async fn submit_change_invite_then_promote_full_roundtrip() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["revision"], 2);
+
+    // Invitee (a plain ROLE_MEMBER, role 0) leaves the group — a self-class
+    // action, allowed without admin rights (docs/53 §Leave).
+    let invitee_pres3 = presentation_header(&public_params, &group_key, &invitee.credential);
+    let leave_body = json!({
+        "revision": 3,
+        "new_encrypted_state": B64.encode(group_key.encrypt_state(b"state after leave")),
+        "actions": { "leave": invitee_emi },
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/groups/{group_id_b64}/changes"))
+                .header("content-type", "application/json")
+                .header("x-group-auth", &invitee_pres3)
+                .body(Body::from(serde_json::to_vec(&leave_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "leave");
+
+    // After leaving, the invitee is no longer a member: state fetch is
+    // membership-gated → 404 (§3.4).
+    let invitee_pres4 = presentation_header(&public_params, &group_key, &invitee.credential);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/groups/{group_id_b64}"))
+                .header("x-group-auth", &invitee_pres4)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "post-leave fetch is gated");
+
+    // The founder is unaffected and can still fetch.
+    let founder_pres2 = presentation_header(&public_params, &group_key, &founder.credential);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/groups/{group_id_b64}"))
+                .header("x-group-auth", &founder_pres2)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "founder still a member");
+}
+
+#[tokio::test]
+async fn submit_change_leave_by_non_member_returns_401() {
+    let state = test_state().await;
+    let app = routes::router().with_state(state.clone());
+    let founder = make_member(&app).await;
+    let outsider = make_member(&app).await;
+    let (group_key, group_id_b64) = create_group_for(&app, &founder).await;
+
+    let public_params = state.zkgroup_secret.public_params();
+    let outsider_pres = presentation_header(&public_params, &group_key, &outsider.credential);
+    // An outsider who was never a member cannot "leave".
+    let leave_body = json!({
+        "revision": 1,
+        "new_encrypted_state": B64.encode([0u8; 32]),
+        "actions": { "leave": emi_for(&group_key, &outsider.did) },
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/groups/{group_id_b64}/changes"))
+                .header("content-type", "application/json")
+                .header("x-group-auth", &outsider_pres)
+                .body(Body::from(serde_json::to_vec(&leave_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "non-member leave rejected");
 }
 
 #[tokio::test]

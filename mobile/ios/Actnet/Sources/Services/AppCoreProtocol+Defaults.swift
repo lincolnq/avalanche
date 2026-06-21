@@ -43,6 +43,11 @@ extension AppCoreProtocol {
     func hasRecovery() -> Bool { false }
     func updateRecoveryBlob(prfOutput: Data, servers: [String]) throws {}
 
+    // MARK: - Account lifecycle (docs/53-multi-account-ux.md)
+
+    func leaveServer() throws {}
+    func deleteIdentity() throws {}
+
     // MARK: - Storage sync (docs/05-device-data-sync.md)
 
     func syncStorage() throws {}
@@ -111,6 +116,7 @@ extension AppCoreProtocol {
         )
     }
 
+    func cachedGroupState(groupId: String) throws -> GroupSummaryFfi? { nil }
     func inviteMember(groupId: String, recipientDid: String, role: Int16) throws {}
     func acceptInvite(groupId: String) throws {}
     func declineInvite(groupId: String) throws {}
@@ -119,6 +125,8 @@ extension AppCoreProtocol {
     func approveJoinRequest(groupId: String, encryptedMemberId: String) throws {}
     func denyJoinRequest(groupId: String, encryptedMemberId: String) throws {}
     func removeMember(groupId: String, encryptedMemberId: String) throws {}
+    func leaveGroup(groupId: String) throws {}
+    func isGroupMember(groupId: String) throws -> Bool { true }
     func changeMemberRole(groupId: String, encryptedMemberId: String, newRole: Int16) throws {}
     func setGroupExpiry(groupId: String, expirySeconds: UInt32) throws {}
     func setGroupTitle(groupId: String, newTitle: String) throws {}

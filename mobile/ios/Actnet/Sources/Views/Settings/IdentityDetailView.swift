@@ -9,6 +9,8 @@ struct IdentityDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var showStubAlert = false
     @State private var stubMessage = ""
+    @State private var isDeleting = false
+    @State private var deleteError: String?
 
     private var homeServer: ServerInfo? {
         // No discovery-server bit on the model yet; first server stands in.
@@ -116,11 +118,17 @@ struct IdentityDetailView: View {
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
-                    Text("Delete identity")
-                        .frame(maxWidth: .infinity)
+                    if isDeleting {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Delete identity")
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                .disabled(isDeleting)
                 .padding(.horizontal)
                 .padding(.top, 24)
             }
@@ -135,8 +143,7 @@ struct IdentityDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                stubMessage = "Identity deletion is not implemented yet. Once wired, this will leave every server, tombstone the DID in PLC, and wipe local state for this identity."
-                showStubAlert = true
+                deleteIdentity()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -146,6 +153,26 @@ struct IdentityDetailView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(stubMessage)
+        }
+        .alert("Couldn't delete identity", isPresented: .constant(deleteError != nil)) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    private func deleteIdentity() {
+        isDeleting = true
+        Task {
+            do {
+                try await appState.deleteIdentity(account: account)
+                // On success the account is gone; pop back to the accounts list
+                // (or onboarding, if this was the last identity).
+                dismiss()
+            } catch {
+                deleteError = error.localizedDescription
+            }
+            isDeleting = false
         }
     }
 

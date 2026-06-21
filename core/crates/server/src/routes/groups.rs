@@ -444,6 +444,10 @@ struct ActionsWire {
     join_via_link: Option<JoinViaLinkWire>,
     #[serde(default)]
     cancel_join_request: Option<String>,
+    /// Self-class: the actor leaves the group (docs/53), naming their own
+    /// encrypted_member_id. Sole action; the named EMI must equal the actor's.
+    #[serde(default)]
+    leave: Option<String>,
     #[serde(default)]
     approve_join_request: Vec<String>,
     #[serde(default)]
@@ -1004,6 +1008,7 @@ enum SelfKind {
     Decline,
     Join,
     Cancel,
+    Leave,
 }
 
 fn classify_actions(actions: &ActionsWire) -> Result<ActionClasses, ServerError> {
@@ -1022,6 +1027,9 @@ fn classify_actions(actions: &ActionsWire) -> Result<ActionClasses, ServerError>
     }
     if actions.cancel_join_request.is_some() {
         self_kinds.push(SelfKind::Cancel);
+    }
+    if actions.leave.is_some() {
+        self_kinds.push(SelfKind::Leave);
     }
     if self_kinds.len() > 1 {
         return Err(ServerError::BadRequest(
@@ -1090,6 +1098,14 @@ async fn enforce_actor_eligibility(
         SelfKind::Join => {
             // join_via_link does NOT require the actor to be in any table;
             // password check happens at apply time.
+        }
+        SelfKind::Leave => {
+            // Only an established member can leave (a pending invitee uses
+            // decline_invite; a pending-approval requester uses
+            // cancel_join_request). Requires a member_credentials row.
+            if actor_role.is_none() {
+                return Err(ServerError::Unauthorized);
+            }
         }
     }
     Ok(())
@@ -1247,6 +1263,19 @@ async fn apply_actions(
         if emi != actor_emi {
             return Err(ServerError::Unauthorized);
         }
+        db::groups::delete_pending_approval(tx, &group.group_id, &emi).await?;
+    }
+
+    // leave (self). Same deterministic-ciphertext actor-equality argument as
+    // `decline_invite`/`cancel_join_request`: the named EMI must be the actor's
+    // own. Drops the member_credentials row (and any pending-state races).
+    if let Some(emi_b64) = &actions.leave {
+        let emi = b64_decode(emi_b64, "leave")?;
+        if emi != actor_emi {
+            return Err(ServerError::Unauthorized);
+        }
+        db::groups::delete_member(tx, &group.group_id, &emi).await?;
+        db::groups::delete_pending_invite(tx, &group.group_id, &emi).await?;
         db::groups::delete_pending_approval(tx, &group.group_id, &emi).await?;
     }
 

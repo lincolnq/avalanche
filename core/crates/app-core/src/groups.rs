@@ -609,6 +609,25 @@ pub async fn fetch_group_state(
     Ok(summary_from_state(&row, &state))
 }
 
+/// Build a `GroupSummary` from the locally-cached state only — no network.
+/// Used to show last-known group info for a group we've left, where a server
+/// fetch is membership-gated and would 404 (docs/53 §Leave). Returns `None` if
+/// the group isn't in the local store or has no cached state yet.
+pub async fn cached_group_state(
+    store: &store::DeviceStore,
+    group_id_b64_s: &str,
+) -> Result<Option<GroupSummary>, AppError> {
+    let Some(row) = store.load_group(group_id_b64_s).await? else {
+        return Ok(None);
+    };
+    if row.encrypted_state_plaintext.is_empty() {
+        return Ok(None);
+    }
+    let state = gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+        .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?;
+    Ok(Some(summary_from_state(&row, &state)))
+}
+
 /// Best-effort: for each group member other than ourselves whose roster entry
 /// carries a profile key we don't already have cached, fetch + decrypt their
 /// profile blob and upsert it into `contact_profiles`. Mirrors
@@ -1051,6 +1070,67 @@ pub async fn remove_member(
     Ok(())
 }
 
+/// Leave a group (docs/53 §Leave). Self-class action: we compute our own
+/// encrypted_member_id deterministically from the group key (no roster scan
+/// needed — the ciphertext for `(did, group_key)` is stable) and submit a sole
+/// `leave` action naming it. Unlike `remove_member` (admin-class), any member
+/// may leave themselves.
+///
+/// We deliberately **keep** the local group row and message history: leaving is
+/// a tombstone-in-place, not a delete. `submit_actions` persists the updated
+/// state with us removed from `members` (so `is_group_member` reports false and
+/// the UI hides the composer) and records a "You left the group" system event
+/// as the last timeline entry. The conversation stays in the inbox, read-only.
+pub async fn leave_group(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+    group_id_b64_s: &str,
+) -> Result<(), AppError> {
+    submit_actions(
+        store,
+        client,
+        did,
+        group_id_b64_s,
+        |state, group_key| {
+            let emi = group_key.encrypt_member_id(did);
+            let emi_bytes = zkgroup::serialize(&emi);
+            state.members.retain(|m| m.encrypted_member_id != emi_bytes);
+            state.pending_invites.retain(|p| p.encrypted_member_id != emi_bytes);
+            state.pending_approvals.retain(|p| p.encrypted_member_id != emi_bytes);
+            Ok(GroupActionsWire {
+                leave: Some(b64(&emi_bytes)),
+                ..Default::default()
+            })
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Whether `did` is currently a member of the locally-cached group state. Reads
+/// the cached `encrypted_state_plaintext` only (no network) so it works after a
+/// leave, when a server fetch would 404. Returns `false` if the group isn't in
+/// the local store. Drives the conversation composer gate (docs/53 §Leave).
+pub async fn is_group_member(
+    store: &store::DeviceStore,
+    did: &str,
+    group_id_b64_s: &str,
+) -> Result<bool, AppError> {
+    let Some(row) = store.load_group(group_id_b64_s).await? else {
+        return Ok(false);
+    };
+    if row.encrypted_state_plaintext.is_empty() {
+        // No cached state yet (e.g. a freshly received invite we haven't
+        // fetched) — treat as not-yet-a-member; the composer stays gated until
+        // state is fetched and we appear in `members`.
+        return Ok(false);
+    }
+    let state = gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+        .map_err(|e| AppError::Protocol(format!("decode cached GroupState: {e}")))?;
+    Ok(state.members.iter().any(|m| m.did == did))
+}
+
 pub async fn change_role(
     store: &store::DeviceStore,
     client: &net::Client,
@@ -1386,6 +1466,10 @@ fn derive_change_events(ctx: &ChangeContext, actions: &GroupActionsWire) -> Vec<
     if let Some(emi) = &actions.cancel_join_request {
         let summary = format!("{} cancelled their join request", actor_label(actor_did));
         out.push(make(GroupEventKind::JoinRequestCancelled, actor_did.to_string(), emi.clone(), now_ms, summary));
+    }
+    if let Some(emi) = &actions.leave {
+        let summary = format!("{} left the group", actor_label(actor_did));
+        out.push(make(GroupEventKind::MemberLeft, actor_did.to_string(), emi.clone(), now_ms, summary));
     }
     for emi in &actions.approve_join_request {
         let tdid = emi_b64_to_did(post, emi);
@@ -2245,6 +2329,21 @@ impl AppCore {
         .map_err(AppErrorFfi::from)
     }
 
+    /// Last-known group info from the local cache, without a server round-trip
+    /// (docs/53 §Leave). Returns `nil` if nothing is cached. Lets the group-info
+    /// screen render for a group we've left, where `fetch_group_state` 404s.
+    pub fn cached_group_state(
+        &self,
+        group_id: String,
+    ) -> Result<Option<GroupSummaryFfi>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let summary = cached_group_state(&inner.store, &group_id).await?;
+            Ok::<_, AppError>(summary.map(summary_to_ffi))
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
     /// Group ids (URL-safe-no-pad base64) of every group held locally —
     /// i.e. every group we have the master key for, including ones we were
     /// invited to (app-core auto-accepts invites). Reads the local group
@@ -2484,6 +2583,24 @@ impl AppCore {
             .await
         })
         .map_err(AppErrorFfi::from)
+    }
+
+    /// Leave a group (docs/53 §Leave). Self-class action — works for any
+    /// member, not just admins. Removes our own server-side membership and drops
+    /// the group from the local store.
+    pub fn leave_group(&self, group_id: String) -> Result<(), AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.leave_group_async(&group_id))
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Whether the current identity is still a member of `group_id` per the
+    /// locally-cached state (docs/53 §Leave). Read-only, no network — `false`
+    /// after leaving, which the UI uses to hide the composer.
+    pub fn is_group_member(&self, group_id: String) -> Result<bool, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.is_group_member_async(&group_id))
+            .map_err(AppErrorFfi::from)
     }
 
     pub fn change_member_role(

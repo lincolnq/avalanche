@@ -1374,6 +1374,19 @@ export class AppCore {
   }
 
   /**
+   * Last-known group info from the local cache, with no server round-trip
+   * (docs/53). Returns `null` if nothing is cached. Use this to show group info
+   * for a group you've left, where {@link AppCore.fetchGroupState} would fail
+   * the membership-gated server fetch.
+   *
+   * @category Groups
+   */
+  async cachedGroupState(groupId: string): Promise<GroupSummary | null> {
+    const s = await this._native.cachedGroupState(groupId);
+    return s ? groupSummaryFromNative(s) : null;
+  }
+
+  /**
    * Group ids of every group held locally — every group we have the master
    * key for, including ones we were invited to (invites are auto-accepted).
    * Reads the local group store directly, so it surfaces groups with no
@@ -1468,6 +1481,51 @@ export class AppCore {
    */
   async removeMember(groupId: string, encryptedMemberId: string): Promise<void> {
     await this._native.removeMember(groupId, encryptedMemberId);
+  }
+
+  /**
+   * Leave a group yourself. Unlike {@link AppCore.removeMember} (an admin
+   * action), any member can leave. Removes your server-side membership and
+   * drops the group locally.
+   *
+   * @category Groups
+   */
+  async leaveGroup(groupId: string): Promise<void> {
+    await this._native.leaveGroup(groupId);
+  }
+
+  /**
+   * Whether the current identity is still a member of the group, per the
+   * locally-cached state (docs/53). Returns `false` after leaving — the UI
+   * uses this to hide the composer while keeping the conversation readable.
+   *
+   * @category Groups
+   */
+  async isGroupMember(groupId: string): Promise<boolean> {
+    return await this._native.isGroupMember(groupId);
+  }
+
+  /**
+   * Leave this server (docs/53): leave every group hosted here, then delete the
+   * account on the server. Your identity, contacts, and other servers are
+   * unaffected. Intended for non-discovery memberships.
+   *
+   * @category Account
+   */
+  async leaveServer(): Promise<void> {
+    await this._native.leaveServer();
+  }
+
+  /**
+   * Delete this identity from the network as completely as the protocol allows
+   * (docs/53): leave-cascade every server, tombstone the DID in the PLC
+   * directory, then wipe all local state. Irreversible. Throws
+   * (leaving local state intact) if the PLC tombstone can't be submitted.
+   *
+   * @category Account
+   */
+  async deleteIdentity(): Promise<void> {
+    await this._native.deleteIdentity();
   }
 
   /**

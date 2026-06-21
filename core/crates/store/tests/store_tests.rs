@@ -333,6 +333,78 @@ async fn conversation_expiry_independent_per_conversation() {
     assert_eq!(store.load_conversation_expiry("did:example:bob").await.unwrap(), Some(86400));
 }
 
+// ── Identity / device wipe (Delete-identity, docs/53) ───────────────────────
+
+#[tokio::test]
+async fn wipe_identity_clears_keys_and_durable_state() {
+    use store::groups::{GroupRow, PolicyRow};
+    use types::Timestamp;
+
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    // Seed identity-scoped state: keys + a group master key.
+    store
+        .save_identity_keypair(&crypto::IdentityKeyPair::generate())
+        .await
+        .unwrap();
+    store.save_did("did:plc:wipeme01", Timestamp(123)).await.unwrap();
+    store.save_rotation_key(&[1u8; 32], &[2u8; 33]).await.unwrap();
+    store
+        .save_group(&GroupRow {
+            group_id: "g-wipe".into(),
+            master_key: vec![7u8; 32],
+            hosting_server_url: "https://hs.example".into(),
+            revision: 0,
+            encrypted_state_plaintext: Vec::new(),
+            policy: PolicyRow::default_admin_only(),
+            group_push_pseudonym: None,
+            created_at: Timestamp(1),
+        })
+        .await
+        .unwrap();
+
+    // Sanity: present before wipe.
+    assert!(store.load_identity().await.unwrap().is_some());
+    assert!(store.load_rotation_key().await.unwrap().is_some());
+    assert!(store.load_did().await.unwrap().is_some());
+    assert_eq!(store.list_groups().await.unwrap().len(), 1);
+
+    store.wipe_identity().await.unwrap();
+
+    // Nothing survives — no key material, no group master keys.
+    assert!(store.load_identity().await.unwrap().is_none());
+    assert!(store.load_rotation_key().await.unwrap().is_none());
+    assert!(store.load_did().await.unwrap().is_none());
+    assert!(store.list_groups().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wipe_device_clears_registration_and_cursor() {
+    use store::account::DeviceAccount;
+    use types::Timestamp;
+
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    store
+        .save_device_account(&DeviceAccount {
+            server_url: "https://hs.example".into(),
+            device_id: 7,
+            registered_at: Timestamp(123),
+            registration_id: 4242,
+        })
+        .await
+        .unwrap();
+    store.set_storage_cursor(99).await.unwrap();
+
+    assert!(store.load_device_account().await.unwrap().is_some());
+    assert_eq!(store.storage_cursor().await.unwrap(), 99);
+
+    store.wipe_device().await.unwrap();
+
+    assert!(store.load_device_account().await.unwrap().is_none());
+    assert_eq!(store.storage_cursor().await.unwrap(), 0);
+}
+
 // ── Storage-service sidecar & dirty-tracking triggers (docs/05) ──────────────
 
 #[cfg(test)]

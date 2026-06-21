@@ -235,6 +235,22 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    /// Permanently delete the authenticated account on this server
+    /// (`DELETE /v1/accounts`). Server hard-deletes the account and all its data
+    /// (devices, prekeys, queue, DID document, profile, …) and returns 204.
+    /// Used by the Leave-server / Delete-identity flows (docs/53).
+    pub async fn delete_account(&self) -> Result<(), NetError> {
+        let resp = self
+            .send_authed(reqwest::Method::DELETE, "/v1/accounts", |b| b)
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        Ok(())
+    }
+
     /// Validate an invite token against the server.
     pub async fn validate_invite(&self, token: &str) -> Result<InviteValidationResponse, NetError> {
         let resp = self.http

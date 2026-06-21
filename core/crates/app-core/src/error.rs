@@ -20,6 +20,9 @@ pub enum AppError {
 
     #[error("contact is blocked: {0}")]
     Blocked(String),
+
+    #[error("identity deletion failed before completion: {0}")]
+    IdentityDeletionFailed(String),
 }
 
 /// UniFFI-exported error type. Flattened to strings since UniFFI can't
@@ -43,6 +46,11 @@ pub enum AppErrorFfi {
 
     #[error("{reason}")]
     Blocked { reason: String },
+
+    /// The PLC tombstone could not be submitted, so the identity was NOT
+    /// deleted and local state was left intact (docs/53). Recoverable: retry.
+    #[error("{reason}")]
+    IdentityDeletionFailed { reason: String },
 }
 
 impl From<AppError> for AppErrorFfi {
@@ -54,6 +62,9 @@ impl From<AppError> for AppErrorFfi {
             AppError::NoAccount => AppErrorFfi::NoAccount,
             AppError::Protocol(s) => AppErrorFfi::Protocol { reason: s },
             AppError::Blocked(s) => AppErrorFfi::Blocked { reason: s },
+            AppError::IdentityDeletionFailed(s) => {
+                AppErrorFfi::IdentityDeletionFailed { reason: s }
+            }
         }
     }
 }

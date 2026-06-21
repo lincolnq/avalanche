@@ -7,7 +7,8 @@ struct ServerDetailView: View {
     let server: ServerInfo
 
     @State private var showLeaveConfirmation = false
-    @State private var showStubAlert = false
+    @State private var isLeaving = false
+    @State private var leaveError: String?
 
     private var isHome: Bool {
         account.servers.first?.id == server.id
@@ -53,11 +54,17 @@ struct ServerDetailView: View {
                     Button(role: .destructive) {
                         showLeaveConfirmation = true
                     } label: {
-                        Text("Leave this server")
-                            .frame(maxWidth: .infinity)
+                        if isLeaving {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Leave this server")
+                                .frame(maxWidth: .infinity)
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .disabled(isLeaving)
                     .padding(.horizontal)
                 }
             }
@@ -72,16 +79,29 @@ struct ServerDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Leave", role: .destructive) {
-                showStubAlert = true
+                leaveServer()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("You'll be removed from any groups and Projects on \(server.name). People you share other servers with will still be able to reach you there. New contacts will reach you at \(homeServerName).")
         }
-        .alert("Not implemented", isPresented: $showStubAlert) {
-            Button("OK", role: .cancel) { }
+        .alert("Couldn't leave server", isPresented: .constant(leaveError != nil)) {
+            Button("OK", role: .cancel) { leaveError = nil }
         } message: {
-            Text("Leaving a server is not implemented yet. Once wired, this will leave every group and Project on \(server.name) and delete the membership.")
+            Text(leaveError ?? "")
+        }
+    }
+
+    private func leaveServer() {
+        isLeaving = true
+        Task {
+            do {
+                try await appState.leaveServer(account: account, server: server)
+                dismiss()
+            } catch {
+                leaveError = error.localizedDescription
+            }
+            isLeaving = false
         }
     }
 }

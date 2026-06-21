@@ -92,8 +92,9 @@ pub async fn update_recovery_blob(
 ///  14. storage_seq            (→ accounts)
 ///  15. storage_snapshots      (→ accounts)
 ///  16. project_bots           (→ accounts; Project row survives)
-///  17. devices                (→ accounts)
-///  18. accounts               (root)
+///  17. abuse_reports          (→ accounts via reporter_account)
+///  18. devices                (→ accounts)
+///  19. accounts               (root)
 pub async fn delete_account(conn: &mut PgConnection, account_id: i64) -> Result<(), sqlx::Error> {
     let mut tx = conn.begin().await?;
 
@@ -220,13 +221,23 @@ pub async fn delete_account(conn: &mut PgConnection, account_id: i64) -> Result<
         .execute(&mut *tx)
         .await?;
 
-    // 17. devices references accounts
+    // 17. abuse_reports references accounts via reporter_account (NOT NULL, no
+    // cascade) — drop reports this account *filed* so the root delete doesn't
+    // FK-violate. Reports filed *about* this account live under the plaintext
+    // `reported_did` column (no FK) and are intentionally retained for operator
+    // review (docs/12 §3).
+    sqlx::query("DELETE FROM abuse_reports WHERE reporter_account = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // 18. devices references accounts
     sqlx::query("DELETE FROM devices WHERE account_id = $1")
         .bind(account_id)
         .execute(&mut *tx)
         .await?;
 
-    // 18. accounts (root row)
+    // 19. accounts (root row)
     sqlx::query("DELETE FROM accounts WHERE id = $1")
         .bind(account_id)
         .execute(&mut *tx)

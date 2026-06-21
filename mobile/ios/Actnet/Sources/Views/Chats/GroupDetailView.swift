@@ -25,6 +25,13 @@ struct GroupDetailView: View {
         summary?.members.first(where: { $0.did == accountId })?.role == 1
     }
 
+    /// Whether we're still a member — false once we've left (docs/53 §Leave).
+    /// Gates the "Leave group" button; the rest of the screen renders read-only
+    /// from cached state.
+    private var amMember: Bool {
+        summary?.members.contains(where: { $0.did == accountId }) ?? false
+    }
+
     var body: some View {
         Group {
             if let s = summary {
@@ -111,11 +118,19 @@ struct GroupDetailView: View {
                             }
                         }
                     }
-                    Section {
-                        Button(role: .destructive) {
-                            leaveGroup()
-                        } label: {
-                            Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
+                    if amMember {
+                        Section {
+                            Button(role: .destructive) {
+                                leaveGroup()
+                            } label: {
+                                Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                    } else {
+                        Section {
+                            Text("You left this group.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -198,7 +213,18 @@ struct GroupDetailView: View {
             self.summary = s
             self.expirySeconds = s.expirySeconds
         } catch {
-            errorMessage = error.localizedDescription
+            // The server fetch is membership-gated, so it 404s for a group we've
+            // left (docs/53 §Leave). Fall back to the last-known cached state so
+            // the info screen still renders, read-only, instead of erroring.
+            let cached = try? await Task.detached(operation: {
+                try core.cachedGroupState(groupId: gid)
+            }).value
+            if let cached {
+                self.summary = cached
+                self.expirySeconds = cached.expirySeconds
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -239,17 +265,19 @@ struct GroupDetailView: View {
     }
 
     private func leaveGroup() {
-        guard let s = summary,
-              let me = s.members.first(where: { $0.did == accountId })
-        else { return }
         guard let core = appState.core(accountId: accountId) else { return }
-        let emi = me.encryptedMemberId
         let gid = groupId
         Task {
             do {
+                // Self-class leave (docs/53): works for any member, not just
+                // admins. Tombstone-in-place — the group stays in the inbox,
+                // read-only, with a "You left the group" entry as the last
+                // message. Reload the timeline so that entry shows, then pop
+                // back to the (now read-only) conversation.
                 try await Task.detached {
-                    try core.removeMember(groupId: gid, encryptedMemberId: emi)
+                    try core.leaveGroup(groupId: gid)
                 }.value
+                appState.reloadGroupTimelineIfLoaded(groupId: gid, accountId: accountId)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

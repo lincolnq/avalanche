@@ -22,6 +22,10 @@ for (const method of [
   "setGroupExpiry",
   "setPendingRequest",
   "fetchAndCacheProfile",
+  "leaveGroup",
+  "isGroupMember",
+  "leaveServer",
+  "deleteIdentity",
 ]) {
   if (typeof AppCore.prototype[method] !== "function") {
     console.error(`unexpected: AppCore.prototype.${method} is not a function`);

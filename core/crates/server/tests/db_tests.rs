@@ -1278,3 +1278,36 @@ async fn abuse_report_insert_and_count() {
     assert_eq!(reports[1].reason, "spam");
     assert!(reports.iter().all(|r| r.reporter_account == reporter));
 }
+
+#[tokio::test]
+async fn delete_account_with_filed_abuse_report_succeeds() {
+    // Regression: `abuse_reports.reporter_account` is NOT NULL with no cascade,
+    // so deleting an account that has filed a report must drop those reports in
+    // the cascade or the root `DELETE FROM accounts` FK-violates.
+    use server::db::{abuse, accounts};
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let reporter = accounts::create(&mut *tx, "did:plc:delreporter01", None, false)
+        .await
+        .unwrap();
+    let other = accounts::create(&mut *tx, "did:plc:delreporter02", None, false)
+        .await
+        .unwrap();
+
+    // `reporter` files reports; a different account also reports `reporter`'s DID.
+    abuse::insert(&mut *tx, "did:plc:somespammer", "spam", reporter).await.unwrap();
+    abuse::insert(&mut *tx, "did:plc:somespammer", "harassment", reporter).await.unwrap();
+    abuse::insert(&mut *tx, "did:plc:delreporter01", "spam", other).await.unwrap();
+
+    // Deleting the reporter succeeds and removes the reports it filed.
+    accounts::delete_account(&mut *tx, reporter).await.unwrap();
+    assert_eq!(abuse::count_by_reporter(&mut *tx, reporter).await.unwrap(), 0);
+    assert!(accounts::find_by_did(&mut *tx, "did:plc:delreporter01").await.unwrap().is_none());
+
+    // Reports filed *about* the deleted DID (plaintext `reported_did`, no FK)
+    // are retained for operator review.
+    let about = abuse::list_for_did(&mut *tx, "did:plc:delreporter01").await.unwrap();
+    assert_eq!(about.len(), 1, "reports about the deleted account survive");
+    assert_eq!(about[0].reporter_account, other);
+}

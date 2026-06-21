@@ -508,6 +508,71 @@ final class AppState: ObservableObject {
         isOnboarding = false
     }
 
+    // MARK: - Account teardown (docs/53-multi-account-ux.md)
+
+    /// Leave a server (docs/53 §Leave): the core leaves every group hosted
+    /// there and deletes the account on the server. Today each account is bound
+    /// to a single server (one core, docs/06 §9 N=1), so the membership and the
+    /// account coincide — leaving removes the account from this device.
+    func leaveServer(account: Account, server: ServerInfo) async throws {
+        guard let core = cores[account.id] else {
+            throw NSError(domain: "AppState", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active connection for this account"])
+        }
+        try await Task.detached { try core.leaveServer() }.value
+        removeAccountLocally(accountId: account.id)
+    }
+
+    /// Delete an identity (docs/53 §Delete identity): the core leaves every
+    /// server, submits a rotation-key-signed PLC tombstone for the DID, and
+    /// wipes its own SQLCipher rows. This then removes the now-empty account
+    /// from the device. Throws (leaving the account in place) if the tombstone
+    /// could not be submitted, so the user can retry.
+    func deleteIdentity(account: Account) async throws {
+        guard let core = cores[account.id] else {
+            throw NSError(domain: "AppState", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active connection for this account"])
+        }
+        try await Task.detached { try core.deleteIdentity() }.value
+        removeAccountLocally(accountId: account.id)
+    }
+
+    /// Tear down all local state for one account: listener tasks, the live
+    /// core, its in-memory conversations/messages, the persisted entry, and the
+    /// SQLCipher database files (identity.db + device.db and their WAL/SHM
+    /// siblings). Returns to onboarding if it was the last account.
+    private func removeAccountLocally(accountId: String) {
+        stateTasks[accountId]?.cancel()
+        stateTasks.removeValue(forKey: accountId)
+        eventTasks[accountId]?.cancel()
+        eventTasks.removeValue(forKey: accountId)
+        cores.removeValue(forKey: accountId)
+        connectionStates.removeValue(forKey: accountId)
+        accounts.removeAll { $0.id == accountId }
+
+        let convIds = conversations.filter { $0.accountId == accountId }.map(\.id)
+        conversations.removeAll { $0.accountId == accountId }
+        for id in convIds {
+            messagesByConversation.removeValue(forKey: id)
+            reactionsByConversation.removeValue(forKey: id)
+        }
+
+        // Delete the on-disk SQLCipher files. The identity DB is the base path;
+        // the device DB is `<base>.device` (store::open_split). Each may have
+        // `-wal` / `-shm` siblings.
+        if let filename = Self.persistedDbFilename(did: accountId) {
+            let base = dbDir.appendingPathComponent(filename).path
+            for path in [base, base + ".device"] {
+                for suffix in ["", "-wal", "-shm"] {
+                    try? FileManager.default.removeItem(atPath: path + suffix)
+                }
+            }
+        }
+
+        Self.removePersistedAccount(did: accountId)
+        if accounts.isEmpty {
+            isOnboarding = true
+        }
+    }
+
     // MARK: - Display name resolution
 
     /// Returns the cached display name for a DID, or the DID itself if unknown.
@@ -555,7 +620,7 @@ final class AppState: ObservableObject {
         case .memberJoinedViaLink: return "\(actor) joined via invite link"
         case .memberRequestedToJoin: return "\(actor) requested to join"
         case .memberInvited: return "\(actor) invited \(target)"
-        case .memberLeft: return "\(actor) left"
+        case .memberLeft: return "\(actor) left the group"
         case .memberRemoved: return "\(actor) removed \(target)"
         case .joinRequestApproved: return "\(actor) approved \(target)'s request to join"
         case .joinRequestDenied: return "\(actor) declined a join request"
@@ -1085,6 +1150,15 @@ final class AppState: ObservableObject {
         conversations.append(conv)
         groupTitleCache[groupId] = title
         return conv
+    }
+
+    /// Whether the current identity is still a member of a group (docs/53 §Leave).
+    /// Reads the locally-cached state via the core — `false` after leaving, which
+    /// the conversation view uses to hide the composer. Defaults to `true` on
+    /// error so a transient read failure doesn't lock a real member out.
+    func isGroupMember(groupId: String, accountId: String) async -> Bool {
+        guard let core = cores[accountId] else { return true }
+        return (try? await Task.detached { try core.isGroupMember(groupId: groupId) }.value) ?? true
     }
 
     /// Refresh the cached title for a group from `fetchGroupState`. Updates
@@ -1759,6 +1833,10 @@ final class AppState: ObservableObject {
         if let data = try? JSONEncoder().encode(existing) {
             UserDefaults.standard.set(data, forKey: accountsKey)
         }
+    }
+
+    private static func persistedDbFilename(did: String) -> String? {
+        loadPersistedAccounts().first(where: { $0.did == did })?.dbFilename
     }
 
     private static func removePersistedAccount(did: String) {

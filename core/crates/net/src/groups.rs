@@ -234,6 +234,10 @@ pub struct GroupActionsWire {
     pub join_via_link: Option<JoinViaLinkWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_join_request: Option<String>,
+    /// Self-class: the actor leaves the group, naming their own
+    /// encrypted_member_id (docs/53). Must be the sole action in the change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leave: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approve_join_request: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

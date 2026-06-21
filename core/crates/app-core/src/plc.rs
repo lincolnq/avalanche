@@ -71,6 +71,92 @@ pub struct PlcService {
     pub endpoint: String,
 }
 
+/// A `did:plc` tombstone operation. Distinct shape from [`PlcOperation`]: it
+/// carries only `type`, `prev`, and `sig` (no keys/services). Submitting it
+/// signed by a rotation key marks the DID permanently deleted — subsequent
+/// resolution returns a tombstoned/gone state (docs/53 §Delete identity).
+///
+/// The field set must DAG-CBOR-encode to exactly `{type, prev, sig}` (sig
+/// omitted while signing), so it is a separate struct rather than a variant of
+/// `PlcOperation`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TombstoneOp {
+    pub r#type: String,
+    pub prev: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+}
+
+/// Build an unsigned tombstone operation chaining from `prev_cid` — the CIDv1 of
+/// the DID's current tip operation (see [`fetch_tip_cid`]).
+pub fn build_tombstone_op(prev_cid: &str) -> TombstoneOp {
+    TombstoneOp {
+        r#type: "plc_tombstone".to_string(),
+        prev: prev_cid.to_string(),
+        sig: None,
+    }
+}
+
+/// Sign a tombstone op with the rotation key. Same process as [`sign_plc_op`]:
+/// strip `sig`, DAG-CBOR encode, ECDSA-SHA256 sign, low-S normalize, base64url
+/// no-pad encode raw r||s.
+pub fn sign_tombstone_op(
+    op: &TombstoneOp,
+    rotation_key_private: &[u8],
+) -> Result<TombstoneOp, AppError> {
+    let mut unsigned = op.clone();
+    unsigned.sig = None;
+
+    let cbor_bytes = serde_ipld_dagcbor::to_vec(&unsigned)
+        .map_err(|e| AppError::Protocol(format!("DAG-CBOR encode failed: {e}")))?;
+
+    let signing_key = SigningKey::from_bytes(rotation_key_private.into())
+        .map_err(|e| AppError::Protocol(format!("invalid rotation key: {e}")))?;
+    let sig: Signature = signing_key.sign(&cbor_bytes);
+    let normalized = sig.normalize_s().unwrap_or(sig);
+    let sig_b64 = BASE64_URL_SAFE_NO_PAD.encode(normalized.to_bytes());
+
+    let mut signed = op.clone();
+    signed.sig = Some(sig_b64);
+    Ok(signed)
+}
+
+/// Submit a signed tombstone op to the PLC directory (POST `/{did}`).
+pub async fn submit_tombstone(did: &str, signed_op: &TombstoneOp) -> Result<(), AppError> {
+    let client = reqwest::Client::new();
+    let url = format!("{PLC_DIRECTORY_URL}/{did}");
+    let resp = client
+        .post(&url)
+        .json(signed_op)
+        .send()
+        .await
+        .map_err(|e| AppError::Protocol(format!("PLC directory request failed: {e}")))?;
+
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    Err(AppError::Protocol(format!(
+        "PLC directory rejected tombstone: {status} — {body} (did={did}, prev={})",
+        signed_op.prev,
+    )))
+}
+
+/// Fetch the CIDv1 of the DID's current tip operation — the `prev` a new op
+/// (e.g. a tombstone) must chain from. Errors if the DID has no op log.
+pub async fn fetch_tip_cid(did: &str) -> Result<String, AppError> {
+    let client = reqwest::Client::new();
+    let ops = fetch_log(&client, did)
+        .await
+        .ok_or_else(|| AppError::Protocol(format!("PLC directory has no log for {did}")))?;
+    let tip = ops
+        .last()
+        .ok_or_else(|| AppError::Protocol(format!("PLC op log for {did} is empty")))?;
+    plc_op_cid(tip)
+}
+
 /// Build an unsigned genesis operation **with no identity key**.
 ///
 /// The genesis op intentionally omits `verification_methods` so the resulting
@@ -535,6 +621,38 @@ mod tests {
         // DID is fixed by genesis, unaffected by subsequent ops.
         let did_after = derive_did(&signed_genesis).unwrap();
         assert_eq!(did, did_after);
+    }
+
+    #[test]
+    fn tombstone_op_signs_and_verifies() {
+        use p256::ecdsa::{signature::Verifier, VerifyingKey};
+
+        let (priv_key, _pub_key) = generate_rotation_key();
+        let op = build_tombstone_op("bafyreiexampleprevcid");
+        assert_eq!(op.r#type, "plc_tombstone");
+        assert!(op.sig.is_none());
+
+        let signed = sign_tombstone_op(&op, &priv_key).unwrap();
+        assert!(signed.sig.is_some());
+        assert_eq!(signed.prev, "bafyreiexampleprevcid");
+
+        // Signature verifies over the unsigned (sig-stripped) DAG-CBOR.
+        let sig_bytes = BASE64_URL_SAFE_NO_PAD.decode(signed.sig.as_ref().unwrap()).unwrap();
+        let signature = Signature::from_bytes((&sig_bytes[..]).into()).unwrap();
+        let mut unsigned = op.clone();
+        unsigned.sig = None;
+        let cbor = serde_ipld_dagcbor::to_vec(&unsigned).unwrap();
+        let verifying_key = VerifyingKey::from(&SigningKey::from_bytes((&priv_key[..]).into()).unwrap());
+        verifying_key.verify(&cbor, &signature).unwrap();
+    }
+
+    #[test]
+    fn tombstone_unsigned_cbor_has_exactly_type_and_prev() {
+        // The signed-over bytes must be exactly {type, prev} — no stray fields,
+        // or plc.directory rejects the signature. A 2-entry CBOR map starts 0xA2.
+        let op = build_tombstone_op("bafyreiexampleprevcid");
+        let cbor = serde_ipld_dagcbor::to_vec(&op).unwrap();
+        assert_eq!(cbor[0], 0xA2, "expected a 2-key CBOR map (type, prev)");
     }
 
     #[test]
