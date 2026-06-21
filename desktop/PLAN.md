@@ -41,8 +41,15 @@ Available skills (use when applicable):
 
 ### Phase 2 — TypeScript Models
 
-- [ ] **T05** — Core models: `src/models/Account.ts`, `src/models/Conversation.ts`, `src/models/Message.ts`. Mirror Swift structs field-for-field including `DeliveryStatus` enum. Reference: `mobile/ios/Actnet/Sources/Models/Account.swift`, `Conversation.swift`, `Message.swift`. Barrel export via `src/models/index.ts`.
-- [ ] **T06** — Secondary models: `src/models/InviteToken.ts` (base64url-decode JSON, extract `s`=serverUrl / `d`=inviterDid), `src/models/ProjectInfo.ts`, `src/models/ServerInfo.ts`. Reference matching `.swift` files. Add to `src/models/index.ts`.
+- [ ] **T05** — Core models: `src/models/Account.ts`, `src/models/Conversation.ts`, `src/models/Message.ts`. Mirror Swift structs exactly — field names are non-obvious, do not guess. Verified fields:
+  - `Account`: `id: string` (IS the DID), `displayName: string`, `avatarData: Uint8Array | null` (binary blob, not a URL), `servers: ServerInfo[]`
+  - `ServerInfo`: `id: string` (IS the server URL), `name: string`, `url: string`, `displayHost: string`
+  - `Conversation`: `id`, `title`, `accountId` (owning account DID — NOT `ownerId`), `serverUrl`, `recipientDid?: string`, `groupId?: string`, `lastMessage?: string`, `lastMessageDate?: number` (unix-ms, NOT a Date object), `lastMessageKind: number`, `lastMessageMetadata?: string`, `lastMessageSenderDid?: string`, `isGroup: boolean`, `isRequest: boolean`, `isBlocked: boolean`
+  - `Message`: `id`, `conversationId`, `senderAccountId: string` (NOT `senderId` or `authorId`), `body: string` (NOT `content` or `text`), `sentAtMs: number` (unix-ms Int64 — NOT a Date), `editedAtMs?: number`, `readAtMs?: number`, `deliveryStatus: DeliveryStatus`, `editCount: number`, `isDeleted: boolean`, `kind: number`, `metadata?: string`, `expireTimerSecs: number`, `expireAtMs?: number`
+  - `DeliveryStatus` enum: `sending = 0`, `sent = 1`, `delivered = 2`, `read = 3`, `failed = 4` (must match exactly for persistence round-trips)
+  
+  Reference: `mobile/ios/Actnet/Sources/Models/` — read the actual Swift files to catch any fields missed above. Barrel export via `src/models/index.ts`.
+- [ ] **T06** — Secondary models: `src/models/ProjectInfo.ts` (reference `mobile/ios/Actnet/Sources/Models/ProjectInfo.swift`). `ServerInfo` is already defined in T05. For `InviteToken`: **TypeScript never decodes the token bytes** — the token format is complex (two shapes, Gatekeeper envelope and Bootstrap) and is opaque to the frontend. Instead: (a) create a `parseInviteUrl(url: string): string | null` helper that extracts the raw token string from URL path components `/i/<token>` or `/invite/<token>` — pure string parsing, no base64; (b) create an `InviteInfo` interface for the server-validated response: `{ token: string; serverUrl: string; serverName: string; inviterDid?: string; inviterDisplayName?: string; postOnboardingRedirect?: string }`. The raw token string is passed to `invoke('validate_invite', { token })` which returns an `InviteInfo`. There is **no `d`=inviterDid field in the token** — that comes from server validation. Add to `src/models/index.ts`.
 
 ### Phase 3 — Service Layer
 
