@@ -194,7 +194,7 @@ One important distinction: the substrate's **private connections graph** (people
 
 On iOS and standard Android, only Apple (APNs) and Google (FCM) can wake a backgrounded app. If homeservers held device tokens directly, they — and Apple/Google — would learn too much. Instead, the app developer runs a **push relay**: homeservers send content-free wakeups to per-(user, server) pseudonyms; the relay maps pseudonyms to tokens and fires empty payloads. Apple/Google see only a ping; the relay sees pseudonym-level timing but no identity, content, or cross-server linkage. Pseudonyms rotate periodically. High-risk users can opt out and poll manually. Multiple relays are supported so the Avalanche-operated relay is not a privileged singleton.
 
-On degoogled Android (no Google Play Services), FCM is unavailable. The app falls back to **UnifiedPush** if the user has a distributor installed, and to a WebSocket keepalive otherwise. On Desktop, the Electron process is already connected — wakeup is a WebSocket frame that triggers a local OS notification with no external push infrastructure.
+On degoogled Android (no Google Play Services), FCM is unavailable. The app falls back to **UnifiedPush** if the user has a distributor installed, and to a WebSocket keepalive otherwise. On Desktop, the Tauri app maintains a persistent WebSocket connection — wakeup is a WebSocket frame that triggers a local OS notification via `tauri-plugin-notification`, with no external push infrastructure.
 
 The Avalanche-operated relay will live at `https://relay.theavalanche.net` (not yet deployed). See `docs/15-push-notifications.md` for the full per-platform dispatch design and UnifiedPush registration flow, and `docs/41-relay-deployment.md` for ops.
 

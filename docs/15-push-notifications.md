@@ -7,7 +7,7 @@
 | iOS | APNs via push relay |
 | Android (standard) | FCM via push relay |
 | Android (degoogled) | UnifiedPush if distributor installed; WebSocket keepalive otherwise |
-| Desktop (Electron) | WebSocket frame → local OS notification; no external push |
+| Desktop (Tauri) | WebSocket frame → local OS notification via `tauri-plugin-notification`; no external push |
 
 The homeserver picks dispatch per device based on what's registered: FCM token → FCM; UnifiedPush endpoint URL → POST to it; neither → WebSocket frame. Desktop never registers a push token.
 
