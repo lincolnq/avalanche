@@ -49,7 +49,7 @@ mobile/android/
 │   │   │       ├── theme/
 │   │   │       ├── navigation/
 │   │   │       ├── onboarding/
-│   │   │       │   ├── SplashScreen.kt
+│   │   │       │   ├── SplashView.kt
 │   │   │       │   ├── QRScannerScreen.kt
 │   │   │       │   ├── InviteLinkEntryScreen.kt
 │   │   │       │   ├── IdentityPickerScreen.kt
@@ -115,7 +115,7 @@ Every row maps an iOS file to its Android equivalent. Update status as work land
 
 | iOS | Android | Status |
 |---|---|---|
-| `SplashView.swift` | `SplashScreen.kt` | `[ ]` |
+| `SplashView.swift` | `SplashView.kt` | `[x]` (static demo; actions stubbed) |
 | `QRScannerView.swift` | `QRScannerScreen.kt` | `[ ]` |
 | `InviteLinkEntryView.swift` | `InviteLinkEntryScreen.kt` | `[ ]` |
 | `IdentityPickerView.swift` | `IdentityPickerScreen.kt` | `[ ]` |
@@ -212,7 +212,7 @@ Every row maps an iOS file to its Android equivalent. Update status as work land
 
 ### Phase 4 — Onboarding screens
 
-- `SplashScreen.kt`: logo, scan QR button, enter link button, dev settings icon
+- `SplashView.kt`: logo, scan QR button, enter link button, dev settings icon
 - `QRScannerScreen.kt`: CameraX + ZXing (`zxing-android-embedded`), parse `actnet://` or `https://…/invite/…` — ZXing chosen over ML Kit to avoid Google Play Services dependency (works on de-Googled Android)
 - `InviteLinkEntryScreen.kt`: text field, parse on submit
 - `IdentityPickerScreen.kt`: existing accounts list or straight to NewAccount
