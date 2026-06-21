@@ -1,5 +1,6 @@
 package net.theavalanche.app
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +26,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -53,11 +55,11 @@ fun SplashView(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "Avalanche",
-                color = AvalancheColors.Brand,
-                fontSize = 48.sp,
-                fontWeight = FontWeight.Bold,
+            Image(
+                painter = painterResource(R.drawable.wordmark),
+                contentDescription = "Avalanche",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.width(280.dp),
             )
             Text(
                 text = "Encrypted organizing",
