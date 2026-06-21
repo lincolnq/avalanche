@@ -148,6 +148,18 @@ FFI constraints (do not violate):
 - `ServerError::Internal(msg)` — unexpected server-side failure; log with `tracing::error!`
 - Never expose DB details or internal state to the client; only log server-side
 
+## Local Claude Hooks (optional, Windows/PowerShell)
+
+The committed `.claude/settings.json` is kept minimal (`{}`) so it works on all platforms.
+Platform-specific hooks belong in `.claude/settings.local.json` (gitignored — create it
+yourself; Claude Code will not create it automatically). On Windows, three PostToolUse
+hooks are useful:
+
+- **Bash / `gh pr create`** — reminds you to delete the matching line from `docs/02-todos-deferred.md`
+- **Edit** and **Write on platform files** — reminds you to implement the equivalent on the other two platforms (iOS / Android / Desktop)
+
+To set them up: copy `.claude/settings.local.json` from a teammate who has them configured.
+
 ## Contributing workflow
 
 The PR template at `.github/pull_request_template.md` is auto-populated by GitHub when you open a PR. It includes layer-specific checklists (server, mobile/FFI, crypto) — fill in every applicable section before requesting review.

@@ -13,6 +13,9 @@ __pycache__/
 # Environment files
 .env
 
+# Claude Code local settings (machine-specific; see CLAUDE.md for hook examples)
+.claude/settings.local.json
+
 # APNs auth keys — never commit
 *.p8
 AuthKey_*.p8
