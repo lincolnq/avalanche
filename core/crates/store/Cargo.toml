@@ -20,3 +20,13 @@ async-trait        = { workspace = true }
 thiserror          = { workspace = true }
 serde              = { workspace = true }
 uuid               = { workspace = true }
+
+# Android cross-compile only. SQLCipher's `bundled-sqlcipher` build links against
+# a system OpenSSL on non-Apple targets (Apple uses CommonCrypto), but there is
+# no system OpenSSL for an NDK target. The vendored-openssl variant compiles
+# OpenSSL from source via the NDK toolchain instead. It feature-unifies with the
+# workspace's `bundled-sqlcipher` and also flips on `openssl-sys/vendored`, which
+# the networking stack's native-tls shares — so this one line covers both the
+# crypto DB and TLS on Android. Other targets are unaffected.
+[target.'cfg(target_os = "android")'.dependencies]
+libsqlite3-sys = { version = "0.28", features = ["bundled-sqlcipher-vendored-openssl"] }

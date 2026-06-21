@@ -11,6 +11,8 @@ All commands run from the repo root. The Rust workspace root is `core/`.
 make ios             # build the iOS app for the simulator (incremental)
 make xcode           # prepare bindings + xcframework + xcodeproj for an
                      # already-open Xcode (no xcodebuild)
+make android         # build the Android debug APK (incremental)
+make android-bindings # Android prep only: Kotlin UniFFI glue + native libs, no Gradle
 make dev-all         # run homeserver + testbot + relay together (preferred)
 make test            # run crypto + store + types + server tests (needs Postgres)
 make test-e2e        # app-core integration tests (needs a running server)

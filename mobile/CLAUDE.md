@@ -71,10 +71,19 @@ The Android app is a Kotlin/Jetpack Compose project under `mobile/android/`.
 ### Build commands
 
 ```bash
-make android-bindings                                    # cross-compile Rust core, generate Kotlin bindings, package AAR
-cd mobile/android && ./gradlew assembleDebug             # build APK
-cd mobile/android && ./gradlew connectedAndroidTest      # run device tests
+make android            # full build: bindings + native libs, then Gradle builds the debug APK
+make android-bindings   # prep only: regenerate Kotlin UniFFI glue + cross-compile
+                        # libapp_core.so per ABI into app/src/main/jniLibs/ (no Gradle).
+                        # The Android analog of `make xcode`.
 ```
+
+`make android` does the minimum necessary work based on file dependencies — the
+Rust cross-compile only reruns when Rust sources change. Gradle needs a JDK 17+;
+the Makefile falls back to Android Studio's bundled JBR if `JAVA_HOME` is unset.
+
+The Rust core is consumed directly (UniFFI-generated Kotlin in `mobile/android/Generated/`
+as a source dir + `libapp_core.so` in `jniLibs/`, loaded via JNA), not packaged as
+an AAR. Both `Generated/` and `jniLibs/` are gitignored build artifacts.
 
 ### FFI constraints (same as iOS, different syntax)
 
