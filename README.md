@@ -70,7 +70,19 @@ make dev-all   # starts all services locally + launches homeserver + relay + tes
 
 This uses Docker to install a few dev prereqs including a Postgres database server, then runs the homeserver on port 3000, and builds and launches some Node-based default projects (testbot and adminbot) that connect to it.
 
-### Run the iOS app
+### Run the desktop app (Windows / macOS / Linux)
+
+See **[desktop/README.md](desktop/README.md)** for prerequisites and setup instructions. Short version:
+
+```bash
+cd desktop
+npm install
+npm run tauri dev
+```
+
+No server needed — the desktop app runs in mock mode by default.
+
+### Run the iOS app on simulator
 
 ```bash
 make ios       # build Rust → XCFramework, generate Swift bindings, generate Xcode project

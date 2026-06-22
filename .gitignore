@@ -34,3 +34,7 @@ dist/
 # local-dev runtime filesystem state: bots' SQLCipher stores, attachment blobs
 # (docs/35), etc. Wiped by `make db-reset`.
 dev-state/
+
+# Desktop app
+desktop/node_modules/
+desktop/src-tauri/target/
