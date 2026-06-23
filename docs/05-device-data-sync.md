@@ -384,6 +384,50 @@ latest snapshot + the recovery blob.
 is **not** the substrate (it would re-centralize on a subpoenable party and leak
 DID↔platform metadata, against the threat model).
 
+### OPEN — backup placement under review (snapshot client core PARKED)
+
+**Status: the snapshot/backup half of this section is being reconsidered. The
+client `build_snapshot`/`restore_snapshot` core was written and tested but is now
+PARKED (commented out in `app-core/src/storage_sync.rs`), and the periodic
+backup-push + `net` snapshot client methods were never built. Do NOT re-enable
+without resolving the questions below.**
+
+The concern surfaced while wiring it: on the server, the snapshot is a **totally
+different kind of storage** from the live per-record store — a separate table
+(`storage_snapshots`, one opaque blob/account, LWW on `snapshot_version`, no `seq`,
+no per-record CAS) versus `storage_items` (per-record CAS + per-account `seq`
+cursor). The two never cross-populate, and the server has **no** authoritative-vs-
+backup concept — "role" is purely client-side (`docs/06` §9), and both endpoint
+families are exposed for every account.
+
+The consequence we're unsure about: **a passive backup cannot be transparently
+promoted to authoritative.** A backup has only ever received snapshot blobs, so
+its `storage_items` is empty; promotion is a deliberate sequence — `GET /snapshot`
+→ `restore_snapshot` locally → **re-seed** the promoted server's `/items` from
+scratch → reset per-(device, server) cursors → resume live sync. That is more
+machinery (and a sharper failure mode) than the original "occasionally push a
+snapshot" framing implied.
+
+Questions to settle on the next pass, before un-parking:
+
+- Is two-storage-types + non-transparent promotion actually the right shape, or
+  should backups be **first-class item stores** fed by one-way `/items`
+  replication (so promotion is a no-op flip)?
+- The original reason for rejecting multi-master (§9) was CAS/`seq` reconciliation
+  — but records are **already independent and per-record LWW**. Does that make a
+  **per-record-LWW multi-master** (or at least multi-*reader* with one-way item
+  fan-out) tractable after all, removing the snapshot type entirely?
+- If we keep snapshots: what's the cadence, and is "serialized item-set" vs an
+  "independent re-encode" the right blob format (the §13 OPEN we punted)?
+- Recovery (`§11`) currently leans on the snapshot path being load-bearing once
+  group keys move out of the recovery blob — re-examine that coupling under
+  whichever model wins.
+
+The parked code (serialize-all-records-via-adapters + restore-as-pull) is kept
+verbatim because the *record-level* mechanics are likely reusable regardless of
+which placement model we land on; it's the **placement/promotion** design that's
+in question, not the per-record seal/adapter machinery.
+
 ## 8. Fast sync (push nudge + delta pull)
 
 §5–6 alone would be poll-only. The fast path reuses the existing per-device
@@ -599,14 +643,19 @@ profile + conversation-timer e2e round-trip (`e2e_storage.rs`).
   - Rate limits `ACTION_STORAGE_SNAPSHOT_GET`/`PUT` (60/hr) in
   `middleware/rate_limit.rs`; `delete_account` purges `storage_snapshots`.
   - Tests: 3 db + 4 http snapshot tests (`server/tests/{db,http}_tests.rs`).
-- **Not yet built (client):** the periodic backup-push task and the
-`build_snapshot`/`restore_snapshot` core that serialize/hydrate the store. Until
-those land, recovery still relies on the authoritative account's live items
-only, even though the server can now hold a snapshot.
-- (5) Fast-sync nudge on the WebSocket (§8) — the commit-hook scheduler covers
-the *push* side (local writes propagate promptly to the server), but there is no
-`storage_changed` nudge to *other* devices yet; they catch up via the 60 s
-safety-net poll / on next foreground rather than instantly.
+- **Client `build_snapshot`/`restore_snapshot`: written + tested, now PARKED**
+(commented out in `app-core/src/storage_sync.rs`) pending the backup-placement
+redesign — see the §7 "OPEN — backup placement under review" note. The periodic
+backup-push task and the `net` snapshot client methods (`GET`/`PUT /v1/storage/
+snapshot`) were never built. Until this is resolved, recovery relies on the
+authoritative account's live items only, even though the server can hold a
+snapshot.
+- (5) Fast-sync nudge on the WebSocket (§8) — **DONE.** A `StorageChangedNotification`
+`WsFrame` variant + `WsPush::StorageChanged`: after a `PUT /v1/storage/items`
+applies, the server pushes a nudge to the account's *other* connected devices
+(never the writer), and the client receive loop responds with a delta pull. The
+commit-hook scheduler still covers the *push* side and the 60 s safety-net poll
+remains the fallback for a missed nudge. (Tests: `storage_put_nudges_other_devices_not_writer`.)
 
 ### 13.2 Known gaps / deferred
 

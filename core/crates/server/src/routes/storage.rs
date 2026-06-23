@@ -286,6 +286,26 @@ async fn put_items(
 
     tx.commit().await?;
 
+    // Fast-sync nudge (docs/05 §8): if anything was applied, tell this account's
+    // *other* connected devices to delta-pull promptly. Best-effort and purely a
+    // latency optimization — correctness is the cursor pull, so a dropped nudge
+    // (offline device, send race) is harmless. Never nudge the writer itself.
+    if let Some(high_seq) = applied.iter().map(|a| a.seq).max() {
+        if let Ok(mut conn) = state.db.acquire().await {
+            if let Ok(pks) = db::devices::pks_for_account(&mut conn, account_id).await {
+                let conns = state.ws_connections.read().await;
+                for pk in pks {
+                    if pk == auth.device_pk {
+                        continue;
+                    }
+                    if let Some(tx) = conns.get(&pk) {
+                        let _ = tx.send(crate::state::WsPush::StorageChanged { high_seq });
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(PutResponse { applied, conflicts }))
 }
 

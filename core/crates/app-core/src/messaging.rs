@@ -11,8 +11,8 @@ use types::{AccountId, DeviceId, Timestamp};
 use crate::groups;
 use crate::profile;
 use crate::proto::{
-    self, content_message::Body, delete_message, receipt_message, ContentMessage, DeleteMessage,
-    EditMessage, ReactionMessage, ReceiptMessage,
+    self, content_message::Body, delete_message, read_mark, receipt_message, sync_sent,
+    ContentMessage, DeleteMessage, EditMessage, ReactionMessage, ReceiptMessage, SyncRead, SyncSent,
 };
 use crate::{
     AppCore, AppCoreInner, AppError, DecryptedMessage, DeliveryStatusUpdate, IncomingEvent,
@@ -490,15 +490,43 @@ impl AppCoreInner {
         plaintext: &[u8],
         expiry_secs: Option<i64>,
     ) -> Result<(), AppError> {
-        let device_ids = self.client.fetch_devices(recipient_did).await?;
-        if device_ids.is_empty() {
+        let mut device_ids = self.client.fetch_devices(recipient_did).await?;
+
+        // A DM addressed to your *own* identity (note-to-self, or a multi-device
+        // sync transcript — docs/04 §5.5) fans out to your *other* devices only:
+        // you never run a Double Ratchet session with yourself. With no other
+        // device this is a no-op success — the content lives only in local
+        // history. A DM to anyone else still requires at least one active device.
+        if recipient_did == self.did {
+            let own = self.device_id as i32;
+            device_ids.retain(|d| *d != own);
+            if device_ids.is_empty() {
+                return Ok(());
+            }
+        } else if device_ids.is_empty() {
             return Err(AppError::Protocol(format!(
                 "no active devices for recipient {recipient_did}"
             )));
         }
 
+        self.dispatch_to_devices(ws, recipient_did, &device_ids, plaintext, expiry_secs)
+            .await
+    }
+
+    /// Encrypt `plaintext` for each of `device_ids` and dispatch the batch over
+    /// the WebSocket (falling back to HTTP), with a single stale-device retry.
+    /// The device-list policy (self-exclusion, empty handling) is the caller's;
+    /// this is the pure transport step shared by `send_dm` and its self-fan-out.
+    async fn dispatch_to_devices(
+        &mut self,
+        ws: Option<&net::ws::WsConnection>,
+        recipient_did: &str,
+        device_ids: &[i32],
+        plaintext: &[u8],
+        expiry_secs: Option<i64>,
+    ) -> Result<(), AppError> {
         let envelopes = self
-            .build_envelopes(recipient_did, &device_ids, plaintext, expiry_secs, &[])
+            .build_envelopes(recipient_did, device_ids, plaintext, expiry_secs, &[])
             .await?;
 
         // Prefer the WebSocket when open — saves a TCP handshake per send.
@@ -528,7 +556,7 @@ impl AppCoreInner {
             Err(net::error::NetError::StaleDevice { stale_devices }) => {
                 let stale_ids: Vec<i32> = stale_devices.iter().map(|s| s.device_id).collect();
                 let envelopes = self
-                    .build_envelopes(recipient_did, &device_ids, plaintext, expiry_secs, &stale_ids)
+                    .build_envelopes(recipient_did, device_ids, plaintext, expiry_secs, &stale_ids)
                     .await?;
                 self.client.send_messages(&envelopes).await?;
                 Ok(())
@@ -725,6 +753,37 @@ impl AppCoreInner {
         })
     }
 
+    /// Mirror content I just sent to a third party onto my *own* other devices
+    /// (docs/04 §5.4 — the "Sent transcript"). Wraps the verbatim
+    /// `ContentMessage` (already encoded as `content_bytes`) in a `SyncSent` and
+    /// sends it as a self-DM. Best-effort: a sync failure must never fail the
+    /// original send, and with no other device the self-DM is a silent no-op.
+    ///
+    /// `target` is the conversation the content went to. Never call this for a
+    /// self-DM — that content already reached your other devices as itself.
+    pub(crate) async fn sync_sent_to_own_devices(
+        &mut self,
+        ws: Option<&net::ws::WsConnection>,
+        target: sync_sent::Target,
+        timestamp_ms: u64,
+        content_bytes: Vec<u8>,
+    ) {
+        let env = ContentMessage {
+            body: Some(Body::SyncSent(SyncSent {
+                timestamp: timestamp_ms,
+                target: Some(target),
+                content: content_bytes,
+            })),
+            timestamp_ms: Timestamp::now().as_millis() as u64,
+            profile_key: Vec::new(),
+            expire_timer_secs: 0,
+        };
+        let own = self.did.clone();
+        if let Err(e) = self.send_dm(ws, &own, &env.encode_to_vec(), None).await {
+            tracing::warn!("[sync] SyncSent to own devices failed: {e}");
+        }
+    }
+
     /// Build a `ContentMessage` envelope around `body` (with our timestamp and
     /// profile key) and fan it out to the group via the sealed-sender path.
     /// This is the group analogue of the DM envelope wrapping in `send_dm`:
@@ -795,6 +854,7 @@ impl AppCoreInner {
 
     pub(crate) async fn send_group_content(
         &mut self,
+        ws: Option<&net::ws::WsConnection>,
         group_id: &str,
         body: Body,
         sent_at_ms: u64,
@@ -822,13 +882,30 @@ impl AppCoreInner {
             expire_timer_secs,
         };
         let bytes = msg.encode_to_vec();
-        let AppCoreInner {
-            ref mut store,
-            ref client,
-            ..
-        } = *self;
-        groups::send_group_message(store, client, &server_url, &did, device_id, group_id, &bytes)
+        {
+            let AppCoreInner {
+                ref mut store,
+                ref client,
+                ..
+            } = *self;
+            groups::send_group_message(
+                store, client, &server_url, &did, device_id, group_id, &bytes,
+            )
             .await?;
+        }
+        // Mirror the content to my own other devices (docs/04 §5.4), keyed on the
+        // group. Best-effort; never fails the original send. `group_id` is the
+        // base64 server-visible id (the conversation key); carry the raw bytes so
+        // the receiving device reconstructs `group-<b64>`.
+        if let Ok(gid_bytes) = groups::b64d(group_id) {
+            self.sync_sent_to_own_devices(
+                ws,
+                sync_sent::Target::GroupId(gid_bytes),
+                sent_at_ms,
+                bytes,
+            )
+            .await;
+        }
         Ok(())
     }
 
@@ -858,10 +935,24 @@ impl AppCoreInner {
                     profile_key,
                     expire_timer_secs,
                 };
-                self.send_dm(ws, recipient_did, &msg.encode_to_vec(), None).await
+                let bytes = msg.encode_to_vec();
+                self.send_dm(ws, recipient_did, &bytes, None).await?;
+                // Mirror the content to my own other devices (docs/04 §5.4),
+                // unless this *is* a self-DM — that content already reached them
+                // as itself. Best-effort; never fails the original send.
+                if recipient_did != &self.did {
+                    self.sync_sent_to_own_devices(
+                        ws,
+                        sync_sent::Target::RecipientDid(recipient_did.clone()),
+                        sent_at_ms,
+                        bytes,
+                    )
+                    .await;
+                }
+                Ok(())
             }
             MessageTarget::Group { group_id } => {
-                self.send_group_content(group_id, body, sent_at_ms).await
+                self.send_group_content(ws, group_id, body, sent_at_ms).await
             }
         }
     }
@@ -952,14 +1043,18 @@ impl AppCoreInner {
                             // blocking drop and the request verdict stay in
                             // app-core; persisting the verdict (recency bump,
                             // pending-request flag) is the consumer's opt-in.
+                            // A DM from your own identity is note-to-self (or a
+                            // synced self-DM): never a request, and we don't
+                            // receipt ourselves.
+                            let is_self = raw.sender_did == self.did;
                             let gate = self.sender_gate(&raw.sender_did).await;
                             if gate.is_blocked {
                                 continue;
                             }
-                            let is_request = gate.is_request();
+                            let is_request = !is_self && gate.is_request();
                             // Auto-send delivery receipt — allowed even for an
-                            // un-accepted request (docs/12 §1), DM only.
-                            if let Some(ts) = sent_at {
+                            // un-accepted request (docs/12 §1), DM only; never to self.
+                            if let (Some(ts), false) = (sent_at, is_self) {
                                 let own_profile_key = self.own_profile_key().await;
                                 let delivery = ContentMessage {
                                     body: Some(Body::Receipt(ReceiptMessage {
@@ -1076,6 +1171,20 @@ impl AppCoreInner {
                                     content.timestamp_ms,
                                 )
                                 .await;
+                        }
+                        Some(Body::SyncSent(sync)) => {
+                            // A transcript from another of my own devices.
+                            // Honored only when the authenticated sender is me.
+                            // Applied to the store silently on the poll path (the
+                            // caller re-loads); the WS path emits a refresh.
+                            if raw.sender_did == self.did {
+                                let _ = apply_sync_sent(&self.store, &self.did, sync).await;
+                            }
+                        }
+                        Some(Body::SyncRead(sync)) => {
+                            if raw.sender_did == self.did {
+                                let _ = apply_sync_read(&self.store, &self.did, sync).await;
+                            }
                         }
                         None => {
                             // ContentMessage with no body — backward compat.
@@ -1224,21 +1333,25 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             // pending-request flag) is now the consumer's opt-in via
             // `touch_contact` / `set_pending_request`.
             let mut is_request = false;
+            let mut is_self = false;
             if decrypted.group_id.is_none() {
                 let inner = core.inner.lock().await;
+                // A DM from your own identity is note-to-self (or a synced
+                // self-DM): never a request, never receipted to yourself.
+                is_self = decrypted.sender_did == inner.did;
                 let gate = inner.sender_gate(&decrypted.sender_did).await;
                 if gate.is_blocked {
                     // Decrypted to advance the ratchet, now dropped: no event,
                     // no notification, no delivery receipt (docs/12 §2).
                     return;
                 }
-                is_request = gate.is_request();
+                is_request = !is_self && gate.is_request();
             }
 
-            // Auto-send delivery receipt to the sender — DM only. Group
-            // delivery receipts would fan out per-recipient and aren't part of
-            // the group read-tracking model yet.
-            if let (Some(ts), None) = (sent_at, decrypted.group_id.as_deref()) {
+            // Auto-send delivery receipt to the sender — DM only, never to self.
+            // Group delivery receipts would fan out per-recipient and aren't part
+            // of the group read-tracking model yet.
+            if let (Some(ts), None, false) = (sent_at, decrypted.group_id.as_deref(), is_self) {
                 let ws = core.ws.lock().expect("ws mutex poisoned").clone();
                 let mut inner = core.inner.lock().await;
                 let own_profile_key = inner.own_profile_key().await;
@@ -1400,6 +1513,30 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                 let _ = core.event_tx.send(ev);
             }
         }
+        Some(Body::SyncSent(sync)) => {
+            // A transcript from another of my own devices (docs/04 §5.4).
+            // Honored only when the authenticated sender is me. The store is
+            // updated in place; surface a refresh so the UI rebuilds the
+            // conversation (same contract as a storage-sync pull).
+            let inner = core.inner.lock().await;
+            if decrypted.sender_did == inner.did {
+                let changed = apply_sync_sent(&inner.store, &inner.did, sync).await;
+                drop(inner);
+                if changed {
+                    let _ = core.event_tx.send(IncomingEvent::StorageSynced);
+                }
+            }
+        }
+        Some(Body::SyncRead(sync)) => {
+            let inner = core.inner.lock().await;
+            if decrypted.sender_did == inner.did {
+                let changed = apply_sync_read(&inner.store, &inner.did, sync).await;
+                drop(inner);
+                if changed {
+                    let _ = core.event_tx.send(IncomingEvent::StorageSynced);
+                }
+            }
+        }
         None => {
             // ContentMessage with no body — emit as raw bytes (backward compat).
             let _ = core.event_tx.send(IncomingEvent::Message { msg: decrypted });
@@ -1407,11 +1544,159 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
     }
 }
 
+/// The local conversation id for a `SyncSent` target / `ReadMark` conversation,
+/// from my own DID's perspective: `dm-<me>-<peer>` or `group-<id-b64>`. Matches
+/// `conv_id_for` and the receive path.
+fn dm_conv_id(my_did: &str, peer_did: &str) -> String {
+    format!("dm-{my_did}-{peer_did}")
+}
+
+/// Apply an inbound `SyncSent` — a transcript of content *I* sent from another
+/// of my own devices (docs/04 §5.4). The caller must have verified the
+/// authenticated sender is one of my devices. Decodes the wrapped
+/// `ContentMessage` and applies its inner body to the named conversation,
+/// attributed as outgoing (authored by `my_did`). Text lands as a new outgoing
+/// history row; reactions/edits/deletes reuse the same store ops as a peer's but
+/// keyed on my own DID. Returns true if local state changed (so the caller can
+/// emit a refresh). Takes the store directly (no client) so it's unit-testable.
+pub(crate) async fn apply_sync_sent(
+    store: &store::DeviceStore,
+    my_did: &str,
+    sync: SyncSent,
+) -> bool {
+    let Some(target) = sync.target else {
+        return false;
+    };
+    let conv_id = match &target {
+        sync_sent::Target::RecipientDid(did) => dm_conv_id(my_did, did),
+        sync_sent::Target::GroupId(gid) => format!("group-{}", groups::b64(gid)),
+    };
+    let content = match ContentMessage::decode(sync.content.as_slice()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("[sync] SyncSent wrapped a non-ContentMessage payload: {e}");
+            return false;
+        }
+    };
+    match content.body {
+        Some(Body::Text(text)) => {
+            // A message I sent from another device. Save it as an outgoing row
+            // (authored by me, already "read" since I wrote it). The id is
+            // deterministic on (conv, sent_at) so a redelivered transcript
+            // upserts in place rather than duplicating.
+            let sent_at = sync.timestamp as i64;
+            let msg = store::messages::HistoryMessage {
+                id: format!("synced-{conv_id}-{sent_at}"),
+                conversation_id: conv_id,
+                sender_did: my_did.to_string(),
+                body: text.body,
+                sent_at: Timestamp(sent_at),
+                edited_at: None,
+                read_at: Some(Timestamp(sent_at)),
+                delivery_status: 1, // sent
+                edit_count: 0,
+                deleted_at: None,
+                kind: 0,
+                metadata: None,
+                expire_timer_secs: content.expire_timer_secs as i64,
+                expire_at: None,
+            };
+            store.save_message(&msg).await.is_ok()
+        }
+        Some(Body::Reaction(r)) => {
+            // I'm the reactor; the target is whatever the wire names.
+            let target_sent_at = Timestamp(r.target_sent_at as i64);
+            let res = if r.remove {
+                store
+                    .remove_reaction(&conv_id, &r.target_author, target_sent_at, my_did)
+                    .await
+            } else {
+                store
+                    .upsert_reaction(&store::messages::ReactionRow {
+                        conversation_id: conv_id,
+                        target_author: r.target_author,
+                        target_sent_at,
+                        reactor_did: my_did.to_string(),
+                        emoji: r.emoji,
+                        reacted_at: Timestamp(content.timestamp_ms as i64),
+                    })
+                    .await
+            };
+            res.is_ok()
+        }
+        Some(Body::Edit(edit)) => {
+            // Edits only ever touch my own message (keyed on my DID as author).
+            let new_body = edit.replacement.map(|t| t.body).unwrap_or_default();
+            store
+                .apply_edit(
+                    &conv_id,
+                    my_did,
+                    Timestamp(edit.target_sent_at as i64),
+                    &new_body,
+                    Timestamp(content.timestamp_ms as i64),
+                    true,
+                )
+                .await
+                .unwrap_or(false)
+        }
+        Some(Body::Delete(del)) => {
+            // Only a FOR_EVERYONE delete of my own message syncs as a transcript
+            // (FOR_ME is local-only and never emitted). Authorship-gated.
+            if del.scope != delete_message::Scope::ForEveryone as i32 || del.target_author != my_did
+            {
+                return false;
+            }
+            store
+                .tombstone_message(
+                    &conv_id,
+                    &del.target_author,
+                    Timestamp(del.target_sent_at as i64),
+                    Timestamp(content.timestamp_ms as i64),
+                )
+                .await
+                .is_ok()
+        }
+        // Other inner bodies (receipts, SKDMs, timer changes, nested sync)
+        // aren't mirrored as transcripts; ignore defensively.
+        _ => false,
+    }
+}
+
+/// Apply an inbound `SyncRead` — read-state cleared on another of my own devices
+/// (docs/04 §5.4). The caller must have verified the sender is one of my
+/// devices. Marks local history read up to each mark's timestamp. Returns true
+/// if any row was newly marked.
+pub(crate) async fn apply_sync_read(store: &store::DeviceStore, my_did: &str, sync: SyncRead) -> bool {
+    let now = Timestamp::now();
+    let mut changed = false;
+    for mark in sync.marks {
+        let Some(conversation) = mark.conversation else {
+            continue;
+        };
+        let conv_id = match conversation {
+            read_mark::Conversation::PeerDid(did) => dm_conv_id(my_did, &did),
+            read_mark::Conversation::GroupId(gid) => format!("group-{}", groups::b64(&gid)),
+        };
+        if let Ok(n) = store
+            .mark_messages_read(&conv_id, Timestamp(mark.up_to_timestamp as i64), now)
+            .await
+        {
+            changed = changed || n > 0;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use prost::Message as _;
 
-    use crate::proto::{content_message::Body, ContentMessage, TimerChangeMessage};
+    use super::{apply_sync_read, apply_sync_sent};
+    use crate::proto::{
+        content_message::Body, read_mark, sync_sent, ContentMessage, ReadMark, SyncRead, SyncSent,
+        TextMessage, TimerChangeMessage,
+    };
+    use types::Timestamp;
 
     #[test]
     fn sender_gate_passes_for_curated_or_bot_only() {
@@ -1474,5 +1759,191 @@ mod tests {
             Some(Body::TimerChange(t)) => assert_eq!(t.expiry_secs, 0),
             other => panic!("unexpected body: {other:?}"),
         }
+    }
+
+    // ── Multi-device sync (docs/04 §5.4) ──────────────────────────────────
+
+    #[test]
+    fn sync_sent_round_trip_wraps_content_bytes() {
+        // The inner content is carried as opaque encoded bytes (non-recursive
+        // wire type), and must decode back to the original ContentMessage.
+        let inner = ContentMessage {
+            body: Some(Body::Text(TextMessage { body: "hi".into() })),
+            timestamp_ms: 7,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let env = ContentMessage {
+            body: Some(Body::SyncSent(SyncSent {
+                timestamp: 7,
+                target: Some(sync_sent::Target::RecipientDid("did:plc:bob".into())),
+                content: inner.encode_to_vec(),
+            })),
+            timestamp_ms: 99,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let decoded = ContentMessage::decode(env.encode_to_vec().as_slice()).unwrap();
+        let Some(Body::SyncSent(s)) = decoded.body else {
+            panic!("expected SyncSent");
+        };
+        assert_eq!(s.timestamp, 7);
+        match s.target.unwrap() {
+            sync_sent::Target::RecipientDid(d) => assert_eq!(d, "did:plc:bob"),
+            other => panic!("unexpected target: {other:?}"),
+        }
+        let inner2 = ContentMessage::decode(s.content.as_slice()).unwrap();
+        match inner2.body {
+            Some(Body::Text(t)) => assert_eq!(t.body, "hi"),
+            other => panic!("unexpected inner body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_read_round_trip() {
+        let env = ContentMessage {
+            body: Some(Body::SyncRead(SyncRead {
+                marks: vec![ReadMark {
+                    conversation: Some(read_mark::Conversation::PeerDid("did:plc:bob".into())),
+                    up_to_timestamp: 42,
+                }],
+            })),
+            timestamp_ms: 0,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let decoded = ContentMessage::decode(env.encode_to_vec().as_slice()).unwrap();
+        let Some(Body::SyncRead(s)) = decoded.body else {
+            panic!("expected SyncRead");
+        };
+        assert_eq!(s.marks.len(), 1);
+        assert_eq!(s.marks[0].up_to_timestamp, 42);
+    }
+
+    #[tokio::test]
+    async fn apply_sync_sent_text_saves_outgoing_idempotently() {
+        let store = store::DeviceStore::open_in_memory().await.unwrap();
+        let me = "did:plc:me";
+        let peer = "did:plc:bob";
+        let inner = ContentMessage {
+            body: Some(Body::Text(TextMessage {
+                body: "from my phone".into(),
+            })),
+            timestamp_ms: 1000,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let mk_sync = || SyncSent {
+            timestamp: 1000,
+            target: Some(sync_sent::Target::RecipientDid(peer.into())),
+            content: inner.encode_to_vec(),
+        };
+
+        assert!(apply_sync_sent(&store, me, mk_sync()).await);
+        let conv = format!("dm-{me}-{peer}");
+        let msgs = store.load_messages(&conv, Timestamp(10_000)).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].sender_did, me); // attributed as outgoing (me)
+        assert_eq!(msgs[0].body, "from my phone");
+        assert!(msgs[0].read_at.is_some()); // outgoing rows saved read
+
+        // Re-applying the same transcript upserts in place (deterministic id).
+        apply_sync_sent(&store, me, mk_sync()).await;
+        let msgs = store.load_messages(&conv, Timestamp(10_000)).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn apply_sync_sent_text_to_group_lands_in_group_conversation() {
+        let store = store::DeviceStore::open_in_memory().await.unwrap();
+        let me = "did:plc:me";
+        let gid = vec![9u8; 32];
+        let inner = ContentMessage {
+            body: Some(Body::Text(TextMessage {
+                body: "group hello from my phone".into(),
+            })),
+            timestamp_ms: 2000,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let sync = SyncSent {
+            timestamp: 2000,
+            target: Some(sync_sent::Target::GroupId(gid.clone())),
+            content: inner.encode_to_vec(),
+        };
+        assert!(apply_sync_sent(&store, me, sync).await);
+        let conv = format!("group-{}", crate::groups::b64(&gid));
+        let msgs = store.load_messages(&conv, Timestamp(10_000)).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].sender_did, me);
+        assert_eq!(msgs[0].body, "group hello from my phone");
+    }
+
+    #[tokio::test]
+    async fn apply_sync_sent_reaction_records_my_reaction() {
+        let store = store::DeviceStore::open_in_memory().await.unwrap();
+        let me = "did:plc:me";
+        let peer = "did:plc:bob";
+        let conv = format!("dm-{me}-{peer}");
+        // The reaction I placed (from another device) on the peer's message.
+        let inner = ContentMessage {
+            body: Some(Body::Reaction(crate::proto::ReactionMessage {
+                target_sent_at: 500,
+                target_author: peer.into(),
+                emoji: "👍".into(),
+                remove: false,
+            })),
+            timestamp_ms: 1200,
+            profile_key: vec![],
+            expire_timer_secs: 0,
+        };
+        let sync = SyncSent {
+            timestamp: 1200,
+            target: Some(sync_sent::Target::RecipientDid(peer.into())),
+            content: inner.encode_to_vec(),
+        };
+        assert!(apply_sync_sent(&store, me, sync).await);
+        let reactions = store.load_reactions(&conv).await.unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].reactor_did, me); // I'm the reactor
+        assert_eq!(reactions[0].target_author, peer);
+        assert_eq!(reactions[0].emoji, "👍");
+    }
+
+    #[tokio::test]
+    async fn apply_sync_read_marks_history_read() {
+        let store = store::DeviceStore::open_in_memory().await.unwrap();
+        let me = "did:plc:me";
+        let peer = "did:plc:bob";
+        let conv = format!("dm-{me}-{peer}");
+        store
+            .save_message(&store::messages::HistoryMessage {
+                id: "m1".into(),
+                conversation_id: conv.clone(),
+                sender_did: peer.into(),
+                body: "yo".into(),
+                sent_at: Timestamp(500),
+                edited_at: None,
+                read_at: None, // unread
+                delivery_status: 2,
+                edit_count: 0,
+                deleted_at: None,
+                kind: 0,
+                metadata: None,
+                expire_timer_secs: 0,
+                expire_at: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.unread_count(&conv, me).await.unwrap(), 1);
+
+        let sync = SyncRead {
+            marks: vec![ReadMark {
+                conversation: Some(read_mark::Conversation::PeerDid(peer.into())),
+                up_to_timestamp: 500,
+            }],
+        };
+        assert!(apply_sync_read(&store, me, sync).await);
+        assert_eq!(store.unread_count(&conv, me).await.unwrap(), 0);
     }
 }

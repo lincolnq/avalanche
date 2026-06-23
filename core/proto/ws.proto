@@ -32,8 +32,9 @@ message WsFrame {
     GroupDeliverRequest     group_deliver_request         = 9;
     GroupDeliverAck         group_deliver_ack             = 10;
     AccountJoinedEvent      account_joined                = 11;
+    StorageChangedNotification storage_changed            = 12;
   }
-  reserved 12 to 20;
+  reserved 13 to 20;
 }
 
 // Client → server: send one or more encrypted messages.
@@ -148,4 +149,19 @@ message AccountJoinedEvent {
   // registrations. Pushed only to bots holding `subscribe.account_joined`.
   optional string invite_token = 3;
   reserved 4 to 10;
+}
+
+// Server → client: durable storage for this account changed on another of the
+// account's devices (docs/05-device-data-sync.md §8). A latency optimization
+// only: the client responds with a delta pull (`GET /v1/storage/items?since=`),
+// and correctness comes from the cursor — a missed nudge is harmless (the
+// safety-net poll still catches up). Pushed to the account's *other* connected
+// devices after a `PUT /v1/storage/items`, never to the writer. Fire-and-forget;
+// no response.
+message StorageChangedNotification {
+  // Highest server `seq` after the write that triggered this nudge. Advisory
+  // (lets a client skip a redundant pull if already past it); the pull is keyed
+  // on the client's own cursor regardless.
+  int64 high_seq = 1;
+  reserved 2 to 10;
 }

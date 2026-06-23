@@ -53,6 +53,14 @@ pub struct InboundPrekeyLow {
     pub kyber_remaining: i64,
 }
 
+/// A server-pushed `StorageChangedNotification` (docs/05 §8): durable storage
+/// changed on another of this account's devices. The client should delta-pull
+/// `GET /v1/storage/items?since={cursor}`. Fire-and-forget; a missed nudge is
+/// harmless (the cursor pull is the source of truth).
+pub struct InboundStorageChanged {
+    pub high_seq: i64,
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -97,6 +105,8 @@ struct Inner {
     account_joined: Mutex<mpsc::UnboundedReceiver<InboundAccountJoined>>,
     /// Incoming `PrekeyLowNotification`s, drained by `next_prekey_low`.
     prekey_low: Mutex<mpsc::UnboundedReceiver<InboundPrekeyLow>>,
+    /// Incoming `StorageChangedNotification`s, drained by `next_storage_changed`.
+    storage_changed: Mutex<mpsc::UnboundedReceiver<InboundStorageChanged>>,
     /// Pending `SendRequest`s awaiting a response, keyed by frame.id.
     correlations: Mutex<HashMap<u64, oneshot::Sender<SendResponse>>>,
     /// Client-side correlation id counter. Starts at 1; 0 is reserved for
@@ -125,6 +135,8 @@ impl WsConnection {
         let (account_joined_tx, account_joined_rx) =
             mpsc::unbounded_channel::<InboundAccountJoined>();
         let (prekey_low_tx, prekey_low_rx) = mpsc::unbounded_channel::<InboundPrekeyLow>();
+        let (storage_changed_tx, storage_changed_rx) =
+            mpsc::unbounded_channel::<InboundStorageChanged>();
 
         let inner = Arc::new(Inner {
             outbound: outbound_tx.clone(),
@@ -132,6 +144,7 @@ impl WsConnection {
             group_deliveries: Mutex::new(group_delivery_rx),
             account_joined: Mutex::new(account_joined_rx),
             prekey_low: Mutex::new(prekey_low_rx),
+            storage_changed: Mutex::new(storage_changed_rx),
             correlations: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         });
@@ -144,6 +157,7 @@ impl WsConnection {
             group_delivery_tx,
             account_joined_tx,
             prekey_low_tx,
+            storage_changed_tx,
             inner.clone(),
         );
 
@@ -184,6 +198,12 @@ impl WsConnection {
     /// once the connection has closed.
     pub async fn next_prekey_low(&self) -> Result<Option<InboundPrekeyLow>, NetError> {
         Ok(self.inner.prekey_low.lock().await.recv().await)
+    }
+
+    /// Wait for the next inbound `StorageChangedNotification` (docs/05 §8).
+    /// Returns `Ok(None)` once the connection has closed.
+    pub async fn next_storage_changed(&self) -> Result<Option<InboundStorageChanged>, NetError> {
+        Ok(self.inner.storage_changed.lock().await.recv().await)
     }
 
     pub async fn group_ack(&self, ack_token: u64) -> Result<(), NetError> {
@@ -275,6 +295,9 @@ fn spawn_writer(
     });
 }
 
+// One sender per server-pushed frame type; bundling them into a struct would
+// be churn for no gain in this internal task spawner.
+#[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     mut stream: futures_util::stream::SplitStream<WsStream>,
     outbound: mpsc::UnboundedSender<Vec<u8>>,
@@ -282,6 +305,7 @@ fn spawn_reader(
     group_delivery_tx: mpsc::UnboundedSender<InboundGroupDelivery>,
     account_joined_tx: mpsc::UnboundedSender<InboundAccountJoined>,
     prekey_low_tx: mpsc::UnboundedSender<InboundPrekeyLow>,
+    storage_changed_tx: mpsc::UnboundedSender<InboundStorageChanged>,
     state: Arc<Inner>,
 ) {
     tokio::spawn(async move {
@@ -347,6 +371,11 @@ fn spawn_reader(
                         kyber_remaining: e.kyber_remaining,
                     });
                 }
+                Body::StorageChanged(e) => {
+                    let _ = storage_changed_tx.send(InboundStorageChanged {
+                        high_seq: e.high_seq,
+                    });
+                }
                 // Variants the client should never receive from the server.
                 Body::SendRequest(_)
                 | Body::DeliverAck(_)
@@ -362,6 +391,7 @@ fn spawn_reader(
         drop(group_delivery_tx);
         drop(account_joined_tx);
         drop(prekey_low_tx);
+        drop(storage_changed_tx);
         let mut map = state.correlations.lock().await;
         for (_, tx) in map.drain() {
             drop(tx);

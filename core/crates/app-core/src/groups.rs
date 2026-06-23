@@ -2709,10 +2709,16 @@ impl AppCore {
         sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
             let body = String::from_utf8_lossy(&plaintext).into_owned();
             inner
-                .send_group_content(&group_id, Body::Text(proto::TextMessage { body }), sent_at_ms as u64)
+                .send_group_content(
+                    ws.as_ref(),
+                    &group_id,
+                    Body::Text(proto::TextMessage { body }),
+                    sent_at_ms as u64,
+                )
                 .await
         })
         .map_err(AppErrorFfi::from)

@@ -646,6 +646,63 @@ async fn storage_put_then_pull_roundtrip() {
     assert_eq!(body["next_cursor"], 1);
 }
 
+/// A storage write nudges the account's *other* connected devices (docs/05 §8)
+/// but never the writer. We register two devices for one account, inject a
+/// `WsPush` channel for each into `ws_connections`, then PUT as device A and
+/// assert B got a `StorageChanged` and A did not.
+#[tokio::test]
+async fn storage_put_nudges_other_devices_not_writer() {
+    use server::state::WsPush;
+    use tokio::sync::mpsc;
+
+    let state = test_state().await;
+    let app = routes::router().with_state(state.clone());
+    let reg = register_dummy(&app).await;
+    let did = reg["did"].as_str().unwrap().to_string();
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    // Device A is the one registration created (device_id 1). Add device B.
+    let mut conn = state.db.acquire().await.unwrap();
+    let dev_a = db::devices::find_by_did(&mut conn, &did, 1)
+        .await
+        .unwrap()
+        .expect("device A exists");
+    let dev_b_pk = db::devices::create(&mut conn, dev_a.account_id, 2, &[5u8; 33], 2)
+        .await
+        .unwrap();
+    drop(conn);
+
+    // Stand in for two live WebSockets.
+    let (tx_a, mut rx_a) = mpsc::unbounded_channel::<WsPush>();
+    let (tx_b, mut rx_b) = mpsc::unbounded_channel::<WsPush>();
+    {
+        let mut conns = state.ws_connections.write().await;
+        conns.insert(dev_a.id, tx_a);
+        conns.insert(dev_b_pk, tx_b);
+    }
+
+    // Write as device A's session.
+    let rid = BASE64_STANDARD.encode([8u8; 16]);
+    let ct = BASE64_STANDARD.encode(b"nudge-me");
+    let (status, _) = storage_put(
+        &app,
+        &token,
+        serde_json::json!({
+            "writes": [{ "record_id": rid, "expected_version": 0, "ciphertext": ct }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The other device was nudged...
+    match rx_b.try_recv() {
+        Ok(WsPush::StorageChanged { high_seq }) => assert!(high_seq >= 1),
+        other => panic!("device B expected StorageChanged, got {other:?}"),
+    }
+    // ...and the writer was not.
+    assert!(rx_a.try_recv().is_err(), "writer must not nudge itself");
+}
+
 #[tokio::test]
 async fn storage_pull_requires_auth() {
     let app = routes::router().with_state(test_state().await);

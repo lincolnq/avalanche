@@ -843,9 +843,202 @@ async fn push(
     Ok(())
 }
 
+// ── Snapshot (docs/05 §7, §11) — PARKED, NOT IN USE ──────────────────────────
+//
+// `build_snapshot`/`restore_snapshot` (a whole-store backup blob for the passive
+// non-authoritative accounts) are intentionally commented out: the underlying
+// backup-placement design is being reconsidered and nothing calls them yet.
+//
+// The open concern (see docs/05-device-data-sync.md §7 "OPEN — backup placement
+// under review"): the snapshot is a *separate kind of server storage* from the
+// per-record `/items` store (different table, no `seq`/CAS, LWW on one blob), so
+// a passive backup can NOT be transparently promoted to authoritative — doing so
+// needs a snapshot-restore-then-full-item-reseed step. Before re-enabling this,
+// take another pass at whether that two-storage-types + non-transparent-promotion
+// model is right, vs. alternatives (backups as first-class item stores / one-way
+// item replication / accepting per-record-LWW multi-master since records are
+// already independent + LWW). Do NOT just uncomment — revisit the design first.
+//
+// The code below is preserved verbatim (it compiled + round-tripped in tests) so
+// a future pass has the working serialize/restore-via-adapters core to build on.
+/*
+const SNAPSHOT_VERSION: u8 = 1;
+
+/// Build a whole-store snapshot blob (docs/05 §7). Enumerates every synced
+/// record from the sidecar, reads each live payload via its adapter (or a
+/// tombstone), seals it, and frames the set. Returns the blob to `PUT` to a
+/// backup account. A no-op empty-record snapshot is still a valid blob.
+pub async fn build_snapshot(
+    store: &store::DeviceStore,
+    registry: &SyncRegistry,
+    storage_key: &[u8; 32],
+) -> Result<Vec<u8>, AppError> {
+    let records = store.all_sync_records().await?;
+
+    // Frame: [u8 version][u32 count] then per record
+    //        [i64 version][u8 deleted][u32 ct_len][ct].
+    let mut out = Vec::new();
+    out.push(SNAPSHOT_VERSION);
+    let mut count: u32 = 0;
+    let mut body = Vec::new();
+    for r in &records {
+        let (deleted, payload) = if r.deleted {
+            (true, Vec::new())
+        } else {
+            match registry.get(r.type_tag) {
+                Some(adapter) => match adapter.read(store, &r.logical_key).await? {
+                    Some(p) => (false, p),
+                    None => (true, Vec::new()), // row vanished → tombstone
+                },
+                None => {
+                    // Unknown type this build can't serialize; skip (the snapshot
+                    // is best-effort whole-store, and a foreign record can't be
+                    // read without its adapter).
+                    tracing::warn!("[storage] snapshot skipping unknown tag {}", r.type_tag);
+                    continue;
+                }
+            }
+        };
+        let ciphertext = seal(storage_key, r.type_tag, &r.logical_key, &payload)?;
+        body.extend_from_slice(&r.version.to_be_bytes());
+        body.push(deleted as u8);
+        body.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+        body.extend_from_slice(&ciphertext);
+        count += 1;
+    }
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// Restore a snapshot blob into the local store (docs/05 §11). Opens each sealed
+/// record, applies it through its adapter (write-through to the domain table),
+/// and records the sidecar version (clean, not dirty) — exactly like a pull.
+/// Idempotent and LWW: a record already at ≥ its snapshot version is skipped.
+/// Returns the number of records applied.
+pub async fn restore_snapshot(
+    store: &store::DeviceStore,
+    registry: &SyncRegistry,
+    storage_key: &[u8; 32],
+    blob: &[u8],
+) -> Result<usize, AppError> {
+    let mut cur = blob;
+    let take = |cur: &mut &[u8], n: usize| -> Result<Vec<u8>, AppError> {
+        if cur.len() < n {
+            return Err(AppError::Protocol("snapshot truncated".into()));
+        }
+        let (head, tail) = cur.split_at(n);
+        *cur = tail;
+        Ok(head.to_vec())
+    };
+
+    let version = take(&mut cur, 1)?[0];
+    if version != SNAPSHOT_VERSION {
+        return Err(AppError::Protocol(format!(
+            "unsupported snapshot version: {version}"
+        )));
+    }
+    let count = u32::from_be_bytes(take(&mut cur, 4)?.try_into().unwrap());
+
+    let mut applied = 0usize;
+    for _ in 0..count {
+        let record_version = i64::from_be_bytes(take(&mut cur, 8)?.try_into().unwrap());
+        let deleted = take(&mut cur, 1)?[0] != 0;
+        let ct_len = u32::from_be_bytes(take(&mut cur, 4)?.try_into().unwrap()) as usize;
+        let ciphertext = take(&mut cur, ct_len)?;
+
+        let (tag, logical_key, payload) = open(storage_key, &ciphertext)?;
+
+        // Integrity: the sealed (tag, key) must reproduce a consistent record_id
+        // (matches the pull path's check; here it just guards a corrupt blob).
+        let _ = record_id(storage_key, tag, &logical_key);
+
+        // LWW: don't regress a record we already hold at an equal/newer version.
+        if record_version <= store.sync_version(tag, &logical_key).await? && record_version != 0 {
+            continue;
+        }
+
+        match registry.get(tag) {
+            Some(adapter) => {
+                let payload_opt = if deleted { None } else { Some(payload.as_slice()) };
+                if let Err(e) = adapter.apply(store, &logical_key, payload_opt).await {
+                    tracing::warn!("[storage] snapshot apply failed for tag {tag}: {e}");
+                    continue;
+                }
+                store
+                    .set_sync_meta(tag, &logical_key, record_version, false, deleted)
+                    .await?;
+                applied += 1;
+            }
+            None => {
+                tracing::warn!("[storage] snapshot has unknown tag {tag}; skipping");
+            }
+        }
+    }
+    Ok(applied)
+}
+*/
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Snapshot tests are PARKED alongside `build_snapshot`/`restore_snapshot`
+    // (see the "PARKED, NOT IN USE" banner above and docs/05 §7). Restore them
+    // when the backup-placement design is revisited.
+    /*
+    #[tokio::test]
+    async fn snapshot_build_then_restore_round_trips_records() {
+        let key = [7u8; 32];
+        let reg = SyncRegistry::default_registry();
+
+        // Source store with two contacts (one curated, one not).
+        let src = store::DeviceStore::open_in_memory().await.unwrap();
+        src.save_storage_key(&key).await.unwrap();
+        ensure_triggers(&src).await.unwrap();
+        src.touch_contact("did:plc:bob", true, Timestamp(111))
+            .await
+            .unwrap();
+        src.touch_contact("did:plc:carol", false, Timestamp(222))
+            .await
+            .unwrap();
+
+        let blob = build_snapshot(&src, &reg, &key).await.unwrap();
+        assert!(blob.len() > 5, "snapshot should carry framed records");
+
+        // A fresh store hydrates entirely from the blob.
+        let dst = store::DeviceStore::open_in_memory().await.unwrap();
+        dst.save_storage_key(&key).await.unwrap();
+        ensure_triggers(&dst).await.unwrap();
+        let applied = restore_snapshot(&dst, &reg, &key, &blob).await.unwrap();
+        assert_eq!(applied, 2);
+
+        let bob = dst
+            .load_contact("did:plc:bob")
+            .await
+            .unwrap()
+            .expect("bob restored");
+        assert!(bob.is_curated);
+        assert_eq!(bob.last_interaction_at.as_millis(), 111);
+        let carol = dst
+            .load_contact("did:plc:carol")
+            .await
+            .unwrap()
+            .expect("carol restored");
+        assert!(!carol.is_curated);
+        assert_eq!(carol.last_interaction_at.as_millis(), 222);
+    }
+
+    #[tokio::test]
+    async fn snapshot_restore_rejects_unknown_version() {
+        let key = [1u8; 32];
+        let reg = SyncRegistry::default_registry();
+        let dst = store::DeviceStore::open_in_memory().await.unwrap();
+        // version byte 99 is not SNAPSHOT_VERSION.
+        let bad = vec![99u8, 0, 0, 0, 0];
+        assert!(restore_snapshot(&dst, &reg, &key, &bad).await.is_err());
+    }
+    */
 
     #[test]
     fn record_id_is_deterministic_and_scoped() {

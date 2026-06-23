@@ -7,7 +7,7 @@
 use types::Timestamp;
 
 use crate::messaging::process_decrypted;
-use crate::{AdminEvent, AppCore, AppError, ConnectionState};
+use crate::{AdminEvent, AppCore, AppError, ConnectionState, IncomingEvent};
 
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
@@ -197,6 +197,31 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                     }
                     Err(e) => {
                         tracing::debug!("[ws] receive error (prekey_low): {e}");
+                        return;
+                    }
+                }
+            }
+            changed = ws.next_storage_changed() => {
+                match changed {
+                    // Durable storage changed on another of our devices (docs/05
+                    // §8). Delta-pull now instead of waiting for the safety-net
+                    // poll. The pull is cursor-keyed and idempotent, so a
+                    // redundant nudge is harmless; surface a refresh if it applied
+                    // anything.
+                    Ok(Some(_)) => {
+                        match core.sync_storage_async().await {
+                            Ok(()) => {
+                                let _ = core.event_tx.send(IncomingEvent::StorageSynced);
+                            }
+                            Err(e) => tracing::warn!("[ws] storage_changed pull failed: {e}"),
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::debug!("[ws] connection closed cleanly (storage_changed)");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::debug!("[ws] receive error (storage_changed): {e}");
                         return;
                     }
                 }

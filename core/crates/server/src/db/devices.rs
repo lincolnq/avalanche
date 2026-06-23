@@ -147,6 +147,20 @@ pub async fn delete(conn: &mut PgConnection, device_pk: i64) -> Result<(), sqlx:
     Ok(())
 }
 
+/// List the internal device PKs for an account. Used by the storage-changed
+/// fast-sync nudge (docs/05 §8) to reach the account's *other* connected
+/// devices after a write.
+pub async fn pks_for_account(
+    conn: &mut PgConnection,
+    account_id: i64,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let rows = sqlx::query("SELECT id FROM devices WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_all(&mut *conn)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
+}
+
 /// List all devices for an account (by DID).
 pub async fn list_by_did(conn: &mut PgConnection, did: &str) -> Result<Vec<Device>, sqlx::Error> {
     let rows = sqlx::query(
