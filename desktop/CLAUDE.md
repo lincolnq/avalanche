@@ -114,8 +114,103 @@ Before closing any branch that adds or changes Desktop UI:
 The shell is the only WebView with Tauri command access. Keep these invariants:
 
 - `npm ci` only — never `npm install` in production or CI
-- Tauri CSP in `tauri.conf.json`: `default-src 'self'`, no `unsafe-inline`, no `eval`
+- Tauri CSP in `tauri.conf.json`: the production `csp` must stay strict — `default-src 'self'`, **no `unsafe-inline`**, no `eval`. Only `devCsp` may relax this (it keeps `'unsafe-inline'` because Vite injects HMR styles inline in dev). Never add `'unsafe-inline'` to the production `csp`.
 - `Object.freeze(Object.prototype)` at app startup in `src/index.tsx`
 - Strict TypeScript (`strict: true` in `tsconfig.json`, no `any`)
 - All message content received as typed data from Tauri commands — never parse raw bytes in the frontend
 - Minimal Tauri command surface: only declare commands the shell legitimately needs in `tauri.conf.json` capabilities
+
+---
+
+## Conventions & common pitfalls (learned from review)
+
+**General directive:** the Day-1 scaffold was generated fast and shipped a layer of
+latent state-management bugs (missing context methods, divergent onboarding paths,
+module-global mock state, non-reactive caches, wrong enum-ordering comparisons). When
+adding or generating substantial frontend code — especially anything touching
+`AppContext` state, the service layer, or onboarding flow — **review and verify it as
+if hand-written**: trace every code path to completion, run `tsc` + `npm run build`,
+and prefer generalizing a shared mechanism over copy-pasting a path with subtle drift.
+Generated code is a draft, not a deliverable. The specific patterns below are the ones
+that have already bitten us — check new code against each.
+
+These caused real bugs in the Day-1 scaffold. Follow them when adding/changing UI.
+
+### Styling: co-located CSS, never inline
+The production CSP forbids `'unsafe-inline'`, which blocks **both** inline `<style>`
+elements and inline `style="…"`/`style={{}}` attributes (CSP can't allowlist
+attribute styles via nonce/hash — they must not exist). So:
+- Each view's styles live in a co-located `.css` file imported at the top of the
+  component (e.g. `import "./ChatsView.css"`). No `const styles = \`…\`` +
+  `<style>{styles}</style>`, and no inline `style={{}}` objects/`style="…"` attributes.
+- Shared colors, the font stack, and reusable component classes (`.btn-primary`,
+  `.text-input`, `.back-btn`, `.spinner`, …) live once in `src/styles/theme.css`;
+  view CSS references them via `var(--…)` tokens. Don't hardcode hex colors or the
+  font stack in a view.
+- Vite emits these as linked external stylesheets (served from `'self'`), so the
+  strict prod CSP is satisfied without any inline styles.
+
+### AppContext surface must be complete
+A view that destructures a method from `useApp()` will get `undefined` at runtime if
+that method isn't on the context — **TypeScript does not catch a missing key pulled
+from an object**, so it surfaces only as a runtime `"x is not a function"` crash.
+When a view calls `useApp().foo()`, `foo` must be declared in the `AppContextValue`
+interface **and** present in the `ctx` object literal. (This crashed the entire
+invite/QR onboarding path once.)
+
+### Background loops: idempotent start, tear down before swapping state
+`startEventLoop`/`startConnectionLoop` (and `startPolling`) must guard against
+re-entry (`if (running) return;`) — they're called from more than one place
+(`restoreAccounts` and `createAccount`), and a double start runs duplicate loops that
+process every incoming event twice. When switching accounts/service, call
+`stopPolling`/`resetSession` **before** swapping the `service()` signal, or the
+in-flight loop will run against the new, uninitialized service.
+
+### Onboarding navigation uses a back-stack, not hardcoded `onBack` targets
+`OnboardingFlow` drives screens through a back-stack (`navigate()` pushes, `goBack()`
+pops). Wire every screen's `onBack` to `goBack()`. Never hardcode a screen's back
+target to a specific other screen — screens are reachable via multiple paths
+(splash → link entry → identity picker, deep-link → link entry, etc.) and a fixed
+target dead-ends on the paths it didn't anticipate.
+
+### Solid store writes
+All store updates go through `setStore(...)`/`produce(...)`. Never assign to a store
+field directly (`store.x = …`) — it silently fails to update the UI.
+
+### All account-entry paths converge on one "enter app" step
+`createAccount`, `restoreAccounts`, and `joinServer` (existing-identity) must finish
+through the **same** completion helper (`enterApp()`: reset the conversations guard,
+`loadConversationsFromStore()`, `startPolling()`, clear `isOnboarding`). Don't give one
+path its own ad-hoc completion — `joinServer` once skipped polling + conversation load
+entirely, so that user landed with a dead event loop. Add a new entry path only by
+calling the shared helper.
+
+### Mock/dev services hold per-instance state, never module globals
+Session state in a service (e.g. the mock's current DID) must be an instance field, not
+a module-level `let`. `logout`/`switchMode` construct a fresh service instance to drop
+session state; a module global survives that and bleeds the previous identity into the
+new session (stale DID → mismatched conversation keys).
+
+### Caches read during render must be reactive; getters must not side-effect
+A context method that looks like a getter (`displayName(did)`) must not fire IPC/network
+as a side effect and return a placeholder — and any cache it reads in a tracking scope
+must be a Solid store/signal, not a plain `Map`. A non-reactive cache never propagates
+the resolved value to the UI and re-fires the fetch every render. Back such caches with
+reactive state and guard against duplicate in-flight fetches per key.
+
+### Optimistic updates need an id-reconciliation story
+Optimistic messages use a client-generated id. Before DevServer/real-backend mode is
+wired, the incoming-event handler must reconcile/de-duplicate the server-delivered copy
+of an outgoing message against its optimistic entry (client id vs server id) — otherwise
+it appears twice. Leave a `// TODO:` at the append site until that path exists.
+
+### Enum comparisons must encode the real ordering
+Don't `>`-compare enum members whose numeric values aren't in semantic order. E.g.
+`DeliveryStatus` is `sending0/sent1/delivered2/read3/failed4` — `failed` is terminal,
+not "more advanced than read." Use an explicit rank/compare for progression, and treat
+terminal states (`failed`) separately rather than by numeric magnitude.
+
+### Distinguish "no connection" from "connected"
+Aggregate/derived connection state must not default to `connected` when there are zero
+connections (e.g. no account yet, or just after logout) — return a non-connected state
+so the UI doesn't show a green indicator before any connection exists.

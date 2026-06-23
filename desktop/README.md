@@ -50,7 +50,7 @@ For other distros see the [Tauri Linux prerequisites](https://tauri.app/start/pr
 ```bash
 # From the repo root
 cd desktop
-npm install        # first time only
+npm ci             # first time only
 npm run tauri dev  # starts Vite + Rust dev server, opens the window
 ```
 

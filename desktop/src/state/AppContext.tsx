@@ -6,10 +6,10 @@ import {
   useContext,
   type JSX,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { load as loadStore } from "@tauri-apps/plugin-store";
-import type { Account, Conversation, ServerInfo } from "../models";
-import { groupConversationId } from "../models";
+import type { Account, Conversation, InviteInfo, ServerInfo } from "../models";
+import { displayHost } from "../lib/format";
 import { DeliveryStatus, type Message } from "../models/Message";
 import { ServiceMode, type ActnetService, type ConnectionState, type StoredMessageFfi, type ConversationSummaryFfi, type IncomingEvent } from "../services/ActnetService";
 import { MockActnetService } from "../services/MockActnetService";
@@ -74,6 +74,7 @@ interface AppContextValue {
   unreadCount: (conversation: Conversation) => number;
   displayName: (did: string, accountId: string) => string;
   setPendingInviteToken: (token: string | null) => void;
+  validateInvite: (token: string) => Promise<InviteInfo>;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -123,8 +124,11 @@ export function AppProvider(props: { children: JSX.Element }) {
     makeService(ServiceMode.Mock)
   );
 
-  // Display name cache — not reactive, just a JS map.
-  const displayNameCache: Map<string, string> = new Map();
+  // Reactive display-name cache: reads are tracked by Solid so components
+  // re-render when a resolved name arrives.  A separate plain Set tracks
+  // in-flight fetches to prevent duplicate IPC calls per DID.
+  const [displayNameCache, setDisplayNameCache] = createStore<Record<string, string>>({});
+  const displayNamePending: Set<string> = new Set();
 
   // Load-once guards
   const loadedConversations = { value: false };
@@ -140,7 +144,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     return (
       store.accounts
         .find((a) => a.id === accountId)
-        ?.servers[0]?.id ?? ""
+        ?.servers[0]?.url ?? ""
     );
   }
 
@@ -204,41 +208,61 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   // ── Account lifecycle ─────────────────────────────────────────────────────
 
+  // Shared completion step for every onboarding path: resets the conversation
+  // load guard, loads conversations, starts event/connection loops, and clears
+  // the onboarding flag.  All three paths (createAccount, restoreAccounts,
+  // joinServer) must call this — never inline the steps individually.
+  function enterApp() {
+    loadedConversations.value = false;
+    void loadConversationsFromStore();
+    startPolling();
+    setStore("isOnboarding", false);
+  }
+
+  // Only restore once per session.  SplashView.onMount fires on every
+  // back-stack push, so guard against a second concurrent or repeat call.
+  let restoring = false;
+  let restored = false;
+
   async function restoreAccounts() {
-    const persisted = await persistedAccounts();
-    if (persisted.length === 0) return;
+    if (restoring || restored) return;
+    restoring = true;
 
-    const svc = service();
-    for (const p of persisted) {
-      try {
-        const result = await svc.login(p.dbPath, "dev-placeholder-key");
-        const account: Account = {
-          id: result.did,
-          displayName: result.displayName || p.displayName,
-          avatarData: null,
-          servers: p.servers.map((srv) => ({
-            id: srv.id,
-            name: srv.name,
-            url: srv.url,
-            displayHost: (() => {
-              try {
-                return new URL(srv.url).hostname;
-              } catch {
-                return srv.name;
-              }
-            })(),
-          })),
-        };
-        setStore("accounts", (prev) => [...prev, account]);
-      } catch {
-        // Account login failed — skip; leave persisted for next launch.
+    try {
+      const persisted = await persistedAccounts();
+      if (persisted.length === 0) return;
+
+      const svc = service();
+      for (const p of persisted) {
+        try {
+          const result = await svc.login(p.dbPath, "dev-placeholder-key");
+          const account: Account = {
+            id: result.did,
+            displayName: result.displayName || p.displayName,
+            avatarData: null,
+            servers: p.servers.map((srv) => ({
+              id: srv.id,
+              name: srv.name,
+              url: srv.url,
+              displayHost: displayHost(srv.url, srv.name),
+            })),
+          };
+          // Skip duplicates — store may already contain this account if
+          // restoreAccounts is called again mid-session.
+          if (!store.accounts.some((a) => a.id === result.did)) {
+            setStore("accounts", (prev) => [...prev, account]);
+          }
+        } catch {
+          // Account login failed — skip; leave persisted for next launch.
+        }
       }
-    }
 
-    if (store.accounts.length > 0) {
-      setStore("isOnboarding", false);
-      await loadConversationsFromStore();
-      startPolling();
+      if (store.accounts.length > 0) {
+        restored = true;
+        enterApp();
+      }
+    } finally {
+      restoring = false;
     }
   }
 
@@ -257,15 +281,11 @@ export function AppProvider(props: { children: JSX.Element }) {
       inviteToken
     );
 
-    const displayHost = (() => {
-      try { return new URL(serverUrl).hostname; } catch { return serverName; }
-    })();
-
     const serverInfo: ServerInfo = {
       id: serverUrl,
       name: serverName,
       url: serverUrl,
-      displayHost,
+      displayHost: displayHost(serverUrl, serverName),
     };
 
     const account: Account = {
@@ -284,49 +304,41 @@ export function AppProvider(props: { children: JSX.Element }) {
       servers: [{ id: serverUrl, name: serverName, url: serverUrl }],
     });
 
-    loadedConversations.value = false;
-    await loadConversationsFromStore();
+    enterApp();
+  }
 
-    setStore("isOnboarding", false);
-    startPolling();
+  function resetSession() {
+    stopPolling();
+    setStore(
+      produce((s) => {
+        s.accounts = [];
+        s.isOnboarding = true;
+        s.conversations = [];
+        s.messagesByConversation = {};
+        s.connectionStates = {};
+        s.pendingInviteToken = null;
+      })
+    );
+    loadedConversations.value = false;
+    loadedMessages.clear();
+    // Reset the reactive display-name cache so components get a reactive
+    // update on logout/mode-switch.
+    setDisplayNameCache(reconcile({}));
+    displayNamePending.clear();
+    // Reset the restore guards so accounts can be reloaded after a logout.
+    restoring = false;
+    restored = false;
+    void persistAccounts([]);
   }
 
   function logout() {
-    stopPolling();
-    setStore(
-      produce((s) => {
-        s.accounts = [];
-        s.isOnboarding = true;
-        s.conversations = [];
-        s.messagesByConversation = {};
-        s.connectionStates = {};
-        s.pendingInviteToken = null;
-      })
-    );
-    loadedConversations.value = false;
-    loadedMessages.clear();
-    displayNameCache.clear();
-    void persistAccounts([]);
+    resetSession();
   }
 
   function switchMode(mode: ServiceMode) {
-    stopPolling();
+    resetSession();
     setService(makeService(mode));
-    setStore(
-      produce((s) => {
-        s.serviceMode = mode;
-        s.accounts = [];
-        s.isOnboarding = true;
-        s.conversations = [];
-        s.messagesByConversation = {};
-        s.connectionStates = {};
-        s.pendingInviteToken = null;
-      })
-    );
-    loadedConversations.value = false;
-    loadedMessages.clear();
-    displayNameCache.clear();
-    void persistAccounts([]);
+    setStore("serviceMode", mode);
     void saveServiceMode(mode);
   }
 
@@ -337,15 +349,12 @@ export function AppProvider(props: { children: JSX.Element }) {
   ) {
     const idx = store.accounts.findIndex((a) => a.id === existingAccountId);
     if (idx >= 0) {
-      const displayHost = (() => {
-        try { return new URL(serverUrl).hostname; } catch { return serverName; }
-      })();
       setStore("accounts", idx, "servers", (prev) => [
         ...prev,
-        { id: serverUrl, name: serverName, url: serverUrl, displayHost },
+        { id: serverUrl, name: serverName, url: serverUrl, displayHost: displayHost(serverUrl, serverName) },
       ]);
     }
-    setStore("isOnboarding", false);
+    enterApp();
   }
 
   // ── Messaging ─────────────────────────────────────────────────────────────
@@ -369,7 +378,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       const title =
         isGroup
           ? s.groupTitle ?? "Group"
-          : displayNameCache.get(recipientDid ?? "") ?? recipientDid ?? s.conversationId;
+          : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
 
       return {
         id: s.conversationId,
@@ -408,11 +417,12 @@ export function AppProvider(props: { children: JSX.Element }) {
       .catch(() => {});
   }
 
-  async function sendMessage(
+  async function sendOptimistic(
     conversationId: string,
     text: string,
-    recipientDid: string,
-    senderAccountId: string
+    senderAccountId: string,
+    transportFn: (sentAtMs: number) => Promise<void>,
+    errorMessage: string
   ) {
     const messageId = crypto.randomUUID();
     const sentAtMs = Date.now();
@@ -444,7 +454,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     }
 
     try {
-      await service().sendDm(recipientDid, text, sentAtMs);
+      await transportFn(sentAtMs);
       setStore("messagesByConversation", conversationId, (msgs) =>
         (msgs ?? []).map((m) =>
           m.id === messageId
@@ -477,59 +487,34 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
-      throw new Error("Send failed");
+      throw new Error(errorMessage);
     }
+  }
+
+  async function sendMessage(
+    conversationId: string,
+    text: string,
+    recipientDid: string,
+    senderAccountId: string
+  ) {
+    await sendOptimistic(
+      conversationId,
+      text,
+      senderAccountId,
+      (sentAtMs) => service().sendDm(recipientDid, text, sentAtMs),
+      "Send failed"
+    );
   }
 
   async function sendGroupMessage(conversation: Conversation, text: string) {
     if (!conversation.groupId) return;
-    const messageId = crypto.randomUUID();
-    const sentAtMs = Date.now();
-
-    const optimistic: Message = {
-      id: messageId,
-      conversationId: conversation.id,
-      senderAccountId: conversation.accountId,
-      body: text,
-      sentAtMs,
-      readAtMs: sentAtMs,
-      deliveryStatus: DeliveryStatus.sending,
-      editCount: 0,
-      isDeleted: false,
-      kind: 0,
-      expireTimerSecs: 0,
-    };
-
-    setStore("messagesByConversation", conversation.id, (prev) => [
-      ...(prev ?? []),
-      optimistic,
-    ]);
-
-    const convIdx = store.conversations.findIndex((c) => c.id === conversation.id);
-    if (convIdx >= 0) {
-      setStore("conversations", convIdx, "lastMessage", text);
-      setStore("conversations", convIdx, "lastMessageDate", sentAtMs);
-    }
-
-    try {
-      await service().sendGroupMessage(conversation.groupId, text, sentAtMs);
-      setStore("messagesByConversation", conversation.id, (msgs) =>
-        (msgs ?? []).map((m) =>
-          m.id === messageId
-            ? { ...m, deliveryStatus: DeliveryStatus.sent }
-            : m
-        )
-      );
-    } catch {
-      setStore("messagesByConversation", conversation.id, (msgs) =>
-        (msgs ?? []).map((m) =>
-          m.id === messageId
-            ? { ...m, deliveryStatus: DeliveryStatus.failed }
-            : m
-        )
-      );
-      throw new Error("Group send failed");
-    }
+    await sendOptimistic(
+      conversation.id,
+      text,
+      conversation.accountId,
+      (sentAtMs) => service().sendGroupMessage(conversation.groupId!, text, sentAtMs),
+      "Group send failed"
+    );
   }
 
   function markAllMessagesRead(conversationId: string, accountId: string) {
@@ -563,7 +548,7 @@ export function AppProvider(props: { children: JSX.Element }) {
 
     const serverUrl = getServerUrl(accountId);
     const convId = `dm-${accountId}-${recipientDid}`;
-    const title = displayNameCache.get(recipientDid) ?? recipientDid;
+    const title = displayNameCache[recipientDid] ?? recipientDid;
     const conv: Conversation = {
       id: convId,
       title,
@@ -589,22 +574,31 @@ export function AppProvider(props: { children: JSX.Element }) {
   function displayName(did: string, accountId: string): string {
     const own = store.accounts.find((a) => a.id === did);
     if (own) return own.displayName;
-    if (displayNameCache.has(did)) return displayNameCache.get(did)!;
-    // Kick off async resolution (best-effort, no await)
-    void service()
-      .contactDisplayName(did)
-      .then((name) => {
-        if (name) {
-          displayNameCache.set(did, name);
-          // Update conversation titles that show the raw DID
-          store.conversations.forEach((c, i) => {
-            if (c.recipientDid === did && c.title === did) {
-              setStore("conversations", i, "title", name);
-            }
-          });
-        }
-      })
-      .catch(() => {});
+    // Reactive read: Solid tracks this access so components re-render when
+    // the cache is populated by the async fetch below.
+    const cached = displayNameCache[did];
+    if (cached !== undefined) return cached;
+    // Guard against duplicate in-flight fetches for the same DID.
+    if (!displayNamePending.has(did)) {
+      displayNamePending.add(did);
+      void service()
+        .contactDisplayName(did)
+        .then((name) => {
+          if (name) {
+            setDisplayNameCache(did, name);
+            // Update conversation titles that still show the raw DID.
+            store.conversations.forEach((c, i) => {
+              if (c.recipientDid === did && c.title === did) {
+                setStore("conversations", i, "title", name);
+              }
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          displayNamePending.delete(did);
+        });
+    }
     void accountId; // suppress lint
     return did;
   }
@@ -617,6 +611,9 @@ export function AppProvider(props: { children: JSX.Element }) {
         case "message": {
           const m = ev.msg;
           const msg = messageFromFfi(m);
+          // TODO: once DevServer mode is wired, reconcile/de-duplicate the
+          // server-delivered copy of an outgoing message against its optimistic
+          // entry (client UUID vs server-assigned id) before appending.
           setStore("messagesByConversation", m.conversationId, (prev) => [
             ...(prev ?? []),
             msg,
@@ -634,15 +631,44 @@ export function AppProvider(props: { children: JSX.Element }) {
         case "receiptUpdate": {
           const msgs = store.messagesByConversation[ev.conversationId];
           if (msgs) {
+            // Delivery-status progression: sending(0) → sent(1) → delivered(2) → read(3).
+            // `failed`(4) is a terminal error state — it can only be set from a
+            // non-terminal state (not from delivered/read), and it must never be
+            // treated as "more advanced" than read.
+            //
+            // rank() maps the four forward states to their progression order and
+            // gives `failed` a rank of -1 so it can only be applied when the
+            // current state is still in the non-terminal range.
+            function rank(s: DeliveryStatus): number {
+              switch (s) {
+                case DeliveryStatus.sending:   return 0;
+                case DeliveryStatus.sent:      return 1;
+                case DeliveryStatus.delivered: return 2;
+                case DeliveryStatus.read:      return 3;
+                case DeliveryStatus.failed:    return -1; // handled separately
+              }
+            }
+            const incoming = ev.deliveryStatus as DeliveryStatus;
             setStore(
               "messagesByConversation",
               ev.conversationId,
-              msgs.map((m) =>
-                m.sentAtMs === ev.sentAtMs &&
-                ev.deliveryStatus > m.deliveryStatus
-                  ? { ...m, deliveryStatus: ev.deliveryStatus as DeliveryStatus }
-                  : m
-              )
+              msgs.map((m) => {
+                if (m.sentAtMs !== ev.sentAtMs) return m;
+                if (incoming === DeliveryStatus.failed) {
+                  // Only apply `failed` when the message is still non-terminal
+                  // (sending/sent).  A delivered or read message is never
+                  // downgraded to failed by a stale or out-of-order receipt.
+                  if (rank(m.deliveryStatus) <= rank(DeliveryStatus.sent)) {
+                    return { ...m, deliveryStatus: DeliveryStatus.failed };
+                  }
+                  return m;
+                }
+                // For normal forward states, only advance — never go backwards.
+                if (rank(incoming) > rank(m.deliveryStatus)) {
+                  return { ...m, deliveryStatus: incoming };
+                }
+                return m;
+              })
             );
           }
           break;
@@ -660,24 +686,30 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   function startEventLoop() {
+    if (eventLoopRunning) return;
     eventLoopRunning = true;
     const loop = async () => {
       if (!eventLoopRunning) return;
       try {
         const events = await service().nextEvents();
         handleIncomingEvents(events);
+        if (eventLoopRunning) void loop();
       } catch {
-        // service errored or loop was stopped
+        // service errored — back off before retrying to avoid tight-spin IPC storm
+        if (eventLoopRunning) {
+          await new Promise<void>((r) => setTimeout(r, 1000));
+          void loop();
+        }
       }
-      if (eventLoopRunning) void loop();
     };
     void loop();
   }
 
   function startConnectionLoop() {
-    connLoopRunning = true;
+    if (connLoopRunning) return;
     const accountId = store.accounts[0]?.id;
     if (!accountId) return;
+    connLoopRunning = true;
 
     const loop = async (last: ConnectionState) => {
       if (!connLoopRunning) return;
@@ -713,7 +745,10 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   const aggregateConnectionState = createMemo((): ConnectionState => {
     const states = Object.values(store.connectionStates);
-    if (states.length === 0) return { type: "connected" };
+    // No connection states yet means no accounts have connected — report
+    // disconnected so the UI doesn't show a misleading "connected" indicator
+    // before any connection exists.
+    if (states.length === 0) return { type: "disconnected" };
     if (states.every((s) => s.type === "connected")) return { type: "connected" };
     for (const s of states) {
       if (s.type === "reconnecting") return s;
@@ -721,6 +756,10 @@ export function AppProvider(props: { children: JSX.Element }) {
     const any = states.find((s) => s.type !== "connected");
     return any ?? { type: "connected" };
   });
+
+  async function validateInvite(token: string): Promise<InviteInfo> {
+    return service().validateInvite(token);
+  }
 
   const ctx: AppContextValue = {
     store,
@@ -740,6 +779,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     unreadCount,
     displayName,
     setPendingInviteToken: (token) => setStore("pendingInviteToken", token),
+    validateInvite,
   };
 
   return (

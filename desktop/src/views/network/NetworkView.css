@@ -1,0 +1,13 @@
+.network-view {
+  padding: 24px;
+  font-family: var(--font-sans);
+}
+.network-view h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.network-view p {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}

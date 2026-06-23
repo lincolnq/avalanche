@@ -1,0 +1,32 @@
+.splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.splash-wordmark {
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -1px;
+  margin-bottom: 12px;
+  color: var(--color-sidebar);
+}
+.splash-tagline {
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  margin-bottom: 48px;
+}
+.splash-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 280px;
+}
+.splash-btn {
+  padding: 14px 24px;
+  border-radius: 12px;
+}

@@ -1,0 +1,109 @@
+/* Shared design tokens + reusable component classes for the Avalanche desktop UI.
+   Colors and the font stack live here only — views reference them via var(--…)
+   in their co-located .css files. */
+
+*, *::before, *::after { box-sizing: border-box; }
+body, html { margin: 0; padding: 0; height: 100%; }
+
+:root {
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Palette */
+  --color-bg: #FFF1E9;            /* primary background */
+  --color-text: #1F1815;          /* primary text */
+  --color-text-secondary: #6E6258;/* muted/secondary text */
+  --color-sidebar: #2A1620;       /* dark sidebar / hero surfaces */
+  --color-accent: #6B3E50;        /* primary action / accent */
+  --color-error: #C0392B;         /* form error text */
+
+  /* Inputs / surfaces */
+  --color-input-border: #D8C8BC;  /* default text-input border */
+  --color-divider: rgba(42, 22, 32, 0.12);
+
+  /* Shape */
+  --radius-input: 10px;
+  --radius-button: 10px;
+}
+
+/* ── Reusable component classes (verbatim-duplicated rules, now centralized) ── */
+
+.btn-primary {
+  padding: 14px;
+  border: none;
+  border-radius: var(--radius-button);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-primary:hover {
+  opacity: 0.9;
+}
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-secondary {
+  padding: 14px;
+  border: 1.5px solid var(--color-accent);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-secondary:hover {
+  background: rgba(107, 62, 80, 0.08);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.text-input {
+  padding: 12px 16px;
+  border: 1.5px solid var(--color-input-border);
+  border-radius: var(--radius-input);
+  background: #fff;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.text-input:focus {
+  border-color: var(--color-accent);
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.back-btn:hover {
+  color: var(--color-text);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

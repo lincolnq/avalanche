@@ -18,8 +18,6 @@ import type { InviteInfo } from "../models";
 const MOCK_SERVER_URL = "https://mock.avalancheapp.net";
 const MOCK_SERVER_NAME = "Mock Server";
 
-let _mockDid = "";
-
 function makeMockDid(): string {
   return `did:plc:mock${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -198,6 +196,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
 }
 
 export class MockActnetService implements ActnetService {
+  private mockDid = "";
   private storedMessages: Map<string, StoredMessageFfi[]> = new Map();
   private pendingEvents: IncomingEvent[] = [];
   private nextEventsResolve: ((events: IncomingEvent[]) => void) | null = null;
@@ -244,13 +243,13 @@ export class MockActnetService implements ActnetService {
     _inviteToken: string | null
   ): Promise<AccountResult> {
     await new Promise((r) => setTimeout(r, 500));
-    _mockDid = makeMockDid();
-    return { did: _mockDid, displayName };
+    this.mockDid = makeMockDid();
+    return { did: this.mockDid, displayName };
   }
 
   async login(_dbPath: string, _dbKey: string): Promise<AccountResult> {
-    _mockDid = _mockDid || makeMockDid();
-    return { did: _mockDid, displayName: "Me" };
+    this.mockDid = this.mockDid || makeMockDid();
+    return { did: this.mockDid, displayName: "Me" };
   }
 
   async recoverFromBlob(
@@ -261,14 +260,14 @@ export class MockActnetService implements ActnetService {
     displayName: string
   ): Promise<AccountResult> {
     await new Promise((r) => setTimeout(r, 500));
-    _mockDid = did;
+    this.mockDid = did;
     return { did, displayName };
   }
 
   async sendDm(recipientDid: string, body: string, sentAtMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
     void sentAtMs;
-    const convId = `dm-${_mockDid}-${recipientDid}`;
+    const convId = `dm-${this.mockDid}-${recipientDid}`;
     this.echoReply(convId, recipientDid, body);
   }
 
@@ -302,14 +301,14 @@ export class MockActnetService implements ActnetService {
   }
 
   async loadConversations(): Promise<ConversationSummaryFfi[]> {
-    return seedConversations(_mockDid);
+    return seedConversations(this.mockDid);
   }
 
   async loadMessages(conversationId: string): Promise<StoredMessageFfi[]> {
     if (!this.storedMessages.has(conversationId)) {
       this.storedMessages.set(
         conversationId,
-        seedMessages(conversationId, _mockDid)
+        seedMessages(conversationId, this.mockDid)
       );
     }
     return this.storedMessages.get(conversationId) ?? [];
@@ -325,7 +324,7 @@ export class MockActnetService implements ActnetService {
     const updated = msgs.map((m) => {
       if (
         m.readAtMs === null &&
-        m.senderDid !== _mockDid &&
+        m.senderDid !== this.mockDid &&
         m.sentAtMs <= upToSentAtMs
       ) {
         count++;
@@ -339,11 +338,11 @@ export class MockActnetService implements ActnetService {
 
   async unreadCount(conversationId: string): Promise<number> {
     const msgs = this.storedMessages.get(conversationId) ?? [];
-    return msgs.filter((m) => m.readAtMs === null && m.senderDid !== _mockDid)
+    return msgs.filter((m) => m.readAtMs === null && m.senderDid !== this.mockDid)
       .length;
   }
 
-  async did(): Promise<string> { return _mockDid; }
+  async did(): Promise<string> { return this.mockDid; }
   async deviceId(): Promise<number> { return 1; }
   async ownDisplayName(): Promise<string> { return "Me"; }
   async setDisplayName(_displayName: string): Promise<void> {}

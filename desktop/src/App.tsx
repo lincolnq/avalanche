@@ -4,13 +4,13 @@ import { useApp } from "./state/AppContext";
 import MainLayout from "./views/common/MainLayout";
 import ChatsView from "./views/chats/ChatsView";
 import NetworkView from "./views/network/NetworkView";
-import SplashView from "./views/onboarding/SplashView";
+import OnboardingFlow from "./views/onboarding/OnboardingFlow";
 
 export default function App() {
   const { store } = useApp();
 
   return (
-    <Show when={!store.isOnboarding} fallback={<SplashView />}>
+    <Show when={!store.isOnboarding} fallback={<OnboardingFlow />}>
       <Router>
         <Route path="/" component={MainLayout}>
           <Route path="/" component={ChatsView} />

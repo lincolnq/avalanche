@@ -21,7 +21,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' blob:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self' blob:; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self' 'unsafe-inline' blob:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
