@@ -144,6 +144,36 @@ impl IdentityStore {
             .map_err(StoreError::Db)
     }
 
+    /// Every sidecar row (regardless of dirty state) — the index of all synced
+    /// records this device knows. `version`/`deleted` are meaningful per row;
+    /// `dirty` is irrelevant.
+    ///
+    /// NOTE: currently only the *parked* `build_snapshot` path (docs/05 §7, under
+    /// design review) needs whole-store enumeration, so this has no live caller
+    /// right now. Kept because it's a generic read-only accessor the snapshot
+    /// redesign will reuse; remove it if that path is dropped entirely.
+    #[allow(dead_code)]
+    pub async fn all_sync_records(&self) -> Result<Vec<DirtySyncRecord>, StoreError> {
+        self.conn
+            .call(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT type, logical_key, version, deleted \
+                     FROM storage_sync ORDER BY type, logical_key",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(DirtySyncRecord {
+                        type_tag: row.get::<_, i64>(0)? as u16,
+                        logical_key: row.get::<_, String>(1)?,
+                        version: row.get::<_, i64>(2)?,
+                        deleted: row.get::<_, i64>(3)? != 0,
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// The server version last recorded for a record (0 if unknown). Used for
     /// the pull-side last-writer-wins comparison.
     pub async fn sync_version(&self, type_tag: u16, logical_key: &str) -> Result<i64, StoreError> {

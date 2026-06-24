@@ -52,11 +52,38 @@ struct ConversationView: View {
             && appState.isBot(message.senderAccountId, accountId: conversation.accountId)
     }
 
+    /// Sender name to show above a group message bubble (Signal-style), or nil.
+    /// Only for incoming group messages, and only on the first message of a
+    /// consecutive run from the same sender (a system event also breaks a run).
+    private func senderName(for message: Message, at index: Int) -> String? {
+        guard conversation.isGroup,
+              message.senderAccountId != conversation.accountId,
+              !message.isSystemEvent else { return nil }
+        if index > 0 {
+            let prev = messages[index - 1]
+            if !prev.isSystemEvent && prev.senderAccountId == message.senderAccountId {
+                return nil
+            }
+        }
+        return appState.resolvedName(for: message.senderAccountId, accountId: conversation.accountId)
+    }
+
+    /// Whether the message at `index` is the last of a consecutive run from the
+    /// same sender — used to collapse the timestamp/delivery line to the last
+    /// bubble of a run. A following system event, a different next sender, or
+    /// being the final message all end the run.
+    private func isLastInRun(at index: Int) -> Bool {
+        guard index < messages.count - 1 else { return true }
+        let next = messages[index + 1]
+        if next.isSystemEvent { return true }
+        return next.senderAccountId != messages[index].senderAccountId
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    ForEach(messages) { message in
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         if message.isSystemEvent {
                             // Group membership/metadata event (docs/03 §3.6) —
                             // a centered grey line, not a chat bubble.
@@ -69,6 +96,8 @@ struct ConversationView: View {
                                 message: message,
                                 isMe: message.senderAccountId == conversation.accountId,
                                 isBot: isBotSender(message),
+                                senderName: senderName(for: message, at: index),
+                                isLastInRun: isLastInRun(at: index),
                                 reactions: appState.reactions(for: message),
                                 myDid: conversation.accountId,
                                 actionsEnabled: actionsEnabled,
@@ -490,7 +519,15 @@ private func conversationPreview(_ conversation: Conversation, _ messages: [Mess
         Message(id: "m1", conversationId: conv.id, senderAccountId: "did:plc:bob",
                 body: "Crew — check in when you arrive.", sentAtMs: 1_700_000_000_000,
                 editedAtMs: nil, readAtMs: 1_700_000_001_000, deliveryStatus: .delivered),
-        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:me",
+        // Consecutive message from Bob: no second name label (same run).
+        Message(id: "m2", conversationId: conv.id, senderAccountId: "did:plc:bob",
+                body: "Bring water, it's hot out.", sentAtMs: 1_700_000_010_000,
+                editedAtMs: nil, readAtMs: 1_700_000_011_000, deliveryStatus: .delivered),
+        // Different sender: gets its own (differently colored) name label.
+        Message(id: "m3", conversationId: conv.id, senderAccountId: "did:plc:carol",
+                body: "Almost there!", sentAtMs: 1_700_000_020_000,
+                editedAtMs: nil, readAtMs: 1_700_000_021_000, deliveryStatus: .delivered),
+        Message(id: "m4", conversationId: conv.id, senderAccountId: "did:plc:me",
                 body: "On site 👍", sentAtMs: 1_700_000_060_000,
                 editedAtMs: nil, readAtMs: 1_700_000_061_000, deliveryStatus: .read),
     ])

@@ -16,13 +16,15 @@ message ContentMessage {
     EditMessage             edit                      = 7;
     DeleteMessage           delete                    = 8;
     ReactionMessage         reaction                  = 9;
+    SyncSent                sync_sent                 = 10;
+    SyncRead                sync_read                 = 11;
   }
   // Reserved for upcoming body variants (typing, group control, call
   // signaling, etc.). Field numbers inside a `oneof` share the parent
   // message's number space, so reservations live here at the message
   // level. Pick a number from this block when adding a new variant;
-  // never reuse 1-9 even if removed.
-  reserved 10 to 14;
+  // never reuse 1-11 even if removed.
+  reserved 12 to 14;
   uint64 timestamp_ms = 15;
   // Sender's profile key (32 bytes, AES-256-GCM). When present, recipients
   // can fetch and decrypt the sender's encrypted profile blob. Attached to
@@ -161,4 +163,50 @@ message ReceiptMessage {
   Type             type       = 1;
   repeated uint64  timestamps = 2;
   reserved 3 to 10;
+}
+
+// Multi-device "Sent transcript" (docs/04-multi-device.md §5.4). When you send
+// content to a third party, a copy of the verbatim payload is mirrored to your
+// *own* other devices wrapped in a SyncSent, so all your devices share one view
+// of the conversation. The receiving device applies it exactly as it would the
+// original send, but attributed as outgoing (authored by you) in the named
+// conversation. Honored only when the authenticated sender is one of your own
+// devices (sender DID == your DID).
+//
+// `content` is an *encoded* `ContentMessage` (the same bytes sent to the
+// recipient) carried as opaque bytes rather than a nested message — this keeps
+// the wire type non-recursive and lets new inner content types (reactions,
+// edits, future bodies) sync with zero new plumbing.
+message SyncSent {
+  // Send-time of the wrapped content (its ContentMessage.timestamp_ms); all your
+  // devices agree on ordering/identity from this.
+  uint64 timestamp = 1;
+  // Which conversation the content was sent to (for attribution on the
+  // receiving device).
+  oneof target {
+    string recipient_did = 2;   // a DM
+    bytes  group_id      = 3;   // a group (server-visible group id bytes)
+  }
+  // Encoded `ContentMessage` — the verbatim payload sent to recipients.
+  bytes content = 4;
+  reserved 5 to 10;
+}
+
+// Multi-device read-state sync (docs/04-multi-device.md §5.4). Clears unread
+// state on your *other* devices up to a per-conversation timestamp. Event-shaped
+// (never reaches a third party). Honored only when the authenticated sender is
+// one of your own devices.
+message SyncRead {
+  repeated ReadMark marks = 1;
+  reserved 2 to 10;
+}
+
+message ReadMark {
+  oneof conversation {
+    string peer_did = 1;   // a DM peer
+    bytes  group_id = 2;   // a group (server-visible group id bytes)
+  }
+  // Everything in the conversation sent at/below this timestamp is read.
+  uint64 up_to_timestamp = 3;
+  reserved 4 to 10;
 }

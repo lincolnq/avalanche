@@ -156,6 +156,13 @@ def main():
     else:
         print("  RELAY_URL not set — homeserver will not send push wakeups")
 
+    # Point the signup privacy-policy link at the hosted demo-server policy so
+    # the onboarding flow can be exercised locally. Override PRIVACY_POLICY_URL
+    # in .env to test against a different hosted policy.
+    privacy_policy_url = os.environ.get(
+        "PRIVACY_POLICY_URL", "https://theavalanche.net/avdemo-privacy/"
+    )
+
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
@@ -163,7 +170,7 @@ def main():
         # exercise the same admission path prod uses. Clients present the shared
         # secret below; testbot/adminbot read DEV_SHARED_SECRET to build a
         # bootstrap token. Override REGISTRATION_MODE=open for quick hacking.
-        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET},
+        env={**os.environ, "PROJECTS": json.dumps(projects_json), "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET, "PRIVACY_POLICY_URL": privacy_policy_url},
     ))
 
     for project, port in project_launches:

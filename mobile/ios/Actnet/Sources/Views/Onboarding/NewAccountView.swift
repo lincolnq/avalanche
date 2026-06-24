@@ -14,9 +14,15 @@ struct NewAccountView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("Create a new identity")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+            VStack(spacing: 4) {
+                Text("Create a new identity")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Text("on \(inviteToken.serverName)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
 
             // TODO: Avatar photo picker
             Circle()

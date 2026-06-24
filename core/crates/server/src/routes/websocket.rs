@@ -55,7 +55,7 @@ use crate::{
     error::ServerError,
     proto::{
         ws_frame::Body, AccountJoinedEvent, DeliverRequest, GroupDeliverRequest, Keepalive,
-        PrekeyLowNotification, SendResponse, WsFrame,
+        PrekeyLowNotification, SendResponse, StorageChangedNotification, WsFrame,
     },
     routes::messages::{send_messages, SendInput},
     state::{AppState, WsPush},
@@ -248,6 +248,12 @@ async fn handle_ws(
                             })),
                         }
                     }
+                    WsPush::StorageChanged { high_seq } => WsFrame {
+                        id: 0,
+                        body: Some(Body::StorageChanged(StorageChangedNotification {
+                            high_seq,
+                        })),
+                    },
                 };
                 if sink.send(Message::Binary(encode(&frame).into())).await.is_err() {
                     break;
@@ -457,7 +463,8 @@ async fn handle_frame(
         | Body::DeliverRequest(_)
         | Body::GroupDeliverRequest(_)
         | Body::PrekeyLow(_)
-        | Body::AccountJoined(_) => None,
+        | Body::AccountJoined(_)
+        | Body::StorageChanged(_) => None,
     }
 }
 

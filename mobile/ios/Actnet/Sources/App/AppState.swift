@@ -1741,7 +1741,16 @@ final class AppState: ObservableObject {
             deliveryStatus: .sent,
             expireTimerSecs: msg.expireTimerSecs
         )
-        messagesByConversation[convId, default: []].append(message)
+        // Only append to the in-memory list if it's already loaded; otherwise
+        // leave the entry nil so loadMessagesFromStore() does a full DB load
+        // when the conversation is next opened. Appending into a nil entry
+        // would create a one-element array (just this latest message), and the
+        // `== nil` guard in loadMessagesFromStore() would then skip loading the
+        // real history — showing only the latest message until app restart.
+        // The message is persisted to SQLCipher below regardless.
+        if messagesByConversation[convId] != nil {
+            messagesByConversation[convId]?.append(message)
+        }
 
         // Persist to SQLCipher in the background.
         if let core = cores[accountId] {

@@ -1449,20 +1449,28 @@ impl AppCore {
             // Refuse outgoing messages to a blocked contact (docs/12 §2).
             inner.ensure_not_blocked(&recipient_did).await?;
             let body = String::from_utf8_lossy(&plaintext).into_owned();
-            let profile_key = inner.own_profile_key().await;
-            let expire_timer_secs = inner.dm_expire_timer(&recipient_did).await;
-            let msg = ContentMessage {
-                body: Some(Body::Text(TextMessage { body })),
-                timestamp_ms: sent_at_ms as u64,
-                profile_key,
-                expire_timer_secs,
-            };
-            inner.send_dm(ws.as_ref(), &recipient_did, &msg.encode_to_vec(), None).await?;
-            // Sending a DM is a deliberate gesture (docs/35 §"What changes a row").
-            let _ = inner
-                .store
-                .touch_contact(&recipient_did, true, Timestamp::now())
-                .await;
+            // Route through the unified content path so the message mirrors to
+            // my own other devices (docs/04 §5.4). A `recipient_did` equal to my
+            // own DID is note-to-self: it fans out to my other devices only and
+            // is a local-only no-op when I have just this device.
+            inner
+                .send_to_target(
+                    ws.as_ref(),
+                    &MessageTarget::Dm {
+                        recipient_did: recipient_did.clone(),
+                    },
+                    Body::Text(TextMessage { body }),
+                    sent_at_ms as u64,
+                )
+                .await?;
+            // Sending a DM is a deliberate gesture (docs/35 §"What changes a
+            // row") — but don't curate yourself for note-to-self.
+            if recipient_did != inner.did {
+                let _ = inner
+                    .store
+                    .touch_contact(&recipient_did, true, Timestamp::now())
+                    .await;
+            }
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
