@@ -68,6 +68,17 @@ struct ConversationView: View {
         return appState.resolvedName(for: message.senderAccountId, accountId: conversation.accountId)
     }
 
+    /// Whether the message at `index` is the last of a consecutive run from the
+    /// same sender — used to collapse the timestamp/delivery line to the last
+    /// bubble of a run. A following system event, a different next sender, or
+    /// being the final message all end the run.
+    private func isLastInRun(at index: Int) -> Bool {
+        guard index < messages.count - 1 else { return true }
+        let next = messages[index + 1]
+        if next.isSystemEvent { return true }
+        return next.senderAccountId != messages[index].senderAccountId
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -86,6 +97,7 @@ struct ConversationView: View {
                                 isMe: message.senderAccountId == conversation.accountId,
                                 isBot: isBotSender(message),
                                 senderName: senderName(for: message, at: index),
+                                isLastInRun: isLastInRun(at: index),
                                 reactions: appState.reactions(for: message),
                                 myDid: conversation.accountId,
                                 actionsEnabled: actionsEnabled,

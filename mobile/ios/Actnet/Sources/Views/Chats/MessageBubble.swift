@@ -14,6 +14,12 @@ struct MessageBubble: View {
     /// decides when to pass it.
     var senderName: String? = nil
 
+    /// Whether this is the last message of a consecutive run from the same
+    /// sender. The timestamp + delivery indicator only show on the last of a
+    /// run (iMessage-style); mid-run bubbles stay clean. ConversationView
+    /// computes this. Defaults to true so non-run callers are unaffected.
+    var isLastInRun: Bool = true
+
     // Reactions / editing / deletion (docs/33, docs/36). `actionsEnabled` gates
     // the long-press menu to conversations where these ops are supported (DMs).
     var reactions: [ReactionFfi] = []
@@ -44,18 +50,6 @@ struct MessageBubble: View {
                 if !reactionClusters.isEmpty {
                     reactionCluster
                 }
-
-                HStack(spacing: 4) {
-                    Text(message.sentAt, style: .time)
-                    if message.isEdited && !message.isDeleted {
-                        Text("· Edited")
-                    }
-                    if isMe {
-                        deliveryIndicator
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
             }
 
             if !isMe { Spacer(minLength: 60) }
@@ -65,8 +59,7 @@ struct MessageBubble: View {
     @ViewBuilder
     private var bubble: some View {
         if message.isDeleted {
-            Text("This message was deleted")
-                .italic()
+            contentText
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -74,18 +67,107 @@ struct MessageBubble: View {
                     RoundedRectangle(cornerRadius: 16)
                         .strokeBorder(Color.avMuted.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 )
+                .overlay(alignment: .bottomTrailing) { metadataOverlay }
         } else {
-            let content = Text(message.body)
+            let content = contentText
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(isMe ? Color.avOutgoingBubble : Color.avIncomingBubble)
                 .foregroundStyle(isMe ? Color.sand100 : .primary)
                 .clipShape(bubbleShape)
+                .overlay(alignment: .bottomTrailing) { metadataOverlay }
             if actionsEnabled {
                 content.contextMenu { menuItems }
             } else {
                 content
             }
+        }
+    }
+
+    /// The bubble's text with a *clear* copy of the metadata cluster appended
+    /// to reserve trailing space on the last line. The visible cluster is then
+    /// drawn as a bottom-trailing overlay (`metadataOverlay`): if it fits after
+    /// the last line it tucks in there, otherwise the clear copy wraps and
+    /// extends the bubble by one line (Signal-style). U+2007 figure spaces give
+    /// a non-breaking gap between the body and the timestamp.
+    private var contentText: Text {
+        let base = message.isDeleted
+            ? Text("This message was deleted").italic()
+            : Text(message.body)
+        guard showMetadata else { return base }
+        return base + Text("\u{2007}\u{2007}") + metadataText(reserved: true)
+    }
+
+    @ViewBuilder
+    private var metadataOverlay: some View {
+        if showMetadata {
+            metadataText(reserved: false)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+        }
+    }
+
+    /// The inline metadata cluster — optional "Edited" marker, the compact
+    /// timestamp, and (own messages) the delivery glyph — built as a single
+    /// `Text` so the reserved (clear) and visible (colored) copies lay out
+    /// identically. Timestamp + delivery only appear on the last message of a
+    /// run; "Edited" always shows when applicable.
+    private func metadataText(reserved: Bool) -> Text {
+        let base: Color = reserved ? .clear : metaColor
+        var parts: Text?
+        func append(_ piece: Text) { parts = parts.map { $0 + piece } ?? piece }
+
+        if message.isEdited && !message.isDeleted {
+            append(Text("Edited").foregroundStyle(base))
+        }
+        if isLastInRun {
+            if parts != nil { append(Text(" ").foregroundStyle(base)) }
+            append(Text(shortTimestamp(message.sentAt)).foregroundStyle(base))
+            if isMe && !message.isDeleted, let symbol = deliverySymbol {
+                let glyph: Color = reserved ? .clear : deliveryColor
+                append(Text(" ").foregroundStyle(base)
+                    + Text(Image(systemName: symbol)).foregroundStyle(glyph))
+            }
+        }
+        return (parts ?? Text("")).font(.caption2)
+    }
+
+    /// Whether any metadata shows at all: the last bubble of a run (timestamp +
+    /// delivery) or any edited message ("Edited").
+    private var showMetadata: Bool {
+        isLastInRun || (message.isEdited && !message.isDeleted)
+    }
+
+    /// Compact, Signal-style timestamp: "now" under a minute, "32m" within the
+    /// hour, otherwise the locale short time ("5:13 PM"). Computed at render —
+    /// it doesn't live-tick between renders.
+    private func shortTimestamp(_ date: Date) -> String {
+        let secs = Date().timeIntervalSince(date)
+        if secs < 60 { return "now" }
+        if secs < 3600 { return "\(Int(secs / 60))m" }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var metaColor: Color {
+        isMe ? Color.sand100.opacity(0.8) : .secondary
+    }
+
+    /// Inline delivery glyph color. Glyphs only ride the outgoing (plum)
+    /// bubble, so they use the same light cluster color as the timestamp — read
+    /// is distinguished by the *filled* symbol, not color (avBrand == plum500,
+    /// which would be invisible here). Failed stays red; it contrasts fine.
+    private var deliveryColor: Color {
+        message.deliveryStatus == .failed ? Color.avError : metaColor
+    }
+
+    /// Single SF Symbol for the delivery state, drawn inline next to the time.
+    private var deliverySymbol: String? {
+        switch message.deliveryStatus {
+        case .sending: return "clock"
+        case .sent: return "checkmark"
+        case .delivered: return "checkmark.circle"
+        case .read: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.circle"
         }
     }
 
@@ -178,34 +260,4 @@ struct MessageBubble: View {
         isBot ? AnyShape(CutCornerRectangle(cut: 12)) : AnyShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    @ViewBuilder
-    private var deliveryIndicator: some View {
-        switch message.deliveryStatus {
-        case .sending:
-            Image(systemName: "clock")
-                .foregroundStyle(.secondary)
-        case .sent:
-            Image(systemName: "checkmark")
-                .foregroundStyle(.secondary)
-        case .delivered:
-            Image(systemName: "checkmark")
-                .foregroundStyle(.secondary)
-                .overlay(
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(.secondary)
-                        .offset(x: 4)
-                )
-        case .read:
-            Image(systemName: "checkmark")
-                .foregroundStyle(Color.avBrand)
-                .overlay(
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(Color.avBrand)
-                        .offset(x: 4)
-                )
-        case .failed:
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(Color.avError)
-        }
-    }
 }
