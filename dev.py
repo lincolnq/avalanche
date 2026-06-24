@@ -156,12 +156,11 @@ def main():
     else:
         print("  RELAY_URL not set — homeserver will not send push wakeups")
 
-    # Point the signup privacy-policy link at the homeserver's bundled template
-    # route so the onboarding flow can be exercised locally. Override
-    # PRIVACY_POLICY_URL in .env to test against a real hosted policy.
-    server_url = os.environ.get("SERVER_URL", "http://localhost:3000")
+    # Point the signup privacy-policy link at the hosted demo-server policy so
+    # the onboarding flow can be exercised locally. Override PRIVACY_POLICY_URL
+    # in .env to test against a different hosted policy.
     privacy_policy_url = os.environ.get(
-        "PRIVACY_POLICY_URL", f"{server_url}/privacy-policy-template"
+        "PRIVACY_POLICY_URL", "https://theavalanche.net/avdemo-privacy/"
     )
 
     processes.append(subprocess.Popen(
