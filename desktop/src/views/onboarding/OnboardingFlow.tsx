@@ -4,7 +4,6 @@ import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import type { Account } from "../../models/Account";
 import SplashView from "./SplashView";
-import QRScannerView from "./QRScannerView";
 import InviteLinkEntryView from "./InviteLinkEntryView";
 import IdentityPickerView from "./IdentityPickerView";
 import NewAccountView from "./NewAccountView";
@@ -12,11 +11,10 @@ import JoiningServerView from "./JoiningServerView";
 
 type Screen =
   | { name: "splash" }
-  | { name: "qrScanner" }
   | { name: "inviteLinkEntry" }
-  | { name: "identityPicker"; inviteInfo: InviteInfo }
-  | { name: "newAccount"; inviteInfo: InviteInfo }
-  | { name: "joiningServer"; inviteInfo: InviteInfo; account: Account };
+  | { name: "identityPicker"; inviteInfo: InviteInfo; inviteToken: string }
+  | { name: "newAccount"; inviteInfo: InviteInfo; inviteToken: string }
+  | { name: "joiningServer"; inviteInfo: InviteInfo; inviteToken: string; account: Account };
 
 export default function OnboardingFlow() {
   const { store, validateInvite, setPendingInviteToken } = useApp();
@@ -47,7 +45,7 @@ export default function OnboardingFlow() {
       void validateInvite(ev.payload)
         .then((info) => {
           // Deep-link success: root + identityPicker so Back returns to splash.
-          setStack([{ name: "splash" }, { name: "identityPicker", inviteInfo: info }]);
+          setStack([{ name: "splash" }, { name: "identityPicker", inviteInfo: info, inviteToken: ev.payload }]);
         })
         .catch(() => {
           // Token invalid — land on link entry so the user can try manually.
@@ -68,7 +66,7 @@ export default function OnboardingFlow() {
     setPendingInviteToken(null);
     void validateInvite(token)
       .then((info) => {
-        setStack([{ name: "splash" }, { name: "identityPicker", inviteInfo: info }]);
+        setStack([{ name: "splash" }, { name: "identityPicker", inviteInfo: info, inviteToken: token }]);
       })
       .catch(() => {
         setStack([{ name: "splash" }, { name: "inviteLinkEntry" }]);
@@ -94,21 +92,13 @@ export default function OnboardingFlow() {
     <Switch>
       <Match when={current().name === "splash"}>
         <SplashView
-          onScanQR={() => navigate({ name: "qrScanner" })}
           onEnterLink={() => navigate({ name: "inviteLinkEntry" })}
-        />
-      </Match>
-
-      <Match when={current().name === "qrScanner"}>
-        <QRScannerView
-          onValidated={(info) => navigate({ name: "identityPicker", inviteInfo: info })}
-          onBack={goBack}
         />
       </Match>
 
       <Match when={current().name === "inviteLinkEntry"}>
         <InviteLinkEntryView
-          onValidated={(info) => navigate({ name: "identityPicker", inviteInfo: info })}
+          onValidated={(info, token) => navigate({ name: "identityPicker", inviteInfo: info, inviteToken: token })}
           onBack={goBack}
         />
       </Match>
@@ -118,10 +108,10 @@ export default function OnboardingFlow() {
           <IdentityPickerView
             inviteInfo={s().inviteInfo}
             onSelectAccount={(account) =>
-              navigate({ name: "joiningServer", inviteInfo: s().inviteInfo, account })
+              navigate({ name: "joiningServer", inviteInfo: s().inviteInfo, inviteToken: s().inviteToken, account })
             }
             onNewIdentity={() =>
-              navigate({ name: "newAccount", inviteInfo: s().inviteInfo })
+              navigate({ name: "newAccount", inviteInfo: s().inviteInfo, inviteToken: s().inviteToken })
             }
             onBack={goBack}
           />
@@ -132,6 +122,7 @@ export default function OnboardingFlow() {
         {(s) => (
           <NewAccountView
             inviteInfo={s().inviteInfo}
+            token={s().inviteToken}
             showRecoverLink={true}
             onBack={goBack}
           />

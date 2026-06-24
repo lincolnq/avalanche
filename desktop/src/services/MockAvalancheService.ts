@@ -1,19 +1,21 @@
 import type {
-  ActnetService,
+  AvalancheService,
   AccountResult,
   StoredMessageFfi,
   ConversationSummaryFfi,
   AccountInfoFfi,
   ProjectInfoFfi,
   ConnectionState,
-  IncomingEvent,
   ContactRowFfi,
   ReactionFfi,
   MessageRevisionFfi,
   GroupSummaryFfi,
   CreatedGroupFfi,
-} from "./ActnetService";
-import type { InviteInfo } from "../models";
+  DecryptedMessage,
+  IncomingEvent,
+  InviteInfo,
+  DeliveryStatusUpdate,
+} from "./AvalancheService";
 
 const MOCK_SERVER_URL = "https://mock.avalancheapp.net";
 const MOCK_SERVER_NAME = "Mock Server";
@@ -195,7 +197,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
   return [];
 }
 
-export class MockActnetService implements ActnetService {
+export class MockAvalancheService implements AvalancheService {
   private mockDid = "";
   private storedMessages: Map<string, StoredMessageFfi[]> = new Map();
   private pendingEvents: IncomingEvent[] = [];
@@ -211,25 +213,22 @@ export class MockActnetService implements ActnetService {
     }
   }
 
-  private echoReply(conversationId: string, senderDid: string, body: string) {
+  private echoReply(conversationId: string, senderDid: string, plaintext: number[]) {
     setTimeout(() => {
+      const isGroup = conversationId.startsWith("group-");
+      const groupId = isGroup ? conversationId.slice("group-".length) : null;
       this.pushEvent({
         type: "message",
         msg: {
-          id: `echo-${Date.now()}`,
-          conversationId,
+          serverId: 0,
           senderDid,
-          body,
+          senderDeviceId: 1,
+          plaintext,
           sentAtMs: Date.now(),
-          editedAtMs: null,
-          readAtMs: null,
-          deliveryStatus: 1,
-          editCount: 0,
-          deleted: false,
-          kind: 0,
-          metadata: null,
+          groupId,
           expireTimerSecs: 0,
-          expireAtMs: null,
+          profileKey: null,
+          isRequest: false,
         },
       });
     }, 1000);
@@ -239,6 +238,7 @@ export class MockActnetService implements ActnetService {
     _serverUrl: string,
     _dbPath: string,
     _dbKey: string,
+    _prfOutput: number[],
     displayName: string,
     _inviteToken: string | null
   ): Promise<AccountResult> {
@@ -255,6 +255,7 @@ export class MockActnetService implements ActnetService {
   async recoverFromBlob(
     _serverUrl: string,
     did: string,
+    _prfOutput: number[],
     _dbPath: string,
     _dbKey: string,
     displayName: string
@@ -264,25 +265,25 @@ export class MockActnetService implements ActnetService {
     return { did, displayName };
   }
 
-  async sendDm(recipientDid: string, body: string, sentAtMs: number): Promise<void> {
+  async sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
     void sentAtMs;
     const convId = `dm-${this.mockDid}-${recipientDid}`;
-    this.echoReply(convId, recipientDid, body);
+    this.echoReply(convId, recipientDid, plaintext);
   }
 
   async sendGroupMessage(
     groupId: string,
-    body: string,
+    plaintext: number[],
     _sentAtMs: number
   ): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
     // AppContext strips the "group-" prefix before passing groupId here,
     // but conversationIds in the store retain the full "group-<id>" form.
-    this.echoReply(`group-${groupId}`, "did:plc:organizer", body);
+    this.echoReply(`group-${groupId}`, "did:plc:organizer", plaintext);
   }
 
-  async receiveMessages(): Promise<StoredMessageFfi[]> {
+  async receiveMessages(): Promise<DecryptedMessage[]> {
     return [];
   }
 
@@ -384,12 +385,12 @@ export class MockActnetService implements ActnetService {
 
   async validateInvite(token: string): Promise<InviteInfo> {
     return {
-      token,
       serverUrl: MOCK_SERVER_URL,
       serverName: MOCK_SERVER_NAME,
-      inviterDid: undefined,
-      inviterDisplayName: undefined,
-      postOnboardingRedirect: undefined,
+      inviterDid: null,
+      inviterDisplayName: null,
+      postOnboardingRedirect: null,
+      inviterProfileKey: null,
     };
   }
 
@@ -409,16 +410,20 @@ export class MockActnetService implements ActnetService {
     _description: string,
     _expirySeconds: number
   ): Promise<CreatedGroupFfi> {
-    return { groupId: `mockgrp-${title.slice(0, 8)}-${Date.now()}` };
+    return { groupId: `mockgrp-${title.slice(0, 8)}-${Date.now()}`, masterKey: [] };
   }
 
   async fetchGroupState(groupId: string): Promise<GroupSummaryFfi> {
     return {
       groupId,
+      masterKey: [],
       revision: 0,
       title: "Mock Group",
       description: "",
       expirySeconds: 0,
+      members: [],
+      pendingInvites: [],
+      pendingApprovals: [],
     };
   }
 

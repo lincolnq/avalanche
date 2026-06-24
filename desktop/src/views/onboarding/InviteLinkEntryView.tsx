@@ -5,7 +5,7 @@ import { useInviteValidation } from "../../lib/useInviteValidation";
 import "./InviteLinkEntryView.css";
 
 interface Props {
-  onValidated: (info: InviteInfo) => void;
+  onValidated: (info: InviteInfo, token: string) => void;
   onBack?: () => void;
 }
 

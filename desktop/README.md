@@ -21,13 +21,15 @@ in-memory so you can demo the UI without a running homeserver.
 - **Visual Studio Build Tools 2022** with the "Desktop development with C++"
   workload — needed by Rust's MSVC toolchain and `tauri-winres` (embeds the
   app icon into the `.exe`).
+- **OpenSSL** — `choco install openssl` (as administrator).
 - **WebView2** — pre-installed on Windows 10 (Nov 2020+) and Windows 11.
   If missing: [download from Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
 ### macOS (additional)
 
 - **Xcode Command Line Tools**: `xcode-select --install`
-- No extra system libraries needed; WebKit ships with macOS.
+- **OpenSSL** — `brew install openssl`
+- WebKit ships with macOS — no extra WebView library needed.
 
 ### Linux (additional, Ubuntu/Debian)
 
@@ -94,4 +96,5 @@ Icons for all platforms (`.ico`, `.icns`, `.png`) are committed in
 Mock mode is the default. To point at a real homeserver, open
 `src/state/AppContext.tsx` and change both `ServiceMode.Mock` occurrences to
 `ServiceMode.DevServer`, then restart. The Tauri commands in
-`src-tauri/src/lib.rs` are currently stubs and will need implementing first.
+`src-tauri/src/lib.rs` delegate directly to `app-core` — create an account
+via the onboarding flow to persist your identity in a local SQLCipher database.

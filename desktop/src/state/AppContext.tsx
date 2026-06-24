@@ -11,9 +11,9 @@ import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Account, Conversation, InviteInfo, ServerInfo } from "../models";
 import { displayHost } from "../lib/format";
 import { DeliveryStatus, type Message } from "../models/Message";
-import { ServiceMode, type ActnetService, type ConnectionState, type StoredMessageFfi, type ConversationSummaryFfi, type IncomingEvent } from "../services/ActnetService";
-import { MockActnetService } from "../services/MockActnetService";
-import { DevServerActnetService } from "../services/DevServerActnetService";
+import { ServiceMode, type AvalancheService, type ConnectionState, type StoredMessageFfi, type ConversationSummaryFfi, type IncomingEvent } from "../services/AvalancheService";
+import { MockAvalancheService } from "../services/MockAvalancheService";
+import { DevServerAvalancheService } from "../services/DevServerAvalancheService";
 
 // ── Persisted account shape (stored in tauri-plugin-store) ────────────────────
 
@@ -79,10 +79,10 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
-function makeService(mode: ServiceMode): ActnetService {
+function makeService(mode: ServiceMode): AvalancheService {
   return mode === ServiceMode.Mock
-    ? new MockActnetService()
-    : new DevServerActnetService();
+    ? new MockAvalancheService()
+    : new DevServerAvalancheService();
 }
 
 function messageFromFfi(m: StoredMessageFfi): Message {
@@ -120,7 +120,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     pendingInviteToken: null,
   });
 
-  const [service, setService] = createSignal<ActnetService>(
+  const [service, setService] = createSignal<AvalancheService>(
     makeService(ServiceMode.Mock)
   );
 
@@ -276,7 +276,13 @@ export function AppProvider(props: { children: JSX.Element }) {
     const result = await service().createAccount(
       serverUrl,
       dbPath,
+      // TODO: replace with real key-derivation when PRF is wired.
       "dev-placeholder-key",
+      // TODO(assumption): AppCore::create_account must accept empty PRF output
+      // (the desktop no-passkey path).  If it validates non-empty bytes,
+      // account creation fails with an opaque backend error.  Verify when
+      // T31 wires the real command.
+      [],
       displayName,
       inviteToken
     );
@@ -308,6 +314,10 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   function resetSession() {
+    // Block restoreAccounts from re-entering while we clear persisted state.
+    // Otherwise SplashView.onMount fires restoreAccounts before persistAccounts([])
+    // completes, finding stale accounts and auto-signing-in — undoing the logout.
+    restoring = true;
     stopPolling();
     setStore(
       produce((s) => {
@@ -325,14 +335,19 @@ export function AppProvider(props: { children: JSX.Element }) {
     // update on logout/mode-switch.
     setDisplayNameCache(reconcile({}));
     displayNamePending.clear();
-    // Reset the restore guards so accounts can be reloaded after a logout.
-    restoring = false;
-    restored = false;
-    void persistAccounts([]);
+    // Clear persisted accounts, then release the restore guard so a
+    // subsequent manual restore or fresh session can proceed cleanly.
+    void persistAccounts([]).finally(() => {
+      restoring = false;
+      restored = false;
+    });
   }
 
   function logout() {
     resetSession();
+    // Fresh service instance so mock state (storedMessages, pendingEvents, etc.)
+    // doesn't bleed into the next session.  Matches switchMode.
+    setService(makeService(store.serviceMode));
   }
 
   function switchMode(mode: ServiceMode) {
@@ -462,7 +477,9 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
-      // Best-effort persist
+      // Best-effort persist.
+      // TODO: surface save failures to the user (e.g. disk full, IPC error)
+      // rather than silently dropping the message from local history.
       void service().saveMessage({
         id: messageId,
         conversationId,
@@ -501,7 +518,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       conversationId,
       text,
       senderAccountId,
-      (sentAtMs) => service().sendDm(recipientDid, text, sentAtMs),
+      (sentAtMs) => service().sendDm(recipientDid, Array.from(new TextEncoder().encode(text)), sentAtMs),
       "Send failed"
     );
   }
@@ -512,7 +529,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       conversation.id,
       text,
       conversation.accountId,
-      (sentAtMs) => service().sendGroupMessage(conversation.groupId!, text, sentAtMs),
+      (sentAtMs) => service().sendGroupMessage(conversation.groupId!, Array.from(new TextEncoder().encode(text)), sentAtMs),
       "Group send failed"
     );
   }
@@ -548,7 +565,8 @@ export function AppProvider(props: { children: JSX.Element }) {
 
     const serverUrl = getServerUrl(accountId);
     const convId = `dm-${accountId}-${recipientDid}`;
-    const title = displayNameCache[recipientDid] ?? recipientDid;
+    // Trigger async fetch; title updates reactively when the cache populates.
+    const title = displayName(recipientDid, accountId);
     const conv: Conversation = {
       id: convId,
       title,
@@ -584,9 +602,10 @@ export function AppProvider(props: { children: JSX.Element }) {
       void service()
         .contactDisplayName(did)
         .then((name) => {
+          // Always cache — even empty strings — to prevent infinite refetch.
+          // Only update conversation titles when a non-empty name arrives.
+          setDisplayNameCache(did, name);
           if (name) {
-            setDisplayNameCache(did, name);
-            // Update conversation titles that still show the raw DID.
             store.conversations.forEach((c, i) => {
               if (c.recipientDid === did && c.title === did) {
                 setStore("conversations", i, "title", name);
@@ -610,26 +629,44 @@ export function AppProvider(props: { children: JSX.Element }) {
       switch (ev.type) {
         case "message": {
           const m = ev.msg;
-          const msg = messageFromFfi(m);
+          const accountId = store.accounts[0]?.id ?? "";
+          const conversationId = m.groupId
+            ? `group-${m.groupId}`
+            : `dm-${accountId}-${m.senderDid}`;
+          const body = new TextDecoder().decode(new Uint8Array(m.plaintext));
+          const msg: Message = {
+            id: crypto.randomUUID(),
+            conversationId,
+            senderAccountId: m.senderDid,
+            body,
+            sentAtMs: m.sentAtMs ?? Date.now(),
+            deliveryStatus: DeliveryStatus.delivered,
+            editCount: 0,
+            isDeleted: false,
+            kind: 0,
+            expireTimerSecs: m.expireTimerSecs,
+          };
           // TODO: once DevServer mode is wired, reconcile/de-duplicate the
           // server-delivered copy of an outgoing message against its optimistic
           // entry (client UUID vs server-assigned id) before appending.
-          setStore("messagesByConversation", m.conversationId, (prev) => [
+          setStore("messagesByConversation", conversationId, (prev) => [
             ...(prev ?? []),
             msg,
           ]);
           // Update conversation preview
           const convIdx = store.conversations.findIndex(
-            (c) => c.id === m.conversationId
+            (c) => c.id === conversationId
           );
           if (convIdx >= 0) {
-            setStore("conversations", convIdx, "lastMessage", m.body);
-            setStore("conversations", convIdx, "lastMessageDate", m.sentAtMs);
+            const previewText = body.length > 100 ? body.slice(0, 100) + "…" : body;
+            setStore("conversations", convIdx, "lastMessage", previewText);
+            setStore("conversations", convIdx, "lastMessageDate", m.sentAtMs ?? Date.now());
           }
           break;
         }
         case "receiptUpdate": {
-          const msgs = store.messagesByConversation[ev.conversationId];
+          const update = ev.update;
+          const msgs = store.messagesByConversation[update.conversationId];
           if (msgs) {
             // Delivery-status progression: sending(0) → sent(1) → delivered(2) → read(3).
             // `failed`(4) is a terminal error state — it can only be set from a
@@ -648,12 +685,14 @@ export function AppProvider(props: { children: JSX.Element }) {
                 case DeliveryStatus.failed:    return -1; // handled separately
               }
             }
-            const incoming = ev.deliveryStatus as DeliveryStatus;
+            // TODO: range-guard the cast (as in messageFromFfi lines 97-99)
+            // so new backend variants don't silently produce undefined from rank().
+            const incoming = update.deliveryStatus as DeliveryStatus;
             setStore(
               "messagesByConversation",
-              ev.conversationId,
+              update.conversationId,
               msgs.map((m) => {
-                if (m.sentAtMs !== ev.sentAtMs) return m;
+                if (m.sentAtMs !== update.sentAtMs) return m;
                 if (incoming === DeliveryStatus.failed) {
                   // Only apply `failed` when the message is still non-terminal
                   // (sending/sent).  A delivered or read message is never
@@ -680,6 +719,8 @@ export function AppProvider(props: { children: JSX.Element }) {
           void loadConversationsFromStore();
           break;
         default:
+          // TODO: handle MessageEdited, MessageDeleted, ReactionUpdated,
+          // and MessagesExpired events once the mock/backend emits them.
           break;
       }
     }
@@ -697,6 +738,9 @@ export function AppProvider(props: { children: JSX.Element }) {
       } catch {
         // service errored — back off before retrying to avoid tight-spin IPC storm
         if (eventLoopRunning) {
+          // TODO: use an abortable delay (or clearTimeout/flag) so that
+          // stopPolling() during the 1s backoff doesn't spawn a second
+          // concurrent event loop via the stale timer.
           await new Promise<void>((r) => setTimeout(r, 1000));
           void loop();
         }
@@ -717,7 +761,12 @@ export function AppProvider(props: { children: JSX.Element }) {
         const next = await service().waitForConnectionStateChange(last);
         setStore("connectionStates", accountId, next);
         if (connLoopRunning) void loop(next);
-      } catch {}
+      } catch {
+        // TODO: retry with backoff on transient failures instead of
+        // silently killing the connection loop. Also reset connLoopRunning
+        // if the initial connectionState() call rejects so the loop isn't
+        // permanently deadlocked.
+      }
     };
 
     void service()
@@ -726,6 +775,7 @@ export function AppProvider(props: { children: JSX.Element }) {
         setStore("connectionStates", accountId, state);
         void loop(state);
       })
+      // TODO: reset connLoopRunning on rejection so the loop can recover.
       .catch(() => {});
   }
 

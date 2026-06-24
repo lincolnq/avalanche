@@ -18,3 +18,14 @@ tauri = { version = "2", features = [] }
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+specta-typescript = "0.0.12"
+app-core = { path = "../../core/crates/app-core" }
+
+# zkgroup depends on a Signal fork of curve25519-dalek (it has private fields
+# zkgroup needs to reach into for Ristretto-based proofs). The fork is API-
+# compatible with crates.io 4.1.x for everything else. Without this patch,
+# transitive dependencies pull in the upstream 4.1.3 and we get a diamond.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

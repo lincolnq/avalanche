@@ -3,7 +3,6 @@ import { useApp } from "../../state/AppContext";
 import "./SplashView.css";
 
 interface SplashViewProps {
-  onScanQR: () => void;
   onEnterLink: () => void;
 }
 
@@ -19,10 +18,7 @@ export default function SplashView(props: SplashViewProps) {
       <div class="splash-wordmark">Avalanche</div>
       <div class="splash-tagline">Secure messaging for organizers</div>
       <div class="splash-actions">
-        <button class="btn-primary splash-btn" onClick={props.onScanQR}>
-          Scan QR Code
-        </button>
-        <button class="btn-secondary splash-btn" onClick={props.onEnterLink}>
+        <button class="btn-primary splash-btn" onClick={props.onEnterLink}>
           Enter Invite Link
         </button>
       </div>

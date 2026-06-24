@@ -5,6 +5,7 @@ import "./NewAccountView.css";
 
 interface Props {
   inviteInfo: InviteInfo;
+  token: string;
   showRecoverLink: boolean;
   onBack?: () => void;
 }
@@ -25,7 +26,7 @@ export default function NewAccountView(props: Props) {
         props.inviteInfo.serverUrl,
         props.inviteInfo.serverName,
         name,
-        props.inviteInfo.token
+        props.token
       );
       // createAccount sets isOnboarding = false — App.tsx unmounts the flow.
     } catch (e) {

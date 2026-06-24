@@ -27,7 +27,7 @@ async function decodeQRFile(file: File): Promise<string | null> {
 }
 
 interface Props {
-  onValidated: (info: InviteInfo) => void;
+  onValidated: (info: InviteInfo, token: string) => void;
   onBack?: () => void;
 }
 

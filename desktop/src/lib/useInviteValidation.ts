@@ -19,7 +19,7 @@ export interface InviteValidation {
  */
 export function useInviteValidation(
   validateInvite: (token: string) => Promise<InviteInfo>,
-  onValidated: (info: InviteInfo) => void,
+  onValidated: (info: InviteInfo, token: string) => void,
   fallbackError: string
 ): InviteValidation {
   const [error, setError] = createSignal<string | null>(null);
@@ -33,7 +33,7 @@ export function useInviteValidation(
     try {
       const token = parseInviteUrl(trimmed) ?? trimmed;
       const info = await validateInvite(token);
-      onValidated(info);
+      onValidated(info, token);
     } catch (e) {
       setError(e instanceof Error ? e.message : fallbackError);
     } finally {
