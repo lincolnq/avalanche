@@ -2086,8 +2086,15 @@ class AppViewModel(
             deliveryStatus = DeliveryStatus.SENT,
             expireTimerSecs = msg.expireTimerSecs,
         )
+        // Only append to the in-memory list if it's already loaded; otherwise
+        // leave the entry absent so loadMessagesFromStore() does a full DB load
+        // when the conversation is next opened. Appending into an absent entry
+        // would create a one-element list (just this latest message), and the
+        // non-null guard in loadMessagesFromStore() would then skip loading the
+        // real history — showing only the latest message until app restart.
+        // The message is persisted to SQLCipher below regardless.
         _messagesByConversation.update { map ->
-            val existing = map[convId] ?: emptyList()
+            val existing = map[convId] ?: return@update map
             map + (convId to (existing + message))
         }
 
