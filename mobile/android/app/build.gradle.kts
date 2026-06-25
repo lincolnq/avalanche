@@ -13,6 +13,32 @@ val relayUrl: String = (project.findProperty("RELAY_URL") as String?)
     ?: System.getenv("RELAY_URL")
     ?: "https://relay.theavalanche.net"
 
+// App version, derived from git so it stays in lock-step with the iOS scheme
+// (see the Makefile's MARKETING_VERSION / CURRENT_PROJECT_VERSION):
+//   versionName ← latest reachable tag, leading `v` stripped  (iOS MARKETING_VERSION / CFBundleShortVersionString)
+//   versionCode ← total commit count, monotonically climbing  (iOS CURRENT_PROJECT_VERSION / CFBundleVersion)
+// `make android` passes both as -P properties (the same vars it hands xcodebuild),
+// so iOS and Android always stamp identical numbers. A bare `./gradlew` build
+// falls back to deriving them from git here, then to 0.0.0 / 1 outside a repo.
+fun gitValue(vararg args: String): String? = runCatching {
+    providers.exec {
+        commandLine(listOf("git") + args)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().takeIf { it.isNotEmpty() }
+}.getOrNull()
+
+val appVersionName: String =
+    (project.findProperty("MARKETING_VERSION") as String?)?.takeIf { it.isNotEmpty() }
+        ?: System.getenv("MARKETING_VERSION")?.takeIf { it.isNotEmpty() }
+        ?: gitValue("describe", "--tags", "--abbrev=0")?.removePrefix("v")
+        ?: "0.0.0"
+
+val appVersionCode: Int =
+    ((project.findProperty("CURRENT_PROJECT_VERSION") as String?)?.takeIf { it.isNotEmpty() }
+        ?: System.getenv("CURRENT_PROJECT_VERSION")?.takeIf { it.isNotEmpty() }
+        ?: gitValue("rev-list", "--count", "HEAD"))
+        ?.toIntOrNull() ?: 1
+
 android {
     namespace = "net.theavalanche.app"
     // API 37 (major). The upgraded AndroidX libs (compose-bom 2026.06, core-ktx
@@ -26,8 +52,8 @@ android {
         applicationId = "net.theavalanche.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         buildConfigField("String", "RELAY_URL", "\"$relayUrl\"")
 

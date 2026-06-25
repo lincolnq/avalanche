@@ -67,7 +67,7 @@ ANDROID_NDK_HOME ?= $(shell ls -d $(ANDROID_HOME)/ndk/* 2>/dev/null | sort -V | 
 # ships with Android Studio (macOS). Override from the env if neither fits.
 ANDROID_JAVA_HOME ?= $(or $(JAVA_HOME),/Applications/Android Studio.app/Contents/jbr/Contents/Home)
 
-# iOS app version, derived from git so it never has to be hand-edited in
+# App version, derived from git so it never has to be hand-edited in
 # project.yml. MARKETING_VERSION (CFBundleShortVersionString) is the latest
 # reachable tag with any leading `v` stripped — the same bare semver the
 # server release uses, so app and server share one version scheme.
@@ -76,7 +76,9 @@ ANDROID_JAVA_HOME ?= $(or $(JAVA_HOME),/Applications/Android Studio.app/Contents
 # which climbs monotonically. Both are overridable from the environment
 # (e.g. CI) via ?=. Passed to xcodebuild as command-line build-setting
 # overrides below, so they're always current regardless of whether make
-# decided the .xcodeproj was stale.
+# decided the .xcodeproj was stale. The android target hands the same two
+# variables to Gradle as -P properties (-> versionName / versionCode), so iOS
+# and Android always stamp identical version + build numbers.
 GIT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 MARKETING_VERSION ?= $(or $(GIT_TAG),0.0.0)
 CURRENT_PROJECT_VERSION ?= $(or $(shell git rev-list --count HEAD 2>/dev/null),0)
@@ -405,7 +407,9 @@ $(XCODE_PROJ_FILE): mobile/ios/Actnet/project.yml $(SWIFT_SOURCES) $(wildcard .e
 # Build the debug APK end to end. Brings bindings + native libs up to date, then
 # runs Gradle (which has its own incremental Kotlin compilation).
 android: android-bindings
-	cd mobile/android && JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" ./gradlew assembleDebug
+	cd mobile/android && JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" ./gradlew assembleDebug \
+		-PMARKETING_VERSION=$(MARKETING_VERSION) \
+		-PCURRENT_PROJECT_VERSION=$(CURRENT_PROJECT_VERSION)
 
 android-bindings: $(KOTLIN_BINDING) $(ANDROID_SO_STAMP)
 
