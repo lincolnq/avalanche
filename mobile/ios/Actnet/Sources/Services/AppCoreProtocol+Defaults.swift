@@ -81,6 +81,7 @@ extension AppCoreProtocol {
     func fetchProjects() throws -> [ProjectInfoFfi] { [] }
     func requestProjectToken(projectUrl: String) throws -> String { "" }
     func registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) throws {}
+    func unregisterPushToken(relayUrl: String) throws {}
 
     // MARK: - Connection state / events
 

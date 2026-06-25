@@ -9,6 +9,14 @@ import android.util.Base64
  * Returns null if the string is not valid base64url.
  */
 fun decodeBase64URL(string: String): ByteArray? {
+    // Strictly reject anything outside the URL-safe alphabet (RFC 4648 §5, no
+    // padding). After the substitution below, Base64.DEFAULT would otherwise
+    // also accept standard '+'/'/' (and '='), so two different-looking tokens
+    // could decode to the same bytes — and this is an invite-token / deep-link
+    // parsing path. Must match iOS Data(base64URLEncoded:).
+    if (string.any { it !in 'A'..'Z' && it !in 'a'..'z' && it !in '0'..'9' && it != '-' && it != '_' }) {
+        return null
+    }
     var base64 = string
         .replace('-', '+')
         .replace('_', '/')

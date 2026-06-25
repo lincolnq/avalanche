@@ -2201,6 +2201,31 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    /// Deregister this device's push token (e.g. on logout). Retires the stored
+    /// pseudonym with both the relay and the homeserver so the relay stops
+    /// mapping the device token to this account, then clears local push state.
+    ///
+    /// Best-effort against the network: a relay/server failure still clears the
+    /// local state and returns Ok, since the caller is tearing the account down
+    /// anyway and the relay GC reaps any stranded pseudonym. A no-op (Ok) when
+    /// no push state is registered.
+    pub fn unregister_push_token(&self, relay_url: String) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let Some(state) = inner.store.load_push_state().await.map_err(AppError::Store)? else {
+                return Ok::<_, AppError>(());
+            };
+            let _ = inner
+                .client
+                .unregister_push_with_relay(&relay_url, &state.pseudonym)
+                .await;
+            let _ = inner.client.unregister_push_pseudonym(&state.pseudonym).await;
+            inner.store.clear_push_state().await.map_err(AppError::Store)?;
+            Ok::<_, AppError>(())
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
     /// Update the recovery blob on the server (e.g. after joining a new server).
     /// `prf_output` is the 32-byte WebAuthn PRF output; the blob-encryption
     /// key is derived from it via HKDF.

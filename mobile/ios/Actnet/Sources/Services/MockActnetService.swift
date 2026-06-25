@@ -178,6 +178,10 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         // Mock: no-op
     }
 
+    func unregisterPushToken(relayUrl: String) throws {
+        // Mock: no-op
+    }
+
 
     // MARK: - Connection state
 

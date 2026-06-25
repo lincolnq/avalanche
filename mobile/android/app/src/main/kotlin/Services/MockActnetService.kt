@@ -106,6 +106,7 @@ class MockAppCore(
     // -----------------------------------------------------------------------
 
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) {}
+    override fun unregisterPushToken(relayUrl: String) {}
 
     // -----------------------------------------------------------------------
     // Message storage

@@ -38,6 +38,19 @@ impl DeviceStore {
             .map_err(StoreError::Db)
     }
 
+    /// Remove the current push registration state (e.g. on logout). A no-op if
+    /// no row exists. After this, [`Self::load_push_state`] returns `None` and
+    /// the next `register_push_token` mints a fresh pseudonym.
+    pub async fn clear_push_state(&self) -> Result<(), StoreError> {
+        self.conn
+            .call(move |conn| {
+                conn.execute("DELETE FROM push_state WHERE id = 1", [])?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// Load the current push registration state. Returns `None` if not yet registered.
     pub async fn load_push_state(&self) -> Result<Option<PushState>, StoreError> {
         use rusqlite::OptionalExtension as _;

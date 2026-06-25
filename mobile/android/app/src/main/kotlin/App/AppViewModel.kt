@@ -412,7 +412,10 @@ class AppViewModel(
                     AppLog.warn("restore", "Failed to authenticate account ${p.did} (will show offline)")
                     continue
                 }
-                cores[core.did()] = core
+                // Key by the persisted DID we already trust — avoids a blocking
+                // FFI call (core.did()) on the main thread; it equals core.did()
+                // for this account anyway.
+                cores[p.did] = core
 
                 // Refresh display name from the local profile store — persisted name can be stale.
                 val coreName = withContext(Dispatchers.IO) {
@@ -457,6 +460,7 @@ class AppViewModel(
     }
 
     fun logout() {
+        deregisterPushBestEffort(cores.values.toList())
         cancelAllListenerJobs()
         _accounts.value = emptyList()
         _conversations.value = emptyList()
@@ -666,6 +670,71 @@ class AppViewModel(
 
     /** Returns all active core instances. */
     fun activeCores(): List<AppCoreProtocol> = cores.values.toList()
+
+    /**
+     * Register [token] with every active core, on the ViewModel's own scope.
+     *
+     * Called by [PushManager.didReceiveToken], which may run on an FCM callback
+     * thread. Snapshotting `cores` inside `viewModelScope.launch` keeps the map
+     * read on the main dispatcher (consistent with every other access), and the
+     * work is cancelled with the ViewModel rather than leaking a detached scope.
+     * The blocking FFI call itself runs on [Dispatchers.IO]. `registerPushToken`
+     * is idempotent, so calling on every launch / rotation is safe.
+     */
+    fun registerPushTokenWithCores(
+        token: String,
+        platform: String,
+        relayUrl: String,
+        environment: String,
+    ) {
+        viewModelScope.launch {
+            val coresSnapshot = cores.values.toList()
+            for (core in coresSnapshot) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        core.registerPushToken(
+                            deviceToken = token,
+                            platform = platform,
+                            relayUrl = relayUrl,
+                            environment = environment,
+                        )
+                    }
+                }.onFailure { error ->
+                    AppLog.error(
+                        "PushManager",
+                        "registerPushToken failed (relay=$relayUrl): ${error.message}",
+                    )
+                }.onSuccess {
+                    AppLog.info(
+                        "PushManager",
+                        "registerPushToken ok (relay=$relayUrl, env=$environment)",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Deregister this device's push token for [coresToClear], best-effort, on
+     * the ViewModel scope (which outlives a logout — the ViewModel isn't
+     * cleared). Callers snapshot `cores` and call this BEFORE clearing the map.
+     * Without it, the relay keeps mapping the FCM token to the logged-out
+     * account until its GC reaps the stranded pseudonym.
+     */
+    private fun deregisterPushBestEffort(coresToClear: List<AppCoreProtocol>) {
+        if (coresToClear.isEmpty()) return
+        val relayUrl = BuildConfig.RELAY_URL
+        if (relayUrl.isEmpty()) return
+        viewModelScope.launch {
+            for (core in coresToClear) {
+                withContext(Dispatchers.IO) {
+                    runCatching { core.unregisterPushToken(relayUrl = relayUrl) }
+                }.onFailure { error ->
+                    AppLog.warn("PushManager", "unregisterPushToken failed: ${error.message}")
+                }
+            }
+        }
+    }
 
     /** Look up the AppCore bound to a given account DID. */
     fun core(accountId: String): AppCoreProtocol? = cores[accountId]

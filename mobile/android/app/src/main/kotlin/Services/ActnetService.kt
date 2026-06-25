@@ -238,6 +238,10 @@ interface AppCoreProtocol {
         environment: String,
     )
 
+    /** Deregister this device's push token (e.g. on logout). Best-effort. */
+    @Throws(AppErrorFfi::class)
+    fun unregisterPushToken(relayUrl: String)
+
     // -----------------------------------------------------------------------
     // Connection state / events
     // -----------------------------------------------------------------------
@@ -371,6 +375,7 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
     override fun requestProjectToken(projectUrl: String): String = core.requestProjectToken(projectUrl)
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) =
         core.registerPushToken(deviceToken, platform, relayUrl, environment)
+    override fun unregisterPushToken(relayUrl: String) = core.unregisterPushToken(relayUrl)
 
     override fun connectionState(): ConnectionState = core.connectionState()
     override fun waitForConnectionStateChange(last: ConnectionState): ConnectionState =
@@ -553,6 +558,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
     override fun fetchProjects(): List<ProjectInfoFfi> = emptyList()
     override fun requestProjectToken(projectUrl: String): String = ""
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) {}
+    override fun unregisterPushToken(relayUrl: String) {}
 
     override fun connectionState(): ConnectionState = ConnectionState.Connected
 

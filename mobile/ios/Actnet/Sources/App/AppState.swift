@@ -256,6 +256,7 @@ final class AppState: ObservableObject {
     }
 
     func logout() {
+        deregisterPushBestEffort(cores: activeCores())
         cancelAllListenerTasks()
         accounts.removeAll()
         conversations.removeAll()
@@ -491,6 +492,21 @@ final class AppState: ObservableObject {
     /// that need to iterate across accounts without direct access to `cores`.
     func activeCores() -> [any AppCoreProtocol] {
         Array(cores.values)
+    }
+
+    /// Deregister this device's push token for `cores`, best-effort, off the
+    /// main actor. Called during logout BEFORE `cores` is cleared (the caller
+    /// snapshots them). Without this, the relay keeps mapping the APNs token to
+    /// the logged-out account until its GC reaps the stranded pseudonym.
+    private func deregisterPushBestEffort(cores: [any AppCoreProtocol]) {
+        guard !cores.isEmpty else { return }
+        let relayUrl = (Bundle.main.object(forInfoDictionaryKey: "RELAY_URL") as? String) ?? ""
+        guard !relayUrl.isEmpty else { return }
+        Task.detached {
+            for core in cores {
+                try? core.unregisterPushToken(relayUrl: relayUrl)
+            }
+        }
     }
 
     /// Look up the AppCore bound to a given account DID. Used by per-account

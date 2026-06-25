@@ -1,10 +1,6 @@
 package net.theavalanche.app
 
 import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 
 // ---------------------------------------------------------------------------
 // PushManager
@@ -94,30 +90,16 @@ object PushManager {
         // "production" to match what the relay server expects for FCM.
         val environment = "production"
 
-        val cores = appViewModel.activeCores()
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        scope.launch {
-            for (core in cores) {
-                // registerPushToken is idempotent — safe to call on every launch.
-                runCatching {
-                    core.registerPushToken(
-                        deviceToken = token,
-                        platform = platform,
-                        relayUrl = relayUrl,
-                        environment = environment,
-                    )
-                    AppLog.info(
-                        "PushManager",
-                        "registerPushToken ok (relay=$relayUrl, env=$environment)",
-                    )
-                }.onFailure { error ->
-                    AppLog.error(
-                        "PushManager",
-                        "registerPushToken failed (relay=$relayUrl): ${error.message}",
-                    )
-                }
-            }
-        }
+        // Hand off to the ViewModel, which runs the per-core registration on its
+        // own lifecycle-scoped coroutine. This keeps `cores` access on the main
+        // dispatcher (FCM may dispatch this callback off the main thread) and
+        // avoids leaking a detached CoroutineScope per token rotation.
+        appViewModel.registerPushTokenWithCores(
+            token = token,
+            platform = platform,
+            relayUrl = relayUrl,
+            environment = environment,
+        )
     }
 
     // -----------------------------------------------------------------------
