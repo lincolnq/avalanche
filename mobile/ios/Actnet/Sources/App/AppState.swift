@@ -1768,6 +1768,15 @@ final class AppState: ObservableObject {
             messagesByConversation[convId]?.append(message)
         }
 
+        // Resolve the sender's name for the notification. A name we already hold
+        // (own account or cached) lets us notify immediately; an unknown sender
+        // is resolved inside the profile-fetch task below (after the network
+        // fetch) so the banner shows a real name instead of "Unknown".
+        let convForNotif = conversations.first(where: { $0.id == convId })
+        let knownName: String? = accounts.first(where: { $0.id == senderDid })?.displayName
+            ?? displayNameCache[senderDid]
+        let hasCore = cores[accountId] != nil
+
         // Persist to SQLCipher in the background.
         if let core = cores[accountId] {
             let stored = StoredMessageFfi(
@@ -1800,7 +1809,7 @@ final class AppState: ObservableObject {
             //    along (blocks on the network, hence detached).
             let profileKey = msg.profileKey
             let isRequest = msg.isRequest
-            Task.detached {
+            Task.detached { [weak self] in
                 try? core.touchContact(did: senderDid, curated: false)
                 if isRequest {
                     try? core.setPendingRequest(did: senderDid, pending: true)
@@ -1808,18 +1817,40 @@ final class AppState: ObservableObject {
                 if let pk = profileKey {
                     try? core.fetchAndCacheProfile(did: senderDid, profileKey: pk)
                 }
+                // Read back the (possibly just-fetched) display name so an unknown
+                // sender's notification shows a real name, not "Unknown". Falls
+                // back to the public account record (getAccountInfo) so bots —
+                // whose names live there, not in an encrypted contact profile —
+                // also resolve. Mirrors resolveDisplayName().
+                let local = (try? core.contactDisplayName(did: senderDid)) ?? ""
+                let resolved = !local.isEmpty
+                    ? local
+                    : (try? core.getAccountInfo(did: senderDid))?.displayName.flatMap { $0.isEmpty ? nil : $0 }
+                await MainActor.run {
+                    guard let self else { return }
+                    if let resolved { self.cacheDisplayName(resolved, for: senderDid) }
+                    // This task is the notifier for an unknown sender — now with
+                    // the freshly-resolved name (or "Unknown" if still unresolved).
+                    if knownName == nil, let conv = convForNotif {
+                        NotificationPresenter.present(
+                            message: message,
+                            conversation: conv,
+                            senderDisplayName: resolved ?? "Unknown",
+                            appState: self
+                        )
+                    }
+                }
             }
         }
 
-        // Fire a local notification (respects scene phase + currently-viewed
+        // Known sender (or no core to fetch with): notify immediately without
+        // waiting on the network (respects scene phase + currently-viewed
         // conversation; updates the app badge regardless).
-        if let conv = conversations.first(where: { $0.id == convId }) {
+        if (knownName != nil || !hasCore), let conv = convForNotif {
             NotificationPresenter.present(
                 message: message,
                 conversation: conv,
-                // resolvedName (not displayName) so an unresolved sender shows
-                // "Unknown" rather than leaking the raw DID into the banner.
-                senderDisplayName: resolvedName(for: senderDid, accountId: accountId),
+                senderDisplayName: knownName ?? "Unknown",
                 appState: self
             )
         }

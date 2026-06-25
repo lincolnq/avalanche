@@ -2213,6 +2213,14 @@ class AppViewModel(
             map + (convId to (existing + message))
         }
 
+        // Resolve the sender's name for the notification. A name we already hold
+        // (own account or cached) lets us notify immediately; an unknown sender
+        // is resolved inside the persistence coroutine below (after the profile
+        // fetch) so the banner shows a real name instead of "Unknown".
+        val convForNotif = _conversations.value.firstOrNull { it.id == convId }
+        val knownName = _accounts.value.firstOrNull { it.id == senderDid }?.displayName
+            ?: displayNameCache[senderDid]
+
         // Persist to SQLCipher in the background.
         val core = cores[accountId]
         if (core != null) {
@@ -2235,7 +2243,7 @@ class AppViewModel(
             val profileKey = msg.profileKey
             val isRequest = msg.isRequest
             viewModelScope.launch {
-                withContext(Dispatchers.IO) {
+                val resolved = withContext(Dispatchers.IO) {
                     runCatching { core.saveMessage(msg = stored) }
                     runCatching { core.touchContact(did = senderDid, curated = false) }
                     if (isRequest) {
@@ -2244,22 +2252,43 @@ class AppViewModel(
                     if (profileKey != null) {
                         runCatching { core.fetchAndCacheProfile(did = senderDid, profileKey = profileKey) }
                     }
+                    // Read back the (possibly just-fetched) display name so an
+                    // unknown sender's notification shows a real name, not "Unknown".
+                    // Falls back to the public account record (getAccountInfo) so
+                    // bots — whose names live there, not in an encrypted contact
+                    // profile — also resolve. Mirrors resolveDisplayName().
+                    val local = runCatching { core.contactDisplayName(did = senderDid) }
+                        .getOrNull().orEmpty()
+                    local.ifEmpty {
+                        runCatching { core.getAccountInfo(did = senderDid) }
+                            .getOrNull()?.displayName.orEmpty()
+                    }.takeIf { it.isNotEmpty() }
+                }
+                if (resolved != null) cacheDisplayName(name = resolved, did = senderDid)
+                // This branch is the notifier for an unknown sender — now with the
+                // freshly-resolved name (or "Unknown" if it still didn't resolve).
+                if (knownName == null && convForNotif != null) {
+                    NotificationPresenter.present(
+                        context = applicationContext,
+                        message = message,
+                        conversation = convForNotif,
+                        senderDisplayName = resolved ?: "Unknown",
+                        appViewModel = this@AppViewModel,
+                    )
                 }
             }
         }
 
-        // Fire a local notification for the inbound message. present() suppresses
-        // the banner when the user is already viewing this conversation and always
-        // refreshes the badge; outgoing messages never reach this path.
-        val convForNotif = _conversations.value.firstOrNull { it.id == convId }
-        if (convForNotif != null) {
+        // Known sender (or no core to fetch with): notify immediately without
+        // waiting on the network. present() suppresses the banner when the user
+        // is already viewing this conversation and always refreshes the badge;
+        // outgoing messages never reach this path.
+        if (convForNotif != null && (knownName != null || core == null)) {
             NotificationPresenter.present(
                 context = applicationContext,
                 message = message,
                 conversation = convForNotif,
-                // resolvedName (not displayName) so an unresolved sender shows
-                // "Unknown" rather than leaking the raw DID into the banner.
-                senderDisplayName = resolvedName(did = senderDid, accountId = accountId),
+                senderDisplayName = knownName ?: "Unknown",
                 appViewModel = this,
             )
         }
