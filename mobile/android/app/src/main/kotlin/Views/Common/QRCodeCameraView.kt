@@ -1,19 +1,27 @@
 package net.theavalanche.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.VibrationEffect
 import android.os.Vibrator
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.tooling.preview.Preview as ComposePreview
 import androidx.compose.ui.unit.dp
@@ -51,6 +60,25 @@ fun QRCodeCameraView(
     var didScan by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    // CAMERA is a runtime ("dangerous") permission on Android — unlike iOS,
+    // there is no auto-prompt on first camera access, so we must request it
+    // explicitly before CameraX will bind. We gate here (rather than in
+    // MainActivity) so every caller of QRCodeCameraView gets the prompt.
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> hasCameraPermission = granted }
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     DisposableEffect(Unit) {
         onDispose {
@@ -63,6 +91,26 @@ fun QRCodeCameraView(
             .fillMaxSize()
             .background(Color.Black),
     ) {
+        if (!hasCameraPermission) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    text = "Camera access is needed to scan QR codes.",
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                    Text("Allow camera access")
+                }
+            }
+            return@Box
+        }
+
         errorMessage?.let { msg ->
             Text(
                 text = msg,
@@ -99,7 +147,12 @@ fun QRCodeCameraView(
                             if (result != null) {
                                 didScan = true
                                 vibrateOnce(context)
-                                onScanned(result)
+                                // The analyzer runs on a background executor, but
+                                // onScanned typically drives navigation / Compose
+                                // state, which must touch the main thread. Hop back.
+                                ContextCompat.getMainExecutor(context).execute {
+                                    onScanned(result)
+                                }
                             }
                         }
                         imageProxy.close()

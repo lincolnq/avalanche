@@ -11,6 +11,8 @@
         android:required="false" />
     <!-- Show message notifications (runtime-requested on Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Haptic feedback on successful QR scan (mirrors iOS scan vibration) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:name=".ActnetApplication"

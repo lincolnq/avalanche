@@ -225,16 +225,11 @@ fun AppNavGraph(
         // ----------------------------------------------------------------
         composable(Route.SCANNER) {
             QRScannerView(
-                onScanned = { rawText ->
-                    // raw QR text — stash and hand off to the link-entry screen,
-                    // which validates and resolves it into an InviteToken.
-                    appViewModel.setPendingInviteToken(rawText)
-                    navController.navigate(Route.INVITE_LINK_ENTRY) {
-                        popUpTo(Route.SCANNER) { inclusive = true }
-                    }
-                },
                 onInviteToken = { token ->
-                    // InviteToken already decoded — record it and enter onboarding.
+                    // QRScannerView decodes + validates the scanned URL itself, so a
+                    // successful scan hands us a ready InviteToken — record it and go
+                    // straight to the identity picker (which offers create / join /
+                    // recover), matching iOS's navigationDestination(item:) flow.
                     appViewModel.setPendingInvite(token)
                     navController.navigate(Route.IDENTITY_PICKER) {
                         popUpTo(Route.SCANNER) { inclusive = true }

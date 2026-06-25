@@ -32,18 +32,15 @@ import kotlinx.coroutines.launch
 
 /// QR scanner screen that mirrors iOS QRScannerView.swift.
 ///
-/// When [onScanned] is non-null, decoded values are forwarded to the caller
-/// instead of starting the onboarding identity-picker flow.
-/// When [onScanned] is null, the composable validates the scanned URL and
-/// calls [onInviteToken] with a parsed [InviteToken] once validation succeeds.
-///
-/// Navigation: pass [onInviteToken] to move to IdentityPickerView after a
-/// successful scan; pass [onScanned] to intercept the raw string elsewhere.
+/// Validates the scanned URL and calls [onInviteToken] with a parsed
+/// [InviteToken] once validation succeeds. The caller is responsible for
+/// navigating onward (typically to IdentityPickerView). On Android this token
+/// is reported outward — rather than navigated to internally as on iOS — because
+/// the destination lives in the app's single NavHost, not in this composable.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QRScannerView(
-    onScanned: ((String) -> Unit)? = null,
-    onInviteToken: (InviteToken) -> Unit = {},
+    onInviteToken: (InviteToken) -> Unit,
     onBack: () -> Unit = {},
 ) {
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -52,10 +49,6 @@ fun QRScannerView(
     val scope = rememberCoroutineScope()
 
     fun handle(value: String) {
-        if (onScanned != null) {
-            onScanned(value)
-            return
-        }
         // Validate that it looks like a go.theavalanche.net deep link.
         // Mirrors iOS: guard let url = URL(string: value), AppState.isDeepLink(url)
         val isDeepLink = value.contains("go.theavalanche.net")
