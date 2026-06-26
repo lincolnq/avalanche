@@ -92,7 +92,7 @@ APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/d
 APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
 APP_CORE_DIST := node/packages/app-core/dist/index.js
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -410,6 +410,18 @@ android: android-bindings
 	cd mobile/android && JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" ./gradlew assembleDebug \
 		-PMARKETING_VERSION=$(MARKETING_VERSION) \
 		-PCURRENT_PROJECT_VERSION=$(CURRENT_PROJECT_VERSION)
+
+# Build the signed, distributable release APK (arm64-v8a only). Signing material
+# is pulled from 1Password into a RAM disk + env vars at build time and torn down
+# afterward — nothing touches persistent disk (see mobile/android/release-sign.sh).
+# Requires the 1Password CLI signed in. Without valid credentials Gradle produces
+# an unsigned APK that won't install.
+# Output: mobile/android/app/build/outputs/apk/release/app-release.apk
+android-release: android-bindings
+	JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" \
+		MARKETING_VERSION="$(MARKETING_VERSION)" \
+		CURRENT_PROJECT_VERSION="$(CURRENT_PROJECT_VERSION)" \
+		mobile/android/release-sign.sh
 
 android-bindings: $(KOTLIN_BINDING) $(ANDROID_SO_STAMP)
 

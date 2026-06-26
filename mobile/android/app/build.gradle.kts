@@ -39,6 +39,17 @@ val appVersionCode: Int =
         ?: gitValue("rev-list", "--count", "HEAD"))
         ?.toIntOrNull() ?: 1
 
+// Release signing credentials are supplied entirely via environment variables at
+// build time — see `make android-release`, which materializes them from 1Password
+// into a RAM disk (the keystore file) and the process environment (the passwords),
+// builds, then tears the RAM disk down. Nothing is written to persistent disk and
+// no credentials are committed. When the env vars are absent (CI, fresh checkout,
+// debug-only work) the release signing config is left unconfigured and
+// `assembleRelease` produces an unsigned APK; `assembleDebug` is unaffected and
+// always uses the auto-generated debug key.
+val releaseStoreFile: String? = System.getenv("RELEASE_KEYSTORE_FILE")
+val hasReleaseSigning: Boolean = releaseStoreFile != null && file(releaseStoreFile).exists()
+
 android {
     namespace = "net.theavalanche.app"
     // API 37 (major). The upgraded AndroidX libs (compose-bom 2026.06, core-ktx
@@ -57,19 +68,50 @@ android {
 
         buildConfigField("String", "RELAY_URL", "\"$relayUrl\"")
 
-        // Ship only the ABIs we cross-compile libapp_core.so for (see ANDROID_ABIS
-        // in the Makefile). Without this, JNA's @aar drags in libjnidispatch.so for
-        // armeabi/mips/x86 too, and a device on one of those ABIs would load JNA but
-        // find no libapp_core.so and crash at startup.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+        // ABI selection is per build type below (debug ships x86_64 for the
+        // emulator; release is arm64-only). An abiFilters is required in any case:
+        // without it JNA's @aar drags in libjnidispatch.so for armeabi/mips/x86
+        // too, and a device on one of those ABIs would load JNA but find no
+        // libapp_core.so and crash at startup.
+    }
+
+    signingConfigs {
+        create("release") {
+            // Populated only when the RELEASE_* env vars are present (see above).
+            if (hasReleaseSigning) {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
         }
     }
 
     buildTypes {
+        debug {
+            // Keep x86_64 so the app runs on the standard x86_64 emulator
+            // alongside arm64 devices. (See ANDROID_ABIS in the Makefile — the
+            // cross-compile produces a libapp_core.so for both.)
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
+            // Distributable APK: arm64-v8a only. Every real Android device is
+            // arm64; x86_64 is emulator-only, so shipping it just bloats the
+            // download.
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             optimization {
                 enable = false
+            }
+            // Sign with the release key when configured; otherwise leave unsigned
+            // (a debug-only checkout can't and shouldn't produce a signed release).
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                null
             }
         }
     }

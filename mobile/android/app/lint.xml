@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- UniFFI-generated glue (mobile/android/Generated/uniffi/app_core/app_core.kt)
+         references java.lang.ref.Cleaner (API 33), but selects it at runtime via
+         Class.forName("java.lang.ref.Cleaner") with a JNA-based fallback, so it is
+         safe on our minSdk 26. lint can't see that guard. It's a regenerated build
+         artifact we don't edit, so scope the NewApi ignore to that file by name
+         rather than disabling NewApi project-wide. -->
+    <issue id="NewApi">
+        <ignore regexp="app_core\.kt" />
+    </issue>
+
+    <!-- The root UI is hosted in a ComponentActivity (androidx.activity) + Compose;
+         we use no Fragments, so the Fragment >= 1.3.0 requirement that this check
+         enforces for registerForActivityResult does not apply to us. -->
+    <issue id="InvalidFragmentVersionForActivityResult" severity="ignore" />
+</lint>

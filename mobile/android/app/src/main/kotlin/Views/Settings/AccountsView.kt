@@ -2,6 +2,7 @@ package net.theavalanche.app
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -75,7 +76,15 @@ fun AccountsView(
         val pm = context.packageManager
         val info = runCatching { pm.getPackageInfo(context.packageName, 0) }.getOrNull()
         val version = info?.versionName ?: "—"
-        val build = info?.longVersionCode?.toString() ?: "—"
+        // getLongVersionCode is API 28+; fall back to the deprecated Int form on
+        // our minSdk 26/27 floor.
+        val build = info?.let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                it.longVersionCode
+            } else {
+                @Suppress("DEPRECATION") it.versionCode.toLong()
+            }
+        }?.toString() ?: "—"
         "Avalanche $version ($build)"
     }
 

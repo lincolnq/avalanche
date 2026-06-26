@@ -15,3 +15,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Release signing material must never be committed. `make android-release` pulls
+# it from 1Password into a RAM disk at build time (nothing lands here), but these
+# patterns are a safety net in case a keystore is ever copied in by hand.
+*.jks
+*.keystore
+keystore.properties
