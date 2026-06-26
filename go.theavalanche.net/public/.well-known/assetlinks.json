@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "net.theavalanche.app",
+      "sha256_cert_fingerprints": [
+        "E0:E9:C5:6D:9A:92:81:B8:57:5B:64:9B:28:FE:4F:40:C0:EE:6B:D3:AE:B1:1E:5B:5B:81:68:E8:11:AC:6D:C5"
+      ]
+    }
+  }
+]

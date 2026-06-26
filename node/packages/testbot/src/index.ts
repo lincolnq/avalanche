@@ -136,6 +136,9 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
         h1 { font-size: 24px; }
         button { font-size: 18px; padding: 12px 24px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; }
         button:disabled { background: #999; }
+        a.openbtn { display: inline-block; font-size: 18px; padding: 12px 24px; margin-top: 16px; background: #007AFF; color: white; border-radius: 8px; text-decoration: none; }
+        /* Must out-specify a.openbtn (0-1-1), so scope the hide rule to the element+class. */
+        a.openbtn.hidden { display: none; }
         #status { margin-top: 16px; color: #666; }
     </style>
 </head>
@@ -144,6 +147,7 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
     <p>Tap below to start a conversation with an AI chatbot. The bot will send you an encrypted DM.</p>
     <button id="textme" onclick="textMe()">Text Me</button>
     <div id="status"></div>
+    <a id="openlink" class="openbtn hidden" href="#">Click to open the conversation</a>
     <script>
         const params = new URLSearchParams(window.location.search);
         const token = params.get('token');
@@ -169,8 +173,16 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
                     return;
                 }
                 const data = await resp.json();
-                status.textContent = 'Bot created! Opening conversation...';
-                window.location.href = 'https://go.theavalanche.net/conversation/' + data.bot.did;
+                status.textContent = 'Bot created!';
+                // Reveal a real link for the user to tap. A genuine tap is the
+                // user gesture both platforms require to hand a verified link off
+                // to the app (Android App Link / iOS Universal Link); a JS
+                // window.location after the await has no live gesture, so Chrome
+                // keeps it in the browser. The tap fixes that on both platforms
+                // with one code path — no intent:// / UA sniffing needed.
+                const link = document.getElementById('openlink');
+                link.href = 'https://go.theavalanche.net/conversation/' + data.bot.did;
+                link.classList.remove('hidden');
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
                 btn.disabled = false;
