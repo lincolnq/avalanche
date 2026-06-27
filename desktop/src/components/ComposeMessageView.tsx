@@ -1,11 +1,13 @@
-import { createSignal, onMount } from "solid-js";
-import { FiChevronUp, FiChevronDown, FiArrowUp } from "solid-icons/fi";
+import { createSignal, createEffect, onMount, Show } from "solid-js";
+import { FiChevronUp, FiChevronDown, FiArrowUp, FiX } from "solid-icons/fi";
 import { useApp } from "../state/AppContext";
-import type { Conversation } from "../models";
+import type { Conversation, Message } from "../models";
 import "./ComposeMessageView.css";
 
 interface Props {
   conversation: Conversation;
+  editingMessage?: Message | null;
+  onCancelEdit?: () => void;
 }
 
 /** Collapsed max-height (~2-3 lines). */
@@ -14,7 +16,7 @@ const COLLAPSED_MAX = 72;
 const EXPANDED_MAX = 212;
 
 export default function ComposeMessageView(props: Props) {
-  const { sendMessage, sendGroupMessage } = useApp();
+  const { sendMessage, sendGroupMessage, editMessage } = useApp();
   const [draft, setDraft] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
@@ -26,6 +28,22 @@ export default function ComposeMessageView(props: Props) {
     // no flash of a blinking cursor before the rich-text engine initialises.
     setMounted(true);
     inputRef?.focus();
+  });
+
+  // Entering/leaving edit mode pre-fills (or clears) the draft. Tracks only
+  // props.editingMessage, so normal typing never re-triggers this.
+  createEffect(() => {
+    const editing = props.editingMessage;
+    if (editing) {
+      setDraft(editing.body);
+      setTimeout(() => {
+        inputRef?.focus();
+        resizeTextarea();
+      }, 0);
+    } else {
+      setDraft("");
+      setTimeout(() => resizeTextarea(), 0);
+    }
   });
 
   function resizeTextarea() {
@@ -50,6 +68,17 @@ export default function ComposeMessageView(props: Props) {
   async function handleSend() {
     const text = draft().trim();
     if (!text || sending()) return;
+
+    // Edit mode: apply the edit (optimistic + async FFI) and exit.
+    const editing = props.editingMessage;
+    if (editing) {
+      editMessage(props.conversation, editing, text);
+      setDraft("");
+      props.onCancelEdit?.();
+      setExpanded(false);
+      setTimeout(() => resizeTextarea(), 0);
+      return;
+    }
 
     if (!props.conversation.isGroup && !props.conversation.recipientDid) return;
 
@@ -79,43 +108,61 @@ export default function ComposeMessageView(props: Props) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    } else if (e.key === "Escape" && props.editingMessage) {
+      e.preventDefault();
+      props.onCancelEdit?.();
     }
   }
 
   return (
-    <div class="compose-row">
-      <div class="compose-input-wrap" classList={{ expanded: expanded() }}>
-        <textarea
-          ref={inputRef}
-          class="compose-input scrollbar-thin"
-          classList={{ mounted: mounted(), expanded: expanded() }}
-          placeholder="Message"
-          rows={1}
-          value={draft()}
-          onInput={(e) => {
-            setDraft(e.currentTarget.value);
-            resizeTextarea();
-          }}
-          onKeyDown={handleKeyDown}
-          disabled={sending()}
-        />
-        {!sending() && (
+    <div class="compose-row-wrap">
+      <Show when={props.editingMessage}>
+        <div class="compose-editing-bar">
+          <span>Editing message</span>
           <button
-            class="compose-expand-tab"
-            onClick={toggleExpand}
-            aria-label={expanded() ? "Collapse" : "Expand"}
+            class="compose-editing-cancel"
+            onClick={() => props.onCancelEdit?.()}
+            aria-label="Cancel edit"
           >
-            {expanded() ? <FiChevronDown size={14} /> : <FiChevronUp size={14} />}
+            <FiX size={14} />
+            Cancel
           </button>
-        )}
+        </div>
+      </Show>
+      <div class="compose-row">
+        <div class="compose-input-wrap" classList={{ expanded: expanded() }}>
+          <textarea
+            ref={inputRef}
+            class="compose-input scrollbar-thin"
+            classList={{ mounted: mounted(), expanded: expanded() }}
+            placeholder="Message"
+            rows={1}
+            value={draft()}
+            onInput={(e) => {
+              setDraft(e.currentTarget.value);
+              resizeTextarea();
+            }}
+            onKeyDown={handleKeyDown}
+            disabled={sending()}
+          />
+          {!sending() && (
+            <button
+              class="compose-expand-tab"
+              onClick={toggleExpand}
+              aria-label={expanded() ? "Collapse" : "Expand"}
+            >
+              {expanded() ? <FiChevronDown size={14} /> : <FiChevronUp size={14} />}
+            </button>
+          )}
+        </div>
+        <button
+          class="send-btn"
+          disabled={!draft().trim() || sending()}
+          onClick={handleSend}
+        >
+          <FiArrowUp size={20} />
+        </button>
       </div>
-      <button
-        class="send-btn"
-        disabled={!draft().trim() || sending()}
-        onClick={handleSend}
-      >
-        <FiArrowUp size={20} />
-      </button>
     </div>
   );
 }

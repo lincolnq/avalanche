@@ -79,8 +79,148 @@
   opacity: 0.6;
 }
 
+.delivery.failed {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-error);
+}
+
 .retry-hint {
   font-size: 11px;
   cursor: pointer;
   text-decoration: underline;
+}
+
+/* ── Bubble wrapper + action menu ──────────────────────────────────────────── */
+
+.bubble-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mine .bubble-wrap {
+  flex-direction: row-reverse;
+}
+
+.bubble-menu-btn {
+  opacity: 0;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.bubble-wrap:hover .bubble-menu-btn {
+  opacity: 1;
+}
+.bubble-menu-btn:hover {
+  background: var(--color-divider);
+}
+
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.context-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 4px;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-button);
+  box-shadow: 0 6px 20px rgba(42, 22, 32, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.context-menu.mine {
+  left: auto;
+  right: 0;
+}
+
+.ctx-emoji-row {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.ctx-emoji {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ctx-emoji:hover {
+  background: var(--color-divider);
+}
+
+.ctx-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ctx-item:hover {
+  background: var(--color-divider);
+}
+.ctx-item.danger {
+  color: var(--color-error);
+}
+
+/* ── Reaction clusters ─────────────────────────────────────────────────────── */
+
+.reaction-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 0 2px;
+}
+.reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--color-input-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.reaction-pill.mine {
+  border-color: var(--color-accent);
+  background: rgba(107, 62, 80, 0.12);
+}
+.reaction-count {
+  font-size: 11px;
+  color: var(--color-text-secondary);
 }

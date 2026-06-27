@@ -1,13 +1,41 @@
 /* ── Row layout ─────────────────────────────────────────────────────────── */
 
+.compose-row-wrap {
+  flex-shrink: 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-divider);
+}
+
+.compose-editing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 18px;
+  font-size: 12px;
+  color: var(--color-accent);
+  border-bottom: 1px solid var(--color-divider);
+}
+.compose-editing-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.compose-editing-cancel:hover {
+  color: var(--color-text);
+}
+
 .compose-row {
   display: flex;
   align-items: flex-end;        /* buttons sit flush with input baseline */
   gap: 4px;                     /* spacing between adjacent icon buttons */
   padding: 10px 12px;           /* block padding above/below the row */
-  border-top: 1px solid var(--color-divider);
   background: var(--color-bg);
-  flex-shrink: 0;
 }
 
 /* ── Pill input wrap ───────────────────────────────────────────────────── */

@@ -1,9 +1,10 @@
-import { createEffect, createMemo, onMount, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onMount, For, Show } from "solid-js";
 import { useApp } from "../../state/AppContext";
-import type { Conversation } from "../../models";
+import type { Conversation, Message } from "../../models";
 import { initials } from "../../lib/format";
 import MessageBubble from "../../components/MessageBubble";
 import ComposeMessageView from "../../components/ComposeMessageView";
+import EditHistorySheet from "../../components/EditHistorySheet";
 import "./ConversationView.css";
 
 interface Props {
@@ -11,12 +12,21 @@ interface Props {
 }
 
 export default function ConversationView(props: Props) {
-  const { store, loadMessagesFromStore, markAllMessagesRead, displayName } = useApp();
+  const { store, loadMessagesFromStore, markAllMessagesRead, displayName, loadReactions } =
+    useApp();
   let messagesEnd: HTMLDivElement | undefined;
 
-  // Re-runs whenever conversation changes, not just on first mount.
+  const [editingMessage, setEditingMessage] = createSignal<Message | null>(null);
+  const [historyMessage, setHistoryMessage] = createSignal<Message | null>(null);
+
+  // Re-runs whenever conversation changes, not just on first mount. Loads both
+  // the message timeline and its reaction clusters.
   createEffect(() => {
     loadMessagesFromStore(props.conversation.id, props.conversation.accountId);
+    loadReactions(props.conversation.id);
+    // Cancel any in-progress edit when switching conversations.
+    setEditingMessage(null);
+    setHistoryMessage(null);
   });
 
   // Mark all messages read when messages arrive (handles both initial async
@@ -56,17 +66,33 @@ export default function ConversationView(props: Props) {
           <For each={messages()}>
             {(msg) => (
               <MessageBubble
+                conversation={props.conversation}
                 message={msg}
                 mine={msg.senderAccountId === props.conversation.accountId}
                 isGroup={props.conversation.isGroup}
                 senderName={displayName(msg.senderAccountId, props.conversation.accountId)}
+                onEdit={(m) => setEditingMessage(m)}
+                onShowHistory={(m) => setHistoryMessage(m)}
               />
             )}
           </For>
         </Show>
         <div ref={messagesEnd} />
       </div>
-      <ComposeMessageView conversation={props.conversation} />
+      <ComposeMessageView
+        conversation={props.conversation}
+        editingMessage={editingMessage()}
+        onCancelEdit={() => setEditingMessage(null)}
+      />
+      <Show when={historyMessage()}>
+        {(m) => (
+          <EditHistorySheet
+            conversation={props.conversation}
+            message={m()}
+            onClose={() => setHistoryMessage(null)}
+          />
+        )}
+      </Show>
     </div>
   );
 }
