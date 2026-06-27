@@ -805,7 +805,10 @@ async fn issue_credential_for_other_did_returns_401() {
 }
 
 #[tokio::test]
-async fn push_binding_rotates_pseudonym_for_member() {
+async fn push_binding_registers_and_rotates_per_device() {
+    // docs/04 multi-device: a device registers additively (no `old`), then
+    // rotates its own binding in place (`old` → `new`); rotating a binding the
+    // member doesn't hold is a NotFound miss.
     let state = test_state().await;
     let app = routes::router().with_state(state.clone());
     let founder = make_member(&app).await;
@@ -814,23 +817,50 @@ async fn push_binding_rotates_pseudonym_for_member() {
     let public_params = state.zkgroup_secret.public_params();
     let pres = presentation_header(&public_params, &group_key, &founder.credential);
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/groups/{group_id_b64}/push_binding"))
-                .header("content-type", "application/json")
-                .header("x-group-auth", &pres)
-                .body(Body::from(
-                    serde_json::to_vec(&json!({
-                        "new_group_push_pseudonym": B64.encode([0xEE; 32])
-                    }))
+    let post = |body: serde_json::Value| {
+        let app = app.clone();
+        let pres = pres.clone();
+        let group_id_b64 = group_id_b64.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/groups/{group_id_b64}/push_binding"))
+                    .header("content-type", "application/json")
+                    .header("x-group-auth", &pres)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+            )
+            .await
+            .unwrap()
+            .status()
+        }
+    };
+
+    let ps_a = B64.encode([0xEE; 32]);
+    let ps_b = B64.encode([0xEF; 32]);
+
+    // First registration for a new device — additive, no `old`.
+    assert_eq!(
+        post(json!({ "new_group_push_pseudonym": ps_a })).await,
+        StatusCode::NO_CONTENT
+    );
+    // That device rotates its binding in place.
+    assert_eq!(
+        post(json!({
+            "old_group_push_pseudonym": ps_a,
+            "new_group_push_pseudonym": ps_b,
+        }))
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    // Rotating from the now-stale `ps_a` is a miss (no such binding).
+    assert_eq!(
+        post(json!({
+            "old_group_push_pseudonym": ps_a,
+            "new_group_push_pseudonym": B64.encode([0xF0; 32]),
+        }))
+        .await,
+        StatusCode::NOT_FOUND
+    );
 }

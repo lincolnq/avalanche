@@ -64,14 +64,18 @@ CREATE TABLE IF NOT EXISTS sender_keys (
     PRIMARY KEY (address, distribution_id)
 );
 
--- Which members have received *our* current sender key for a group, so the
--- send path (Signal-style lazy distribution) only ships an SKDM to members
--- that don't have it yet — e.g. someone who joined after us. Cleared when we
--- re-seed our sender key (recovery / rotation) so everyone re-receives it.
+-- Which member *devices* have received *our* current sender key for a group,
+-- so the send path (Signal-style lazy distribution) only ships an SKDM to
+-- devices that don't have it yet — e.g. someone who joined after us, or a
+-- co-member's newly-linked second device (docs/04 multi-device groups). Keyed
+-- per (recipient_did, device) so a member gaining a device triggers a fresh
+-- SKDM. Cleared when we re-seed our sender key (recovery / rotation) so
+-- everyone re-receives it.
 CREATE TABLE IF NOT EXISTS sender_key_shared (
-    group_id      TEXT NOT NULL,
-    recipient_did TEXT NOT NULL,
-    PRIMARY KEY (group_id, recipient_did)
+    group_id            TEXT NOT NULL,
+    recipient_did       TEXT NOT NULL,
+    recipient_device_id INTEGER NOT NULL,
+    PRIMARY KEY (group_id, recipient_did, recipient_device_id)
 );
 
 -- Push notification pseudonym + device token for this device.

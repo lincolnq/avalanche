@@ -275,6 +275,31 @@ impl DeviceStore {
         self.conn
             .call(|conn| {
                 conn.execute_batch(crate::schema::DEVICE_MIGRATIONS)?;
+                // `sender_key_shared` gained `recipient_device_id` in its primary
+                // key for multi-device groups (docs/04). It is a rebuildable
+                // cache, so a database created with the old per-DID shape is just
+                // dropped and recreated — the next group send re-distributes
+                // SKDMs idempotently. `CREATE TABLE IF NOT EXISTS` above won't
+                // alter an existing table, hence this explicit recreate.
+                let has_device_col = {
+                    let mut stmt = conn.prepare("PRAGMA table_info(sender_key_shared)")?;
+                    let found = stmt
+                        .query_map([], |row| row.get::<_, String>(1))?
+                        .filter_map(Result::ok)
+                        .any(|c| c == "recipient_device_id");
+                    found
+                };
+                if !has_device_col {
+                    conn.execute_batch(
+                        "DROP TABLE IF EXISTS sender_key_shared;
+                         CREATE TABLE sender_key_shared (
+                             group_id            TEXT NOT NULL,
+                             recipient_did       TEXT NOT NULL,
+                             recipient_device_id INTEGER NOT NULL,
+                             PRIMARY KEY (group_id, recipient_did, recipient_device_id)
+                         );",
+                    )?;
+                }
                 Ok(())
             })
             .await

@@ -391,9 +391,18 @@ impl Client {
     pub async fn fetch_group_messages(
         &self,
         group_id_b64: &str,
+        pseudonym: &[u8],
         presentation: &[u8],
     ) -> Result<Vec<QueuedGroupMessage>, NetError> {
-        let url = format!("{}/v1/groups/{}/messages", self.server_url(), group_id_b64);
+        // The device names its own pseudonym so the server drains the right
+        // per-device queue (docs/04 multi-device groups). `b64` is URL-safe
+        // (no `+`/`/`/`=`), so it needs no further query-string escaping.
+        let url = format!(
+            "{}/v1/groups/{}/messages?pseudonym={}",
+            self.server_url(),
+            group_id_b64,
+            b64(pseudonym),
+        );
         let resp = self
             .presentation_request(reqwest::Method::GET, &url, presentation, None)
             .await?;
@@ -412,11 +421,15 @@ impl Client {
     pub async fn ack_group_messages(
         &self,
         group_id_b64: &str,
+        pseudonym: &[u8],
         message_ids: Vec<i64>,
         presentation: &[u8],
     ) -> Result<(), NetError> {
         let url = format!("{}/v1/groups/{}/messages", self.server_url(), group_id_b64);
-        let body = serde_json::json!({ "message_ids": message_ids });
+        let body = serde_json::json!({
+            "pseudonym": b64(pseudonym),
+            "message_ids": message_ids,
+        });
         let resp = self
             .presentation_request(reqwest::Method::DELETE, &url, presentation, Some(body))
             .await?;
@@ -522,9 +535,15 @@ impl Client {
 
     // ── presentation-auth: rotate push binding ──────────────────────────
 
+    /// Register or rotate this device's group push pseudonym (docs/04
+    /// multi-device groups). Pass `old_pseudonym = Some(..)` to rotate this
+    /// device's existing binding in place (7-day cadence); pass `None` for a
+    /// first registration (e.g. a freshly linked device), which adds a pseudonym
+    /// without disturbing sibling devices' bindings.
     pub async fn rotate_group_push_binding(
         &self,
         group_id_b64: &str,
+        old_pseudonym: Option<&[u8]>,
         new_pseudonym: &[u8],
         presentation: &[u8],
     ) -> Result<(), NetError> {
@@ -533,9 +552,12 @@ impl Client {
             self.server_url(),
             group_id_b64,
         );
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "new_group_push_pseudonym": b64(new_pseudonym),
         });
+        if let Some(old) = old_pseudonym {
+            body["old_group_push_pseudonym"] = serde_json::Value::String(b64(old));
+        }
         let resp = self
             .presentation_request(reqwest::Method::POST, &url, presentation, Some(body))
             .await?;

@@ -610,6 +610,12 @@ async fn submit_changes(
 #[derive(Deserialize)]
 struct PushBindingRequest {
     new_group_push_pseudonym: String,
+    /// The device's prior pseudonym, when rotating (docs/03 §3.9 7-day cadence).
+    /// Absent on a device's first registration (e.g. a freshly linked second
+    /// device), in which case the new pseudonym is added rather than replacing
+    /// one — sibling devices' bindings are left intact (docs/04).
+    #[serde(default)]
+    old_group_push_pseudonym: Option<String>,
 }
 
 async fn push_binding(
@@ -635,16 +641,30 @@ async fn push_binding(
 
     let (group, actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
     let new_pseudonym = b64_decode(&body.new_group_push_pseudonym, "new_group_push_pseudonym")?;
+    let emi = zkgroup::serialize(&actor_emi);
     let mut conn = state.db.acquire().await?;
-    let rotated = db::groups::rotate_member_pseudonym(
-        &mut conn,
-        &group.group_id,
-        &zkgroup::serialize(&actor_emi),
-        &new_pseudonym,
-    )
-    .await?;
-    if !rotated {
-        return Err(ServerError::NotFound);
+    match &body.old_group_push_pseudonym {
+        // Rotation: replace this device's prior pseudonym in place. A miss means
+        // the old binding isn't (or is no longer) ours — surface NotFound.
+        Some(old_b64) => {
+            let old_pseudonym = b64_decode(old_b64, "old_group_push_pseudonym")?;
+            let rotated = db::groups::rotate_member_pseudonym(
+                &mut conn,
+                &group.group_id,
+                &emi,
+                &old_pseudonym,
+                &new_pseudonym,
+            )
+            .await?;
+            if !rotated {
+                return Err(ServerError::NotFound);
+            }
+        }
+        // First registration for this device — additive, leaving siblings intact.
+        None => {
+            db::groups::insert_member_pseudonym(&mut conn, &group.group_id, &emi, &new_pseudonym)
+                .await?;
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -736,8 +756,11 @@ async fn send_group_message(
         fanout_by_sid.insert(f.service_id_fixed_width, f);
     }
 
-    // Build the recipient ServiceId set for token verification and resolve
-    // each EMI to a pseudonym via `member_credentials`.
+    // Build the recipient ServiceId set for token verification and resolve each
+    // EMI to *all* of that member's device pseudonyms (docs/04 multi-device): the
+    // same fan-out blob is delivered once per device. Token verification stays
+    // per service-id (per member), so each recipient contributes one ServiceId
+    // regardless of how many devices it has.
     let mut recipient_service_ids: Vec<libsignal_core::ServiceId> =
         Vec::with_capacity(body.recipients.len());
     let mut recipient_targets: Vec<(Vec<u8>, &crypto::sealed_sender::RecipientFanout)> =
@@ -759,14 +782,13 @@ async fn send_group_message(
                 .get(&sid_arr)
                 .ok_or_else(|| ServerError::BadRequest("recipient not in envelope".into()))?;
             let emi = b64_decode(&r.encrypted_member_id, "encrypted_member_id")?;
-            let pseudonym =
-                db::groups::member_pseudonym(&mut conn, &group_id, &emi)
-                    .await?
-                    .ok_or_else(|| {
-                        ServerError::BadRequest("recipient not a member of this group".into())
-                    })?;
             recipient_service_ids.push(sid);
-            recipient_targets.push((pseudonym, fanout));
+            // Zero pseudonyms means the member has no device registered for
+            // fan-out (yet) — nothing to enqueue for them, but they remain a
+            // valid token recipient above.
+            for pseudonym in db::groups::member_pseudonyms(&mut conn, &group_id, &emi).await? {
+                recipient_targets.push((pseudonym, fanout));
+            }
         }
     }
 
@@ -834,20 +856,35 @@ struct QueuedGroupMessageWire {
     enqueued_at: String,
 }
 
+/// Query string for offline pickup: the device names *its own* pseudonym, since
+/// a member may now have several (one per device, docs/04) and the per-account
+/// presentation can't say which device is asking.
+#[derive(Deserialize)]
+struct FetchGroupMessagesQuery {
+    pseudonym: String,
+}
+
 async fn fetch_group_messages(
     State(state): State<AppState>,
     Path(group_id_b64): Path<String>,
+    Query(query): Query<FetchGroupMessagesQuery>,
     headers: HeaderMap,
 ) -> Result<Json<FetchGroupMessagesResponse>, ServerError> {
     let (group, actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let pseudonym = b64_decode(&query.pseudonym, "pseudonym")?;
     let mut conn = state.db.acquire().await?;
-    let pseudonym = db::groups::member_pseudonym(
+    // The pseudonym must be one this member registered, or a member could drain
+    // another's queue.
+    if !db::groups::pseudonym_belongs_to_member(
         &mut conn,
         &group.group_id,
         &zkgroup::serialize(&actor_emi),
+        &pseudonym,
     )
     .await?
-    .ok_or(ServerError::NotFound)?;
+    {
+        return Err(ServerError::NotFound);
+    }
     let queued = db::group_messages::fetch_for_pseudonym(&mut conn, &pseudonym).await?;
     Ok(Json(FetchGroupMessagesResponse {
         messages: queued
@@ -865,6 +902,8 @@ async fn fetch_group_messages(
 
 #[derive(Deserialize)]
 struct AckGroupMessagesRequest {
+    /// The device's own pseudonym whose queue these ids belong to (docs/04).
+    pseudonym: String,
     message_ids: Vec<i64>,
 }
 
@@ -875,14 +914,18 @@ async fn ack_group_messages(
     Json(body): Json<AckGroupMessagesRequest>,
 ) -> Result<StatusCode, ServerError> {
     let (group, actor_emi) = authorize_member(&state, &headers, &group_id_b64).await?;
+    let pseudonym = b64_decode(&body.pseudonym, "pseudonym")?;
     let mut conn = state.db.acquire().await?;
-    let pseudonym = db::groups::member_pseudonym(
+    if !db::groups::pseudonym_belongs_to_member(
         &mut conn,
         &group.group_id,
         &zkgroup::serialize(&actor_emi),
+        &pseudonym,
     )
     .await?
-    .ok_or(ServerError::NotFound)?;
+    {
+        return Err(ServerError::NotFound);
+    }
     let _ = db::group_messages::acknowledge(&mut conn, &pseudonym, &body.message_ids).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1188,7 +1231,8 @@ async fn apply_actions(
             "promote_pending_members.group_push_pseudonym",
         )?;
         db::groups::delete_pending_invite(tx, &group.group_id, actor_emi).await?;
-        db::groups::insert_member(tx, &group.group_id, actor_emi, pending.role, &pseudonym).await?;
+        db::groups::insert_member(tx, &group.group_id, actor_emi, pending.role).await?;
+        db::groups::insert_member_pseudonym(tx, &group.group_id, actor_emi, &pseudonym).await?;
     }
 
     // decline_invite (self)
@@ -1236,11 +1280,11 @@ async fn apply_actions(
         )?;
         match group.policy.join_policy {
             x if x == JOIN_POLICY_OPEN_LINK => {
-                db::groups::insert_member(
+                db::groups::insert_member(tx, &group.group_id, actor_emi, ROLE_MEMBER).await?;
+                db::groups::insert_member_pseudonym(
                     tx,
                     &group.group_id,
                     actor_emi,
-                    ROLE_MEMBER,
                     &pseudonym,
                 )
                 .await?;
@@ -1286,11 +1330,11 @@ async fn apply_actions(
             .await?
             .ok_or_else(|| ServerError::BadRequest("approve_join_request: not pending".into()))?;
         db::groups::delete_pending_approval(tx, &group.group_id, &emi).await?;
-        db::groups::insert_member(
+        db::groups::insert_member(tx, &group.group_id, &emi, ROLE_MEMBER).await?;
+        db::groups::insert_member_pseudonym(
             tx,
             &group.group_id,
             &emi,
-            ROLE_MEMBER,
             &pending.group_push_pseudonym,
         )
         .await?;

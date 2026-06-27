@@ -566,25 +566,57 @@ async fn restore_group(
         .map_err(|_| AppError::Protocol("group master_key length != 32".into()))?;
     let group_id_b64 = groups::b64(&crypto::groups::GroupKey::from_bytes(mk).group_id().0);
 
+    // 1. Persist minimal row so master_key_for / load_group succeed. Empty
+    //    encrypted_state_plaintext is fine — fetch_group_state (in
+    //    `reconcile_group`) fills it in.
+    {
+        let inner = core.inner.lock().await;
+        inner
+            .store
+            .save_group(&store::groups::GroupRow {
+                group_id: group_id_b64.clone(),
+                master_key: mk.to_vec(),
+                hosting_server_url: hosting_server_url.to_string(),
+                revision: 0,
+                encrypted_state_plaintext: Vec::new(),
+                policy: store::groups::PolicyRow::default_admin_only(),
+                group_push_pseudonym: None,
+                created_at: Timestamp::now(),
+            })
+            .await?;
+    }
+
+    // 2-5: state, per-device pseudonym + subscribe, sender-key (re)distribution.
+    reconcile_group(core, &group_id_b64, hosting_server_url).await
+}
+
+/// Bring a locally-known group (master key already persisted) up to a state
+/// where *this device* sends and receives group fan-out: pull live state,
+/// register a fresh per-device push pseudonym + subscribe, then (re)seed our
+/// Sender Key and distribute it to every member. Shared by recovery
+/// (`restore_group`) and the storage-sync reconciler (`reconcile_synced_groups`)
+/// — a freshly linked second device is, for groups, just a fresh device that
+/// got the master key via sync rather than a recovery blob (docs/04).
+async fn reconcile_group(
+    core: &Arc<AppCore>,
+    group_id_b64: &str,
+    hosting_server_url: &str,
+) -> Result<(), AppError> {
+    let group_id_b64 = group_id_b64.to_string();
+    let mk: [u8; 32] = {
+        let inner = core.inner.lock().await;
+        let row = inner
+            .store
+            .load_group(&group_id_b64)
+            .await?
+            .ok_or_else(|| AppError::Protocol("reconcile_group: group not found".into()))?;
+        row.master_key
+            .try_into()
+            .map_err(|_| AppError::Protocol("group master_key length != 32".into()))?
+    };
+
     let ws = core.ws.lock().expect("ws mutex poisoned").clone();
     let mut inner = core.inner.lock().await;
-
-    // 1. Persist minimal row so master_key_for / load_group succeed. Empty
-    //    encrypted_state_plaintext is fine — fetch_group_state below fills
-    //    it in.
-    inner
-        .store
-        .save_group(&store::groups::GroupRow {
-            group_id: group_id_b64.clone(),
-            master_key: mk.to_vec(),
-            hosting_server_url: hosting_server_url.to_string(),
-            revision: 0,
-            encrypted_state_plaintext: Vec::new(),
-            policy: store::groups::PolicyRow::default_admin_only(),
-            group_push_pseudonym: None,
-            created_at: Timestamp::now(),
-        })
-        .await?;
 
     // 2. Pull live state so revision/members/policy are accurate.
     groups::fetch_group_state(
@@ -627,6 +659,19 @@ async fn restore_group(
     let group_id_bytes = groups::b64d(&group_id_b64)?;
     let recipients = groups::other_member_dids(&inner.store, &group_id_b64, &did).await?;
     for rdid in recipients {
+        let device_ids = {
+            // Disjoint field borrows of the guarded `AppCoreInner` (store + client).
+            let inner_ref: &mut AppCoreInner = &mut inner;
+            crate::messaging::ensure_group_recipient_sessions(
+                &mut inner_ref.store,
+                &inner_ref.client,
+                &did,
+                device_id,
+                &rdid,
+            )
+            .await
+            .unwrap_or_default()
+        };
         let skdm_msg = crate::proto::ContentMessage {
             body: Some(crate::proto::content_message::Body::SenderKeyDistribution(
                 crate::proto::SenderKeyDistribution {
@@ -645,7 +690,10 @@ async fn restore_group(
         {
             tracing::warn!("[recovery] SKDM to {rdid} for restored group failed: {e}");
         } else {
-            let _ = inner.store.mark_sender_key_shared(&group_id_b64, &rdid).await;
+            let _ = inner
+                .store
+                .mark_sender_key_shared_devices(&group_id_b64, &rdid, &device_ids)
+                .await;
         }
     }
     Ok(())
@@ -3876,6 +3924,33 @@ impl AppCore {
         Ok(())
     }
 
+    /// Register this device for group fan-out on any group whose master key we
+    /// now hold locally but for which we have no push pseudonym yet — i.e.
+    /// groups that arrived via storage sync on a freshly linked device (docs/04
+    /// multi-device groups). For each, `reconcile_group` fetches state, registers
+    /// a fresh per-device pseudonym + subscribes, and (re)distributes our sender
+    /// key. Idempotent: a reconciled group gains a pseudonym, so later passes
+    /// skip it. Run after every storage-sync pull (see `run_scheduler`).
+    pub async fn reconcile_synced_groups(self: &Arc<Self>) -> Result<(), AppError> {
+        let pending: Vec<(String, String)> = {
+            let inner = self.inner.lock().await;
+            inner
+                .store
+                .list_groups()
+                .await?
+                .into_iter()
+                .filter(|g| g.group_push_pseudonym.is_none())
+                .map(|g| (g.group_id, g.hosting_server_url))
+                .collect()
+        };
+        for (group_id_b64, host) in pending {
+            if let Err(e) = reconcile_group(self, &group_id_b64, &host).await {
+                tracing::warn!("[groups] reconcile synced group {group_id_b64} failed: {e}");
+            }
+        }
+        Ok(())
+    }
+
     /// Async receive_messages for use in tests running inside a tokio runtime.
     pub async fn receive_messages_async(&self) -> Result<Vec<DecryptedMessage>, AppError> {
         let ws = self.ws.lock().expect("ws mutex poisoned").clone();
@@ -4030,10 +4105,25 @@ impl AppCore {
             profile_key: Vec::new(),
             expire_timer_secs: 0,
         };
+        let device_ids = {
+            let inner_ref: &mut AppCoreInner = &mut inner;
+            crate::messaging::ensure_group_recipient_sessions(
+                &mut inner_ref.store,
+                &inner_ref.client,
+                &did,
+                device_id,
+                recipient_did,
+            )
+            .await
+            .unwrap_or_default()
+        };
         inner
             .send_dm(None, recipient_did, &skdm_msg.encode_to_vec(), None)
             .await?;
-        let _ = inner.store.mark_sender_key_shared(group_id, recipient_did).await;
+        let _ = inner
+            .store
+            .mark_sender_key_shared_devices(group_id, recipient_did, &device_ids)
+            .await;
         Ok(())
     }
 
@@ -4051,6 +4141,18 @@ impl AppCore {
         let group_id_bytes = groups::b64d(group_id)?;
         let recipients = groups::other_member_dids(&inner.store, group_id, &did).await?;
         for rdid in recipients {
+            let device_ids = {
+                let inner_ref: &mut AppCoreInner = &mut inner;
+                crate::messaging::ensure_group_recipient_sessions(
+                    &mut inner_ref.store,
+                    &inner_ref.client,
+                    &did,
+                    device_id,
+                    &rdid,
+                )
+                .await
+                .unwrap_or_default()
+            };
             let skdm_msg = ContentMessage {
                 body: Some(Body::SenderKeyDistribution(
                     proto::SenderKeyDistribution {
@@ -4066,7 +4168,10 @@ impl AppCore {
             inner
                 .send_dm(None, &rdid, &skdm_msg.encode_to_vec(), None)
                 .await?;
-            let _ = inner.store.mark_sender_key_shared(group_id, &rdid).await;
+            let _ = inner
+                .store
+                .mark_sender_key_shared_devices(group_id, &rdid, &device_ids)
+                .await;
         }
         inner.refresh_recovery_blob_best_effort().await;
         Ok(())

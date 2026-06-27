@@ -672,6 +672,13 @@ pub(crate) async fn run_scheduler(weak: std::sync::Weak<crate::AppCore>) {
         if let Err(e) = app.sync_storage_async().await {
             tracing::warn!("[storage] scheduled sync failed: {e}");
         }
+        // A pull may have applied group master keys synced from another of our
+        // devices. Register this device for fan-out on any such group (docs/04
+        // multi-device groups) — without a pseudonym it never receives others'
+        // messages.
+        if let Err(e) = app.reconcile_synced_groups().await {
+            tracing::warn!("[storage] group reconcile after sync failed: {e}");
+        }
     }
 }
 

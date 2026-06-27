@@ -488,54 +488,78 @@ impl crypto::Store for DeviceStore {}
 // ── sender-key distribution bookkeeping ───────────────────────────────────────
 
 impl DeviceStore {
-    /// Record that `recipient_did` has received our current sender key for
-    /// `group_id` (Signal-style lazy distribution). Idempotent.
+    /// Record that one of `recipient_did`'s devices has received our current
+    /// sender key for `group_id` (Signal-style lazy distribution). Idempotent.
     pub async fn mark_sender_key_shared(
         &self,
         group_id: &str,
         recipient_did: &str,
+        recipient_device_id: u32,
     ) -> Result<(), StoreError> {
+        self.mark_sender_key_shared_devices(group_id, recipient_did, &[recipient_device_id])
+            .await
+    }
+
+    /// Mark several of `recipient_did`'s devices as having received our current
+    /// sender key for `group_id`. Idempotent; a no-op for an empty device list.
+    pub async fn mark_sender_key_shared_devices(
+        &self,
+        group_id: &str,
+        recipient_did: &str,
+        device_ids: &[u32],
+    ) -> Result<(), StoreError> {
+        if device_ids.is_empty() {
+            return Ok(());
+        }
         let group_id = group_id.to_string();
         let recipient_did = recipient_did.to_string();
+        let device_ids = device_ids.to_vec();
         self.conn
             .call(move |conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO sender_key_shared (group_id, recipient_did) \
-                     VALUES (?1, ?2)",
-                    rusqlite::params![group_id, recipient_did],
-                )?;
+                for dev in device_ids {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO sender_key_shared \
+                         (group_id, recipient_did, recipient_device_id) \
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![group_id, recipient_did, dev],
+                    )?;
+                }
                 Ok(())
             })
             .await
             .map_err(StoreError::Db)
     }
 
-    /// Of `members`, return those that have NOT yet received our current sender
-    /// key for `group_id` — i.e. the recipients the send path still owes an
-    /// SKDM. Order follows `members`.
-    pub async fn sender_key_unshared_members(
+    /// Of `recipient_did`'s `device_ids`, return those that have NOT yet
+    /// received our current sender key for `group_id` — i.e. the devices the
+    /// send path still owes an SKDM (a co-member's freshly-linked device, or a
+    /// member who joined after us). Order follows `device_ids`.
+    pub async fn sender_key_unshared_devices(
         &self,
         group_id: &str,
-        members: &[String],
-    ) -> Result<Vec<String>, StoreError> {
-        if members.is_empty() {
+        recipient_did: &str,
+        device_ids: &[u32],
+    ) -> Result<Vec<u32>, StoreError> {
+        if device_ids.is_empty() {
             return Ok(Vec::new());
         }
         let group_id = group_id.to_string();
-        let members = members.to_vec();
+        let recipient_did = recipient_did.to_string();
+        let device_ids = device_ids.to_vec();
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT 1 FROM sender_key_shared WHERE group_id = ?1 AND recipient_did = ?2",
+                    "SELECT 1 FROM sender_key_shared \
+                     WHERE group_id = ?1 AND recipient_did = ?2 AND recipient_device_id = ?3",
                 )?;
                 let mut out = Vec::new();
-                for did in members {
+                for dev in device_ids {
                     let shared = stmt
-                        .query_row(rusqlite::params![group_id, did], |_| Ok(()))
+                        .query_row(rusqlite::params![group_id, recipient_did, dev], |_| Ok(()))
                         .optional()?
                         .is_some();
                     if !shared {
-                        out.push(did);
+                        out.push(dev);
                     }
                 }
                 Ok(out)

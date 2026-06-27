@@ -449,6 +449,18 @@ impl AppCoreInner {
         let group_id_bytes = groups::b64d(group_id_b64)?;
         let recipients = groups::other_member_dids(&self.store, group_id_b64, &did).await?;
         for rdid in recipients {
+            // Resolve the member's device set so we can mark each device shared
+            // (multi-device groups, docs/04). `send_dm` fans the SKDM out to all
+            // of them anyway.
+            let device_ids = ensure_group_recipient_sessions(
+                &mut self.store,
+                &self.client,
+                &did,
+                device_id,
+                &rdid,
+            )
+            .await
+            .unwrap_or_default();
             let skdm_msg = ContentMessage {
                 body: Some(Body::SenderKeyDistribution(proto::SenderKeyDistribution {
                     group_id: group_id_bytes.clone(),
@@ -466,7 +478,10 @@ impl AppCoreInner {
                 tracing::warn!("[groups] SKDM DM to {rdid} failed: {e}");
             } else {
                 // Record so the lazy distribution path doesn't resend.
-                let _ = self.store.mark_sender_key_shared(group_id_b64, &rdid).await;
+                let _ = self
+                    .store
+                    .mark_sender_key_shared_devices(group_id_b64, &rdid, &device_ids)
+                    .await;
             }
         }
 
@@ -813,20 +828,47 @@ impl AppCoreInner {
         group_id: &str,
     ) -> Result<(), AppError> {
         let did = self.did.clone();
+        let device_id = self.device_id;
         let members = groups::other_member_dids(&self.store, group_id, &did).await?;
-        let unshared = self
-            .store
-            .sender_key_unshared_members(group_id, &members)
-            .await?;
-        if unshared.is_empty() {
+
+        // Per member, resolve the *current* device set (this also establishes
+        // sessions, and crucially discovers a co-member's freshly-linked second
+        // device — docs/04 multi-device groups). A member owes an SKDM if any of
+        // their devices hasn't received our current sender key yet.
+        let mut owed: Vec<(String, Vec<u32>)> = Vec::new();
+        for rdid in &members {
+            let device_ids = match ensure_group_recipient_sessions(
+                &mut self.store,
+                &self.client,
+                &did,
+                device_id,
+                rdid,
+            )
+            .await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("[groups] resolve devices for {rdid} in {group_id}: {e}");
+                    continue;
+                }
+            };
+            let unshared = self
+                .store
+                .sender_key_unshared_devices(group_id, rdid, &device_ids)
+                .await?;
+            if !unshared.is_empty() {
+                owed.push((rdid.clone(), device_ids));
+            }
+        }
+        if owed.is_empty() {
             return Ok(());
         }
-        let device_id = self.device_id;
+
         let mk = groups::master_key_for(&self.store, group_id).await?;
         let skdm = groups::seed_own_sender_key(&mut self.store, &did, device_id, &mk).await?;
         let group_id_bytes = groups::b64d(group_id)?;
         let dist = groups::distribution_id_for(&mk).as_bytes().to_vec();
-        for rdid in unshared {
+        for (rdid, device_ids) in owed {
             let skdm_msg = ContentMessage {
                 body: Some(Body::SenderKeyDistribution(proto::SenderKeyDistribution {
                     group_id: group_id_bytes.clone(),
@@ -838,8 +880,9 @@ impl AppCoreInner {
                 expire_timer_secs: 0,
             };
             // Best-effort per member: a transient failure to one recipient must
-            // not block the group send. We only mark a member shared once their
-            // SKDM actually went out, so the next send retries the stragglers.
+            // not block the group send. We only mark a member's devices shared
+            // once their SKDM actually went out (it fans out to all their
+            // devices), so the next send retries the stragglers.
             if let Err(e) = self
                 .send_dm(None, &rdid, &skdm_msg.encode_to_vec(), None)
                 .await
@@ -847,7 +890,9 @@ impl AppCoreInner {
                 tracing::warn!("[groups] lazy SKDM to {rdid} for {group_id} failed: {e}");
                 continue;
             }
-            self.store.mark_sender_key_shared(group_id, &rdid).await?;
+            self.store
+                .mark_sender_key_shared_devices(group_id, &rdid, &device_ids)
+                .await?;
         }
         Ok(())
     }

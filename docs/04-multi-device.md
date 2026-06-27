@@ -100,10 +100,6 @@ an ephemeral mailbox; the linking device picks the next free `device_id` (§4).
 
 What is **not** built (the rest of this doc):
 
-- Sent-message and read-state sync across a user's own devices (the §5.4 event
-channel: the `SyncSent`/`SyncRead` types and apply paths exist, but the fan-out
-to one's *own* other devices is a no-op until §4 produces a second device — now
-unblocked, but the own-device fan-out wiring is still pending).
 - History backfill onto a freshly linked device (explicit non-goal, §10).
 - Device revocation flow.
 - Device-set-change detection / UX.
@@ -380,19 +376,61 @@ bootstrap/recovery flows.
 
 ## 6. Group fan-out & new-device-in-existing-group
 
-**Status: mostly DECIDED (substrate), one OPEN test gap.**
+**Status: BUILT.** Concurrent multi-device group receive (every device of a
+member independently receives and decrypts group messages).
 
-Per-device fan-out and per-device sender keys are already built (§3). The cost is
-performance: N members × M devices = N·M sealed-sender slices and a separate
-ratchet per device for SKDM delivery. This is inherent to the per-device model
-and the architectural price is already paid.
+The key crypto fact that makes this cheap: the group envelope is SSv2
+multi-recipient, and its per-recipient key material (`C_i`/`AT_i`) is derived
+from the recipient **account's identity key** — "once per recipient", not per
+device (libsignal `sealed_sender.rs`, `apply_agreement_xor`/
+`compute_authentication_tag` against `recipient_identity`). Decryption uses only
+the account identity private key, which every linked device shares. So **the same
+delivered blob is decryptable by any device of the member** — no per-device
+sealed-sender slice, no sender-side change, no endorsement change. The sender
+already emits one blob per member.
 
-The OPEN gap: when an *existing* member links a *new* device mid-group, that
-device needs a session **and** a fresh SKDM. The lazy-establishment /
-registration-id path should fire for "existing member, new device" the same as
-for a late joiner. Add an explicit test: member links device → next group send
-establishes the new device's session and delivers it a fresh sender key →
-new device decrypts.
+What we changed:
+
+1. **Per-device delivery pseudonyms.** Routing pseudonyms moved out of
+   `member_credentials` (one per member) into `group_member_pseudonyms` (N per
+   `(group, encrypted_member_id)` — one per device). The group queue stays a
+   single-consumer mailbox per pseudonym; each device drains its own. Send
+   fan-out resolves a recipient's EMI to **all** its pseudonyms and enqueues the
+   (identical) blob to each. `POST …/push_binding` is additive: a device with no
+   prior binding registers (`old` absent); a rotating device passes `old`→`new`
+   so siblings are untouched. Offline pickup (`GET/DELETE …/messages`) names the
+   device's own pseudonym, ownership-checked against the member's set.
+2. **Linked-device reconciler.** A freshly linked device gets the group master
+   key via storage sync (`GroupKeyAdapter`) with no pseudonym. After every sync
+   pull, `reconcile_synced_groups` finds such groups and, per group: fetches
+   state, registers a per-device pseudonym + subscribes, and (re)seeds +
+   distributes its sender key. This generalizes the recovery-only `restore_group`
+   into a path that also fires for a linked second device (which, for groups, is
+   just a fresh device that got the master key via sync rather than a blob).
+3. **Per-device sender-key distribution.** `sender_key_shared` is keyed per
+   `(group, recipient_did, device)`. Before each send, distribution resolves each
+   member's current device set (via `ensure_group_recipient_sessions`, which also
+   discovers a co-member's new device) and ships an SKDM to any member with an
+   unshared device — so a co-member's newly-linked device gets the sender key on
+   the next send.
+
+Costs accepted: (a) the server learns *device-count per member* (N pseudonyms per
+EMI) — the EMI stays zkgroup-opaque so it can't reach a DID; same leak Signal
+accepts; (b) the per-send distribution does an extra device-registration fetch
+per member (could be deduped with the send's own fetch later); (c) messages sent
+*before* a sender redistributes to a new device aren't decryptable on that device
+— standard sender-key behavior, and history backfill is an explicit non-goal
+(§10).
+
+Test coverage: server DB layer (`db_tests`: fan-out to all device pseudonyms,
+additive register, rotate-in-place, removal cascade, ownership), store
+(`integration`: per-device SKDM tracking flips for a new device), HTTP
+(`group_tests`: push-binding register/rotate/miss), and the single-device group
+e2e remains green. The full concurrent two-device **decrypt** e2e shares the
+PLC-directory limitation that leaves `recover_from_blob` and device-link
+registration untested e2e (`provision_linked_device` requires a resolvable
+`did:plc:` rotation key); it is verified by the mechanism tests above + the
+identity-key finding + real-device repro.
 
 ## 7. Recovery interaction
 

@@ -481,3 +481,39 @@ proptest! {
         prop_assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 }
+
+#[tokio::test]
+async fn sender_key_shared_is_tracked_per_device() {
+    // docs/04 multi-device groups: SKDM distribution is tracked per
+    // (group, recipient_did, device) so a co-member linking a new device is
+    // detected as "owes an SKDM" even though the DID already had the key.
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    let g = "group-skdm";
+    let bob = "did:plc:bob";
+
+    // Nothing shared yet → every queried device is owed the key.
+    assert_eq!(
+        store.sender_key_unshared_devices(g, bob, &[1, 2]).await.unwrap(),
+        vec![1, 2]
+    );
+
+    // Share with device 1; device 2 still owes.
+    store.mark_sender_key_shared(g, bob, 1).await.unwrap();
+    assert_eq!(store.sender_key_unshared_devices(g, bob, &[1, 2]).await.unwrap(), vec![2]);
+
+    // Bulk-mark 2 and 3; now none of {1,2,3} owes.
+    store.mark_sender_key_shared_devices(g, bob, &[2, 3]).await.unwrap();
+    assert!(store.sender_key_unshared_devices(g, bob, &[1, 2, 3]).await.unwrap().is_empty());
+
+    // Bob links a brand-new device 4 → detected as owed (the multi-device bug).
+    assert_eq!(store.sender_key_unshared_devices(g, bob, &[1, 2, 3, 4]).await.unwrap(), vec![4]);
+
+    // Tracking is scoped per (group, recipient): a different group/recipient is
+    // untouched by the marks above.
+    assert_eq!(store.sender_key_unshared_devices("group-other", bob, &[1]).await.unwrap(), vec![1]);
+    assert_eq!(store.sender_key_unshared_devices(g, "did:plc:carol", &[1]).await.unwrap(), vec![1]);
+
+    // Re-seeding clears the whole group so every device re-receives the key.
+    store.clear_sender_key_shared(g).await.unwrap();
+    assert_eq!(store.sender_key_unshared_devices(g, bob, &[1, 2]).await.unwrap(), vec![1, 2]);
+}

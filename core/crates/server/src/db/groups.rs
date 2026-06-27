@@ -88,13 +88,20 @@ pub async fn create(conn: &mut PgConnection, ng: &NewGroup<'_>) -> Result<(), sq
     .await?;
 
     sqlx::query(
-        "INSERT INTO member_credentials (group_id, encrypted_member_id, role, group_push_pseudonym)
-         VALUES ($1, $2, 1, $3)",
+        "INSERT INTO member_credentials (group_id, encrypted_member_id, role)
+         VALUES ($1, $2, 1)",
     )
     .bind(ng.group_id)
     .bind(ng.founder_encrypted_member_id)
-    .bind(ng.founder_group_push_pseudonym)
     .execute(&mut *conn)
+    .await?;
+    // The founder's first device registers its routing pseudonym (docs/04).
+    insert_member_pseudonym(
+        conn,
+        ng.group_id,
+        ng.founder_encrypted_member_id,
+        ng.founder_group_push_pseudonym,
+    )
     .await?;
     Ok(())
 }
@@ -294,22 +301,87 @@ pub async fn list_member_encrypted_ids(
         .collect())
 }
 
-/// Look up the active member's push pseudonym. Used by the websocket
-/// subscribe path and by group send fan-out.
-pub async fn member_pseudonym(
+/// All push pseudonyms registered for a member — one per device (docs/04
+/// multi-device groups). Used by the websocket subscribe path and by group
+/// send fan-out, which delivers one copy per pseudonym.
+pub async fn member_pseudonyms(
     conn: &mut PgConnection,
     group_id: &[u8],
     encrypted_member_id: &[u8],
-) -> Result<Option<Vec<u8>>, sqlx::Error> {
+) -> Result<Vec<Vec<u8>>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT group_push_pseudonym FROM group_member_pseudonyms
+         WHERE group_id = $1 AND encrypted_member_id = $2
+         ORDER BY created_at, group_push_pseudonym",
+    )
+    .bind(group_id)
+    .bind(encrypted_member_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| r.get::<Vec<u8>, _>("group_push_pseudonym"))
+        .collect())
+}
+
+/// Register a device's push pseudonym for a member (additive — a member may
+/// hold several, one per device). Idempotent on the pseudonym primary key.
+pub async fn insert_member_pseudonym(
+    conn: &mut PgConnection,
+    group_id: &[u8],
+    encrypted_member_id: &[u8],
+    group_push_pseudonym: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO group_member_pseudonyms
+            (group_id, encrypted_member_id, group_push_pseudonym)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (group_id, group_push_pseudonym) DO NOTHING",
+    )
+    .bind(group_id)
+    .bind(encrypted_member_id)
+    .bind(group_push_pseudonym)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Whether `pseudonym` is registered to this member in this group. Used to
+/// authorize a device draining/acking its own offline queue (docs/04).
+pub async fn pseudonym_belongs_to_member(
+    conn: &mut PgConnection,
+    group_id: &[u8],
+    encrypted_member_id: &[u8],
+    pseudonym: &[u8],
+) -> Result<bool, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT group_push_pseudonym FROM member_credentials
+        "SELECT 1 FROM group_member_pseudonyms
+         WHERE group_id = $1 AND encrypted_member_id = $2 AND group_push_pseudonym = $3",
+    )
+    .bind(group_id)
+    .bind(encrypted_member_id)
+    .bind(pseudonym)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Remove every push pseudonym for a member (called when the member is removed
+/// or leaves). The membership row in `member_credentials` is deleted separately.
+pub async fn delete_member_pseudonyms(
+    conn: &mut PgConnection,
+    group_id: &[u8],
+    encrypted_member_id: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM group_member_pseudonyms
          WHERE group_id = $1 AND encrypted_member_id = $2",
     )
     .bind(group_id)
     .bind(encrypted_member_id)
-    .fetch_optional(&mut *conn)
+    .execute(&mut *conn)
     .await?;
-    Ok(row.map(|r| r.get("group_push_pseudonym")))
+    Ok(())
 }
 
 pub async fn insert_member(
@@ -317,22 +389,21 @@ pub async fn insert_member(
     group_id: &[u8],
     encrypted_member_id: &[u8],
     role: i16,
-    group_push_pseudonym: &[u8],
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO member_credentials
-            (group_id, encrypted_member_id, role, group_push_pseudonym)
-         VALUES ($1, $2, $3, $4)",
+            (group_id, encrypted_member_id, role)
+         VALUES ($1, $2, $3)",
     )
     .bind(group_id)
     .bind(encrypted_member_id)
     .bind(role)
-    .bind(group_push_pseudonym)
     .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
+/// Delete a member's credential row and all their device pseudonyms.
 pub async fn delete_member(
     conn: &mut PgConnection,
     group_id: &[u8],
@@ -346,6 +417,7 @@ pub async fn delete_member(
     .bind(encrypted_member_id)
     .execute(&mut *conn)
     .await?;
+    delete_member_pseudonyms(conn, group_id, encrypted_member_id).await?;
     Ok(())
 }
 
@@ -367,22 +439,27 @@ pub async fn set_member_role(
     Ok(())
 }
 
-/// Rotate the push pseudonym for an existing member. Called from
-/// POST /v1/groups/{id}/push_binding.
+/// Rotate one device's push pseudonym old → new for a member (docs/04). Only
+/// the row matching `old_pseudonym` is replaced, so sibling devices' bindings
+/// are untouched. Returns true if a row changed. Called from
+/// POST /v1/groups/{id}/push_binding when the client supplies its prior
+/// pseudonym; a first-time device registration uses `insert_member_pseudonym`.
 pub async fn rotate_member_pseudonym(
     conn: &mut PgConnection,
     group_id: &[u8],
     encrypted_member_id: &[u8],
+    old_pseudonym: &[u8],
     new_pseudonym: &[u8],
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE member_credentials
-            SET group_push_pseudonym = $1
-          WHERE group_id = $2 AND encrypted_member_id = $3",
+        "UPDATE group_member_pseudonyms
+            SET group_push_pseudonym = $1, created_at = now()
+          WHERE group_id = $2 AND encrypted_member_id = $3 AND group_push_pseudonym = $4",
     )
     .bind(new_pseudonym)
     .bind(group_id)
     .bind(encrypted_member_id)
+    .bind(old_pseudonym)
     .execute(&mut *conn)
     .await?;
     Ok(result.rows_affected() == 1)

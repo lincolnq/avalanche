@@ -1740,8 +1740,16 @@ pub async fn rotate_group_pseudonym(
         ensure_credential(store, client, &row.hosting_server_url, did, &public).await?;
     let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
     let new_pseudonym = fresh_pseudonym();
+    // If we already hold a pseudonym for this group, rotate it in place; if not
+    // (a freshly linked device that got the master key via storage sync, docs/04),
+    // register additively so we don't clobber a sibling device's binding.
     client
-        .rotate_group_push_binding(group_id_b64_s, &new_pseudonym, &presentation)
+        .rotate_group_push_binding(
+            group_id_b64_s,
+            row.group_push_pseudonym.as_deref(),
+            &new_pseudonym,
+            &presentation,
+        )
         .await?;
     store
         .set_group_push_pseudonym(group_id_b64_s, &new_pseudonym)
@@ -2042,12 +2050,19 @@ pub async fn fetch_group_messages(
 ) -> Result<Vec<ReceivedGroupMessage>, AppError> {
     let mk = master_key_for(store, group_id_b64).await?;
     let group_key = GroupKey::from_bytes(mk);
+    // This device drains its *own* per-device queue, keyed by the pseudonym it
+    // registered (docs/04 multi-device groups). No local pseudonym means this
+    // device isn't set up for fan-out yet — nothing to drain.
+    let pseudonym = match store.load_group(group_id_b64).await?.and_then(|r| r.group_push_pseudonym) {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
     let public = ensure_server_params(store, client, server_url).await?;
     let cred = ensure_credential(store, client, server_url, recipient_did, &public).await?;
     let presentation = build_presentation_bytes(&public, &cred, &group_key)?;
 
     let queued = client
-        .fetch_group_messages(group_id_b64, &presentation)
+        .fetch_group_messages(group_id_b64, &pseudonym, &presentation)
         .await?;
     if queued.is_empty() {
         return Ok(Vec::new());
@@ -2108,7 +2123,7 @@ pub async fn fetch_group_messages(
 
     if !acked.is_empty() {
         if let Err(e) = client
-            .ack_group_messages(group_id_b64, acked, &presentation)
+            .ack_group_messages(group_id_b64, &pseudonym, acked, &presentation)
             .await
         {
             tracing::warn!("[groups] ack_group_messages failed: {e}");

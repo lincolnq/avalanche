@@ -1393,3 +1393,124 @@ async fn provisioning_expired_session_hides_slots() {
     let swept = server::db::provisioning::delete_expired(&mut *tx).await.unwrap();
     assert!(swept >= 1);
 }
+
+// ── Per-device group push pseudonyms (docs/04 multi-device groups) ──────────────
+
+/// Insert a minimal group so the FK on `group_member_pseudonyms.group_id` holds.
+async fn setup_group(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, gid: &[u8], founder_emi: &[u8], founder_ps: &[u8]) {
+    let policy = server::db::groups::Policy {
+        invite_members_role: 1,
+        remove_members_role: 1,
+        modify_title_role: 1,
+        modify_description_role: 1,
+        modify_expiry_role: 1,
+        join_policy: 0,
+        invite_link_password: None,
+        announcement_only: false,
+    };
+    server::db::groups::create(
+        &mut **tx,
+        &server::db::groups::NewGroup {
+            group_id: gid,
+            server_public_params_version: server::db::zkgroup_params::CURRENT_VERSION,
+            group_public_params: &[1u8; 32],
+            encrypted_state: &[2u8; 16],
+            policy: &policy,
+            founder_encrypted_member_id: founder_emi,
+            founder_group_push_pseudonym: founder_ps,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn member_pseudonyms_fan_out_to_all_devices() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let gid = b"group-fanout-0001".to_vec();
+    let founder_emi = b"founder-emi".to_vec();
+    let founder_ps = b"founder-pseudonym-aaaaaa".to_vec();
+    setup_group(&mut tx, &gid, &founder_emi, &founder_ps).await;
+
+    // Founder's create registered exactly their first device's pseudonym.
+    let founder = server::db::groups::member_pseudonyms(&mut *tx, &gid, &founder_emi).await.unwrap();
+    assert_eq!(founder, vec![founder_ps.clone()]);
+
+    // A second member joins (one device), then links a second device.
+    let emi = b"member-emi".to_vec();
+    let ps1 = b"member-device-1-pseudonym".to_vec();
+    let ps2 = b"member-device-2-pseudonym".to_vec();
+    server::db::groups::insert_member(&mut *tx, &gid, &emi, 0).await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, &ps1).await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, &ps2).await.unwrap();
+
+    // Fan-out resolves the member's EMI to BOTH device pseudonyms — the crux of
+    // concurrent multi-device receive.
+    let mut got = server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap();
+    got.sort();
+    let mut want = vec![ps1.clone(), ps2.clone()];
+    want.sort();
+    assert_eq!(got, want);
+
+    // Re-registering an existing pseudonym is idempotent (ON CONFLICT DO NOTHING).
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, &ps1).await.unwrap();
+    assert_eq!(server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap().len(), 2);
+
+    // Ownership check gates offline pickup: own pseudonym yes, a stranger's no.
+    assert!(server::db::groups::pseudonym_belongs_to_member(&mut *tx, &gid, &emi, &ps1).await.unwrap());
+    assert!(!server::db::groups::pseudonym_belongs_to_member(&mut *tx, &gid, &emi, &founder_ps).await.unwrap());
+}
+
+#[tokio::test]
+async fn rotate_pseudonym_replaces_only_that_device() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let gid = b"group-rotate-0001".to_vec();
+    let founder_emi = b"founder-emi".to_vec();
+    setup_group(&mut tx, &gid, &founder_emi, b"founder-ps-rotate-aaaaaa").await;
+
+    let emi = b"member-emi".to_vec();
+    let ps1 = b"device-1-old-pseudonym--".to_vec();
+    let ps2 = b"device-2-pseudonym------".to_vec();
+    server::db::groups::insert_member(&mut *tx, &gid, &emi, 0).await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, &ps1).await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, &ps2).await.unwrap();
+
+    // Device 1 rotates old → new; device 2's binding is untouched.
+    let ps1_new = b"device-1-new-pseudonym--".to_vec();
+    let rotated = server::db::groups::rotate_member_pseudonym(&mut *tx, &gid, &emi, &ps1, &ps1_new)
+        .await
+        .unwrap();
+    assert!(rotated);
+    let mut got = server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap();
+    got.sort();
+    let mut want = vec![ps1_new.clone(), ps2.clone()];
+    want.sort();
+    assert_eq!(got, want);
+
+    // Rotating a pseudonym we don't hold is a no-op miss (returns false).
+    assert!(!server::db::groups::rotate_member_pseudonym(&mut *tx, &gid, &emi, &ps1, &ps1_new).await.unwrap());
+}
+
+#[tokio::test]
+async fn delete_member_cascades_all_device_pseudonyms() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let gid = b"group-cascade-0001".to_vec();
+    let founder_emi = b"founder-emi".to_vec();
+    setup_group(&mut tx, &gid, &founder_emi, b"founder-ps-cascade-aaaaa").await;
+
+    let emi = b"member-emi".to_vec();
+    server::db::groups::insert_member(&mut *tx, &gid, &emi, 0).await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, b"dev-1-ps-cascade--------").await.unwrap();
+    server::db::groups::insert_member_pseudonym(&mut *tx, &gid, &emi, b"dev-2-ps-cascade--------").await.unwrap();
+    assert_eq!(server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap().len(), 2);
+
+    // Removing the member drops the credential row AND every device pseudonym.
+    server::db::groups::delete_member(&mut *tx, &gid, &emi).await.unwrap();
+    assert!(server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap().is_empty());
+}
