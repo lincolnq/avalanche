@@ -1069,6 +1069,9 @@ export function AppProvider(props: { children: JSX.Element }) {
     return conv;
   }
 
+  // TODO(track-F): no in-app entry point calls joinViaLink yet. iOS joins a
+  // group purely via deep link (no dedicated UI), so the trigger lands with the
+  // deep-link plumbing in PR 2. The handler itself is complete.
   async function joinViaLink(
     masterKey: number[],
     hostingServerUrl: string,
