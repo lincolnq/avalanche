@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -264,6 +265,10 @@ class AppViewModel(
     private companion object {
         const val SERVICE_MODE_KEY = "serviceMode"
         const val ACCOUNTS_KEY = "persistedAccounts"
+        // Device-linking poll loop (docs/04 §4.2): one FFI step per GET, sleeping
+        // between steps in a cancellable coroutine.
+        const val LINK_TIMEOUT_MS = 180_000L
+        const val LINK_POLL_INTERVAL_MS = 1_000L
     }
 
     private val prefs: SharedPreferences
@@ -664,6 +669,106 @@ class AppViewModel(
         } finally {
             recoveriesInFlight.remove(did)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Device linking (docs/04-multi-device.md §4)
+    //
+    // Two sides; the bundle always flows existing→new. Role (show vs. scan) is
+    // independent of which device is which — the FFI is symmetric.
+    // Mirrors iOS AppState device-linking methods.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Existing-device side: show a pairing code for a new device to scan.
+     * Returns the pairing string; follow with [linkSendBundle].
+     */
+    suspend fun linkCreatePairing(accountId: String): String {
+        val core = cores[accountId] ?: throw IllegalStateException("Account not signed in on this device")
+        return withContext(Dispatchers.IO) { core.linkCreatePairing(null) }
+    }
+
+    /**
+     * Existing-device side: ingest a code scanned/pasted from the new device.
+     * Follow with [linkSendBundle].
+     */
+    suspend fun linkAcceptPairing(accountId: String, code: String) {
+        val core = cores[accountId] ?: throw IllegalStateException("Account not signed in on this device")
+        withContext(Dispatchers.IO) { core.linkAcceptPairing(code) }
+    }
+
+    /**
+     * Existing-device side: seal and send the provisioning bundle, driving the
+     * mailbox poll loop here. Because the loop lives in a coroutine with a
+     * cancellable [kotlinx.coroutines.delay], the caller's LaunchedEffect being
+     * cancelled (screen dismissed / mode switched) stops polling within ~1s — no
+     * orphaned, uncancellable FFI poll (docs/04 §4.2).
+     */
+    suspend fun linkSendBundle(accountId: String) {
+        val core = cores[accountId] ?: throw IllegalStateException("Account not signed in on this device")
+        val deadline = System.currentTimeMillis() + LINK_TIMEOUT_MS
+        while (true) {
+            val done = withContext(Dispatchers.IO) { core.linkSendBundleStep() }
+            if (done) return
+            if (System.currentTimeMillis() >= deadline) {
+                throw IllegalStateException("Timed out waiting for the other device. Try again.")
+            }
+            delay(LINK_POLL_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * New-device side: create a fresh link handle (this device has no account
+     * yet). Drive it via [DeviceLink], then [completeDeviceLink].
+     */
+    fun makeDeviceLink(): DeviceLink = _service.makeDeviceLink()
+
+    /**
+     * New-device side: complete the link and register the resulting account,
+     * exiting onboarding. [link] must have had [DeviceLink.createPairing] or
+     * [DeviceLink.acceptPairing] called on it first. Blocks until the existing
+     * device approves or the attempt times out.
+     */
+    suspend fun completeDeviceLink(link: DeviceLink) {
+        val dbFilename = "account-${UUID.randomUUID().toString().take(8)}.db"
+        val dbPath = File(dbDir, dbFilename).absolutePath
+        val dbKey = withContext(Dispatchers.IO) {
+            KeystoreKeyManager.dbPassphrase(applicationContext)
+        }
+
+        // UI-driven poll loop with a cancellable delay (see linkSendBundle).
+        val deadline = System.currentTimeMillis() + LINK_TIMEOUT_MS
+        val core = run {
+            while (true) {
+                val c = withContext(Dispatchers.IO) { link.awaitLinkStep(dbPath, dbKey) }
+                if (c != null) return@run c
+                if (System.currentTimeMillis() >= deadline) {
+                    throw IllegalStateException("Timed out waiting for the link to complete. Try again.")
+                }
+                delay(LINK_POLL_INTERVAL_MS)
+            }
+            @Suppress("UNREACHABLE_CODE") error("unreachable")
+        }
+
+        // The joining device learns its DID and home server from the bundle, so
+        // neither is supplied by the user (unlike recovery).
+        val did = withContext(Dispatchers.IO) { core.did() }
+        if (_accounts.value.any { it.id == did }) return
+
+        val serverUrl = withContext(Dispatchers.IO) { core.homeServer() }
+        val serverName = runCatching { Uri.parse(serverUrl).host }.getOrNull() ?: serverUrl
+        val restoredName = withContext(Dispatchers.IO) {
+            runCatching { core.ownDisplayName() }.getOrElse { "" }
+        }
+        val displayName = if (restoredName.isNotEmpty()) restoredName else "Account ${did.takeLast(6)}"
+
+        finishAccountRegistration(
+            core = core,
+            serverUrl = serverUrl,
+            serverName = serverName,
+            displayName = displayName,
+            dbFilename = dbFilename,
+        )
     }
 
     private suspend fun finishAccountRegistration(

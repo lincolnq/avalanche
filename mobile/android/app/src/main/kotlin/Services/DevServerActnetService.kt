@@ -59,6 +59,8 @@ class DevServerActnetService : ActnetService {
         displayName: String,
     ): AppCoreProtocol =
         LiveActnetService.recoverFromBlob(serverUrl, did, prfOutput, dbPath, dbKey, displayName)
+
+    override fun makeDeviceLink(): DeviceLink = LiveActnetService.makeDeviceLink()
 }
 
 /**

@@ -41,6 +41,7 @@ fun SplashView(
     onScanInvite: () -> Unit = {},
     onEnterLink: () -> Unit = {},
     onRecover: () -> Unit = {},
+    onLinkDevice: () -> Unit = {},
 ) {
     Box(
         modifier = Modifier
@@ -105,6 +106,14 @@ fun SplashView(
             TextButton(onClick = onRecover) {
                 Text(
                     text = "Recover account",
+                    color = AvalancheColors.Muted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            TextButton(onClick = onLinkDevice) {
+                Text(
+                    text = "Link to an existing device",
                     color = AvalancheColors.Muted,
                     textAlign = TextAlign.Center,
                 )

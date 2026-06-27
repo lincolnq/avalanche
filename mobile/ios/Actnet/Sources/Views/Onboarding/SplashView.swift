@@ -5,6 +5,7 @@ struct SplashView: View {
     @State private var showScanner = false
     @State private var showLinkEntry = false
     @State private var showRecovery = false
+    @State private var showLinkDevice = false
     @State private var pendingInvite: InviteToken?
     @State private var isValidatingDeepLink = false
 
@@ -51,6 +52,13 @@ struct SplashView: View {
                             Text("Recover account")
                                 .font(.subheadline)
                         }
+
+                        Button {
+                            showLinkDevice = true
+                        } label: {
+                            Text("Link to an existing device")
+                                .font(.subheadline)
+                        }
                     }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 48)
@@ -67,6 +75,9 @@ struct SplashView: View {
             }
             .navigationDestination(isPresented: $showRecovery) {
                 RecoveryExplainerView()
+            }
+            .navigationDestination(isPresented: $showLinkDevice) {
+                LinkNewDeviceView()
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $pendingInvite) { token in

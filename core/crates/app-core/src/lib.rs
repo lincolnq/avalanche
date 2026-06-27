@@ -1472,6 +1472,13 @@ impl AppCore {
         self.inner.blocking_lock().device_id
     }
 
+    /// This account's home (primary) server URL. Useful for the device-linking
+    /// flow, where the joining device learns its server from the provisioning
+    /// bundle rather than from user input (docs/04 §4).
+    pub fn home_server(&self) -> String {
+        self.inner.blocking_lock().client.server_url().to_string()
+    }
+
     /// Send an encrypted DM to a recipient. Plaintext is wrapped in a
     /// content envelope (with the sender's timestamp) before encryption.
     /// Internally fans out one ciphertext per active recipient device.
@@ -2975,27 +2982,6 @@ const LINK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 /// Mailbox poll interval while waiting for a slot to be filled.
 const LINK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 
-/// Poll a provisioning mailbox slot until it has content or the timeout passes.
-async fn poll_slot(
-    client: &net::Client,
-    session_id: &str,
-    slot: &str,
-    timeout: std::time::Duration,
-) -> Result<Vec<u8>, AppError> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if let Some(bytes) = client.get_provisioning_slot(session_id, slot).await? {
-            return Ok(bytes);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AppError::Provisioning(format!(
-                "timed out waiting for provisioning slot '{slot}'"
-            )));
-        }
-        tokio::time::sleep(LINK_POLL_INTERVAL).await;
-    }
-}
-
 /// Given a decrypted provisioning bundle, register this device additively under
 /// the identity and return a live `AppCore`. The shared identity key, rotation
 /// key, and storage key come from the bundle; this device mints its own
@@ -3027,14 +3013,22 @@ async fn provision_linked_device(
     };
     let primary_client = net::Client::new(&primary_server);
 
-    // Pick a free device_id (max existing + 1) and a fresh registration id.
-    let existing = primary_client.fetch_devices(&did).await?;
-    if existing.is_empty() {
+    // The new (joining) device isn't authenticated yet, so it can't query the
+    // device list or request a challenge nonce itself. The existing device
+    // resolved both while sealing the bundle (docs/04 §4.2): a free device_id
+    // and an anti-replay nonce challenged for one of its devices.
+    let new_device_id: u32 = bundle.new_device_id as u32;
+    if new_device_id == 0 {
         return Err(AppError::Provisioning(
-            "identity has no existing devices to link to".into(),
+            "bundle missing new_device_id (existing device too old to link?)".into(),
         ));
     }
-    let new_device_id: u32 = (existing.iter().copied().max().unwrap_or(0) + 1) as u32;
+    let nonce = bundle.link_nonce.clone();
+    if nonce.is_empty() {
+        return Err(AppError::Provisioning(
+            "bundle missing link nonce (existing device too old to link?)".into(),
+        ));
+    }
     let new_registration_id = rand::Rng::random::<u32>(&mut rand::rng()) & 0x3FFF;
 
     // Fresh prekeys signed by the shared identity.
@@ -3045,11 +3039,6 @@ async fn provision_linked_device(
         .map(|id| crypto::prekeys::generate_kyber_prekey(&identity, id))
         .collect::<Result<_, _>>()?;
 
-    // Anti-replay nonce: challenge any existing device of the account. The
-    // rotation signature is the real authorization; the nonce only prevents
-    // replay, so binding it to the account (via any device) is sufficient.
-    let existing_device_id = existing.iter().copied().min().unwrap();
-    let nonce = primary_client.challenge(&did, existing_device_id).await?;
     let link_payload = format!("linkdevice:{did}:{new_device_id}:{nonce}");
     let rotation_sig =
         recovery::sign_with_rotation_key(&rotation_key_private, link_payload.as_bytes())?;
@@ -3229,9 +3218,22 @@ impl DeviceLinkNew {
             .map_err(AppErrorFfi::from)
     }
 
-    /// Complete the link: derive the shared key, receive the sealed bundle, and
-    /// register this device. Blocks until the existing device approves or the
-    /// attempt times out. Returns a live `AppCore`.
+    /// One step of completing the link: returns the live `AppCore` once the
+    /// bundle has arrived and this device is registered, or `null` if it hasn't
+    /// arrived yet. The UI loops this with its own delay so it can cancel by
+    /// stopping — no long-lived, uncancellable FFI call (docs/04 §4.2).
+    pub fn await_link_step(
+        &self,
+        db_path: String,
+        db_key: String,
+    ) -> Result<Option<Arc<AppCore>>, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.await_link_step_async(db_path, db_key))
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Blocking link completion (loops [`Self::await_link_step`] until done or
+    /// timeout). For headless callers; the UI uses the step method.
     pub fn await_link(&self, db_path: String, db_key: String) -> Result<Arc<AppCore>, AppErrorFfi> {
         ffi_runtime()
             .block_on(self.await_link_async(db_path, db_key))
@@ -3280,32 +3282,83 @@ impl DeviceLinkNew {
         Ok(())
     }
 
+    /// One non-blocking step of completing the link (docs/04 §4.2): resolve the
+    /// peer's ephemeral key (one GET of the handshake slot if we showed the code)
+    /// and check the bundle slot. Returns `Some(core)` once the bundle has
+    /// arrived and the device is registered, or `None` if it hasn't arrived yet
+    /// (poll again). The UI drives the loop, so cancellation is just the caller
+    /// stopping — no long-lived, uncancellable FFI call.
+    pub async fn await_link_step_async(
+        &self,
+        db_path: String,
+        db_key: String,
+    ) -> Result<Option<Arc<AppCore>>, AppError> {
+        // Peek (don't take) so a not-ready step can be retried; clear only on done.
+        let hs = {
+            let guard = self.handshake.lock().await;
+            guard
+                .clone()
+                .ok_or_else(|| AppError::Provisioning("call create_pairing or accept_pairing first".into()))?
+        };
+        let client = net::Client::new(&hs.mailbox_url);
+
+        // Resolve the peer's ephemeral public key (from the code if we scanned,
+        // else one GET of the handshake slot the scanner posts). Cache it back so
+        // later steps skip the handshake fetch.
+        let peer_pub = match hs.peer_pub.clone() {
+            Some(p) => p,
+            None => match client
+                .get_provisioning_slot(&hs.session_id, provisioning::SLOT_HANDSHAKE)
+                .await?
+            {
+                Some(bytes) => {
+                    if let Some(h) = self.handshake.lock().await.as_mut() {
+                        h.peer_pub = Some(bytes.clone());
+                    }
+                    bytes
+                }
+                None => return Ok(None), // peer hasn't posted its key yet
+            },
+        };
+        let key = hs.shared_key(&peer_pub)?;
+
+        let sealed = match client
+            .get_provisioning_slot(&hs.session_id, provisioning::SLOT_BUNDLE)
+            .await?
+        {
+            Some(s) => s,
+            None => return Ok(None), // existing device hasn't sent the bundle yet
+        };
+        let bundle = provisioning::open_bundle(&sealed, &key)?;
+
+        let core = provision_linked_device(bundle, db_path, db_key).await?;
+        *self.handshake.lock().await = None;
+        Ok(Some(core))
+    }
+
+    /// Blocking convenience over [`Self::await_link_step_async`] for headless
+    /// callers (e2e). The UI uses the step method so it can drive (and cancel)
+    /// the poll loop itself rather than block here for ~3 minutes.
     pub async fn await_link_async(
         &self,
         db_path: String,
         db_key: String,
     ) -> Result<Arc<AppCore>, AppError> {
-        let hs = self
-            .handshake
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| AppError::Provisioning("call create_pairing or accept_pairing first".into()))?;
-        let client = net::Client::new(&hs.mailbox_url);
-
-        // Resolve the peer's ephemeral public key (from the code if we scanned,
-        // else from the handshake slot the scanner posted).
-        let peer_pub = match hs.peer_pub.clone() {
-            Some(p) => p,
-            None => poll_slot(&client, &hs.session_id, provisioning::SLOT_HANDSHAKE, LINK_TIMEOUT).await?,
-        };
-        let key = hs.shared_key(&peer_pub)?;
-
-        let sealed =
-            poll_slot(&client, &hs.session_id, provisioning::SLOT_BUNDLE, LINK_TIMEOUT).await?;
-        let bundle = provisioning::open_bundle(&sealed, &key)?;
-
-        provision_linked_device(bundle, db_path, db_key).await
+        let deadline = tokio::time::Instant::now() + LINK_TIMEOUT;
+        loop {
+            if let Some(core) = self
+                .await_link_step_async(db_path.clone(), db_key.clone())
+                .await?
+            {
+                return Ok(core);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AppError::Provisioning(
+                    "timed out waiting for the link to complete".into(),
+                ));
+            }
+            tokio::time::sleep(LINK_POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -4222,8 +4275,19 @@ impl AppCore {
             .map_err(AppErrorFfi::from)
     }
 
-    /// Seal the provisioning bundle to the new device and post it to the
-    /// mailbox. Requires a prior `link_create_pairing`/`link_accept_pairing`.
+    /// One step of the bundle send: returns `true` when the bundle has been
+    /// sealed + posted (done), `false` if the new device hasn't posted its key
+    /// yet. The UI loops this with its own delay so it can cancel by stopping —
+    /// no long-lived, uncancellable FFI call (docs/04 §4.2). Requires a prior
+    /// `link_create_pairing`/`link_accept_pairing`.
+    pub fn link_send_bundle_step(&self) -> Result<bool, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(self.link_send_bundle_step_async())
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Blocking send (loops [`Self::link_send_bundle_step`] until done or
+    /// timeout). For headless callers; the UI uses the step method.
     pub fn link_send_bundle(&self) -> Result<(), AppErrorFfi> {
         ffi_runtime()
             .block_on(self.link_send_bundle_async())
@@ -4274,22 +4338,33 @@ impl AppCore {
         Ok(())
     }
 
-    pub async fn link_send_bundle_async(&self) -> Result<(), AppError> {
-        let hs = self
-            .link_state
-            .lock()
-            .expect("link_state poisoned")
-            .take()
-            .ok_or_else(|| {
+    /// One non-blocking step of the existing-device bundle send (docs/04 §4.2):
+    /// resolve the peer's ephemeral key (from the scanned code, or one GET of the
+    /// handshake slot) and, once known, seal + post the bundle. Returns `true`
+    /// when the bundle is sent (done) and `false` if the peer hasn't posted its
+    /// key yet (poll again). The UI drives the loop, so cancellation is just the
+    /// caller stopping — no long-lived, uncancellable FFI call.
+    pub async fn link_send_bundle_step_async(&self) -> Result<bool, AppError> {
+        // Peek (don't take) so a not-ready step can be retried; clear only on done.
+        let hs = {
+            let guard = self.link_state.lock().expect("link_state poisoned");
+            guard.clone().ok_or_else(|| {
                 AppError::Provisioning(
                     "call link_create_pairing or link_accept_pairing first".into(),
                 )
-            })?;
+            })?
+        };
         let client = net::Client::new(&hs.mailbox_url);
 
         let peer_pub = match hs.peer_pub.clone() {
             Some(p) => p,
-            None => poll_slot(&client, &hs.session_id, provisioning::SLOT_HANDSHAKE, LINK_TIMEOUT).await?,
+            None => match client
+                .get_provisioning_slot(&hs.session_id, provisioning::SLOT_HANDSHAKE)
+                .await?
+            {
+                Some(bytes) => bytes,
+                None => return Ok(false), // scanner hasn't posted its key yet
+            },
         };
         let key = hs.shared_key(&peer_pub)?;
 
@@ -4314,6 +4389,19 @@ impl AppCore {
                 .await?
                 .map(|p| (p.display_name, p.profile_key))
                 .unwrap_or_default();
+
+            // Resolve the new device's registration prerequisites here, on the
+            // authenticated existing device — the joining device has no account
+            // yet and so can't call these authed endpoints itself (docs/04
+            // §4.2). Pick a free device_id (max existing + 1) and obtain an
+            // anti-replay nonce challenged for *this* (existing) device.
+            let existing = inner.client.fetch_devices(&inner.did).await?;
+            let new_device_id = existing.iter().copied().max().unwrap_or(0) + 1;
+            let link_nonce = inner
+                .client
+                .challenge(&inner.did, inner.device_id as i32)
+                .await?;
+
             provisioning::ProvisioningBundle {
                 identity_keypair: identity.serialize(),
                 rotation_key_private: rot_priv,
@@ -4322,6 +4410,8 @@ impl AppCore {
                 servers: vec![inner.client.server_url().to_string()],
                 display_name,
                 profile_key,
+                new_device_id,
+                link_nonce,
             }
         };
 
@@ -4329,7 +4419,28 @@ impl AppCore {
         client
             .put_provisioning_slot(&hs.session_id, provisioning::SLOT_BUNDLE, &sealed)
             .await?;
-        Ok(())
+
+        // Done — clear the in-flight handshake.
+        *self.link_state.lock().expect("link_state poisoned") = None;
+        Ok(true)
+    }
+
+    /// Blocking convenience over [`Self::link_send_bundle_step_async`] for
+    /// headless callers (bots, e2e). The UI uses the step method so it can drive
+    /// (and cancel) the poll loop itself rather than block here for ~3 minutes.
+    pub async fn link_send_bundle_async(&self) -> Result<(), AppError> {
+        let deadline = tokio::time::Instant::now() + LINK_TIMEOUT;
+        loop {
+            if self.link_send_bundle_step_async().await? {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AppError::Provisioning(
+                    "timed out waiting for the new device to scan".into(),
+                ));
+            }
+            tokio::time::sleep(LINK_POLL_INTERVAL).await;
+        }
     }
 }
 

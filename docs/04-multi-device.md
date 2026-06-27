@@ -116,7 +116,11 @@ allocates a fresh `device_id` (max existing + 1).
 
 **Status: BUILT.** The model was DECIDED; the wire protocol below is now
 implemented (`app-core/src/provisioning.rs`, `crypto/src/ephemeral.rs`,
-`server/src/routes/provisioning.rs` + `devices.rs`, migration `019`).
+`server/src/routes/provisioning.rs` + `devices.rs`, migration `019`). The
+**iOS and Android UI** flows ship the QR show/scan gestures (`LinkDeviceView`
+existing-device side, `LinkNewDeviceView` new-device side); Desktop is deferred
+(`docs/02` backlog). A linked-device *management/revoke* screen is also deferred
+(no enumerate/revoke FFI yet).
 
 The problem reduces to: *transport the identity's shared identity private key (and
 rotation key + storage key) onto the new device without it ever touching the
@@ -153,16 +157,40 @@ vs. scans the code. **Short, human-spoken PAKE codes were considered and
 deferred** (would need SPAKE2): a scanned-or-pasted high-entropy code is secure
 under plain ECDH and covers the flexibility goal without new crypto.
 
+**Why polling, not a WebSocket:** the mailbox is deliberately the dumbest thing
+that works — stateless, unauthenticated HTTP — because the joining device has no
+account/auth/WS session, and the flow is rare (once per link) and short (a
+two-message handshake, 5-min TTL). A WS would need a new unauthenticated endpoint
+plus server-side pub/sub to notify the waiting side. (Signal *does* use a
+provisioning socket; we chose simplicity.) **The poll loop is client-driven:** the
+FFI exposes single-step methods (`link_send_bundle_step` on the existing device,
+`await_link_step` on the new one) that each do *one* mailbox GET and return
+ready/not-ready; the UI loops them with its own cancellable delay. This keeps the
+poll **screen-scoped** — it stops the instant the user leaves the screen or
+switches show↔scan — instead of a long-lived blocking FFI call that can't be
+cancelled across the boundary. Blocking convenience wrappers (`link_send_bundle`,
+`await_link`) remain for headless callers (bots, e2e).
+
 ### 4.2 Additive registration
 
 The new device registers via `POST /v1/devices/link` — the additive sibling of
 `/v1/devices/replace`: rotation-key authorized (signature over
 `linkdevice:{did}:{new_device_id}:{nonce}`, verified against the DID's PLC
 `rotationKeys`), but it **inserts** a device row instead of swapping one, so the
-existing device set stays intact. The anti-replay nonce is obtained by
-challenging any existing device of the account (the rotation signature is the
-real auth). The new device then pulls durable state via the storage service
-(`docs/05` §11) — groups, contacts, settings arrive there, not in the bundle.
+existing device set stays intact. It then pulls durable state via the storage
+service (`docs/05` §11) — groups, contacts, settings arrive there, not in the
+bundle.
+
+Crucially, the joining device has **no account or signer yet**, so it cannot call
+any authenticated endpoint. The two registration prerequisites it would
+otherwise need are therefore resolved by the **existing** device while it seals
+the bundle, and carried inside the (encrypted) bundle: the free `new_device_id`
+(max existing + 1, from the existing device's authed device-list fetch) and the
+anti-replay `link_nonce` (a `POST /v1/auth/challenge` issued for one of the
+existing device's own devices; valid 5 min — far longer than the seconds-long
+handshake). The rotation signature over `{did}:{new_device_id}:{nonce}` is the
+real auth; the nonce only prevents replay, so binding it to the account via any
+device is sufficient. `/v1/devices/link` itself is unauthenticated by design.
 
 Notes / sharp edges:
 

@@ -61,11 +61,14 @@ private object Route {
     const val RECOVERY_EXPLAINER = "recovery_explainer"
     const val RECOVERY_CONSOLE = "recovery_console"
     const val LOG_VIEWER = "log_viewer"
+    const val LINK_DEVICE = "link_device/{did}"        // existing-device side
+    const val LINK_NEW_DEVICE = "link_new_device"      // new (joining) device side
 
     // helpers
     fun conversation(id: String) = "conversation/$id"
     fun groupDetail(groupId: String, accountId: String) = "group_detail/$groupId/$accountId"
     fun identityDetail(did: String) = "identity_detail/${Uri.encode(did)}"
+    fun linkDevice(did: String) = "link_device/${Uri.encode(did)}"
     fun blockedContacts(did: String) = "blocked_contacts/${Uri.encode(did)}"
     fun serverDetail(serverUrl: String) = "server_detail/${Uri.encode(serverUrl)}"
     fun passkeyExplainer(displayName: String) = "passkey_explainer/${Uri.encode(displayName)}"
@@ -230,6 +233,18 @@ fun AppNavGraph(
                 onEnterLink = { navController.navigate(Route.INVITE_LINK_ENTRY) },
                 // Recovery flows through the explainer screen first (mirrors iOS SplashView).
                 onRecover = { navController.navigate(Route.RECOVERY_EXPLAINER) },
+                onLinkDevice = { navController.navigate(Route.LINK_NEW_DEVICE) },
+            )
+        }
+
+        // ----------------------------------------------------------------
+        // Link to an existing device — new (joining) device side (docs/04 §4).
+        // On success AppViewModel flips isOnboarding, re-routing to MAIN.
+        // ----------------------------------------------------------------
+        composable(Route.LINK_NEW_DEVICE) {
+            LinkNewDeviceView(
+                viewModel = appViewModel,
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -575,8 +590,23 @@ fun AppNavGraph(
                     onNavigateToBlocked = { acct ->
                         navController.navigate(Route.blockedContacts(acct.id))
                     },
+                    onNavigateToLinkDevice = { acct ->
+                        navController.navigate(Route.linkDevice(acct.id))
+                    },
                 )
             }
+        }
+
+        // ----------------------------------------------------------------
+        // Link a device — existing-device side (docs/04 §4).
+        // ----------------------------------------------------------------
+        composable(Route.LINK_DEVICE) { backStackEntry ->
+            val did = backStackEntry.arguments?.getString("did") ?: return@composable
+            LinkDeviceView(
+                accountId = did,
+                viewModel = appViewModel,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         // ----------------------------------------------------------------

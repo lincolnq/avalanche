@@ -30,4 +30,28 @@ protocol ActnetService: Sendable {
     /// on the home server, and returns an `AppCoreProtocol` bound to a fresh
     /// local store.
     func recoverFromBlob(serverUrl: String, did: String, prfOutput: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol
+
+    /// Create a fresh handle for the joining (new-device) side of device
+    /// linking (docs/04 §4). The returned handle has no account yet — drive it
+    /// via `DeviceLinkProtocol`, then register the core it produces.
+    func makeDeviceLink() -> any DeviceLinkProtocol
+}
+
+/// Abstraction over the Rust `DeviceLinkNew` handle: the joining side of
+/// device linking, used before any `AppCore` exists (docs/04 §4). Mirrors
+/// `PreparedAccountProtocol` — the concrete handle is opaque, and `awaitLink`
+/// yields a fully-built `AppCoreProtocol` for the app to register.
+protocol DeviceLinkProtocol: Sendable {
+    /// Show a pairing code from this new device. `mailboxServer` defaults to
+    /// the built-in mailbox host when nil, so the new device needs no server
+    /// URL up front. Returns the pairing string to render as a QR and/or code.
+    func createPairing(mailboxServer: String?) throws -> String
+
+    /// This new device scanned/pasted the existing device's pairing code.
+    func acceptPairing(code: String) throws
+
+    /// One step of completing the link: returns a live core once the bundle has
+    /// arrived and this device is registered, or `nil` if it hasn't arrived yet.
+    /// The caller loops this with its own (cancellable) delay (docs/04 §4.2).
+    func awaitLinkStep(dbPath: String, dbKey: String) throws -> (any AppCoreProtocol)?
 }

@@ -172,4 +172,17 @@ fn assert_bundle_matches(bundle: &ProvisioningBundle, expected_did: &str, storag
         .expect("transported identity keypair is valid");
     assert!(!bundle.rotation_key_private.is_empty(), "rotation key transported");
     assert_eq!(bundle.storage_key, storage_key, "storage key transported");
+    // The existing (authed) device resolves the new device's registration
+    // prerequisites and ships them in the bundle (docs/04 §4.2), since the
+    // joining device can't call authed endpoints itself. The existing device is
+    // device 1, so the next free id is 2.
+    assert!(
+        bundle.new_device_id >= 2,
+        "bundle carries a free new_device_id past the existing device (got {})",
+        bundle.new_device_id
+    );
+    assert!(
+        !bundle.link_nonce.is_empty(),
+        "bundle carries an anti-replay link nonce challenged by the existing device"
+    );
 }

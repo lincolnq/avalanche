@@ -175,6 +175,74 @@ async fn prekey_pool_count() {
 }
 
 #[tokio::test]
+async fn load_conversations_dedups_tied_timestamps() {
+    // Regression (device-linking duplicate-group bug, docs/04 §4): a conversation
+    // with several messages sharing the max sent_at must yield exactly ONE
+    // conversation row. A freshly linked device receives bursts of group events /
+    // SKDMs with identical (or zero) timestamps; the old MAX(sent_at) self-join
+    // returned one row per tie, surfacing the same group many times in the list.
+    use store::messages::HistoryMessage;
+
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    let msg = |id: &str, ts: i64| HistoryMessage {
+        id: id.to_string(),
+        conversation_id: "group-G".to_string(),
+        sender_did: "did:plc:alice".to_string(),
+        body: "hi".to_string(),
+        sent_at: Timestamp(ts),
+        edited_at: None,
+        read_at: None,
+        delivery_status: 1,
+        edit_count: 0,
+        deleted_at: None,
+        kind: 0,
+        metadata: None,
+        expire_timer_secs: 0,
+        expire_at: None,
+    };
+
+    store.save_message(&msg("m1", 1000)).await.unwrap();
+    store.save_message(&msg("m2", 1000)).await.unwrap();
+    store.save_message(&msg("m3", 1000)).await.unwrap();
+    // A second conversation, to prove dedup is per-conversation, not global.
+    store.save_message(&msg2_other("dm-x", 1000)).await.unwrap();
+
+    let convs = store.load_conversations(Timestamp(2000)).await.unwrap();
+    let group_rows: Vec<_> = convs.iter().filter(|c| c.conversation_id == "group-G").collect();
+    assert_eq!(
+        group_rows.len(),
+        1,
+        "tied timestamps must collapse to one conversation row, got {group_rows:?}"
+    );
+    // Deterministic tie-break: highest id wins.
+    assert_eq!(group_rows[0].last_message.as_ref().unwrap().id, "m3");
+    assert_eq!(
+        convs.iter().filter(|c| c.conversation_id == "dm-x").count(),
+        1,
+        "the unrelated conversation still appears exactly once"
+    );
+}
+
+fn msg2_other(conv: &str, ts: i64) -> store::messages::HistoryMessage {
+    store::messages::HistoryMessage {
+        id: format!("{conv}-1"),
+        conversation_id: conv.to_string(),
+        sender_did: "did:plc:bob".to_string(),
+        body: "yo".to_string(),
+        sent_at: Timestamp(ts),
+        edited_at: None,
+        read_at: None,
+        delivery_status: 1,
+        edit_count: 0,
+        deleted_at: None,
+        kind: 0,
+        metadata: None,
+        expire_timer_secs: 0,
+        expire_at: None,
+    }
+}
+
+#[tokio::test]
 async fn message_queue_enqueue_drain_deliver() {
     use store::messages::QueuedMessage;
     use types::MessageId;

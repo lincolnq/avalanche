@@ -1606,6 +1606,28 @@ pub async fn apply_pending_changes(
         .load_group(group_id_b64_s)
         .await?
         .ok_or_else(|| AppError::Protocol("group not found".into()))?;
+
+    // Initial materialization (a group obtained via device-link storage sync, or
+    // any first-ever fetch): revision 0 means we have no baseline, so the *entire*
+    // `/changes` log is history from before this device had the group. Per Signal,
+    // pre-join history is applied to state silently and never rendered as timeline
+    // entries — and our protocol can't even timestamp those changes (membership
+    // opacity; docs/04 §3.6), so backfilling would stamp every one with the same
+    // `now` (the bug that surfaced groups as duplicate conversation rows). So we
+    // fast-forward *state* only (members/title for the header + list) and emit no
+    // events; the timeline accrues entries for changes processed live from here.
+    if row.revision == 0 {
+        let summary = fetch_group_state(
+            store,
+            client,
+            &row.hosting_server_url,
+            did,
+            group_id_b64_s,
+        )
+        .await?;
+        return Ok((summary.revision, Vec::new()));
+    }
+
     let group_key = GroupKey::from_bytes(
         row.master_key
             .clone()

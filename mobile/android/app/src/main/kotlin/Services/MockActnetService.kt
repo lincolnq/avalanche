@@ -436,6 +436,8 @@ class RichMockActnetService : ActnetService {
         Thread.sleep(500)
         return MockAppCore(did = did, displayName = displayName)
     }
+
+    override fun makeDeviceLink(): DeviceLink = MockDeviceLink()
 }
 
 // ---------------------------------------------------------------------------

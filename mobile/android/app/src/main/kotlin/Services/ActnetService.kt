@@ -8,6 +8,7 @@ import uniffi.app_core.ContactRowFfi
 import uniffi.app_core.ConversationSummaryFfi
 import uniffi.app_core.CreatedGroupFfi
 import uniffi.app_core.DecryptedMessage
+import uniffi.app_core.DeviceLinkNew
 import uniffi.app_core.GroupSummaryFfi
 import uniffi.app_core.IncomingEvent
 import uniffi.app_core.JoinResultFfi
@@ -103,6 +104,39 @@ interface ActnetService {
         dbKey: String,
         displayName: String,
     ): AppCoreProtocol
+
+    /**
+     * Create a fresh handle for the joining (new-device) side of device linking
+     * (docs/04 §4). The returned handle has no account yet — drive it via
+     * [DeviceLink], then register the core it produces.
+     */
+    fun makeDeviceLink(): DeviceLink
+}
+
+/**
+ * Joining (new-device) side of device linking (docs/04 §4), used before any
+ * [AppCore] exists. Mirrors iOS `DeviceLinkProtocol` — the concrete handle is
+ * opaque, and [awaitLink] yields a fully-built [AppCoreProtocol] to register.
+ *
+ * All methods are synchronous and BLOCKING — always call from Dispatchers.IO.
+ */
+interface DeviceLink {
+    /**
+     * Show a pairing code from this new device. [mailboxServer] defaults to the
+     * built-in mailbox host when null, so the new device needs no server URL up
+     * front. Returns the pairing string to render as a QR and/or code.
+     */
+    @Throws(AppErrorFfi::class) fun createPairing(mailboxServer: String?): String
+
+    /** This new device scanned/pasted the existing device's pairing code. */
+    @Throws(AppErrorFfi::class) fun acceptPairing(code: String)
+
+    /**
+     * One step of completing the link: returns a live core once the bundle has
+     * arrived and this device is registered, or null if it hasn't arrived yet.
+     * The caller loops this with its own (cancellable) delay (docs/04 §4.2).
+     */
+    @Throws(AppErrorFfi::class) fun awaitLinkStep(dbPath: String, dbKey: String): AppCoreProtocol?
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +168,7 @@ interface AppCoreProtocol {
 
     @Throws(AppErrorFfi::class) fun getAccountInfo(did: String): AccountInfoFfi
     @Throws(AppErrorFfi::class) fun ownDisplayName(): String
+    @Throws(AppErrorFfi::class) fun homeServer(): String
     @Throws(AppErrorFfi::class) fun setDisplayName(displayName: String)
     @Throws(AppErrorFfi::class) fun contactDisplayName(did: String): String
     @Throws(AppErrorFfi::class) fun refreshContactProfile(did: String): Boolean
@@ -177,6 +212,7 @@ interface AppCoreProtocol {
     @Throws(AppErrorFfi::class) fun linkCreatePairing(mailboxServer: String?): String
     @Throws(AppErrorFfi::class) fun linkAcceptPairing(code: String)
     @Throws(AppErrorFfi::class) fun linkSendBundle()
+    @Throws(AppErrorFfi::class) fun linkSendBundleStep(): Boolean
 
     // -----------------------------------------------------------------------
     // Messaging
@@ -325,6 +361,7 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
 
     override fun getAccountInfo(did: String): AccountInfoFfi = core.getAccountInfo(did)
     override fun ownDisplayName(): String = core.ownDisplayName()
+    override fun homeServer(): String = core.homeServer()
     override fun setDisplayName(displayName: String) = core.setDisplayName(displayName)
     override fun contactDisplayName(did: String): String = core.contactDisplayName(did)
     override fun refreshContactProfile(did: String): Boolean = core.refreshContactProfile(did)
@@ -355,6 +392,7 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
         core.linkCreatePairing(mailboxServer)
     override fun linkAcceptPairing(code: String) = core.linkAcceptPairing(code)
     override fun linkSendBundle() = core.linkSendBundle()
+    override fun linkSendBundleStep(): Boolean = core.linkSendBundleStep()
 
     override fun sendDm(recipientDid: String, plaintext: ByteArray, sentAtMs: Long) =
         core.sendDm(recipientDid, plaintext, sentAtMs)
@@ -501,6 +539,18 @@ object LiveActnetService : ActnetService {
         LiveAppCoreProtocol(
             AppCore.recoverFromBlob(serverUrl, did, prfOutput, dbPath, dbKey, displayName)
         )
+
+    override fun makeDeviceLink(): DeviceLink = LiveDeviceLink()
+}
+
+/**
+ * Live [DeviceLink] wrapping the UniFFI [DeviceLinkNew] object.
+ */
+class LiveDeviceLink(private val inner: DeviceLinkNew = DeviceLinkNew()) : DeviceLink {
+    override fun createPairing(mailboxServer: String?): String = inner.createPairing(mailboxServer)
+    override fun acceptPairing(code: String) = inner.acceptPairing(code)
+    override fun awaitLinkStep(dbPath: String, dbKey: String): AppCoreProtocol? =
+        inner.awaitLinkStep(dbPath, dbKey)?.let { LiveAppCoreProtocol(it) }
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +574,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
         AccountInfoFfi(did = did, displayName = null, isBot = false)
 
     override fun ownDisplayName(): String = ""
+    override fun homeServer(): String = ""
     override fun setDisplayName(displayName: String) {}
     override fun contactDisplayName(did: String): String = ""
     override fun refreshContactProfile(did: String): Boolean = false
@@ -551,6 +602,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
     override fun linkCreatePairing(mailboxServer: String?): String = ""
     override fun linkAcceptPairing(code: String) {}
     override fun linkSendBundle() {}
+    override fun linkSendBundleStep(): Boolean = true
 
     override fun sendDm(recipientDid: String, plaintext: ByteArray, sentAtMs: Long) {}
     override fun sendMessage(target: MessageTarget, plaintext: ByteArray, sentAtMs: Long) {}
@@ -691,4 +743,19 @@ open class MockActnetService : ActnetService {
         dbKey: String,
         displayName: String,
     ): AppCoreProtocol = MockAppCoreProtocol()
+
+    override fun makeDeviceLink(): DeviceLink = MockDeviceLink()
+}
+
+/**
+ * No-op [DeviceLink] that fabricates a pairing code and, after a short delay,
+ * hands back a freshly "linked" account. For previews/tests.
+ */
+class MockDeviceLink : DeviceLink {
+    override fun createPairing(mailboxServer: String?): String = "av1.mock.mock.mock"
+    override fun acceptPairing(code: String) {}
+    override fun awaitLinkStep(dbPath: String, dbKey: String): AppCoreProtocol? {
+        Thread.sleep(500)
+        return MockAppCoreProtocol()
+    }
 }

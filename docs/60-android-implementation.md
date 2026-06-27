@@ -120,6 +120,7 @@ mobile/android/app/src/main/kotlin/
 | `RecoveryExplainerView.swift` | `RecoveryExplainerView.kt` | `[~]` UI done; Credential Manager call stubbed |
 | `RecoveryConsoleView.swift` | `RecoveryConsoleView.kt` | `[~]` passkey-with-DID path only; PLC homeserver resolution stubbed |
 | `RecoveryPhraseSetupView.swift` | `RecoveryPhraseSetupView.kt` | `[x]` |
+| `LinkNewDeviceView.swift` | `LinkNewDeviceView.kt` | `[x]` device linking, new-device side (docs/04 §4) |
 
 ### Navigation
 
@@ -158,6 +159,7 @@ mobile/android/app/src/main/kotlin/
 | `AddAccountView.swift` | `AddAccountView.kt` | `[x]` |
 | `BlockedContactsView.swift` | `BlockedContactsView.kt` | `[x]` |
 | `IdentityDetailView.swift` | `IdentityDetailView.kt` | `[x]` |
+| `LinkDeviceView.swift` | `LinkDeviceView.kt` | `[x]` device linking, existing-device side (docs/04 §4) |
 | `ServerDetailView.swift` | `ServerDetailView.kt` | `[x]` |
 
 ### Common

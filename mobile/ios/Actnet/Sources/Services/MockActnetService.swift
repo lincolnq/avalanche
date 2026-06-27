@@ -322,6 +322,25 @@ struct MockActnetService: ActnetService {
         Thread.sleep(forTimeInterval: 0.5)
         return MockAppCore(did: did, displayName: displayName)
     }
+
+    func makeDeviceLink() -> any DeviceLinkProtocol {
+        MockDeviceLink()
+    }
+}
+
+/// Mock device-link handle that fabricates a pairing code and, after a short
+/// delay, hands back a freshly "linked" account.
+final class MockDeviceLink: DeviceLinkProtocol, @unchecked Sendable {
+    func createPairing(mailboxServer: String?) throws -> String {
+        "av1.mock.mock.mock"
+    }
+
+    func acceptPairing(code: String) throws {}
+
+    func awaitLinkStep(dbPath: String, dbKey: String) throws -> (any AppCoreProtocol)? {
+        Thread.sleep(forTimeInterval: 0.5)
+        return MockAppCore(displayName: "Linked Device")
+    }
 }
 
 /// Seed data for mock mode — conversations that appear after registration.

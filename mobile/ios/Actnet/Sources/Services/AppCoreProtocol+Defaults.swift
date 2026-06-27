@@ -22,6 +22,7 @@ extension AppCoreProtocol {
     }
 
     func ownDisplayName() throws -> String { "" }
+    func homeServer() -> String { "" }
     func setDisplayName(displayName: String) throws {}
     func contactDisplayName(did: String) throws -> String { "" }
     func refreshContactProfile(did: String) throws -> Bool { false }
@@ -57,6 +58,7 @@ extension AppCoreProtocol {
     func linkCreatePairing(mailboxServer: String?) throws -> String { "" }
     func linkAcceptPairing(code: String) throws {}
     func linkSendBundle() throws {}
+    func linkSendBundleStep() throws -> Bool { true }
 
     // MARK: - Messaging
 

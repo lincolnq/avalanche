@@ -98,6 +98,21 @@ struct IdentityDetailView: View {
 
                 VStack(spacing: 12) {
                     NavigationLink {
+                        LinkDeviceView(accountId: account.id)
+                    } label: {
+                        HStack {
+                            Label("Link a Device", systemImage: "iphone.and.arrow.forward")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
                         BlockedContactsView(account: account)
                     } label: {
                         HStack {

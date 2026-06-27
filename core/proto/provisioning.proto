@@ -44,4 +44,16 @@ message ProvisioningBundle {
   // 32-byte profile key, empty for accounts without a profile. Lets the new
   // device decrypt its own profile blob.
   bytes profile_key = 7;
+
+  // Device-registration prerequisites the new device can't obtain itself
+  // (it has no account/signer yet), so the existing (authenticated) device
+  // resolves them while sealing the bundle (docs/04 §4.2):
+  //
+  //   new_device_id — a free device_id (max existing + 1) for the link.
+  //   link_nonce    — an anti-replay challenge nonce issued for an existing
+  //                   device of this account (POST /v1/auth/challenge). The
+  //                   new device signs "linkdevice:{did}:{new_device_id}:{nonce}"
+  //                   with the transported rotation key. Valid 5 min.
+  int32 new_device_id = 8;
+  string link_nonce = 9;
 }

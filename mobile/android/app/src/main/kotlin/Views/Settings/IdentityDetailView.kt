@@ -85,6 +85,7 @@ fun IdentityDetailView(
     viewModel: AppViewModel,
     onBack: () -> Unit = {},
     onNavigateToBlocked: (Account) -> Unit = {},
+    onNavigateToLinkDevice: (Account) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -237,12 +238,34 @@ fun IdentityDetailView(
 
         Spacer(Modifier.height(20.dp))
 
-        // Blocked contacts row
+        // Link a device + Blocked contacts rows
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            TextButton(
+                onClick = { onNavigateToLinkDevice(account) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.textButtonColors(
+                    containerColor = AvalancheColors.Sand50,
+                    contentColor = AvalancheColors.Ink,
+                ),
+            ) {
+                Text(
+                    text = "Link a Device",
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start,
+                )
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = AvalancheColors.Muted,
+                )
+            }
+
             TextButton(
                 onClick = { onNavigateToBlocked(account) },
                 modifier = Modifier.fillMaxWidth(),

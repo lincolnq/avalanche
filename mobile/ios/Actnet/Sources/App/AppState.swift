@@ -465,6 +465,104 @@ final class AppState: ObservableObject {
         )
     }
 
+    // MARK: - Device linking (docs/04-multi-device.md §4)
+    //
+    // Two sides; the bundle always flows existing→new. Role (show vs. scan) is
+    // independent of which device is which — the FFI is symmetric.
+
+    enum LinkError: LocalizedError {
+        case noCore
+        case timedOut
+        var errorDescription: String? {
+            switch self {
+            case .noCore: return "This account is not signed in on this device."
+            case .timedOut: return "Timed out waiting for the other device. Try again."
+            }
+        }
+    }
+
+    // The link poll loop is UI-driven (docs/04 §4.2): each FFI step does one
+    // mailbox GET, and we sleep between steps here. Because the loop lives in
+    // Swift async with a cancellable `Task.sleep`, the caller's `.task` cancelling
+    // (screen dismissed / mode switched) stops polling within ~1s — no orphaned,
+    // uncancellable FFI poll.
+    private static let linkTimeout: TimeInterval = 180
+    private static let linkPollNanos: UInt64 = 1_000_000_000
+
+    /// Existing-device side: show a pairing code for a new device to scan.
+    /// Returns the pairing string; follow with `linkSendBundle`.
+    func linkCreatePairing(accountId: String) async throws -> String {
+        guard let core = cores[accountId] else { throw LinkError.noCore }
+        return try await Task.detached { try core.linkCreatePairing(mailboxServer: nil) }.value
+    }
+
+    /// Existing-device side: ingest a code scanned/pasted from the new device.
+    /// Follow with `linkSendBundle`.
+    func linkAcceptPairing(accountId: String, code: String) async throws {
+        guard let core = cores[accountId] else { throw LinkError.noCore }
+        try await Task.detached { try core.linkAcceptPairing(code: code) }.value
+    }
+
+    /// Existing-device side: seal and send the provisioning bundle, driving the
+    /// mailbox poll loop here so it cancels cleanly when the caller's task stops.
+    func linkSendBundle(accountId: String) async throws {
+        guard let core = cores[accountId] else { throw LinkError.noCore }
+        let deadline = Date().addingTimeInterval(Self.linkTimeout)
+        while true {
+            let done = try await Task.detached { try core.linkSendBundleStep() }.value
+            if done { return }
+            if Date() >= deadline { throw LinkError.timedOut }
+            try await Task.sleep(nanoseconds: Self.linkPollNanos)
+        }
+    }
+
+    /// New-device side: create a fresh link handle (this device has no account
+    /// yet). Drive it via `DeviceLinkProtocol`, then `completeDeviceLink`.
+    func makeDeviceLink() -> any DeviceLinkProtocol {
+        _service.makeDeviceLink()
+    }
+
+    /// New-device side: complete the link and register the resulting account,
+    /// exiting onboarding. `link` must have had `createPairing` or
+    /// `acceptPairing` called on it first. Drives the mailbox poll loop here so it
+    /// cancels cleanly when the caller's task stops.
+    func completeDeviceLink(_ link: any DeviceLinkProtocol) async throws {
+        let dir = dbDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let dbFilename = "account-\(UUID().uuidString.prefix(8)).db"
+        let dbPath = dir.appendingPathComponent(dbFilename).path
+        let dbKey = try SecureEnclaveKeyManager.dbPassphrase()
+
+        let deadline = Date().addingTimeInterval(Self.linkTimeout)
+        var linked: (any AppCoreProtocol)?
+        while linked == nil {
+            linked = try await Task.detached { try link.awaitLinkStep(dbPath: dbPath, dbKey: dbKey) }.value
+            if linked != nil { break }
+            if Date() >= deadline { throw LinkError.timedOut }
+            try await Task.sleep(nanoseconds: Self.linkPollNanos)
+        }
+        guard let core = linked else { throw LinkError.timedOut }
+
+        // The joining device learns its DID and home server from the bundle, so
+        // neither is supplied by the user (unlike recovery).
+        let did = core.did()
+        guard !accounts.contains(where: { $0.id == did }) else { return }
+
+        let serverUrl = core.homeServer()
+        let serverName = URL(string: serverUrl)?.host ?? serverUrl
+        let restoredName = (try? await Task.detached(operation: { try core.ownDisplayName() }).value) ?? ""
+        let displayName = restoredName.isEmpty ? "Account \(String(did.suffix(6)))" : restoredName
+
+        try await finishAccountRegistration(
+            core: core,
+            serverUrl: serverUrl,
+            serverName: serverName,
+            displayName: displayName,
+            dbFilename: dbFilename
+        )
+    }
+
     private func finishAccountRegistration(
         core: any AppCoreProtocol,
         serverUrl: String,

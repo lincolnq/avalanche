@@ -22,6 +22,7 @@ use crate::error::CryptoError;
 
 /// A throwaway Curve25519 key pair for a single ECDH agreement, stored as
 /// serialized public/private bytes.
+#[derive(Clone)]
 pub struct EphemeralKeyPair {
     private: Vec<u8>,
     public: Vec<u8>,

@@ -26,6 +26,27 @@ struct DevServerActnetService: ActnetService {
     func recoverFromBlob(serverUrl: String, did: String, prfOutput: Data, dbPath: String, dbKey: String, displayName: String) throws -> any AppCoreProtocol {
         try AppCore.recoverFromBlob(serverUrl: serverUrl, did: did, prfOutput: prfOutput, dbPath: dbPath, dbKey: dbKey, displayName: displayName)
     }
+
+    func makeDeviceLink() -> any DeviceLinkProtocol {
+        LiveDeviceLink()
+    }
+}
+
+/// Live device-link handle wrapping the UniFFI `DeviceLinkNew` object.
+final class LiveDeviceLink: DeviceLinkProtocol, @unchecked Sendable {
+    private let inner = DeviceLinkNew()
+
+    func createPairing(mailboxServer: String?) throws -> String {
+        try inner.createPairing(mailboxServer: mailboxServer)
+    }
+
+    func acceptPairing(code: String) throws {
+        try inner.acceptPairing(code: code)
+    }
+
+    func awaitLinkStep(dbPath: String, dbKey: String) throws -> (any AppCoreProtocol)? {
+        try inner.awaitLinkStep(dbPath: dbPath, dbKey: dbKey)
+    }
 }
 
 enum ActnetServiceError: LocalizedError {

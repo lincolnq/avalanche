@@ -256,20 +256,29 @@ impl IdentityStore {
                 // 1. Latest non-expired message per conversation. Expired
                 //    messages (docs/03 §5) are excluded so a disappeared message
                 //    never surfaces as a preview, regardless of reaper timing.
+                //
+                //    Use ROW_NUMBER() to pick exactly ONE row per conversation.
+                //    A plain MAX(sent_at) self-join returns one row *per tie*, so
+                //    a conversation with several messages sharing the max
+                //    timestamp (e.g. a burst of group membership events / SKDMs
+                //    delivered to a freshly linked device, some with identical or
+                //    zero sent_at) would surface as duplicate conversation rows.
+                //    Tie-break on `id` (monotonic rowid) for a deterministic pick.
                 let mut stmt = conn.prepare(
-                    "SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
-                            m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata, m.expire_timer_secs, m.expire_at
-                     FROM message_history m
-                     JOIN (
-                         SELECT conversation_id, MAX(sent_at) AS max_sent
-                         FROM message_history
-                         WHERE expire_at IS NULL OR expire_at > ?1
-                         GROUP BY conversation_id
-                     ) latest
-                       ON m.conversation_id = latest.conversation_id
-                      AND m.sent_at = latest.max_sent
-                      AND (m.expire_at IS NULL OR m.expire_at > ?1)
-                     ORDER BY m.sent_at DESC",
+                    "SELECT conversation_id, id, sender_did, body, sent_at,
+                            edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at
+                     FROM (
+                         SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
+                                m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata, m.expire_timer_secs, m.expire_at,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY m.conversation_id
+                                    ORDER BY m.sent_at DESC, m.id DESC
+                                ) AS rn
+                         FROM message_history m
+                         WHERE m.expire_at IS NULL OR m.expire_at > ?1
+                     )
+                     WHERE rn = 1
+                     ORDER BY sent_at DESC",
                 )?;
                 let with_msgs: Vec<ConversationSummary> = stmt
                     .query_map([now_ms], |row| {

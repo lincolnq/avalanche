@@ -168,6 +168,7 @@ impl PairingCode {
 /// bundle step. Used on both the existing device (`AppCore::link_state`) and the
 /// new device (`DeviceLinkNew`). Role-flexible: either device can be the one
 /// that shows the code or the one that scans it.
+#[derive(Clone)]
 pub struct LinkHandshake {
     /// This device's ephemeral key pair (byte-backed; `Send + Sync`).
     pub ephemeral: crypto::EphemeralKeyPair,
@@ -203,6 +204,8 @@ mod tests {
             servers: vec!["https://hs-a".into(), "https://hs-b".into()],
             display_name: "Sam".into(),
             profile_key: vec![3u8; 32],
+            new_device_id: 3,
+            link_nonce: "test-nonce".into(),
         }
     }
 
@@ -294,6 +297,8 @@ mod tests {
                 servers: vec!["https://hs".into()],
                 display_name: String::new(),
                 profile_key: vec![],
+                new_device_id: 2,
+                link_nonce: "n".into(),
             };
             let sealed = seal_bundle(&bundle, &key).unwrap();
             prop_assert_eq!(open_bundle(&sealed, &key).unwrap(), bundle);
