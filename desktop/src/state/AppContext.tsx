@@ -656,6 +656,30 @@ export function AppProvider(props: { children: JSX.Element }) {
       setStore("conversations", convIdx, "lastMessageMetadata", undefined);
     }
 
+    // Persist every delivery state to the local store so the timeline survives a
+    // refresh/restart and a store reload never loses an in-flight or failed
+    // send. "sending" is persisted up front (and awaited) so a crash or refresh
+    // mid-send is recoverable. Matches iOS AppState.sendMessage.
+    const persist = (status: DeliveryStatus) =>
+      service().saveMessage({
+        id: messageId,
+        conversationId,
+        senderDid: senderAccountId,
+        body: text,
+        sentAtMs,
+        editedAtMs: null,
+        readAtMs: sentAtMs,
+        deliveryStatus: status,
+        editCount: 0,
+        deleted: false,
+        kind: 0,
+        metadata: null,
+        expireTimerSecs,
+        expireAtMs: null,
+      });
+
+    await persist(DeliveryStatus.sending);
+
     try {
       await transportFn(sentAtMs);
       setStore("messagesByConversation", conversationId, (msgs) =>
@@ -665,28 +689,10 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
-      // Best-effort persist — log failures to console so they are
-      // visible in DevTools but never crash the send path.
-      void service()
-        .saveMessage({
-          id: messageId,
-          conversationId,
-          senderDid: senderAccountId,
-          body: text,
-          sentAtMs,
-          editedAtMs: null,
-          readAtMs: sentAtMs,
-          deliveryStatus: DeliveryStatus.sent,
-          editCount: 0,
-          deleted: false,
-          kind: 0,
-          metadata: null,
-          expireTimerSecs,
-          expireAtMs: null,
-        })
-        .catch((err: unknown) => {
-          console.warn("saveMessage failed:", err);
-        });
+      // Best-effort re-save — log failures but never crash the send path.
+      void persist(DeliveryStatus.sent).catch((err: unknown) => {
+        console.warn("saveMessage (sent) failed:", err);
+      });
     } catch {
       setStore("messagesByConversation", conversationId, (msgs) =>
         (msgs ?? []).map((m) =>
@@ -695,6 +701,9 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
+      void persist(DeliveryStatus.failed).catch((err: unknown) => {
+        console.warn("saveMessage (failed) failed:", err);
+      });
       throw new Error(errorMessage);
     }
   }
@@ -1054,6 +1063,26 @@ export function AppProvider(props: { children: JSX.Element }) {
           : m
       )
     );
+    // Persist each state (same contract as the original optimistic send) so the
+    // retried message survives a reload regardless of outcome. Matches iOS.
+    const persist = (status: DeliveryStatus) =>
+      service().saveMessage({
+        id: message.id,
+        conversationId: conversation.id,
+        senderDid: message.senderAccountId,
+        body: message.body,
+        sentAtMs,
+        editedAtMs: message.editedAtMs ?? null,
+        readAtMs: sentAtMs,
+        deliveryStatus: status,
+        editCount: message.editCount,
+        deleted: message.isDeleted,
+        kind: message.kind,
+        metadata: message.metadata ?? null,
+        expireTimerSecs: message.expireTimerSecs,
+        expireAtMs: null,
+      });
+    await persist(DeliveryStatus.sending);
     const bytes = Array.from(new TextEncoder().encode(message.body));
     try {
       if (conversation.isGroup && conversation.groupId) {
@@ -1070,28 +1099,9 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
-      // Persist the now-sent message — the original failed send never wrote it
-      // to the DB, so without this the retried message is lost on next reload.
-      void service()
-        .saveMessage({
-          id: message.id,
-          conversationId: conversation.id,
-          senderDid: message.senderAccountId,
-          body: message.body,
-          sentAtMs,
-          editedAtMs: message.editedAtMs ?? null,
-          readAtMs: sentAtMs,
-          deliveryStatus: DeliveryStatus.sent,
-          editCount: message.editCount,
-          deleted: message.isDeleted,
-          kind: message.kind,
-          metadata: message.metadata ?? null,
-          expireTimerSecs: message.expireTimerSecs,
-          expireAtMs: null,
-        })
-        .catch((err: unknown) => {
-          console.warn("saveMessage after retry failed:", err);
-        });
+      void persist(DeliveryStatus.sent).catch((err: unknown) => {
+        console.warn("saveMessage after retry failed:", err);
+      });
     } catch (e) {
       setStore("messagesByConversation", conversation.id, (prev) =>
         (prev ?? []).map((m) =>
@@ -1100,6 +1110,9 @@ export function AppProvider(props: { children: JSX.Element }) {
             : m
         )
       );
+      void persist(DeliveryStatus.failed).catch((err: unknown) => {
+        console.warn("saveMessage (failed) after retry failed:", err);
+      });
       console.warn("retryMessage failed:", e);
     }
   }
