@@ -60,9 +60,6 @@
 
 See `docs/14-bitchat-fallback.md` for the full design. BLE mesh transport as a fallback when the homeserver is unreachable.
 
-## App Store readiness
-- Privacy policy URL plumbing: homeserver metadata endpoint exposes the operator's privacy policy URL; client displays it during signup alongside the app's own policy. Required because each homeserver is a separate data controller under GDPR.
-
 ## Push Notifications
 
 ### 4. Testing & privacy

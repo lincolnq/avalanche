@@ -8,9 +8,6 @@ struct NewAccountView: View {
     @State private var displayName = ""
     @State private var showPasskeyExplainer = false
     @State private var showRecovery = false
-    /// Operator's privacy policy URL from the server's public `/v1/info`. nil
-    /// until loaded, or if the operator hasn't configured one.
-    @State private var privacyPolicyURL: URL?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -50,7 +47,7 @@ struct NewAccountView: View {
             .padding(.horizontal, 32)
             .disabled(displayName.isEmpty)
 
-            if let url = privacyPolicyURL {
+            if let url = inviteToken.privacyPolicyURL {
                 Link("View \(inviteToken.serverName)'s privacy policy", destination: url)
                     .font(.caption)
             }
@@ -73,9 +70,6 @@ struct NewAccountView: View {
         .background(Color.avPaper)
         .navigationTitle("New Identity")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            privacyPolicyURL = await PublicServerInfo.privacyPolicyURL(forServer: inviteToken.serverUrl)
-        }
         .navigationDestination(isPresented: $showPasskeyExplainer) {
             PasskeyExplainerView(inviteToken: inviteToken, displayName: displayName)
         }

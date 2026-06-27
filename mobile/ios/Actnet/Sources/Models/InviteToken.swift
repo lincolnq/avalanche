@@ -7,6 +7,11 @@ struct InviteToken: Identifiable, Hashable {
     let serverName: String
     let inviterDid: String?
     let postOnboardingRedirect: String?
+    /// Operator's privacy policy URL, resolved by the core as part of invite
+    /// validation (same source as `GET /v1/info`) — no separate server call.
+    /// nil when none is configured or the value is blank. Onboarding screens
+    /// show the link only when non-nil.
+    let privacyPolicyURL: URL?
 
     /// Parse a go.theavalanche.net invite URL and validate the token with the server.
     static func from(url: URL) async throws -> InviteToken {
@@ -32,7 +37,9 @@ struct InviteToken: Identifiable, Hashable {
             serverUrl: serverUrl,
             serverName: info.serverName,
             inviterDid: info.inviterDid,
-            postOnboardingRedirect: info.postOnboardingRedirect
+            postOnboardingRedirect: info.postOnboardingRedirect,
+            privacyPolicyURL: info.privacyPolicyUrl
+                .flatMap { $0.isEmpty ? nil : URL(string: $0) }
         )
     }
 }
