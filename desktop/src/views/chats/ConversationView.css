@@ -12,8 +12,26 @@
   border-bottom: 1px solid var(--color-divider);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   flex-shrink: 0;
+}
+.conv-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.conv-header-timer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.conv-header-timer-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
 }
 .conv-header-avatar {
   width: 32px;
@@ -43,4 +61,79 @@
   justify-content: center;
   color: var(--color-text-secondary);
   font-size: 14px;
+}
+
+/* ── Track D: message-request gate + blocked bar ──────────────────────────── */
+
+.request-banner {
+  flex-shrink: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-bg);
+}
+.request-text {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+.request-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.request-block,
+.request-delete,
+.request-accept {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.request-block,
+.request-delete {
+  background: transparent;
+  border-color: var(--color-input-border);
+  color: var(--color-error);
+}
+.request-block:hover,
+.request-delete:hover {
+  background: rgba(192, 57, 43, 0.08);
+}
+.request-accept {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+.request-accept:hover {
+  opacity: 0.85;
+}
+
+.blocked-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-bg);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.blocked-unblock-btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--radius-button);
+  border: 1px solid var(--color-input-border);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+.blocked-unblock-btn:hover {
+  background: rgba(107, 62, 80, 0.08);
 }

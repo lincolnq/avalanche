@@ -1,10 +1,20 @@
-import { createEffect, createMemo, createSignal, onMount, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onMount,
+  For,
+  Show,
+  Switch,
+  Match,
+} from "solid-js";
 import { useApp } from "../../state/AppContext";
 import type { Conversation, Message } from "../../models";
 import { initials } from "../../lib/format";
 import MessageBubble from "../../components/MessageBubble";
 import ComposeMessageView from "../../components/ComposeMessageView";
 import EditHistorySheet from "../../components/EditHistorySheet";
+import DisappearingMessagesPicker from "../../components/DisappearingMessagesPicker";
 import "./ConversationView.css";
 
 interface Props {
@@ -12,31 +22,55 @@ interface Props {
 }
 
 export default function ConversationView(props: Props) {
-  const { store, loadMessagesFromStore, markAllMessagesRead, displayName, loadReactions } =
-    useApp();
+  const app = useApp();
+  const {
+    store,
+    loadMessagesFromStore,
+    markAllMessagesRead,
+    displayName,
+    loadReactions,
+    acceptRequest,
+    deleteRequest,
+    reportAndBlock,
+    unblockContact,
+    getConversationTimer,
+    setConversationTimer,
+  } = app;
   let messagesEnd: HTMLDivElement | undefined;
 
   const [editingMessage, setEditingMessage] = createSignal<Message | null>(null);
   const [historyMessage, setHistoryMessage] = createSignal<Message | null>(null);
+  const [timerSecs, setTimerSecs] = createSignal(0);
+
+  const isDm = () => !props.conversation.isGroup && !!props.conversation.recipientDid;
 
   // Re-runs whenever conversation changes, not just on first mount. Loads both
-  // the message timeline and its reaction clusters.
+  // the message timeline and its reaction clusters, and the DM timer.
   createEffect(() => {
     loadMessagesFromStore(props.conversation.id, props.conversation.accountId);
     loadReactions(props.conversation.id);
-    // Cancel any in-progress edit when switching conversations.
+    // Cancel any in-progress edit/history when switching conversations.
     setEditingMessage(null);
     setHistoryMessage(null);
+    // Load the disappearing-messages timer for DMs (groups manage their own
+    // timer in the group detail view).
+    if (isDm()) {
+      void getConversationTimer(props.conversation.id).then((s) => setTimerSecs(s ?? 0));
+    } else {
+      setTimerSecs(0);
+    }
   });
 
   // Mark all messages read when messages arrive (handles both initial async
   // load and new incoming messages).  Tracking messages().length ensures this
-  // re-runs after the async fetch resolves — the conversation-id-only effect
-  // would fire before messages arrived from disk.
+  // re-runs after the async fetch resolves.  Don't ack reads on a conversation
+  // that is still a pending request — opening it to evaluate isn't acceptance.
   createEffect(() => {
     const msgs = messages();
     msgs.length; // track — re-run when messages actually arrive
-    markAllMessagesRead(props.conversation.id, props.conversation.accountId);
+    if (!props.conversation.isRequest) {
+      markAllMessagesRead(props.conversation.id, props.conversation.accountId);
+    }
   });
 
   onMount(() => {
@@ -52,11 +86,25 @@ export default function ConversationView(props: Props) {
     messagesEnd?.scrollIntoView({ behavior: "smooth" });
   });
 
+  function changeTimer(secs: number) {
+    setTimerSecs(secs);
+    const recipientDid = props.conversation.recipientDid;
+    if (recipientDid) void setConversationTimer(recipientDid, secs === 0 ? null : secs);
+  }
+
   return (
     <div class="conv-view">
       <div class="conv-header">
-        <div class="conv-header-avatar">{initials(props.conversation.title)}</div>
-        {props.conversation.title}
+        <div class="conv-header-main">
+          <div class="conv-header-avatar">{initials(props.conversation.title)}</div>
+          {props.conversation.title}
+        </div>
+        <Show when={isDm()}>
+          <div class="conv-header-timer">
+            <span class="conv-header-timer-label">Disappearing</span>
+            <DisappearingMessagesPicker seconds={timerSecs()} onChange={changeTimer} />
+          </div>
+        </Show>
       </div>
       <div class="messages-list scrollbar-thin">
         <Show
@@ -79,11 +127,60 @@ export default function ConversationView(props: Props) {
         </Show>
         <div ref={messagesEnd} />
       </div>
-      <ComposeMessageView
-        conversation={props.conversation}
-        editingMessage={editingMessage()}
-        onCancelEdit={() => setEditingMessage(null)}
-      />
+
+      <Switch
+        fallback={
+          <ComposeMessageView
+            conversation={props.conversation}
+            editingMessage={editingMessage()}
+            onCancelEdit={() => setEditingMessage(null)}
+          />
+        }
+      >
+        <Match when={props.conversation.isRequest}>
+          <div class="request-banner">
+            <p class="request-text">
+              Let {props.conversation.title} message you and share your name with them?
+            </p>
+            <div class="request-actions">
+              <button
+                class="request-block"
+                onClick={() =>
+                  void reportAndBlock(props.conversation, "Blocked from message request")
+                }
+              >
+                Block
+              </button>
+              <button
+                class="request-delete"
+                onClick={() => void deleteRequest(props.conversation)}
+              >
+                Delete
+              </button>
+              <button
+                class="request-accept"
+                onClick={() => void acceptRequest(props.conversation)}
+              >
+                Accept
+              </button>
+            </div>
+          </div>
+        </Match>
+        <Match when={props.conversation.isBlocked}>
+          <div class="blocked-bar">
+            <span>You blocked this contact.</span>
+            <Show when={props.conversation.recipientDid}>
+              <button
+                class="blocked-unblock-btn"
+                onClick={() => void unblockContact(props.conversation.recipientDid!)}
+              >
+                Unblock
+              </button>
+            </Show>
+          </div>
+        </Match>
+      </Switch>
+
       <Show when={historyMessage()}>
         {(m) => (
           <EditHistorySheet

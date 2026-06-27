@@ -1,11 +1,13 @@
-import { type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { FiArrowLeft } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
+import BlockedContactsView from "./BlockedContactsView";
 import "./DevSettingsView.css";
 
 export default function DevSettingsView(): JSX.Element {
   const { store, logout } = useApp();
+  const [showBlocked, setShowBlocked] = createSignal(false);
   // useNavigate throws if rendered outside a Router — guard gracefully.
   let navigate: ReturnType<typeof useNavigate> | undefined;
   try {
@@ -39,6 +41,20 @@ export default function DevSettingsView(): JSX.Element {
           Sign Out
         </button>
       </section>
+
+      <section class="dev-settings-section">
+        <h2>Safety</h2>
+        <p class="dev-settings-hint">
+          Contacts you have blocked. Unblock to allow their messages again.
+        </p>
+        <button class="btn-secondary" onClick={() => setShowBlocked(true)}>
+          Blocked Contacts
+        </button>
+      </section>
+
+      <Show when={showBlocked()}>
+        <BlockedContactsView onClose={() => setShowBlocked(false)} />
+      </Show>
     </div>
   );
 }

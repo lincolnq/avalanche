@@ -1,0 +1,18 @@
+.timer-picker {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-input);
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+}
+.timer-picker:focus {
+  border-color: var(--color-accent);
+}
+.timer-picker:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
