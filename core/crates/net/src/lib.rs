@@ -69,8 +69,19 @@ impl Client {
     /// requests. Unauthenticated endpoints (register, resolve_did, etc.) work
     /// without a signer.
     pub fn new(server_url: &str) -> Self {
+        // Bound both the TCP connect and the overall request so a stale
+        // network path (typical after an app resumes from suspension) can't
+        // leave an authenticated call — e.g. the lazy challenge/response in
+        // `ensure_authenticated`, which gates WS connect — hung indefinitely.
+        // Defense-in-depth alongside the connect timeout in
+        // `app-core::connection::try_connect_ws`.
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         Self {
-            http: reqwest::Client::new(),
+            http,
             server_url: server_url.trim_end_matches('/').to_string(),
             auth: Mutex::new(None),
         }

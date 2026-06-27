@@ -669,6 +669,16 @@ pub struct AppCore {
     /// Handle to the background reaper task. Held so it isn't detached; the
     /// task self-exits when the last `Arc<AppCore>` drops.
     pub(crate) expire_reaper_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Opportunistic-reconnect signal (`reconnect_now`). Serves two mutually
+    /// exclusive waiters: the reconnect loop's backoff sleep (woken to retry
+    /// immediately) and `net`'s WS reader (foreground liveness probe of a live
+    /// connection — passed in as its `probe_notify`). Fired by `reconnect_now`
+    /// and by `set_app_active(true)` on a foreground transition.
+    pub(crate) reconnect_notify: Arc<tokio::sync::Notify>,
+    /// Whether the app is foreground-active. Gates the periodic keepalive in
+    /// `net`'s reader (foreground-only, for battery). Defaults `true` so headless
+    /// bots — which never call `set_app_active` — keep their keepalive running.
+    pub(crate) app_active: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// One server-bound account context of an identity (docs/06 §9): a device store,
@@ -747,6 +757,8 @@ impl AppCore {
             sync_task: std::sync::Mutex::new(None),
             expire_notify: Arc::new(tokio::sync::Notify::new()),
             expire_reaper_task: std::sync::Mutex::new(None),
+            reconnect_notify: Arc::new(tokio::sync::Notify::new()),
+            app_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -1850,6 +1862,31 @@ impl AppCore {
             Ok(new_state)
         })
         .map_err(AppErrorFfi::from)
+    }
+
+    /// Opportunistically retry/validate connectivity now. Wakes the reconnect
+    /// loop if it's backing off (retry immediately with reset backoff) and, if a
+    /// WebSocket is open, triggers a foreground liveness probe — a keepalive
+    /// whose missing reply within a short deadline tears the socket down so a
+    /// fresh one is opened. Cheap, sync, infallible; safe to call often.
+    ///
+    /// Call on any opportunistic trigger named in docs/34 (foreground, network
+    /// change, user acting on a server). The platform foreground hooks route
+    /// through `set_app_active(true)`, which calls this internally.
+    pub fn reconnect_now(&self) {
+        self.reconnect_notify.notify_one();
+    }
+
+    /// Tell the core whether the app is foreground-active. Gates the periodic
+    /// WS keepalive (foreground-only, for battery). A transition to active also
+    /// triggers `reconnect_now()` so a socket that died while the app was
+    /// suspended is detected and replaced promptly on resume. Sync, infallible.
+    pub fn set_app_active(&self, active: bool) {
+        self.app_active
+            .store(active, std::sync::atomic::Ordering::Relaxed);
+        if active {
+            self.reconnect_now();
+        }
     }
 
     /// Block until at least one event is available; drain the queue and

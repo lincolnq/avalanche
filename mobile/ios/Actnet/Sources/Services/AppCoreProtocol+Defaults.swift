@@ -95,6 +95,8 @@ extension AppCoreProtocol {
         Thread.sleep(forTimeInterval: 0.1)
         return []
     }
+    func reconnectNow() {}
+    func setAppActive(active: Bool) {}
 
     // MARK: - Groups (docs/03-groups.md §5)
 

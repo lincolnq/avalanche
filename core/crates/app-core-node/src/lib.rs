@@ -821,6 +821,21 @@ impl AppCore {
         self.inner.connection_state().into()
     }
 
+    /// Opportunistically retry/validate connectivity now (wake backoff + probe a
+    /// live socket). Cheap, infallible.
+    #[napi]
+    pub fn reconnect_now(&self) {
+        self.inner.reconnect_now();
+    }
+
+    /// Tell the core whether the app is foreground-active (gates the WS
+    /// keepalive; a transition to active also probes). Bots can leave this
+    /// untouched — keepalive defaults on. Infallible.
+    #[napi]
+    pub fn set_app_active(&self, active: bool) {
+        self.inner.set_app_active(active);
+    }
+
     /// Blocks (off the event loop) until the connection state differs from
     /// `last`, then returns the new value.
     #[napi]

@@ -163,7 +163,12 @@ struct ActnetApp: App {
                         appState.handleDeepLink(url)
                     }
                     .onChange(of: scenePhase) { _, newPhase in
-                        appState.isAppActive = (newPhase == .active)
+                        let active = (newPhase == .active)
+                        appState.isAppActive = active
+                        // Gate the WS keepalive (foreground-only) and probe the
+                        // connection on resume so a socket that died while the
+                        // app was suspended recovers without a restart.
+                        appState.setAppActiveAll(active)
                     }
             }
         }

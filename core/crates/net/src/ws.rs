@@ -21,13 +21,51 @@
 //! connection can be used concurrently from a receive loop and a sender.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio_tungstenite::tungstenite;
+
+/// How often the client sends a keepalive ping while the connection is open
+/// and the app is foreground-active. Relaxed (vs. a tight ping) to keep battery
+/// cost negligible while still keeping NAT/firewall mappings warm and detecting
+/// a silently-dead path. Foreground-only: gated on `app_active` (and the iOS
+/// runtime is suspended in the background regardless).
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
+
+/// If no inbound frame (keepalive echo, message, ack — anything) arrives within
+/// this window while foreground-active, the socket is considered dead and torn
+/// down so the reconnect loop opens a fresh one. ~2 missed keepalive echoes.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// After a foreground probe sends a keepalive, the connection must show inbound
+/// activity within this window or it's declared dead. Shorter than `IDLE_TIMEOUT`
+/// because the user is actively waiting on resume.
+const PROBE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Reserved `frame.id` for client-initiated keepalive pings. The server echoes
+/// it back with the same id (`websocket.rs` `Body::Keepalive`), letting the
+/// reader recognize its own echo and *not* re-echo it (which would loop). The
+/// server never initiates a keepalive with this id (it allocates from its own
+/// counter and reserves 0 for fire-and-forget).
+const KEEPALIVE_PING_ID: u64 = u64::MAX;
+
+/// True iff no inbound frame has been seen within `timeout` ending at `now`.
+/// Pure helper so the liveness/probe-deadline decision is unit-testable without
+/// real timers.
+fn is_idle(last_activity: tokio::time::Instant, now: tokio::time::Instant, timeout: Duration) -> bool {
+    now.duration_since(last_activity) > timeout
+}
+
+/// True iff `id` marks one of our own keepalive pings (so the reader treats the
+/// echo as liveness and does not re-echo it).
+fn is_own_keepalive(id: u64) -> bool {
+    id == KEEPALIVE_PING_ID
+}
 
 use crate::error::NetError;
 use crate::proto::{
@@ -117,7 +155,18 @@ struct Inner {
 impl WsConnection {
     /// Connect to the homeserver's WebSocket endpoint. Spawns background
     /// reader and writer tasks that live until the connection closes.
-    pub async fn connect(server_url: &str, token: &str) -> Result<Self, NetError> {
+    ///
+    /// `app_active` gates the periodic keepalive (foreground-only). `probe_notify`
+    /// lets the owner (`AppCore::reconnect_now`) force an immediate liveness probe
+    /// of this connection — used when the app returns to the foreground so a
+    /// socket that died while suspended is detected within `PROBE_DEADLINE`
+    /// instead of waiting out `IDLE_TIMEOUT`.
+    pub async fn connect(
+        server_url: &str,
+        token: &str,
+        app_active: Arc<AtomicBool>,
+        probe_notify: Arc<Notify>,
+    ) -> Result<Self, NetError> {
         let ws_url = server_url
             .replacen("http://", "ws://", 1)
             .replacen("https://", "wss://", 1);
@@ -159,6 +208,8 @@ impl WsConnection {
             prekey_low_tx,
             storage_changed_tx,
             inner.clone(),
+            app_active,
+            probe_notify,
         );
 
         Ok(Self { inner })
@@ -264,6 +315,16 @@ impl WsConnection {
     }
 }
 
+/// Queue a client-initiated keepalive ping (sentinel id). Returns `Err` if the
+/// writer task has already gone away (connection closed).
+fn send_keepalive(outbound: &mpsc::UnboundedSender<Vec<u8>>) -> Result<(), NetError> {
+    let frame = WsFrame {
+        id: KEEPALIVE_PING_ID,
+        body: Some(Body::Keepalive(Keepalive {})),
+    };
+    send_frame(outbound, &frame)
+}
+
 fn send_frame(
     outbound: &mpsc::UnboundedSender<Vec<u8>>,
     frame: &WsFrame,
@@ -307,14 +368,77 @@ fn spawn_reader(
     prekey_low_tx: mpsc::UnboundedSender<InboundPrekeyLow>,
     storage_changed_tx: mpsc::UnboundedSender<InboundStorageChanged>,
     state: Arc<Inner>,
+    app_active: Arc<AtomicBool>,
+    probe_notify: Arc<Notify>,
 ) {
     tokio::spawn(async move {
-        while let Some(frame) = stream.next().await {
-            let bytes = match frame {
-                Ok(tungstenite::Message::Binary(b)) => b,
-                Ok(tungstenite::Message::Close(_)) | Err(_) => break,
-                // Ignore text frames (legacy) and ping/pong (handled by tungstenite).
-                Ok(_) => continue,
+        // Liveness state. `last_activity` is bumped on *every* inbound frame
+        // (binary, text, ping, pong) — any byte from the server proves the path
+        // is alive. `probe_deadline` is armed by a foreground probe and cleared
+        // by the next inbound frame; if it fires first, the socket is dead.
+        let mut last_activity = tokio::time::Instant::now();
+        let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+        // `Delay` so a wake from suspension fires one tick, not a catch-up burst.
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        keepalive.tick().await; // consume the immediate first tick
+        let mut probe_deadline: Option<tokio::time::Instant> = None;
+
+        loop {
+            // A future that resolves at `probe_deadline` when set, else never.
+            let probe_wait = async {
+                match probe_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+
+            let msg = tokio::select! {
+                frame = stream.next() => match frame {
+                    Some(Ok(m)) => m,
+                    // Clean close, stream end, or transport error: tear down.
+                    Some(Err(_)) | None => break,
+                },
+                _ = keepalive.tick() => {
+                    // Foreground-only. While inactive we neither ping nor enforce
+                    // the idle timeout — the connection is re-validated by the
+                    // foreground probe on resume (and the iOS runtime is
+                    // suspended in the background anyway).
+                    if app_active.load(Ordering::Relaxed) {
+                        if is_idle(last_activity, tokio::time::Instant::now(), IDLE_TIMEOUT) {
+                            break; // server stopped responding to keepalives
+                        }
+                        if send_keepalive(&outbound).is_err() {
+                            break; // writer task gone
+                        }
+                    }
+                    continue;
+                }
+                _ = probe_notify.notified() => {
+                    // Foreground probe: ping now and require inbound activity
+                    // within PROBE_DEADLINE. A send error means the writer is
+                    // already gone, so fail immediately rather than waiting.
+                    if send_keepalive(&outbound).is_err() {
+                        break;
+                    }
+                    probe_deadline = Some(tokio::time::Instant::now() + PROBE_DEADLINE);
+                    continue;
+                }
+                _ = probe_wait => {
+                    // Deadline elapsed with no inbound frame since the probe.
+                    break;
+                }
+            };
+
+            // Any inbound frame proves liveness and satisfies an outstanding probe.
+            last_activity = tokio::time::Instant::now();
+            probe_deadline = None;
+
+            let bytes = match msg {
+                tungstenite::Message::Binary(b) => b,
+                tungstenite::Message::Close(_) => break,
+                // Text (legacy) and ping/pong (handled by tungstenite): liveness
+                // already counted above, nothing to decode.
+                _ => continue,
             };
             let Ok(ws_frame) = WsFrame::decode(bytes.as_ref()) else {
                 continue;
@@ -342,6 +466,11 @@ fn spawn_reader(
                         let _ = tx.send(resp);
                     }
                 }
+                // Our own keepalive echo: liveness already counted; do not
+                // re-echo (that would loop with the server's echo). A
+                // server-initiated keepalive (different id) is echoed per the
+                // symmetric protocol.
+                Body::Keepalive(_) if is_own_keepalive(id) => {}
                 Body::Keepalive(_) => {
                     let reply = WsFrame {
                         id,
@@ -397,4 +526,34 @@ fn spawn_reader(
             drop(tx);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_idle_respects_window() {
+        let base = tokio::time::Instant::now();
+        // Just under the timeout: not idle.
+        assert!(!is_idle(base, base + IDLE_TIMEOUT - Duration::from_secs(1), IDLE_TIMEOUT));
+        // Past the timeout: idle.
+        assert!(is_idle(base, base + IDLE_TIMEOUT + Duration::from_secs(1), IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn probe_deadline_window_is_short() {
+        // The same idle math drives the probe deadline; verify the boundary.
+        let probe_sent = tokio::time::Instant::now();
+        assert!(!is_idle(probe_sent, probe_sent + PROBE_DEADLINE - Duration::from_millis(1), PROBE_DEADLINE));
+        assert!(is_idle(probe_sent, probe_sent + PROBE_DEADLINE + Duration::from_millis(1), PROBE_DEADLINE));
+    }
+
+    #[test]
+    fn only_sentinel_id_is_own_keepalive() {
+        assert!(is_own_keepalive(KEEPALIVE_PING_ID));
+        assert!(!is_own_keepalive(0));
+        assert!(!is_own_keepalive(1));
+        assert!(!is_own_keepalive(42));
+    }
 }

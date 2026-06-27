@@ -12,6 +12,14 @@ use crate::{AdminEvent, AppCore, AppError, ConnectionState, IncomingEvent};
 /// Connect-receive-backoff loop. Runs as a background tokio task owned by
 /// `AppCore::reconnect_task`. Holds a `Weak<AppCore>` so dropping the last
 /// strong reference lets the task exit on its next iteration.
+/// Max time a single connect attempt (lazy auth + WS handshake) may take before
+/// we treat it as failed and fall through to backoff. Without this, a stale
+/// network path after the app resumes from suspension can leave the attempt
+/// awaiting forever, pinning `Connecting` ("Reconnecting…") until a full
+/// restart. (The reqwest client carries its own connect/request timeouts too;
+/// this bounds the whole attempt including the WS handshake.)
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
     let mut backoff_sec: u64 = 1;
     loop {
@@ -21,8 +29,8 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
 
         core.publish_state(ConnectionState::Connecting);
 
-        match try_connect_ws(&core).await {
-            Ok(ws) => {
+        match tokio::time::timeout(CONNECT_TIMEOUT, try_connect_ws(&core)).await {
+            Ok(Ok(ws)) => {
                 core.publish_state(ConnectionState::Connected);
                 *core.ws.lock().expect("ws mutex poisoned") = Some(ws.clone());
                 let connected_at = std::time::Instant::now();
@@ -54,8 +62,11 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
                     );
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!("[ws] connect failed: {e}");
+            }
+            Err(_elapsed) => {
+                tracing::warn!("[ws] connect timed out after {CONNECT_TIMEOUT:?}");
             }
         }
 
@@ -66,10 +77,21 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
         let next_attempt_at_ms = Timestamp::now().as_millis() + sleep_ms as i64;
         core.publish_state(ConnectionState::Reconnecting { next_attempt_at_ms });
 
-        // Release the strong ref before sleeping so AppCore can drop.
+        // Clone the wake signal before releasing the strong ref so AppCore can
+        // drop while we sleep.
+        let reconnect_notify = core.reconnect_notify.clone();
         drop(core);
-        tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
-        backoff_sec = (backoff_sec * 2).min(30);
+        // Wait out the backoff, but wake early on an opportunistic-reconnect
+        // signal (app returned to foreground, etc.) and retry immediately with a
+        // reset backoff.
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)) => {
+                backoff_sec = (backoff_sec * 2).min(30);
+            }
+            _ = reconnect_notify.notified() => {
+                backoff_sec = 1;
+            }
+        }
     }
 }
 
@@ -120,7 +142,13 @@ async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppErro
         .ok_or_else(|| AppError::Protocol("no session token after auth".into()))?;
     drop(inner);
 
-    let ws = net::ws::WsConnection::connect(&url, &token).await?;
+    let ws = net::ws::WsConnection::connect(
+        &url,
+        &token,
+        core.app_active.clone(),
+        core.reconnect_notify.clone(),
+    )
+    .await?;
     Ok(ws)
 }
 

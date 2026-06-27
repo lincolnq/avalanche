@@ -499,6 +499,20 @@ final class AppState: ObservableObject {
         cores[accountId]
     }
 
+    /// Push the foreground-active state to every account's core. Gates the WS
+    /// keepalive (foreground-only, for battery); becoming active also triggers
+    /// an opportunistic reconnect + liveness probe, so a socket that died while
+    /// the app was suspended recovers promptly instead of pinning
+    /// "Reconnecting…" until a restart. Driven by `scenePhase`.
+    func setAppActiveAll(_ active: Bool) {
+        let allCores = Array(cores.values)
+        Task.detached {
+            for core in allCores {
+                core.setAppActive(active: active)
+            }
+        }
+    }
+
     func joinServer(serverUrl: String, serverName: String, existingAccountId: String) async throws {
         if let idx = accounts.firstIndex(where: { $0.id == existingAccountId }) {
             accounts[idx].servers.append(
