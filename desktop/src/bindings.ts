@@ -90,6 +90,29 @@ export const commands = {
 	sendDelete: (target: MessageTarget, targetAuthor: string, targetSentAtMs: number, forEveryone: boolean, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_delete", { target, targetAuthor, targetSentAtMs, forEveryone, sentAtMs })),
 	loadReactions: (conversationId: string) => typedError<ReactionFfi[], string>(__TAURI_INVOKE("load_reactions", { conversationId })),
 	loadMessageRevisions: (conversationId: string, author: string, sentAtMs: number) => typedError<MessageRevisionFfi[], string>(__TAURI_INVOKE("load_message_revisions", { conversationId, author, sentAtMs })),
+	/**
+	 *  Drain decrypted messages from app-core's queue. The Desktop event loop polls
+	 *  `next_events`; this lower-level call is plumbed for parity with iOS/Android.
+	 */
+	receiveMessages: () => typedError<DecryptedMessage[], string>(__TAURI_INVOKE("receive_messages")),
+	/**
+	 *  Recover an account from a BIP39 recovery phrase. Mirrors `recover_from_blob`
+	 *  but derives the 32-byte recovery seed from the phrase first
+	 *  (`recovery_phrase_to_seed` returns exactly 32 bytes, satisfying
+	 *  `recover_from_blob`'s `len() == 32` check). The seed plays the role of
+	 *  `prf_output` in the blob recovery path.
+	 */
+	recoverFromPhrase: (phrase: string, serverUrl: string, did: string, dbPath: string, dbKey: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_phrase", { phrase, serverUrl, did, dbPath, dbKey, displayName })),
+	sendReadReceipt: (recipientDid: string, timestamps: number[]) => typedError<null, string>(__TAURI_INVOKE("send_read_receipt", { recipientDid, timestamps })),
+	joinViaLink: (masterKey: number[], hostingServerUrl: string, password: number[]) => typedError<JoinResultFfi, string>(__TAURI_INVOKE("join_via_link", { masterKey, hostingServerUrl, password })),
+	acceptRequest: (did: string) => typedError<null, string>(__TAURI_INVOKE("accept_request", { did })),
+	deleteRequest: (did: string) => typedError<null, string>(__TAURI_INVOKE("delete_request", { did })),
+	setPendingRequest: (did: string, pending: boolean) => typedError<null, string>(__TAURI_INVOKE("set_pending_request", { did, pending })),
+	reportAndBlock: (did: string, reason: string) => typedError<null, string>(__TAURI_INVOKE("report_and_block", { did, reason })),
+	listBlocked: () => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_blocked")),
+	getConversationTimer: (conversationId: string) => typedError<number | null, string>(__TAURI_INVOKE("get_conversation_timer", { conversationId })),
+	setConversationTimer: (recipientDid: string, expirySecs: number | null) => typedError<null, string>(__TAURI_INVOKE("set_conversation_timer", { recipientDid, expirySecs })),
+	deleteExpiredMessages: () => typedError<string[], string>(__TAURI_INVOKE("delete_expired_messages")),
 };
 
 /* Types */
@@ -422,6 +445,16 @@ export type InviteInfo = {
 	 */
 	inviterProfileKey: number[] | null,
 };
+
+/**  Outcome of `join_via_link`. */
+export type JoinResultFfi = 
+/**  Admitted directly into `member_credentials` (OpenLink policy). */
+{ type: "member" } | 
+/**
+ *  Placed in `members_pending_approval` (RequestToJoin policy);
+ *  admins must approve before the requester can act.
+ */
+{ type: "pending" };
 
 /**  A prior body of an edited message, for the edit-history sheet. */
 export type MessageRevisionFfi = {

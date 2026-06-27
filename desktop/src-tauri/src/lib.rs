@@ -98,6 +98,19 @@ pub fn run() {
             send_delete,
             load_reactions,
             load_message_revisions,
+            // Receipts / requests / safety / timers / recovery (PR1 foundation)
+            receive_messages,
+            recover_from_phrase,
+            send_read_receipt,
+            join_via_link,
+            accept_request,
+            delete_request,
+            set_pending_request,
+            report_and_block,
+            list_blocked,
+            get_conversation_timer,
+            set_conversation_timer,
+            delete_expired_messages,
         ]);
 
     #[cfg(feature = "codegen")]
@@ -176,6 +189,31 @@ fn recover_from_blob(
     display_name: String,
 ) -> Result<AccountResult, String> {
     let app = AppCore::recover_from_blob(server_url, did, prf_output, db_path, db_key, display_name)
+        .map_err(|e| e.to_string())?;
+    let did = app.did();
+    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
+    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+    Ok(AccountResult { did, display_name })
+}
+
+/// Recover an account from a BIP39 recovery phrase. Mirrors `recover_from_blob`
+/// but derives the 32-byte recovery seed from the phrase first
+/// (`recovery_phrase_to_seed` returns exactly 32 bytes, satisfying
+/// `recover_from_blob`'s `len() == 32` check). The seed plays the role of
+/// `prf_output` in the blob recovery path.
+#[tauri::command]
+#[specta::specta]
+fn recover_from_phrase(
+    state: tauri::State<'_, AppState>,
+    phrase: String,
+    server_url: String,
+    did: String,
+    db_path: String,
+    db_key: String,
+    display_name: String,
+) -> Result<AccountResult, String> {
+    let seed = app_core::recovery_phrase_to_seed(phrase).map_err(|e| e.to_string())?;
+    let app = AppCore::recover_from_blob(server_url, did, seed, db_path, db_key, display_name)
         .map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
@@ -776,6 +814,132 @@ fn load_message_revisions(
 ) -> Result<Vec<app_core::MessageRevisionFfi>, String> {
     get_app(&state)?
         .load_message_revisions(conversation_id, author, sent_at_ms)
+        .map_err(|e| e.to_string())
+}
+
+// ── Read receipts ─────────────────────────────────────────────────────────────
+
+/// Drain decrypted messages from app-core's queue. The Desktop event loop polls
+/// `next_events`; this lower-level call is plumbed for parity with iOS/Android.
+#[tauri::command]
+#[specta::specta]
+fn receive_messages(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<app_core::DecryptedMessage>, String> {
+    get_app(&state)?
+        .receive_messages()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn send_read_receipt(
+    state: tauri::State<'_, AppState>,
+    recipient_did: String,
+    timestamps: Vec<i64>,
+) -> Result<(), String> {
+    get_app(&state)?
+        .send_read_receipt(recipient_did, timestamps)
+        .map_err(|e| e.to_string())
+}
+
+// ── Message requests / safety ─────────────────────────────────────────────────
+
+#[tauri::command]
+#[specta::specta]
+fn accept_request(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
+    get_app(&state)?
+        .accept_request(did)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn delete_request(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
+    get_app(&state)?
+        .delete_request(did)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn set_pending_request(
+    state: tauri::State<'_, AppState>,
+    did: String,
+    pending: bool,
+) -> Result<(), String> {
+    get_app(&state)?
+        .set_pending_request(did, pending)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn report_and_block(
+    state: tauri::State<'_, AppState>,
+    did: String,
+    reason: String,
+) -> Result<(), String> {
+    get_app(&state)?
+        .report_and_block(did, reason)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn list_blocked(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::ContactRowFfi>, String> {
+    get_app(&state)?
+        .list_blocked()
+        .map_err(|e| e.to_string())
+}
+
+// ── Disappearing-message timers ───────────────────────────────────────────────
+
+#[tauri::command]
+#[specta::specta]
+fn get_conversation_timer(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<u32>, String> {
+    get_app(&state)?
+        .get_conversation_timer(conversation_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn set_conversation_timer(
+    state: tauri::State<'_, AppState>,
+    recipient_did: String,
+    expiry_secs: Option<u32>,
+) -> Result<(), String> {
+    get_app(&state)?
+        .set_conversation_timer(recipient_did, expiry_secs)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn delete_expired_messages(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    get_app(&state)?
+        .delete_expired_messages()
+        .map_err(|e| e.to_string())
+}
+
+// ── Group join via link ───────────────────────────────────────────────────────
+
+#[tauri::command]
+#[specta::specta]
+fn join_via_link(
+    state: tauri::State<'_, AppState>,
+    master_key: Vec<u8>,
+    hosting_server_url: String,
+    password: Vec<u8>,
+) -> Result<app_core::JoinResultFfi, String> {
+    get_app(&state)?
+        .join_via_link(master_key, hosting_server_url, password)
         .map_err(|e| e.to_string())
 }
 

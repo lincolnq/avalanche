@@ -11,8 +11,10 @@ import type {
   MessageRevisionFfi,
   GroupSummaryFfi,
   CreatedGroupFfi,
+  DecryptedMessage,
   IncomingEvent,
   InviteInfo,
+  JoinResultFfi,
   DeliveryStatusUpdate,
 } from "./AvalancheService";
 
@@ -303,6 +305,19 @@ export class MockAvalancheService implements AvalancheService {
     return { did, displayName };
   }
 
+  async recoverFromPhrase(
+    _phrase: string,
+    _serverUrl: string,
+    did: string,
+    _dbPath: string,
+    _dbKey: string,
+    displayName: string
+  ): Promise<AccountResult> {
+    await new Promise((r) => setTimeout(r, 500));
+    this.mockDid = did;
+    return { did, displayName };
+  }
+
   async sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
     void sentAtMs;
@@ -377,6 +392,9 @@ export class MockAvalancheService implements AvalancheService {
       .length;
   }
 
+  async receiveMessages(): Promise<DecryptedMessage[]> { return []; }
+  async sendReadReceipt(_recipientDid: string, _timestamps: number[]): Promise<void> {}
+
   async did(): Promise<string> { return this.mockDid; }
   async deviceId(): Promise<number> { return 1; }
   async ownDisplayName(): Promise<string> { return "Me"; }
@@ -400,6 +418,14 @@ export class MockAvalancheService implements AvalancheService {
   ): Promise<void> {}
   async blockContact(_did: string): Promise<void> {}
   async unblockContact(_did: string): Promise<void> {}
+  async acceptRequest(_did: string): Promise<void> {}
+  async deleteRequest(_did: string): Promise<void> {}
+  async setPendingRequest(_did: string, _pending: boolean): Promise<void> {}
+  async reportAndBlock(_did: string, _reason: string): Promise<void> {}
+  async listBlocked(): Promise<ContactRowFfi[]> { return []; }
+  async getConversationTimer(_conversationId: string): Promise<number | null> { return null; }
+  async setConversationTimer(_recipientDid: string, _expirySecs: number | null): Promise<void> {}
+  async deleteExpiredMessages(): Promise<string[]> { return []; }
   async leaveServer(): Promise<void> {}
   async deleteIdentity(): Promise<void> {}
 
@@ -501,6 +527,13 @@ export class MockAvalancheService implements AvalancheService {
   async groupExpirySeconds(_groupId: string): Promise<number> { return 0; }
   async applyPendingGroupChanges(_groupId: string): Promise<number> { return 0; }
   async listGroups(): Promise<string[]> { return []; }
+  async joinViaLink(
+    _masterKey: number[],
+    _hostingServerUrl: string,
+    _password: number[]
+  ): Promise<JoinResultFfi> {
+    return { type: "member" };
+  }
 
   async sendReaction(
     _target: { type: "dm"; recipient_did: string } | { type: "group"; group_id: string },

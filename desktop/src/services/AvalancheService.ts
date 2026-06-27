@@ -17,6 +17,7 @@ export type {
   ContactRowFfi,
   ConversationSummaryFfi,
   CreatedGroupFfi,
+  DecryptedMessage,
   DeliveryStatusUpdate,
   GroupEventKind,
   GroupMemberFfi,
@@ -25,6 +26,7 @@ export type {
   GroupSummaryFfi,
   IncomingEvent,
   InviteInfo,
+  JoinResultFfi,
   MessageRevisionFfi,
   MessageTarget,
   ProjectInfoFfi,
@@ -53,6 +55,14 @@ export interface AvalancheService {
     dbKey: string,
     displayName: string
   ): Promise<import("../bindings").AccountResult>;
+  recoverFromPhrase(
+    phrase: string,
+    serverUrl: string,
+    did: string,
+    dbPath: string,
+    dbKey: string,
+    displayName: string
+  ): Promise<import("../bindings").AccountResult>;
 
   // Core messaging
   sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void>;
@@ -63,6 +73,8 @@ export interface AvalancheService {
   loadMessages(conversationId: string): Promise<import("../bindings").StoredMessageFfi[]>;
   markMessagesRead(conversationId: string, upToSentAtMs: number): Promise<number>;
   unreadCount(conversationId: string): Promise<number>;
+  receiveMessages(): Promise<import("../bindings").DecryptedMessage[]>;
+  sendReadReceipt(recipientDid: string, timestamps: number[]): Promise<void>;
 
   // Identity / contacts
   did(): Promise<string>;
@@ -79,6 +91,18 @@ export interface AvalancheService {
   primeContactProfile(did: string, displayName: string, profileKey: Uint8Array): Promise<void>;
   blockContact(did: string): Promise<void>;
   unblockContact(did: string): Promise<void>;
+
+  // Message requests / safety
+  acceptRequest(did: string): Promise<void>;
+  deleteRequest(did: string): Promise<void>;
+  setPendingRequest(did: string, pending: boolean): Promise<void>;
+  reportAndBlock(did: string, reason: string): Promise<void>;
+  listBlocked(): Promise<import("../bindings").ContactRowFfi[]>;
+
+  // Disappearing-message timers
+  getConversationTimer(conversationId: string): Promise<number | null>;
+  setConversationTimer(recipientDid: string, expirySecs: number | null): Promise<void>;
+  deleteExpiredMessages(): Promise<string[]>;
 
   // Account lifecycle
   leaveServer(): Promise<void>;
@@ -115,6 +139,11 @@ export interface AvalancheService {
   groupExpirySeconds(groupId: string): Promise<number>;
   applyPendingGroupChanges(groupId: string): Promise<number>;
   listGroups(): Promise<string[]>;
+  joinViaLink(
+    masterKey: number[],
+    hostingServerUrl: string,
+    password: number[]
+  ): Promise<import("../bindings").JoinResultFfi>;
 
   // Reactions / edit / delete
   sendReaction(

@@ -45,6 +45,17 @@ export class DevServerAvalancheService implements AvalancheService {
     return ok(commands.recoverFromBlob(serverUrl, did, prfOutput, dbPath, dbKey, displayName));
   }
 
+  async recoverFromPhrase(
+    phrase: string,
+    serverUrl: string,
+    did: string,
+    dbPath: string,
+    dbKey: string,
+    displayName: string,
+  ): Promise<AccountResult> {
+    return ok(commands.recoverFromPhrase(phrase, serverUrl, did, dbPath, dbKey, displayName));
+  }
+
   // ── Core messaging ─────────────────────────────────────────────────
 
   async sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void> {
@@ -77,6 +88,14 @@ export class DevServerAvalancheService implements AvalancheService {
 
   async unreadCount(conversationId: string): Promise<number> {
     return ok(commands.unreadCount(conversationId));
+  }
+
+  async receiveMessages(): Promise<import("../bindings").DecryptedMessage[]> {
+    return ok(commands.receiveMessages());
+  }
+
+  async sendReadReceipt(recipientDid: string, timestamps: number[]): Promise<void> {
+    await ok(commands.sendReadReceipt(recipientDid, timestamps));
   }
 
   // ── Identity / contacts ────────────────────────────────────────────
@@ -135,6 +154,42 @@ export class DevServerAvalancheService implements AvalancheService {
 
   async unblockContact(did: string): Promise<void> {
     await ok(commands.unblockContact(did));
+  }
+
+  // ── Message requests / safety ──────────────────────────────────────
+
+  async acceptRequest(did: string): Promise<void> {
+    await ok(commands.acceptRequest(did));
+  }
+
+  async deleteRequest(did: string): Promise<void> {
+    await ok(commands.deleteRequest(did));
+  }
+
+  async setPendingRequest(did: string, pending: boolean): Promise<void> {
+    await ok(commands.setPendingRequest(did, pending));
+  }
+
+  async reportAndBlock(did: string, reason: string): Promise<void> {
+    await ok(commands.reportAndBlock(did, reason));
+  }
+
+  async listBlocked(): Promise<import("../bindings").ContactRowFfi[]> {
+    return ok(commands.listBlocked());
+  }
+
+  // ── Disappearing-message timers ────────────────────────────────────
+
+  async getConversationTimer(conversationId: string): Promise<number | null> {
+    return ok(commands.getConversationTimer(conversationId));
+  }
+
+  async setConversationTimer(recipientDid: string, expirySecs: number | null): Promise<void> {
+    await ok(commands.setConversationTimer(recipientDid, expirySecs));
+  }
+
+  async deleteExpiredMessages(): Promise<string[]> {
+    return ok(commands.deleteExpiredMessages());
   }
 
   // ── Account lifecycle ──────────────────────────────────────────────
@@ -249,6 +304,14 @@ export class DevServerAvalancheService implements AvalancheService {
 
   async listGroups(): Promise<string[]> {
     return ok(commands.listGroups());
+  }
+
+  async joinViaLink(
+    masterKey: number[],
+    hostingServerUrl: string,
+    password: number[],
+  ): Promise<import("../bindings").JoinResultFfi> {
+    return ok(commands.joinViaLink(masterKey, hostingServerUrl, password));
   }
 
   // ── Reactions / edit / delete ──────────────────────────────────────
