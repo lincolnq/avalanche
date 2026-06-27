@@ -167,7 +167,20 @@ class AppViewModel(
 
     fun setSelectedTab(tab: Tab) { _selectedTab.value = tab }
     fun setCurrentConversationId(id: String?) { _currentConversationId.value = id }
-    fun setIsAppActive(active: Boolean) { _isAppActive.value = active }
+    fun setIsAppActive(active: Boolean) {
+        _isAppActive.value = active
+        // Push the foreground-active state to every core: gates the WS keepalive
+        // (foreground-only, for battery) and, on becoming active, triggers an
+        // opportunistic reconnect + liveness probe so a socket that died while
+        // the app was backgrounded recovers promptly instead of pinning
+        // "Reconnecting…". Mirrors iOS's `AppState.setAppActiveAll`.
+        viewModelScope.launch {
+            val coresSnapshot = cores.values.toList()
+            for (core in coresSnapshot) {
+                withContext(Dispatchers.IO) { runCatching { core.setAppActive(active) } }
+            }
+        }
+    }
     fun setNavigateToConversation(conv: Conversation?) { _navigateToConversation.value = conv }
     fun setPendingInviteToken(token: String?) { _pendingInviteToken.value = token }
     fun setPendingInvite(invite: InviteToken?) { _pendingInvite.value = invite }

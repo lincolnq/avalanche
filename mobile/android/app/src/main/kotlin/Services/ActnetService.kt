@@ -259,6 +259,21 @@ interface AppCoreProtocol {
      */
     @Throws(AppErrorFfi::class) fun nextEvents(): List<IncomingEvent>
 
+    /**
+     * Opportunistically retry/validate connectivity now: wakes the reconnect
+     * loop if it's backing off and probes a live socket for silent death.
+     * Cheap and infallible.
+     */
+    fun reconnectNow()
+
+    /**
+     * Tell the core whether the app is foreground-active. Gates the WebSocket
+     * keepalive (foreground-only, for battery); a transition to active also
+     * probes the connection so a socket that died while the app was backgrounded
+     * recovers promptly. Infallible.
+     */
+    fun setAppActive(active: Boolean)
+
     // -----------------------------------------------------------------------
     // Groups (docs/03-groups.md §5)
     // -----------------------------------------------------------------------
@@ -381,6 +396,8 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
     override fun waitForConnectionStateChange(last: ConnectionState): ConnectionState =
         core.waitForConnectionStateChange(last)
     override fun nextEvents(): List<IncomingEvent> = core.nextEvents()
+    override fun reconnectNow() = core.reconnectNow()
+    override fun setAppActive(active: Boolean) = core.setAppActive(active)
 
     override fun createGroup(title: String, description: String, expirySeconds: UInt): CreatedGroupFfi =
         core.createGroup(title, description, expirySeconds)
@@ -573,6 +590,9 @@ open class MockAppCoreProtocol : AppCoreProtocol {
         Thread.sleep(100)
         return emptyList()
     }
+
+    override fun reconnectNow() {}
+    override fun setAppActive(active: Boolean) {}
 
     override fun createGroup(title: String, description: String, expirySeconds: UInt): CreatedGroupFfi =
         CreatedGroupFfi(

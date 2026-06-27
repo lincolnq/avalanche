@@ -323,6 +323,9 @@ class MockAppCore(
         return emptyList()
     }
 
+    override fun reconnectNow() {}
+    override fun setAppActive(active: Boolean) {}
+
     override fun receiveMessages(): List<DecryptedMessage> {
         Thread.sleep(100)
         return lock.withLock {
