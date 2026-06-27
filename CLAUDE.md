@@ -126,6 +126,21 @@ touch one branch, grep for its sibling and change both. (The deeper fix is to
 collapse the mobile send onto the unified `send_message(target:)` path so the
 split can't exist — do that when it's in scope.)
 
+## Feature conventions
+
+- **Group/admin actions surface a system message by default.** Any group
+  membership or metadata change — join, leave, invite, remove, role change
+  (admin grant/revoke), title/description/expiry/policy change — must appear as
+  a system line in the conversation timeline. app-core already persists these as
+  `message_history` rows with `kind > 0` (the `kind_code` offset; docs/03 §3.6)
+  and emits `IncomingEvent::GroupMetadataChanged`, so every UI must (a) render
+  `kind > 0` rows as centered system text (resolving actor/target DIDs to display
+  names via the structured `metadata`, falling back to the row `body`), and
+  (b) refresh the affected group's timeline on `GroupMetadataChanged`. When you
+  add a new group action, it surfaces a system message **unless the design doc
+  explicitly says it should be silent** (e.g. DM `TimerChange` is deliberately
+  silent — `app-core/src/messaging.rs`). This applies on all three platforms.
+
 ## Subsystem docs
 
 Each subsystem has its own CLAUDE.md with workflow and conventions specific to that layer:
