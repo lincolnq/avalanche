@@ -468,7 +468,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     loadedConversations.value = true;
 
     const summaries = await service().loadConversations().catch(() => [] as ConversationSummaryFfi[]);
-    const accountId = store.accounts[0]?.id ?? "";
+    const accountId = getActiveAccountId();
     const serverUrl = getServerUrl(accountId);
 
     const convs: Conversation[] = summaries.map((s) => {
