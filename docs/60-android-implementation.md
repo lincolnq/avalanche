@@ -141,6 +141,7 @@ mobile/android/app/src/main/kotlin/
 | `NameGroupView.swift` | `NameGroupView.kt` | `[x]` |
 | `GroupDetailView.swift` | `GroupDetailView.kt` | `[x]` |
 | `EditHistorySheet.swift` | `EditHistorySheet.kt` | `[x]` |
+| — (iOS share-in blocked, docs/02) | `ShareDestinationSheet.kt` | `[x]` Android-only: pick a chat for an image shared in via `ACTION_SEND` |
 | `RecipientTokenField.swift` | `RecipientTokenField.kt` | `[x]` (currently unused; composer uses its own chip field) |
 | `RecoveryKeyBanner.swift` | `RecoveryKeyBanner.kt` | `[x]` |
 
@@ -193,6 +194,8 @@ mobile/android/app/src/main/kotlin/
 | `joinServer(...)` / `leaveServer(...)` | `[x]` |
 | `switchMode(mode)` | `[x]` |
 | `sendMessage(...)` / `sendGroupMessage(...)` — optimistic + core | `[x]` |
+| Clipboard image paste → stage in composer (docs/35) | `[x]` (paste button shown when the clipboard holds an image) |
+| Share photo in (`ACTION_SEND`) → destination picker → stage in composer (docs/35) | `[x]` **Android-only** — iOS share-in blocked on the extension sandbox until the shared-DB foundation (docs/02) |
 | `addOptimisticMessage(...)` | `[x]` |
 | `editMessage` / `deleteMessage` / edit-history | `[x]` |
 | `toggleReaction` / `reactions` | `[x]` |

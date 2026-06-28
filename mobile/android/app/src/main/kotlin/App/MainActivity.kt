@@ -29,6 +29,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -172,6 +176,29 @@ class MainActivity : ComponentActivity() {
         val accountId = intent.getStringExtra("accountId")
         if (conversationId != null && accountId != null) {
             appViewModel.openConversationById(conversationId = conversationId, accountId = accountId)
+            return
+        }
+        // A photo shared in from another app (docs/35): ACTION_SEND carrying an
+        // image stream. Unlike iOS, this launches the real Activity directly. Read
+        // the bytes off the main thread (we hold the sender's read grant on this
+        // content:// URI), then surface the chat picker.
+        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
+            val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+            if (uri != null) {
+                val contentType = intent.type ?: "image/jpeg"
+                lifecycleScope.launch {
+                    val data = withContext(Dispatchers.IO) {
+                        runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+                            .getOrNull()
+                    }
+                    if (data != null) appViewModel.setPendingSharedImage(data, contentType)
+                }
+            }
             return
         }
         intent.data?.let { appViewModel.handleDeepLink(it) }
@@ -674,6 +701,16 @@ fun AppNavGraph(
         composable(Route.LOG_VIEWER) {
             LogViewerView(onDismiss = { navController.popBackStack() })
         }
+    }
+
+    // An image shared in from another app (docs/35): pick a destination chat.
+    // Rendered as an overlay dialog so it appears over whatever screen is current.
+    val pendingSharedImage by appViewModel.pendingSharedImage.collectAsState()
+    if (pendingSharedImage != null) {
+        ShareDestinationSheet(
+            viewModel = appViewModel,
+            onDismiss = { appViewModel.clearPendingSharedImage() },
+        )
     }
 }
 

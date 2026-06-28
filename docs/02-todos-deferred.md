@@ -7,6 +7,7 @@
 - $ Training modules inside CRM: browse to the training site via Network tab, complete modules
 
 ## Mobile app
+- iOS "share a photo into a chat" (system share sheet → Avalanche). Android ships this via `ACTION_SEND` (docs/35), but iOS is blocked: a Share Extension is the only entry point, and per Apple an extension may NOT launch its containing app (only Today widgets can call `NSExtensionContext.open`; the `openURL:` responder-chain trick is force-failed on iOS 18 — see Apple DTS forum thread 764570). The two sanctioned paths both need the App-Group **shared database** so the extension can either send the message itself (Signal's model) or post a local notification to hand off — so this is gated on building that multi-process store (the same foundation that unlocks the in-sheet conversation picker and `INSendMessageIntent` share suggestions). Until then iOS users use clipboard paste. App-Group provisioning (App ID capability + extension App ID) is also required.
 - Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)
 - Written-down recovery phrase alternative to passkey (generate memorable phrase, encrypt recovery blob with it, cache derived key in Secure Enclave)
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)

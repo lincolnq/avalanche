@@ -1,11 +1,17 @@
 package net.theavalanche.app
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -198,6 +204,13 @@ fun ConversationView(
         }
     }
 
+    // Stage raw image bytes in the composer — shared by the photo picker, the
+    // clipboard paste button, and an incoming share (docs/35). Mirrors iOS
+    // ConversationView.stageImageData.
+    fun stageImageBytes(data: ByteArray) {
+        stagedImageData = data
+    }
+
     // Photo attachment picker (docs/35): load the picked image and *stage* it in
     // the composer; nothing is uploaded or sent until Send. Mirrors iOS.
     val context = LocalContext.current
@@ -210,7 +223,45 @@ fun ConversationView(
                 runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
                     .getOrNull()
             } ?: return@launch
-            stagedImageData = data
+            stageImageBytes(data)
+        }
+    }
+
+    // Clipboard image paste (docs/35): show a paste button when the clipboard
+    // holds an image, and stage it on tap. Android only lets the focused app read
+    // the clipboard, so we refresh on resume (return from another app where the
+    // user copied) and on primary-clip change. Mirrors iOS's paste button.
+    val clipboard = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
+    var canPasteImage by remember { mutableStateOf(false) }
+    fun refreshPasteAvailability() {
+        canPasteImage = clipboard.primaryClipDescription?.let { desc ->
+            (0 until desc.mimeTypeCount).any { desc.getMimeType(it).startsWith("image/") }
+        } ?: false
+    }
+    fun pasteImage() {
+        val clip = clipboard.primaryClip ?: return
+        if (clip.itemCount == 0) return
+        val uri = clip.getItemAt(0).uri ?: return
+        scope.launch {
+            val data = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+                    .getOrNull()
+            } ?: return@launch
+            stageImageBytes(data)
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, clipboard) {
+        val clipListener = ClipboardManager.OnPrimaryClipChangedListener { refreshPasteAvailability() }
+        clipboard.addPrimaryClipChangedListener(clipListener)
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshPasteAvailability()
+        }
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        refreshPasteAvailability()
+        onDispose {
+            clipboard.removePrimaryClipChangedListener(clipListener)
+            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
         }
     }
 
@@ -296,6 +347,9 @@ fun ConversationView(
     // onAppear: load messages, reactions, mark read, set current conv.
     LaunchedEffect(conversation.id) {
         viewModel.setCurrentConversationId(conversation.id)
+        // An image shared/routed into this chat (docs/35): pre-stage it in the
+        // composer for review before sending.
+        viewModel.takePendingStagedImage(conversation.id)?.let { stageImageBytes(it) }
         viewModel.loadMessagesFromStore(
             conversationId = conversation.id,
             accountId = conversation.accountId,
@@ -559,6 +613,8 @@ fun ConversationView(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
+                    canPasteImage = canPasteImage,
+                    onPaste = { pasteImage() },
                 )
         }
     }
@@ -620,6 +676,8 @@ private fun Composer(
     onApplyEdit: () -> Unit,
     onCancelEdit: () -> Unit,
     onAttach: () -> Unit = {},
+    canPasteImage: Boolean = false,
+    onPaste: () -> Unit = {},
 ) {
     Column {
         // Inline edit bar — shown above the text field when editing.
@@ -707,6 +765,17 @@ private fun Composer(
                         contentDescription = "Attach",
                         tint = LocalAvalancheColors.current.brand,
                     )
+                }
+                // Paste an image from the clipboard (docs/35) — shown only when the
+                // clipboard holds an image.
+                if (canPasteImage) {
+                    IconButton(onClick = onPaste) {
+                        Icon(
+                            imageVector = Icons.Filled.ContentPaste,
+                            contentDescription = "Paste image",
+                            tint = LocalAvalancheColors.current.brand,
+                        )
+                    }
                 }
             }
 

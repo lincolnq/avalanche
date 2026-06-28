@@ -149,6 +149,17 @@ class AppViewModel(
     private val _navigateToConversation = MutableStateFlow<Conversation?>(null)
     val navigateToConversation: StateFlow<Conversation?> = _navigateToConversation.asStateFlow()
 
+    // An image shared into the app from another app (docs/35), awaiting a
+    // destination chat. Non-null drives the share-destination picker. Android-only
+    // for now — iOS share-in is blocked on the share-extension sandbox (docs/02).
+    private val _pendingSharedImage = MutableStateFlow<PendingSharedImage?>(null)
+    val pendingSharedImage: StateFlow<PendingSharedImage?> = _pendingSharedImage.asStateFlow()
+
+    // Image bytes staged for a specific conversation by the share flow, consumed
+    // (and cleared) by ConversationView's onAppear. Keyed by conversation id.
+    private val _pendingStagedImage = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
+    val pendingStagedImage: StateFlow<Map<String, ByteArray>> = _pendingStagedImage.asStateFlow()
+
     /**
      * A notification tap that arrived before the conversation list finished
      * loading (cold-start launch). Stored as (conversationId, accountId) and
@@ -414,6 +425,40 @@ class AppViewModel(
         pendingOpenConversation = null
         _selectedTab.value = Tab.CHATS
         _navigateToConversation.value = conv
+    }
+
+    // -----------------------------------------------------------------------
+    // Shared image (docs/35) — Android share-in routing
+    // -----------------------------------------------------------------------
+
+    /** Surface the destination picker for an image shared in from another app. */
+    fun setPendingSharedImage(data: ByteArray, contentType: String) {
+        _pendingSharedImage.value = PendingSharedImage(data = data, contentType = contentType)
+    }
+
+    /** Dismiss the share-destination picker without choosing a chat. */
+    fun clearPendingSharedImage() {
+        _pendingSharedImage.value = null
+    }
+
+    /**
+     * Route a shared image to the chosen conversation: stage it for that chat and
+     * navigate there, where ConversationView pre-fills the composer for review.
+     */
+    fun routeSharedImage(conversation: Conversation) {
+        val pending = _pendingSharedImage.value ?: return
+        _pendingStagedImage.value = _pendingStagedImage.value + (conversation.id to pending.data)
+        _pendingSharedImage.value = null
+        _selectedTab.value = Tab.CHATS
+        _navigateToConversation.value = conversation
+    }
+
+    /** Consume (and clear) the image staged for a conversation, if any. */
+    fun takePendingStagedImage(conversationId: String): ByteArray? {
+        val current = _pendingStagedImage.value
+        val data = current[conversationId] ?: return null
+        _pendingStagedImage.value = current - conversationId
+        return data
     }
 
     // -----------------------------------------------------------------------

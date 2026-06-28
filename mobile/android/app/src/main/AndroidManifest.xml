@@ -44,6 +44,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="go.theavalanche.net" />
             </intent-filter>
+            <!-- Share a photo in from another app (docs/35). Unlike iOS, the share
+                 target is this real Activity: MainActivity.handleIntent reads
+                 EXTRA_STREAM and the app shows a destination-chat picker. Images
+                 only, single image — matches the photo-picker scope. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
         <!-- FCM push: receives token rotations and content-free wakeups (docs/15). -->
