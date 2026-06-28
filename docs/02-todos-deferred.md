@@ -12,6 +12,7 @@
 - Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
 - Read receipt user preference toggle (send_read_receipts setting)
 - Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
+- Scroll-to-first-unread on open (iOS + Android): currently best-effort and usually lands at the bottom, because opening a conversation marks its messages read (`markAllMessagesRead` on transcript load) before the scroll-to-first-unread logic reads `readAtMs`. To make it reliable, capture the first-unread index from the freshly loaded transcript *before* marking read, and scroll to that. Affects both platforms (iOS `.onChange(of: messages.count)` / `.task(id:)`, Android `LaunchedEffect(messageCount)` / the onAppear scroll effect).
 - Account switcher UI for multi-account support
 - My QR Code screen uses `accounts.first` — should use the active/selected account once multi-account is implemented
 - Consider whether we should hit `validateInvite` endpoint during 'compose recipient' scan/paste for a server invite token.
