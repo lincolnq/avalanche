@@ -21,9 +21,11 @@ tauri = { version = "2", features = [] }
 tauri-plugin-store = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
-# `deep-link` feature: forward a second instance's avalanche:// URL to the
-# already-running instance's on_open_url handler instead of spawning a new window.
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# Forwards a second instance's launch to the running one. We extract the
+# avalanche:// URL from the second instance's argv ourselves (see lib.rs) rather
+# than relying on the `deep-link` feature's auto-forward, which doesn't fire
+# reliably for the second-instance argv path on Windows.
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }

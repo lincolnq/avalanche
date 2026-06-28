@@ -31,6 +31,13 @@ fn get_app(state: &tauri::State<'_, AppState>) -> Result<std::sync::Arc<AppCore>
         .ok_or_else(|| "no account".to_string())
 }
 
+/// Whether a process-arg looks like one of our deep links — the custom
+/// `avalanche://` scheme or a universal-link URL on our host. Used to pick the
+/// URL out of a second instance's argv (see the single-instance callback).
+fn is_deep_link_arg(arg: &str) -> bool {
+    arg.starts_with("avalanche://") || arg.contains("go.theavalanche.net")
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -136,14 +143,20 @@ pub fn run() {
     #[allow(unreachable_code)]
     tauri::Builder::default()
         // Single-instance MUST be the first plugin. When a second launch occurs
-        // (e.g. opening an avalanche:// link while the app runs), this focuses the
-        // existing window; the `deep-link` feature forwards that launch's URL to
-        // the running instance's on_open_url handler instead of opening a new window.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            use tauri::Manager;
+        // (e.g. opening an avalanche:// link while the app runs) the OS spawns a
+        // new process; this callback runs in the *existing* one. We focus the
+        // window and forward the deep-link URL from the new process's argv to the
+        // frontend (the deep-link plugin's on_open_url only fires for the
+        // cold-start launch, not this second-instance path on Windows/Linux).
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            use tauri::{Emitter, Manager};
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
+            }
+            if let Some(url) = argv.iter().find(|a| is_deep_link_arg(a)) {
+                eprintln!("[deep-link] second instance: {url}");
+                let _ = app.emit("avalanche-deeplink", url.clone());
             }
         }))
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -160,6 +173,7 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
+                    eprintln!("[deep-link] on_open_url: {url}");
                     let _ = handle.emit("avalanche-deeplink", url.to_string());
                 }
             });
