@@ -350,6 +350,40 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 - System tray integration (optional: keep app running in background)
 - Native notifications via `tauri-plugin-notification`
 
+### Phase 8 — Multi-account (day 6, required before Desktop is "complete")
+
+Desktop currently runs a **single account**: `src-tauri` holds one
+`Mutex<Option<Arc<AppCore>>>` and every Tauri command resolves that one core, so
+the frontend's `getActiveAccountId()` (`AppContext.tsx`) is just a mirror of it.
+iOS and Android already run **multiple accounts concurrently** — a `cores` map
+keyed by accountId, per-account event/connection loops, all merged into one
+shared inbox (there is no "currently active" identity to switch between). See
+`docs/53-multi-account-ux.md` for the UX, and `restoreAccounts`/`cores` in
+`mobile/ios/.../App/AppState.swift` + `mobile/android/.../App/AppViewModel.kt`
+for the reference implementation.
+
+Port that model to Desktop:
+- **Backend:** `AppState.app: Mutex<Option<Arc<AppCore>>>` becomes a map keyed by
+  accountId; `get_app` resolves per account; every command takes an `account_id`;
+  `next_events` / `wait_for_connection_state_change` run per account; account
+  lifecycle commands add/remove map entries instead of replacing the one slot.
+- **Frontend:** account-aware service (`serviceFor(accountId)` or pass the id);
+  one event + connection loop per account (loop over `store.accounts`); remove
+  `getActiveAccountId` (its 2 call sites take the accountId from their own
+  per-account loop); add a "sign in another account" onboarding path that spins
+  up a second core without tearing down the first.
+- **Already half-built:** `connectionStates` is keyed by accountId and
+  `aggregateConnectionState` already merges across accounts; conversation IDs
+  already embed the account (`dm-${accountId}-${senderDid}`). One gap to resolve:
+  `group-${groupId}` is not account-scoped.
+
+Spec-first (per the repo "spec before code" rule) against `docs/53` + the mobile
+implementations. Best done as a fresh branch off `main` after day-3/4/5 land, so
+it doesn't disrupt the in-review stack.
+
+**Done when:** two accounts can be signed in at once, both receive in real time,
+and their conversations show up in one merged list, matching iOS/Android.
+
 ---
 
 ## Open Questions
@@ -361,4 +395,5 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 
 ## Deferred / Known Limitations
 
+- **Single-account only (until day 6).** Desktop holds one `AppCore` and assumes one account throughout (`getActiveAccountId`, `accounts[0]`). Multi-account (one shared inbox over all identities, like iOS/Android) is required for parity and is tracked as **Phase 8 / day 6** above. Desktop is not "complete" until this lands.
 - **tauri-plugin-store metadata exposure.** The identity list (own DIDs, display names, server URLs, DB filename) is stored as a plain JSON file in the OS app-data directory (`%APPDATA%\actnet\` on Windows, `~/Library/Application Support/actnet/` on macOS, `~/.local/share/actnet/` on Linux). It is protected only by OS-level filesystem permissions — not encrypted, not keyed from hardware-backed crypto. Desktop sandboxing is weaker than mobile: any process running as the same user has straightforward read access. An attacker (or malware at user privilege) gets enough to link the device to specific orgs. Message content and the contact graph are not exposed — they live inside the per-identity SQLCipher DBs. The fix would be a small `manifest.db` encrypted with a key stored in the platform credential store (Windows DPAPI / Credential Manager, macOS Keychain, Linux Secret Service). Deferred because the sensitivity of the leaked metadata is low relative to the cross-platform implementation complexity. See the analogous iOS note in `docs/02-todos-deferred.md`.
