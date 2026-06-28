@@ -265,6 +265,7 @@ private fun BubbleContent(
     } else {
         val bgColor = if (isMe) LocalAvalancheColors.current.outgoingBubble else LocalAvalancheColors.current.incomingBubble
         val fgColor = if (isMe) AvalancheColors.Sand100 else LocalAvalancheColors.current.ink
+        val context = LocalContext.current
 
         Box(
             modifier = Modifier
@@ -277,7 +278,7 @@ private fun BubbleContent(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             FlowMessageText(
-                text = linkify(message.body),
+                text = linkify(message.body) { url -> openUrlInBrowser(context, url) },
                 textStyle = MaterialTheme.typography.bodyMedium,
                 textColor = fgColor,
                 showMetadata = showMetadata,
@@ -294,12 +295,16 @@ private fun BubbleContent(
 private val URL_REGEX = Regex("""(https?://|www\.)\S+""", RegexOption.IGNORE_CASE)
 
 /**
- * Turn URLs in [body] into tappable links (Compose opens them via the
- * `LocalUriHandler`). Mirrors iOS's `NSDataDetector` linkification; trailing
- * punctuation is excluded from the link, and bare `www.` hosts get an `http://`
- * scheme so they resolve.
+ * Turn URLs in [body] into tappable links. Mirrors iOS's `NSDataDetector`
+ * linkification; trailing punctuation is excluded from the link, and bare `www.`
+ * hosts get an `http://` scheme so they resolve.
+ *
+ * Each link carries an explicit [onClick] listener that launches the URL via
+ * [openUrlInBrowser]. We do NOT rely on the default `LocalUriHandler` path: it
+ * launched without `FLAG_ACTIVITY_NEW_TASK` and swallowed the resulting failure,
+ * so taps appeared inert.
  */
-fun linkify(body: String): AnnotatedString = buildAnnotatedString {
+fun linkify(body: String, onClick: (String) -> Unit): AnnotatedString = buildAnnotatedString {
     var idx = 0
     for (m in URL_REGEX.findAll(body)) {
         append(body.substring(idx, m.range.first))
@@ -312,7 +317,9 @@ fun linkify(body: String): AnnotatedString = buildAnnotatedString {
                 LinkAnnotation.Url(
                     url,
                     TextLinkStyles(SpanStyle(textDecoration = TextDecoration.Underline)),
-                )
+                ) { link ->
+                    onClick((link as LinkAnnotation.Url).url)
+                }
             ) {
                 append(linkText)
             }

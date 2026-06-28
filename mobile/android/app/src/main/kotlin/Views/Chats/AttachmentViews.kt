@@ -1,7 +1,12 @@
 package net.theavalanche.app
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,12 +38,41 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.io.ByteArrayOutputStream
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
+
+/**
+ * Open [url] in the user's browser via an ACTION_VIEW intent.
+ *
+ * Uses the Activity [Context] directly (the proven pattern in AccountsView)
+ * rather than Compose's `LocalUriHandler`: `AndroidUriHandler.openUri` does a
+ * bare `startActivity` without `FLAG_ACTIVITY_NEW_TASK`, and when that throws the
+ * failure was being silently swallowed — so chat link previews and hyperlinks
+ * appeared inert. `NEW_TASK` is added defensively so the launch resolves a
+ * browser regardless of the launching context.
+ */
+fun openUrlInBrowser(context: Context, rawUrl: String) {
+    if (rawUrl.isBlank()) return
+    // Schemes are case-insensitive per RFC 3986, but Android's intent matching is
+    // case-sensitive and browsers only register lowercase http/https — so a typed
+    // "Http://..." resolves to nothing. We hand-roll link detection (linkify), so
+    // unlike Signal — which leans on Android's Linkify to canonicalize the scheme
+    // for free — we must lowercase it ourselves.
+    val url = SCHEME_PREFIX.replace(rawUrl) { it.value.lowercase() }
+    runCatching {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        // Mirror Signal's LinkActions: NEW_TASK only when not launching from an
+        // Activity (from an Activity it would needlessly start a separate task).
+        if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }.onFailure { Log.w("Avalanche", "Failed to open URL: $url", it) }
+}
+
+private val SCHEME_PREFIX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
 /**
  * Renders a single message attachment (docs/35-attachments.md). Images show the
@@ -149,7 +183,7 @@ fun LinkPreviewCard(
     loader: suspend (AttachmentFfi) -> ByteArray?,
 ) {
     val colors = LocalAvalancheColors.current
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     var imageData by remember(preview.url) { mutableStateOf<ByteArray?>(null) }
 
     LaunchedEffect(preview.url) {
@@ -168,7 +202,7 @@ fun LinkPreviewCard(
             .sizeIn(maxWidth = 260.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(if (isMe) colors.outgoingBubble.copy(alpha = 0.6f) else colors.incomingBubble)
-            .clickable { runCatching { uriHandler.openUri(preview.url) } },
+            .clickable { openUrlInBrowser(context, preview.url) },
     ) {
         if (bitmap != null) {
             Image(
