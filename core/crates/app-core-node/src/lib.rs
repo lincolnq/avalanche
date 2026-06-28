@@ -15,10 +15,10 @@ use napi_derive::napi;
 
 use app_core::error::AppErrorFfi;
 use app_core::{
-    self as core, AccountInfoFfi, ConnectionState, ContactRowFfi, ConversationSummaryFfi,
-    CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate, GroupMemberFfi, GroupPendingFfi,
-    AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo, JoinResultFfi, MessageTarget,
-    ProjectInfoFfi, StoredMessageFfi,
+    self as core, AccountInfoFfi, AttachmentFfi, ConnectionState, ContactRowFfi,
+    ConversationSummaryFfi, CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate,
+    GroupMemberFfi, GroupPendingFfi, AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo,
+    JoinResultFfi, MessageTarget, ProjectInfoFfi, StoredMessageFfi,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -46,6 +46,74 @@ impl From<ProjectInfoFfi> for ProjectInfoJs {
     }
 }
 
+/// An end-to-end-encrypted attachment (docs/35). The pointer fields plus local
+/// download state; mirrors `AttachmentFfi`.
+#[napi(object)]
+pub struct AttachmentJs {
+    pub id: String,
+    pub url: String,
+    pub content_type: String,
+    pub key: Buffer,
+    pub digest: Buffer,
+    pub size_bytes: i64,
+    pub file_name: Option<String>,
+    pub width: i32,
+    pub height: i32,
+    pub duration_ms: i32,
+    pub blurhash: Option<String>,
+    pub thumbnail: Buffer,
+    pub caption: Option<String>,
+    pub flags: i32,
+    pub local_path: Option<String>,
+    pub downloaded_at_ms: Option<i64>,
+}
+
+impl From<AttachmentFfi> for AttachmentJs {
+    fn from(a: AttachmentFfi) -> Self {
+        Self {
+            id: a.id,
+            url: a.url,
+            content_type: a.content_type,
+            key: a.key.into(),
+            digest: a.digest.into(),
+            size_bytes: a.size_bytes,
+            file_name: a.file_name,
+            width: a.width,
+            height: a.height,
+            duration_ms: a.duration_ms,
+            blurhash: a.blurhash,
+            thumbnail: a.thumbnail.into(),
+            caption: a.caption,
+            flags: a.flags,
+            local_path: a.local_path,
+            downloaded_at_ms: a.downloaded_at_ms,
+        }
+    }
+}
+
+impl From<AttachmentJs> for AttachmentFfi {
+    fn from(a: AttachmentJs) -> Self {
+        Self {
+            id: a.id,
+            url: a.url,
+            content_type: a.content_type,
+            key: a.key.to_vec(),
+            digest: a.digest.to_vec(),
+            size_bytes: a.size_bytes,
+            file_name: a.file_name,
+            width: a.width,
+            height: a.height,
+            duration_ms: a.duration_ms,
+            blurhash: a.blurhash,
+            thumbnail: a.thumbnail.to_vec(),
+            caption: a.caption,
+            flags: a.flags,
+            local_path: a.local_path,
+            downloaded_at_ms: a.downloaded_at_ms,
+        }
+    }
+}
+
 #[napi(object)]
 pub struct DecryptedMessageJs {
     pub server_id: i64,
@@ -62,6 +130,8 @@ pub struct DecryptedMessageJs {
     /// (docs/12 §1). Bots typically ignore this; a bot that tracks requests
     /// calls `setPendingRequest`.
     pub is_request: bool,
+    /// Attachments carried on the message (docs/35); empty for plain text.
+    pub attachments: Vec<AttachmentJs>,
 }
 
 impl From<DecryptedMessage> for DecryptedMessageJs {
@@ -75,6 +145,7 @@ impl From<DecryptedMessage> for DecryptedMessageJs {
             group_id: m.group_id,
             profile_key: m.profile_key.map(Into::into),
             is_request: m.is_request,
+            attachments: m.attachments.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -93,6 +164,8 @@ pub struct StoredMessageJs {
     pub kind: i64,
     /// JSON for system rows (event kind + actor/target DIDs); `None` otherwise.
     pub metadata: Option<String>,
+    /// Attachments on this message (docs/35); empty for plain text.
+    pub attachments: Vec<AttachmentJs>,
 }
 
 impl From<StoredMessageFfi> for StoredMessageJs {
@@ -108,6 +181,7 @@ impl From<StoredMessageFfi> for StoredMessageJs {
             delivery_status: m.delivery_status as u32,
             kind: m.kind,
             metadata: m.metadata,
+            attachments: m.attachments.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -134,6 +208,7 @@ impl From<StoredMessageJs> for StoredMessageFfi {
             // the send path; bots don't set them via the JS save path.
             expire_timer_secs: 0,
             expire_at_ms: None,
+            attachments: m.attachments.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -854,6 +929,79 @@ impl AppCore {
         let target = target.into_ffi()?;
         let pt = plaintext.to_vec();
         tokio::task::spawn_blocking(move || core.send_message(target, pt, sent_at_ms))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    /// Send a text message with attachments (docs/35) to a DM or group target.
+    /// The attachments must already be uploaded via `uploadAttachment`.
+    #[napi]
+    pub async fn send_message_with_attachments(
+        &self,
+        target: MessageTargetJs,
+        body: String,
+        attachments: Vec<AttachmentJs>,
+        sent_at_ms: i64,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let target = target.into_ffi()?;
+        let attachments: Vec<AttachmentFfi> = attachments.into_iter().map(Into::into).collect();
+        tokio::task::spawn_blocking(move || {
+            core.send_message_with_attachments(target, body, attachments, sent_at_ms)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)
+    }
+
+    /// Encrypt and upload an attachment blob (docs/35), returning its pointer.
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_attachment(
+        &self,
+        plaintext: Buffer,
+        content_type: String,
+        file_name: Option<String>,
+        width: i32,
+        height: i32,
+        duration_ms: i32,
+        thumbnail: Buffer,
+        flags: i32,
+    ) -> napi::Result<AttachmentJs> {
+        let core = self.inner.clone();
+        let plaintext = plaintext.to_vec();
+        let thumbnail = thumbnail.to_vec();
+        let ptr = tokio::task::spawn_blocking(move || {
+            core.upload_attachment(plaintext, content_type, file_name, width, height, duration_ms, thumbnail, flags)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)?;
+        Ok(ptr.into())
+    }
+
+    /// Download, verify, and decrypt an attachment blob (docs/35).
+    #[napi]
+    pub async fn download_attachment(&self, attachment: AttachmentJs) -> napi::Result<Buffer> {
+        let core = self.inner.clone();
+        let att: AttachmentFfi = attachment.into();
+        let bytes = tokio::task::spawn_blocking(move || core.download_attachment(att))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(bytes.into())
+    }
+
+    /// Record an attachment's downloaded local path (docs/35).
+    #[napi]
+    pub async fn set_attachment_downloaded(
+        &self,
+        attachment_id: String,
+        local_path: String,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.set_attachment_downloaded(attachment_id, local_path))
             .await
             .map_err(join_err)?
             .map_err(to_napi)

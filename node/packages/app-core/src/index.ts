@@ -201,6 +201,44 @@ export interface ProjectInfo {
  *
  * @category Types
  */
+/**
+ * An end-to-end-encrypted attachment (docs/35-attachments.md). The pointer
+ * fields (`url`..`flags`) are what travels in the message; `id`, `localPath`,
+ * and `downloadedAt` are local state once persisted/downloaded.
+ *
+ * @category Types
+ */
+export interface Attachment {
+  /** Local row id; empty for a freshly-uploaded pointer not yet persisted. */
+  id: string;
+  /** Full download URL on the hosting homeserver. */
+  url: string;
+  /** MIME type. */
+  contentType: string;
+  /** 64-byte attachment key (AES ‖ HMAC). */
+  key: Uint8Array;
+  /** 32-byte SHA-256 of the stored ciphertext blob. */
+  digest: Uint8Array;
+  /** Unpadded plaintext size in bytes. */
+  sizeBytes: number;
+  fileName?: string;
+  /** Image/video width in pixels; 0 if not applicable. */
+  width: number;
+  /** Image/video height in pixels; 0 if not applicable. */
+  height: number;
+  /** Audio/video duration in ms; 0 if not applicable. */
+  durationMs: number;
+  blurhash?: string;
+  /** Small decrypted preview (downscaled JPEG); empty if none. */
+  thumbnail: Uint8Array;
+  caption?: string;
+  /** Bitset (voice-note, gif, ...). */
+  flags: number;
+  /** Filesystem path of the decrypted blob once downloaded. */
+  localPath?: string;
+  downloadedAt?: Temporal.Instant;
+}
+
 export interface DecryptedMessage {
   /** Server-assigned monotonic id. Used for acking. */
   serverId: number;
@@ -242,6 +280,8 @@ export interface DecryptedMessage {
    * Most bots ignore this.
    */
   isRequest: boolean;
+  /** Attachments carried on the message (docs/35); empty for plain text. */
+  attachments: Attachment[];
 }
 
 /**
@@ -282,6 +322,8 @@ export interface StoredMessage {
    * normal chat messages.
    */
   metadata?: string;
+  /** Attachments on this message (docs/35); empty for plain text. */
+  attachments?: Attachment[];
 }
 
 /**
@@ -504,6 +546,44 @@ const sendTargetToNative = (t: SendTarget): native.MessageTargetJs =>
     ? { kind: "dm", recipientDid: t.recipientDid }
     : { kind: "group", groupId: t.groupId };
 
+const attachmentFromNative = (a: native.AttachmentJs): Attachment => ({
+  id: a.id,
+  url: a.url,
+  contentType: a.contentType,
+  key: asU8(a.key),
+  digest: asU8(a.digest),
+  sizeBytes: Number(a.sizeBytes),
+  fileName: a.fileName ?? undefined,
+  width: a.width,
+  height: a.height,
+  durationMs: a.durationMs,
+  blurhash: a.blurhash ?? undefined,
+  thumbnail: asU8(a.thumbnail),
+  caption: a.caption ?? undefined,
+  flags: a.flags,
+  localPath: a.localPath ?? undefined,
+  downloadedAt: instantFromMsOpt(a.downloadedAtMs),
+});
+
+const attachmentToNative = (a: Attachment): native.AttachmentJs => ({
+  id: a.id,
+  url: a.url,
+  contentType: a.contentType,
+  key: asBuf(a.key),
+  digest: asBuf(a.digest),
+  sizeBytes: a.sizeBytes,
+  fileName: a.fileName,
+  width: a.width,
+  height: a.height,
+  durationMs: a.durationMs,
+  blurhash: a.blurhash,
+  thumbnail: asBuf(a.thumbnail),
+  caption: a.caption,
+  flags: a.flags,
+  localPath: a.localPath,
+  downloadedAtMs: a.downloadedAt ? instantToMs(a.downloadedAt) : undefined,
+});
+
 const decryptedMessageFromNative = (m: native.DecryptedMessageJs): DecryptedMessage => {
   const plaintext = asU8(m.plaintext);
   return {
@@ -516,6 +596,7 @@ const decryptedMessageFromNative = (m: native.DecryptedMessageJs): DecryptedMess
     groupId: m.groupId,
     profileKey: m.profileKey ? asU8(m.profileKey) : undefined,
     isRequest: m.isRequest,
+    attachments: (m.attachments ?? []).map(attachmentFromNative),
   };
 };
 
@@ -530,6 +611,7 @@ const storedMessageFromNative = (m: native.StoredMessageJs): StoredMessage => ({
   deliveryStatus: deliveryFromNum(m.deliveryStatus),
   kind: m.kind,
   metadata: m.metadata ?? undefined,
+  attachments: (m.attachments ?? []).map(attachmentFromNative),
 });
 
 const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
@@ -544,6 +626,7 @@ const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
   // The JS layer only saves normal chat messages; app-core writes system rows.
   kind: m.kind ?? 0,
   metadata: m.metadata ?? undefined,
+  attachments: (m.attachments ?? []).map(attachmentToNative),
 });
 
 const conversationSummaryFromNative = (c: native.ConversationSummaryJs): ConversationSummary => ({
@@ -935,6 +1018,82 @@ export class AppCore {
   async send(target: SendTarget, body: string, sentAt?: Temporal.Instant): Promise<void> {
     const ts = sentAt ?? Temporal.Now.instant();
     await this._native.sendMessage(sendTargetToNative(target), encodeBody(body), instantToMs(ts));
+  }
+
+  /**
+   * Encrypt and upload an attachment blob (docs/35-attachments.md), returning
+   * the {@link Attachment} pointer to pass to {@link sendWithAttachments}. The
+   * blob is padded, CBC+HMAC-encrypted under a fresh one-off key, and uploaded;
+   * the server only ever sees ciphertext.
+   *
+   * @category Direct Messages
+   */
+  async uploadAttachment(
+    plaintext: Uint8Array,
+    contentType: string,
+    opts: {
+      fileName?: string;
+      width?: number;
+      height?: number;
+      durationMs?: number;
+      thumbnail?: Uint8Array;
+      flags?: number;
+    } = {},
+  ): Promise<Attachment> {
+    const ptr = await this._native.uploadAttachment(
+      asBuf(plaintext),
+      contentType,
+      opts.fileName,
+      opts.width ?? 0,
+      opts.height ?? 0,
+      opts.durationMs ?? 0,
+      asBuf(opts.thumbnail ?? new Uint8Array()),
+      opts.flags ?? 0,
+    );
+    return attachmentFromNative(ptr);
+  }
+
+  /**
+   * Send a text message with attachments to a {@link SendTarget}. The
+   * attachments must already be uploaded via {@link uploadAttachment}. `body`
+   * may be empty for an attachment-only message.
+   *
+   * @category Direct Messages
+   */
+  async sendWithAttachments(
+    target: SendTarget,
+    body: string,
+    attachments: Attachment[],
+    sentAt?: Temporal.Instant,
+  ): Promise<void> {
+    const ts = sentAt ?? Temporal.Now.instant();
+    await this._native.sendMessageWithAttachments(
+      sendTargetToNative(target),
+      body,
+      attachments.map(attachmentToNative),
+      instantToMs(ts),
+    );
+  }
+
+  /**
+   * Download, verify, and decrypt an attachment blob (docs/35). Aborts before
+   * decrypting if the downloaded bytes don't match the pointer's digest.
+   *
+   * @category Direct Messages
+   */
+  async downloadAttachment(attachment: Attachment): Promise<Uint8Array> {
+    const bytes = await this._native.downloadAttachment(attachmentToNative(attachment));
+    return asU8(bytes);
+  }
+
+  /**
+   * Record that an attachment's blob was downloaded to `localPath` (docs/35),
+   * so later loads render the local file instead of re-fetching.
+   *
+   * @category Direct Messages
+   */
+  async setAttachmentDownloaded(attachmentId: string, localPath: string): Promise<void> {
+    await this._native.setAttachmentDownloaded(attachmentId, localPath);
   }
 
   /**

@@ -31,6 +31,10 @@ for (const method of [
   "linkCreatePairing",
   "linkAcceptPairing",
   "linkSendBundle",
+  "uploadAttachment",
+  "downloadAttachment",
+  "sendWithAttachments",
+  "setAttachmentDownloaded",
 ]) {
   if (typeof AppCore.prototype[method] !== "function") {
     console.error(`unexpected: AppCore.prototype.${method} is not a function`);

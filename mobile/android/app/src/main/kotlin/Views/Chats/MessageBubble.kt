@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.ReactionFfi
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -100,6 +101,9 @@ fun MessageBubble(
     onEdit: () -> Unit = {},
     onDelete: (Boolean) -> Unit = {},
     onShowHistory: () -> Unit = {},
+    /** Loads decrypted bytes for an attachment (docs/35); injected by the
+     *  conversation screen so the bubble stays free of ViewModel access. */
+    attachmentLoader: suspend (AttachmentFfi) -> ByteArray? = { null },
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -125,7 +129,14 @@ fun MessageBubble(
                 )
             }
 
-            // Bubble
+            // Attachments (docs/35), rendered above the text bubble.
+            message.attachments.forEach { att ->
+                AttachmentView(attachment = att, loader = attachmentLoader)
+            }
+
+            // Bubble — omitted for an attachment-only message (empty body) so a
+            // photo doesn't get an empty bubble below it.
+            if (message.body.isNotEmpty() || message.attachments.isEmpty() || message.isDeleted) {
             Box {
                 BubbleContent(
                     message = message,
@@ -161,6 +172,7 @@ fun MessageBubble(
                         },
                     )
                 }
+            }
             }
 
             // Reaction clusters

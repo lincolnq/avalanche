@@ -1,5 +1,10 @@
 package net.theavalanche.app
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +68,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.app_core.MessageTarget
 import uniffi.app_core.MessageRevisionFfi
 import java.util.UUID
 
@@ -166,6 +173,43 @@ fun ConversationView(
                 conversation = conversation,
             )
             historyMessage = message
+        }
+    }
+
+    // Photo attachment picker (docs/35): load the picked image, generate a
+    // thumbnail, and send it on the conversation's transport. Mirrors iOS.
+    val context = LocalContext.current
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val caption = messageText
+        messageText = ""
+        scope.launch {
+            val data = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+                    .getOrNull()
+            } ?: return@launch
+            val (thumb, w, h) = makeAttachmentThumbnail(data)
+            val target = if (conversation.isGroup) {
+                MessageTarget.Group(groupId = conversation.groupId ?: "")
+            } else {
+                MessageTarget.Dm(recipientDid = conversation.recipientDid ?: "")
+            }
+            runCatching {
+                viewModel.sendAttachment(
+                    conversationId = conversation.id,
+                    target = target,
+                    senderAccountId = conversation.accountId,
+                    data = data,
+                    contentType = "image/jpeg",
+                    fileName = "photo.jpg",
+                    caption = caption,
+                    width = w,
+                    height = h,
+                    thumbnail = thumb,
+                )
+            }.onFailure { errorMessage = it.message }
         }
     }
 
@@ -425,6 +469,9 @@ fun ConversationView(
                             )
                         },
                         onShowHistory = { showHistory(message) },
+                        attachmentLoader = { att ->
+                            viewModel.attachmentData(att, accountId = conversation.accountId)
+                        },
                     )
                 }
             }
@@ -471,6 +518,11 @@ fun ConversationView(
                     onSend = { sendMessage() },
                     onApplyEdit = { applyEdit() },
                     onCancelEdit = { cancelEdit() },
+                    onAttach = {
+                        photoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
                 )
         }
     }
@@ -526,6 +578,7 @@ private fun Composer(
     onSend: () -> Unit,
     onApplyEdit: () -> Unit,
     onCancelEdit: () -> Unit,
+    onAttach: () -> Unit = {},
 ) {
     Column {
         // Inline edit bar — shown above the text field when editing.
@@ -569,6 +622,17 @@ private fun Composer(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Attachment picker (docs/35) — hidden while editing a message.
+            if (editingMessage == null) {
+                IconButton(onClick = onAttach) {
+                    Icon(
+                        imageVector = Icons.Filled.AddCircle,
+                        contentDescription = "Attach",
+                        tint = AvalancheColors.Brand,
+                    )
+                }
+            }
+
             // Rounded, borderless "pill" input that sits on a soft fill — replaces
             // the boxy default outline. Grows up to a few lines, then scrolls.
             OutlinedTextField(

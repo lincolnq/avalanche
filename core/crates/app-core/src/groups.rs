@@ -2753,7 +2753,7 @@ impl AppCore {
                 .send_group_content(
                     ws.as_ref(),
                     &group_id,
-                    Body::Text(proto::TextMessage { body }),
+                    Body::Text(proto::TextMessage { body, ..Default::default() }),
                     sent_at_ms as u64,
                 )
                 .await

@@ -26,6 +26,9 @@ pub enum AppError {
 
     #[error("identity deletion failed before completion: {0}")]
     IdentityDeletionFailed(String),
+
+    #[error("attachment error: {0}")]
+    Attachment(#[from] crypto::attachments::AttachmentError),
 }
 
 /// UniFFI-exported error type. Flattened to strings since UniFFI can't
@@ -57,6 +60,9 @@ pub enum AppErrorFfi {
     /// deleted and local state was left intact (docs/53). Recoverable: retry.
     #[error("{reason}")]
     IdentityDeletionFailed { reason: String },
+
+    #[error("{reason}")]
+    Attachment { reason: String },
 }
 
 impl From<AppError> for AppErrorFfi {
@@ -72,6 +78,7 @@ impl From<AppError> for AppErrorFfi {
             AppError::IdentityDeletionFailed(s) => {
                 AppErrorFfi::IdentityDeletionFailed { reason: s }
             }
+            AppError::Attachment(e) => AppErrorFfi::Attachment { reason: e.to_string() },
         }
     }
 }

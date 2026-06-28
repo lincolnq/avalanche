@@ -20,6 +20,7 @@
 //! production implementation of [`Store`]; tests can supply any compatible type.
 //! This keeps cryptographic logic isolated and testable without a database.
 
+pub mod attachments;
 pub mod ephemeral;
 pub mod error;
 pub mod groups;

@@ -393,6 +393,8 @@ impl AppCoreInner {
             // DM-style profile_key handling here.
             profile_key: None,
             is_request: false,
+            // Populated when `process_decrypted` unwraps the inner text body.
+            attachments: Vec::new(),
         })
     }
 
@@ -954,6 +956,67 @@ impl AppCoreInner {
         Ok(())
     }
 
+    /// Encrypt `plaintext` with a fresh one-off key, upload the ciphertext to a
+    /// server-allocated slot, and return the pointer to embed in a message
+    /// (docs/35-attachments.md). The blob is padded, CBC+HMAC-encrypted, and
+    /// uploaded; the server never sees the key.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn upload_attachment_inner(
+        &mut self,
+        plaintext: Vec<u8>,
+        content_type: String,
+        file_name: Option<String>,
+        width: i32,
+        height: i32,
+        duration_ms: i32,
+        thumbnail: Vec<u8>,
+        flags: i32,
+    ) -> Result<crate::AttachmentFfi, AppError> {
+        let size_bytes = plaintext.len() as i64;
+        let key = crypto::attachments::generate_key();
+        let enc = crypto::attachments::encrypt(&plaintext, &key)?;
+        let slot = self
+            .client
+            .allocate_attachment_upload(enc.blob.len() as u64)
+            .await?;
+        self.client.upload_attachment_blob(&slot, enc.blob).await?;
+        Ok(crate::AttachmentFfi {
+            id: String::new(),
+            url: slot.download_url,
+            content_type,
+            key: key.to_vec(),
+            digest: enc.digest,
+            size_bytes,
+            file_name,
+            width,
+            height,
+            duration_ms,
+            blurhash: None,
+            thumbnail,
+            caption: None,
+            flags,
+            local_path: None,
+            downloaded_at_ms: None,
+        })
+    }
+
+    /// Download an attachment blob, verify its digest + MAC, and decrypt it
+    /// (docs/35). Returns the plaintext bytes; the caller writes them to disk
+    /// and records the path via `set_attachment_downloaded`.
+    pub(crate) async fn download_attachment_inner(
+        &self,
+        att: &crate::AttachmentFfi,
+    ) -> Result<Vec<u8>, AppError> {
+        let blob = self.client.download_attachment(&att.url, None).await?;
+        let plaintext = crypto::attachments::decrypt(
+            &blob,
+            &att.key,
+            &att.digest,
+            att.size_bytes as usize,
+        )?;
+        Ok(plaintext)
+    }
+
     /// Send a `ContentMessage` body to a conversation target — the single place
     /// the DM and group transports fork. DMs wrap the body in an envelope and
     /// fan out per-device (Double Ratchet); groups reuse `send_group_content`
@@ -1076,6 +1139,8 @@ impl AppCoreInner {
                         }
                         Some(Body::Text(text)) => {
                             let body = text.body;
+                            let attachments: Vec<crate::AttachmentFfi> =
+                                text.attachments.into_iter().map(crate::pointer_to_ffi).collect();
                             let sent_at = if content.timestamp_ms > 0 {
                                 Some(content.timestamp_ms as i64)
                             } else {
@@ -1120,6 +1185,7 @@ impl AppCoreInner {
                                 expire_timer_secs: content.expire_timer_secs,
                                 profile_key,
                                 is_request,
+                                attachments,
                                 ..raw
                             });
                         }
@@ -1302,6 +1368,9 @@ impl AppCoreInner {
             // content body is unwrapped.
             profile_key: None,
             is_request: false,
+            // Populated from the text body's pointers in `process_decrypted` /
+            // `receive_messages`.
+            attachments: Vec::new(),
         })
     }
 }
@@ -1365,6 +1434,8 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
         }
         Some(Body::Text(text)) => {
             let body = text.body;
+            let attachments: Vec<crate::AttachmentFfi> =
+                text.attachments.into_iter().map(crate::pointer_to_ffi).collect();
             let sent_at = if msg.timestamp_ms > 0 {
                 Some(msg.timestamp_ms as i64)
             } else {
@@ -1420,6 +1491,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                 expire_timer_secs: msg.expire_timer_secs,
                 profile_key,
                 is_request,
+                attachments,
                 ..decrypted
             };
             let _ = core.event_tx.send(IncomingEvent::Message { msg: out });
@@ -1634,8 +1706,9 @@ pub(crate) async fn apply_sync_sent(
             // deterministic on (conv, sent_at) so a redelivered transcript
             // upserts in place rather than duplicating.
             let sent_at = sync.timestamp as i64;
+            let msg_id = format!("synced-{conv_id}-{sent_at}");
             let msg = store::messages::HistoryMessage {
-                id: format!("synced-{conv_id}-{sent_at}"),
+                id: msg_id.clone(),
                 conversation_id: conv_id.clone(),
                 sender_did: my_did.to_string(),
                 body: text.body,
@@ -1650,7 +1723,20 @@ pub(crate) async fn apply_sync_sent(
                 expire_timer_secs: content.expire_timer_secs as i64,
                 expire_at: None,
             };
-            store.save_message(&msg).await.is_ok()
+            let saved = store.save_message(&msg).await.is_ok();
+            // Mirror the message's attachments so my own devices render them too.
+            if saved && !text.attachments.is_empty() {
+                let rows: Vec<store::attachments::AttachmentRow> = text
+                    .attachments
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        crate::ffi_to_attachment_row(&msg_id, i as i64, &crate::pointer_to_ffi(p))
+                    })
+                    .collect();
+                let _ = store.save_attachments(&msg_id, &rows).await;
+            }
+            saved
         }
         Some(Body::Reaction(r)) => {
             // I'm the reactor; the target is whatever the wire names.
@@ -1825,7 +1911,7 @@ mod tests {
         // The inner content is carried as opaque encoded bytes (non-recursive
         // wire type), and must decode back to the original ContentMessage.
         let inner = ContentMessage {
-            body: Some(Body::Text(TextMessage { body: "hi".into() })),
+            body: Some(Body::Text(TextMessage { body: "hi".into(), ..Default::default() })),
             timestamp_ms: 7,
             profile_key: vec![],
             expire_timer_secs: 0,
@@ -1885,6 +1971,7 @@ mod tests {
         let inner = ContentMessage {
             body: Some(Body::Text(TextMessage {
                 body: "from my phone".into(),
+                ..Default::default()
             })),
             timestamp_ms: 1000,
             profile_key: vec![],
@@ -1921,6 +2008,7 @@ mod tests {
         let inner = ContentMessage {
             body: Some(Body::Text(TextMessage {
                 body: "group hello from my phone".into(),
+                ..Default::default()
             })),
             timestamp_ms: 2000,
             profile_key: vec![],

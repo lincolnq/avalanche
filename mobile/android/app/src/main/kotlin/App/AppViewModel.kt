@@ -24,6 +24,7 @@ import uniffi.app_core.DecryptedMessage
 import uniffi.app_core.GroupEventKind
 import uniffi.app_core.IncomingEvent
 import uniffi.app_core.MessageRevisionFfi
+import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.MessageTarget
 import uniffi.app_core.PreparedAccount
 import uniffi.app_core.ReactionFfi
@@ -1231,6 +1232,7 @@ class AppViewModel(
             metadata = null,
             expireTimerSecs = timer,
             expireAtMs = null,
+            attachments = emptyList(),
         )
         withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = pending) } }
 
@@ -1248,6 +1250,7 @@ class AppViewModel(
                 body = text, sentAtMs = nowMs, editedAtMs = null, readAtMs = nowMs,
                 deliveryStatus = DeliveryStatus.SENT.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
+                attachments = emptyList(),
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = sent) } }
         }.onFailure { error ->
@@ -1262,9 +1265,77 @@ class AppViewModel(
                 body = text, sentAtMs = nowMs, editedAtMs = null, readAtMs = nowMs,
                 deliveryStatus = DeliveryStatus.FAILED.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
+                attachments = emptyList(),
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = failed) } }
             throw error
+        }
+    }
+
+    /**
+     * Send an attachment (docs/35): encrypt+upload the blob via core, send a
+     * message carrying the pointer, and persist+show an optimistic local copy.
+     * Mirrors iOS AppState.sendAttachment.
+     */
+    suspend fun sendAttachment(
+        conversationId: String,
+        target: MessageTarget,
+        senderAccountId: String,
+        data: ByteArray,
+        contentType: String,
+        fileName: String?,
+        caption: String = "",
+        width: Int = 0,
+        height: Int = 0,
+        thumbnail: ByteArray = ByteArray(0),
+    ) {
+        val core = cores[senderAccountId] ?: return
+        val messageId = UUID.randomUUID().toString()
+        val nowMs = System.currentTimeMillis()
+        val pointer = withContext(Dispatchers.IO) {
+            core.uploadAttachment(data, contentType, fileName, width, height, 0, thumbnail, 0)
+        }
+        withContext(Dispatchers.IO) {
+            core.sendMessageWithAttachments(target, caption, listOf(pointer), nowMs)
+        }
+        val stored = StoredMessageFfi(
+            id = messageId, conversationId = conversationId, senderDid = senderAccountId,
+            body = caption, sentAtMs = nowMs, editedAtMs = null, readAtMs = nowMs,
+            deliveryStatus = DeliveryStatus.SENT.code.toUByte(), editCount = 0u, deleted = false,
+            kind = 0L, metadata = null, expireTimerSecs = 0u, expireAtMs = null,
+            attachments = listOf(pointer),
+        )
+        withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = stored) } }
+        val optimistic = messageFromFfi(stored)
+        _messagesByConversation.update { map ->
+            val existing = map[conversationId] ?: return@update map
+            map + (conversationId to (existing + optimistic))
+        }
+    }
+
+    /**
+     * Download (or load the cached) decrypted bytes for an attachment (docs/35),
+     * caching the blob in filesDir and recording the path so later loads skip
+     * the network. Mirrors iOS AppState.attachmentData.
+     */
+    suspend fun attachmentData(attachment: AttachmentFfi, accountId: String): ByteArray? {
+        attachment.localPath?.let { path ->
+            val f = java.io.File(path)
+            if (f.exists()) return runCatching { f.readBytes() }.getOrNull()
+        }
+        val core = cores[accountId] ?: return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val data = core.downloadAttachment(attachment)
+                val dir = File(applicationContext.filesDir, "attachments").apply { mkdirs() }
+                val name = attachment.id.ifEmpty { UUID.randomUUID().toString() }
+                val file = File(dir, name)
+                file.writeBytes(data)
+                if (attachment.id.isNotEmpty()) {
+                    runCatching { core.setAttachmentDownloaded(attachment.id, file.absolutePath) }
+                }
+                data
+            }.getOrNull()
         }
     }
 
@@ -1606,6 +1677,7 @@ class AppViewModel(
         metadata = m.metadata,
         expireTimerSecs = m.expireTimerSecs,
         expireAtMs = m.expireAtMs,
+        attachments = m.attachments,
     )
 
     /**
@@ -1810,6 +1882,7 @@ class AppViewModel(
             metadata = null,
             expireTimerSecs = timer,
             expireAtMs = null,
+            attachments = emptyList(),
         )
         withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = pending) } }
 
@@ -1832,6 +1905,7 @@ class AppViewModel(
                 editedAtMs = null, readAtMs = sentAtMs,
                 deliveryStatus = DeliveryStatus.SENT.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
+                attachments = emptyList(),
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = sent) } }
         }.onFailure { error ->
@@ -1847,6 +1921,7 @@ class AppViewModel(
                 editedAtMs = null, readAtMs = sentAtMs,
                 deliveryStatus = DeliveryStatus.FAILED.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
+                attachments = emptyList(),
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = failed) } }
             throw error
@@ -2450,6 +2525,7 @@ class AppViewModel(
             readAtMs = null,
             deliveryStatus = DeliveryStatus.SENT,
             expireTimerSecs = msg.expireTimerSecs,
+            attachments = msg.attachments,
         )
         // Only append to the in-memory list if it's already loaded; otherwise
         // leave the entry absent so loadMessagesFromStore() does a full DB load
@@ -2489,6 +2565,7 @@ class AppViewModel(
                 metadata = null,
                 expireTimerSecs = msg.expireTimerSecs,
                 expireAtMs = null,
+                attachments = msg.attachments,
             )
             val profileKey = msg.profileKey
             val isRequest = msg.isRequest

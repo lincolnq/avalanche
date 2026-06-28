@@ -711,6 +711,15 @@ impl IdentityStore {
         let conv = conversation_id.to_string();
         self.conn
             .call(move |conn| {
+                // Attachment rows have no FK cascade (foreign_keys pragma is
+                // off), so clear them before the message rows they reference.
+                conn.execute(
+                    "DELETE FROM message_attachments
+                     WHERE message_id IN (
+                         SELECT id FROM message_history WHERE conversation_id = ?1
+                     )",
+                    rusqlite::params![conv],
+                )?;
                 conn.execute(
                     "DELETE FROM message_history WHERE conversation_id = ?1",
                     rusqlite::params![conv],

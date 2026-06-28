@@ -60,8 +60,8 @@ use crypto::session::DeviceAddress;
 use error::{AppError, AppErrorFfi};
 use net::types::{RegisterRequest, ReplaceDeviceRequest};
 use proto::{
-    content_message::Body, delete_message, receipt_message, ContentMessage, DeleteMessage,
-    EditMessage, ReactionMessage, ReceiptMessage, TextMessage,
+    content_message::Body, delete_message, receipt_message, AttachmentPointer, ContentMessage,
+    DeleteMessage, EditMessage, ReactionMessage, ReceiptMessage, TextMessage,
 };
 use prost::Message as _;
 use rand::TryRngCore as _;
@@ -137,6 +137,146 @@ pub struct ProjectInfoFfi {
     pub description: String,
 }
 
+/// An end-to-end-encrypted attachment (docs/35-attachments.md).
+///
+/// One type spans the whole lifecycle: the pointer fields (`url`..`flags`)
+/// mirror the wire `AttachmentPointer`; `id`/`local_path`/`downloaded_at_ms`
+/// carry local state once the attachment is persisted/downloaded. A freshly
+/// uploaded pointer has an empty `id` and no local state.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AttachmentFfi {
+    /// Local row id; empty for a freshly-uploaded pointer not yet persisted.
+    pub id: String,
+    /// Full download URL on the hosting homeserver.
+    pub url: String,
+    pub content_type: String,
+    /// 64-byte attachment key (`aes ‖ hmac`).
+    pub key: Vec<u8>,
+    /// 32-byte SHA-256 of the stored ciphertext blob.
+    pub digest: Vec<u8>,
+    /// Unpadded plaintext size in bytes.
+    pub size_bytes: i64,
+    pub file_name: Option<String>,
+    pub width: i32,
+    pub height: i32,
+    pub duration_ms: i32,
+    pub blurhash: Option<String>,
+    /// Small decrypted preview (downscaled JPEG); empty if none.
+    pub thumbnail: Vec<u8>,
+    pub caption: Option<String>,
+    /// Bitset (VOICE_NOTE, GIF, ...).
+    pub flags: i32,
+    /// Filesystem path of the decrypted full blob once downloaded; `None`
+    /// until the consumer downloads it and records the path via
+    /// `set_attachment_downloaded`.
+    pub local_path: Option<String>,
+    pub downloaded_at_ms: Option<i64>,
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Decode a wire `AttachmentPointer` into its FFI shape (no local state yet).
+fn pointer_to_ffi(p: AttachmentPointer) -> AttachmentFfi {
+    AttachmentFfi {
+        id: String::new(),
+        url: p.url,
+        content_type: p.content_type,
+        key: p.key,
+        digest: p.digest,
+        size_bytes: p.size_bytes as i64,
+        file_name: non_empty(p.file_name),
+        width: p.width as i32,
+        height: p.height as i32,
+        duration_ms: p.duration_ms as i32,
+        blurhash: non_empty(p.blurhash),
+        thumbnail: p.thumbnail,
+        caption: non_empty(p.caption),
+        flags: p.flags as i32,
+        local_path: None,
+        downloaded_at_ms: None,
+    }
+}
+
+/// Encode an FFI attachment back to its wire pointer (drops local-only fields).
+fn ffi_to_pointer(a: &AttachmentFfi) -> AttachmentPointer {
+    AttachmentPointer {
+        url: a.url.clone(),
+        content_type: a.content_type.clone(),
+        key: a.key.clone(),
+        digest: a.digest.clone(),
+        size_bytes: a.size_bytes as u64,
+        file_name: a.file_name.clone().unwrap_or_default(),
+        width: a.width.max(0) as u32,
+        height: a.height.max(0) as u32,
+        duration_ms: a.duration_ms.max(0) as u32,
+        blurhash: a.blurhash.clone().unwrap_or_default(),
+        thumbnail: a.thumbnail.clone(),
+        caption: a.caption.clone().unwrap_or_default(),
+        flags: a.flags.max(0) as u32,
+    }
+}
+
+/// Convert a stored attachment row to its FFI shape.
+fn attachment_row_to_ffi(r: store::attachments::AttachmentRow) -> AttachmentFfi {
+    AttachmentFfi {
+        id: r.id,
+        url: r.url,
+        content_type: r.content_type,
+        key: r.enc_key,
+        digest: r.digest,
+        size_bytes: r.size_bytes,
+        file_name: r.file_name,
+        width: r.width.unwrap_or(0) as i32,
+        height: r.height.unwrap_or(0) as i32,
+        duration_ms: r.duration_ms.unwrap_or(0) as i32,
+        blurhash: r.blurhash,
+        thumbnail: r.thumbnail.unwrap_or_default(),
+        caption: r.caption,
+        flags: r.flags as i32,
+        local_path: r.local_path,
+        downloaded_at_ms: r.downloaded_at.map(|t| t.as_millis()),
+    }
+}
+
+/// Build a store attachment row from an FFI attachment for `message_id` at
+/// `ordinal`. A fresh local id is generated when the FFI carries none.
+fn ffi_to_attachment_row(
+    message_id: &str,
+    ordinal: i64,
+    a: &AttachmentFfi,
+) -> store::attachments::AttachmentRow {
+    store::attachments::AttachmentRow {
+        id: if a.id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            a.id.clone()
+        },
+        message_id: message_id.to_string(),
+        ordinal,
+        url: a.url.clone(),
+        content_type: a.content_type.clone(),
+        enc_key: a.key.clone(),
+        digest: a.digest.clone(),
+        size_bytes: a.size_bytes,
+        file_name: a.file_name.clone(),
+        width: (a.width != 0).then_some(a.width as i64),
+        height: (a.height != 0).then_some(a.height as i64),
+        duration_ms: (a.duration_ms != 0).then_some(a.duration_ms as i64),
+        blurhash: a.blurhash.clone(),
+        thumbnail: (!a.thumbnail.is_empty()).then(|| a.thumbnail.clone()),
+        caption: a.caption.clone(),
+        flags: a.flags as i64,
+        local_path: a.local_path.clone(),
+        downloaded_at: a.downloaded_at_ms.map(Timestamp),
+    }
+}
+
 /// A decrypted inbound message.
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct DecryptedMessage {
@@ -166,6 +306,10 @@ pub struct DecryptedMessage {
     /// app-core no longer sets the pending-request flag itself; it only reports
     /// the verdict so the consumer can decide whether to persist it.
     pub is_request: bool,
+    /// Attachment pointers carried on a text body (docs/35). Empty for messages
+    /// with no attachments. The consumer persists these via `save_message` and
+    /// fetches the blobs via `download_attachment`.
+    pub attachments: Vec<AttachmentFfi>,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -198,6 +342,9 @@ pub struct StoredMessageFfi {
     /// Unix-millis deletion deadline once the countdown has started (on read),
     /// or `None`. The UI schedules the live disappear from this.
     pub expire_at_ms: Option<i64>,
+    /// Attachments on this message (docs/35), ordered. Empty for plain text.
+    /// Populated by `load_messages`; persisted by `save_message`.
+    pub attachments: Vec<AttachmentFfi>,
 }
 
 /// A reaction on a message (docs/33-reactions.md), keyed by the target's wire
@@ -257,6 +404,9 @@ fn stored_to_ffi(m: store::messages::HistoryMessage) -> StoredMessageFfi {
         metadata: m.metadata,
         expire_timer_secs: m.expire_timer_secs as u32,
         expire_at_ms: m.expire_at.map(|t| t.as_millis()),
+        // Attachments are loaded and merged separately (load_messages); a bare
+        // conversion carries none.
+        attachments: Vec::new(),
     }
 }
 
@@ -1564,7 +1714,7 @@ impl AppCore {
                     &MessageTarget::Dm {
                         recipient_did: recipient_did.clone(),
                     },
-                    Body::Text(TextMessage { body }),
+                    Body::Text(TextMessage { body, ..Default::default() }),
                     sent_at_ms as u64,
                 )
                 .await?;
@@ -1612,7 +1762,7 @@ impl AppCore {
                 .send_to_target(
                     ws.as_ref(),
                     &target,
-                    Body::Text(TextMessage { body }),
+                    Body::Text(TextMessage { body, ..Default::default() }),
                     sent_at_ms as u64,
                 )
                 .await?;
@@ -1623,6 +1773,105 @@ impl AppCore {
                     .await;
             }
             Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Send a text message with attachments to a [`MessageTarget`] (docs/35).
+    /// The attachments must already be uploaded via [`Self::upload_attachment`]
+    /// (the caller passes the returned pointers here). `body` may be empty for
+    /// an attachment-only message. Works for both DMs and groups.
+    ///
+    /// Call from a background thread — this blocks until complete.
+    pub fn send_message_with_attachments(
+        &self,
+        target: MessageTarget,
+        body: String,
+        attachments: Vec<AttachmentFfi>,
+        sent_at_ms: i64,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let ws = self.ws.lock().expect("ws mutex poisoned").clone();
+            let mut inner = self.inner.lock().await;
+            if let MessageTarget::Dm { recipient_did } = &target {
+                inner.ensure_not_blocked(recipient_did).await?;
+            }
+            let attachments = attachments.iter().map(ffi_to_pointer).collect();
+            inner
+                .send_to_target(
+                    ws.as_ref(),
+                    &target,
+                    Body::Text(TextMessage { body, attachments }),
+                    sent_at_ms as u64,
+                )
+                .await?;
+            if let MessageTarget::Dm { recipient_did } = &target {
+                let _ = inner
+                    .store
+                    .touch_contact(recipient_did, true, Timestamp::now())
+                    .await;
+            }
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Encrypt and upload an attachment blob (docs/35), returning the pointer to
+    /// pass to [`Self::send_message_with_attachments`]. The blob is padded,
+    /// CBC+HMAC-encrypted under a fresh one-off key, and uploaded; the server
+    /// only ever sees ciphertext.
+    ///
+    /// `width`/`height`/`duration_ms`/`flags` are `0` when not applicable;
+    /// `thumbnail` is an empty vec when there is none. Call from a background
+    /// thread — this blocks until complete.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_attachment(
+        &self,
+        plaintext: Vec<u8>,
+        content_type: String,
+        file_name: Option<String>,
+        width: i32,
+        height: i32,
+        duration_ms: i32,
+        thumbnail: Vec<u8>,
+        flags: i32,
+    ) -> Result<AttachmentFfi, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let mut inner = self.inner.lock().await;
+            inner
+                .upload_attachment_inner(
+                    plaintext, content_type, file_name, width, height, duration_ms, thumbnail,
+                    flags,
+                )
+                .await
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Download, verify, and decrypt an attachment blob (docs/35). Returns the
+    /// plaintext bytes; the caller writes them to disk and records the path via
+    /// [`Self::set_attachment_downloaded`].
+    ///
+    /// Aborts before decrypting if the downloaded bytes don't match the
+    /// pointer's digest. Call from a background thread — this blocks.
+    pub fn download_attachment(&self, attachment: AttachmentFfi) -> Result<Vec<u8>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner.download_attachment_inner(&attachment).await
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Record that an attachment's full blob has been downloaded to `local_path`
+    /// (docs/35), so later loads render the local file instead of re-fetching.
+    pub fn set_attachment_downloaded(
+        &self,
+        attachment_id: String,
+        local_path: String,
+    ) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            inner
+                .store
+                .set_attachment_downloaded(&attachment_id, &local_path, Timestamp::now())
+                .await
+                .map_err(AppError::from)
         }).map_err(AppErrorFfi::from)
     }
 
@@ -1795,7 +2044,7 @@ impl AppCore {
                 .await.map_err(AppError::from)?;
             let body = Body::Edit(EditMessage {
                 target_sent_at: target_sent_at_ms as u64,
-                replacement: Some(TextMessage { body: new_body }),
+                replacement: Some(TextMessage { body: new_body, ..Default::default() }),
             });
             inner.send_to_target(ws.as_ref(), &target, body, sent_at_ms as u64).await
         }).map_err(AppErrorFfi::from)
@@ -2007,6 +2256,13 @@ impl AppCore {
     /// Save a message to local history (SQLCipher).
     pub fn save_message(&self, msg: StoredMessageFfi) -> Result<(), AppErrorFfi> {
         let timed = msg.expire_timer_secs > 0;
+        let msg_id = msg.id.clone();
+        let attachment_rows: Vec<store::attachments::AttachmentRow> = msg
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| ffi_to_attachment_row(&msg_id, i as i64, a))
+            .collect();
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
             inner.store.save_message(&store::messages::HistoryMessage {
@@ -2032,7 +2288,13 @@ impl AppCore {
                 // store-owned (set on read), so it's a placeholder here.
                 expire_timer_secs: msg.expire_timer_secs as i64,
                 expire_at: None,
-            }).await.map_err(AppError::from)
+            }).await.map_err(AppError::from)?;
+            // Persist the message's attachment pointers (docs/35). Idempotent:
+            // re-saving on a status transition preserves prior download state.
+            if !attachment_rows.is_empty() {
+                inner.store.save_attachments(&msg_id, &attachment_rows).await.map_err(AppError::from)?;
+            }
+            Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)?;
         // Wake the reaper so it schedules this message's deadline (docs/03 §5).
         if timed {
@@ -2064,7 +2326,26 @@ impl AppCore {
             let inner = self.inner.lock().await;
             let msgs = inner.store.load_messages(&conversation_id, Timestamp::now()).await
                 .map_err(AppError::from)?;
-            Ok::<_, AppError>(msgs.into_iter().map(stored_to_ffi).collect())
+            // Load all attachments for the conversation in one query, then group
+            // by message id so each row's pointers (and local download state)
+            // ride along for rendering (docs/35).
+            let atts = inner
+                .store
+                .load_attachments_for_conversation(&conversation_id)
+                .await
+                .map_err(AppError::from)?;
+            let mut by_msg: std::collections::HashMap<String, Vec<AttachmentFfi>> =
+                std::collections::HashMap::new();
+            for a in atts {
+                by_msg.entry(a.message_id.clone()).or_default().push(attachment_row_to_ffi(a));
+            }
+            Ok::<_, AppError>(msgs.into_iter().map(|m| {
+                let mut ffi = stored_to_ffi(m);
+                if let Some(a) = by_msg.remove(&ffi.id) {
+                    ffi.attachments = a;
+                }
+                ffi
+            }).collect())
         }).map_err(AppErrorFfi::from)
     }
 
@@ -3810,12 +4091,73 @@ impl AppCore {
         let profile_key = inner.own_profile_key().await;
         let expire_timer_secs = inner.dm_expire_timer(recipient_did).await;
         let msg = ContentMessage {
-            body: Some(Body::Text(TextMessage { body })),
+            body: Some(Body::Text(TextMessage { body, ..Default::default() })),
             timestamp_ms: sent_at_ms as u64,
             profile_key,
             expire_timer_secs,
         };
         inner.send_dm(ws.as_ref(), recipient_did, &msg.encode_to_vec(), None).await
+    }
+
+    /// Async attachment upload for tests (docs/35).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_attachment_async(
+        &self,
+        plaintext: Vec<u8>,
+        content_type: &str,
+        file_name: Option<String>,
+        width: i32,
+        height: i32,
+        duration_ms: i32,
+        thumbnail: Vec<u8>,
+        flags: i32,
+    ) -> Result<AttachmentFfi, AppError> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .upload_attachment_inner(
+                plaintext,
+                content_type.to_string(),
+                file_name,
+                width,
+                height,
+                duration_ms,
+                thumbnail,
+                flags,
+            )
+            .await
+    }
+
+    /// Async attachment download + verify + decrypt for tests (docs/35).
+    pub async fn download_attachment_async(
+        &self,
+        attachment: &AttachmentFfi,
+    ) -> Result<Vec<u8>, AppError> {
+        let inner = self.inner.lock().await;
+        inner.download_attachment_inner(attachment).await
+    }
+
+    /// Async send-with-attachments for tests (docs/35).
+    pub async fn send_message_with_attachments_async(
+        &self,
+        target: MessageTarget,
+        body: &str,
+        attachments: Vec<AttachmentFfi>,
+        sent_at_ms: i64,
+    ) -> Result<(), AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
+        let mut inner = self.inner.lock().await;
+        if let MessageTarget::Dm { recipient_did } = &target {
+            inner.ensure_not_blocked(recipient_did).await?;
+        }
+        let attachments = attachments.iter().map(ffi_to_pointer).collect();
+        inner
+            .send_to_target(
+                ws.as_ref(),
+                &target,
+                Body::Text(TextMessage { body: body.to_string(), attachments }),
+                sent_at_ms as u64,
+            )
+            .await
     }
 
     /// Async block/unblock for tests and bots (docs/12 §2). Blocking creates a

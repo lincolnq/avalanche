@@ -30,6 +30,9 @@ struct MessageBubble: View {
     var onEdit: () -> Void = {}
     var onDelete: (Bool) -> Void = { _ in }
     var onShowHistory: () -> Void = {}
+    /// Loads decrypted bytes for an attachment (docs/35); injected by the
+    /// conversation view so the bubble stays free of app-core access.
+    var attachmentLoader: (AttachmentFfi) async -> Data? = { _ in nil }
 
     /// Quick-reaction palette shown in the long-press menu.
     private static let quickEmoji = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
@@ -46,7 +49,16 @@ struct MessageBubble: View {
                         .foregroundStyle(senderColor)
                         .padding(.leading, 4)
                 }
-                bubble
+                if !message.attachments.isEmpty {
+                    ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, att in
+                        AttachmentView(attachment: att, loader: attachmentLoader)
+                    }
+                }
+                // The text bubble is omitted for an attachment-only message
+                // (empty body), so a photo doesn't get an empty grey bubble.
+                if !message.body.isEmpty || message.attachments.isEmpty || message.isDeleted {
+                    bubble
+                }
                 if !reactionClusters.isEmpty {
                     reactionCluster
                 }

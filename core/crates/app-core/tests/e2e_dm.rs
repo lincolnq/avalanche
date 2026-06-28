@@ -65,6 +65,56 @@ async fn alice_sends_dm_to_bob() {
 }
 
 #[tokio::test]
+async fn alice_sends_dm_with_attachment_bob_downloads_and_decrypts() {
+    use app_core::MessageTarget;
+
+    let url = server_url();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token()).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token()).await.unwrap();
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    // A blob bigger than one AES block and not a bucket boundary, so padding +
+    // trimming are exercised.
+    let original: Vec<u8> = (0..5000u32).map(|i| (i % 256) as u8).collect();
+
+    // Alice encrypts + uploads, then sends a DM carrying the pointer.
+    let pointer = alice
+        .upload_attachment_async(original.clone(), "image/jpeg", Some("photo.jpg".into()), 800, 600, 0, vec![1, 2, 3], 0)
+        .await
+        .unwrap();
+    assert_eq!(pointer.key.len(), 64);
+    assert_eq!(pointer.digest.len(), 32);
+    assert_eq!(pointer.size_bytes, original.len() as i64);
+
+    alice
+        .send_message_with_attachments_async(
+            MessageTarget::Dm { recipient_did: bob_did.clone() },
+            "look at this",
+            vec![pointer],
+            now_ms(),
+        )
+        .await
+        .unwrap();
+
+    // Bob receives the message with the pointer attached.
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].plaintext, b"look at this");
+    assert_eq!(msgs[0].attachments.len(), 1);
+    let att = &msgs[0].attachments[0];
+    assert_eq!(att.content_type, "image/jpeg");
+    assert_eq!(att.file_name.as_deref(), Some("photo.jpg"));
+    assert_eq!(att.width, 800);
+    assert_eq!(att.thumbnail, vec![1, 2, 3]);
+    assert_eq!(att.size_bytes, original.len() as i64);
+
+    // Bob downloads, verifies the digest, decrypts, and recovers the exact bytes.
+    let recovered = bob.download_attachment_async(att).await.unwrap();
+    assert_eq!(recovered, original);
+}
+
+#[tokio::test]
 async fn bidirectional_conversation() {
     let url = server_url();
 

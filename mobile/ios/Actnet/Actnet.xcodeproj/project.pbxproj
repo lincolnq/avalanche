@@ -44,6 +44,7 @@
 		947A00551C7A5A62A0638A14 /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61ED846E5A712650DB67C893 /* Conversation.swift */; };
 		99FD87ED3F4EB328193828FF /* RecoveryConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C175D8D86EA1A357FB1515A9 /* RecoveryConsoleView.swift */; };
 		9A5A0F932631DA4A71A0A632 /* InviteToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D6AA10E40B490772D3A29A3 /* InviteToken.swift */; };
+		9D91452D0FAE26AAAB374C93 /* AttachmentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE4E0138D3CCEDCB01175F94 /* AttachmentViews.swift */; };
 		A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEE393F3CBD5B0C5D48ACDC /* PushManager.swift */; };
 		A58A9D263F1E4921F319B28F /* IdentityPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AB2D93100F9BA3D2C8BBD22 /* IdentityPickerView.swift */; };
 		ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */; };
@@ -122,6 +123,7 @@
 		B42EE451B555DFBE024236DB /* ProjectInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectInfo.swift; sourceTree = "<group>"; };
 		B6168BA4AD89E27656AE0A59 /* PasskeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyManager.swift; sourceTree = "<group>"; };
 		B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectWebView.swift; sourceTree = "<group>"; };
+		BE4E0138D3CCEDCB01175F94 /* AttachmentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentViews.swift; sourceTree = "<group>"; };
 		C0BC2191A5A534D46806501B /* ConversationRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRow.swift; sourceTree = "<group>"; };
 		C175D8D86EA1A357FB1515A9 /* RecoveryConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryConsoleView.swift; sourceTree = "<group>"; };
 		C9F568020569E5B672851351 /* BlockedContactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedContactsView.swift; sourceTree = "<group>"; };
@@ -202,6 +204,7 @@
 		3E11A5DB2587F144B7D53C07 /* Chats */ = {
 			isa = PBXGroup;
 			children = (
+				BE4E0138D3CCEDCB01175F94 /* AttachmentViews.swift */,
 				60B3DC7CBE016789D232757D /* ChatsView.swift */,
 				77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */,
 				C0BC2191A5A534D46806501B /* ConversationRow.swift */,
@@ -411,6 +414,7 @@
 				453C9CABA749A1A2D5191AC4 /* AppCoreProtocol+Defaults.swift in Sources */,
 				B1BE1C0F66D5E81BA2BE3ED4 /* AppLog.swift in Sources */,
 				DD42A62234B9DF687F2AE7BB /* AppState.swift in Sources */,
+				9D91452D0FAE26AAAB374C93 /* AttachmentViews.swift in Sources */,
 				EF24D30DE8AE1125CB83DB84 /* AvalancheColors.swift in Sources */,
 				835054B2BD1DA05A5F04B452 /* Base64URL.swift in Sources */,
 				B514347DE5B82B23C61F63D9 /* BlockedContactsView.swift in Sources */,
@@ -474,7 +478,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 384;
+				CURRENT_PROJECT_VERSION = 387;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -630,7 +634,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 384;
+				CURRENT_PROJECT_VERSION = 387;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (

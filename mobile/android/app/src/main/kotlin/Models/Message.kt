@@ -2,6 +2,7 @@ package net.theavalanche.app
 
 import org.json.JSONObject
 import java.util.Date
+import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.GroupEventKind
 
 // `GroupEventKind` is the UniFFI-generated enum (from Generated/uniffi/app_core/app_core.kt).
@@ -81,6 +82,8 @@ data class Message(
     /// Unix-millis deletion deadline once the countdown started (on read), or
     /// null. The UI schedules the live disappear from this.
     var expireAtMs: Long? = null,
+    /// Attachments on this message (docs/35); empty for plain text.
+    var attachments: List<AttachmentFfi> = emptyList(),
 ) {
     val sentAt: Date get() = Date(sentAtMs)
 

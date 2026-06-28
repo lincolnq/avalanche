@@ -162,7 +162,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 kind: msgs[i].kind,
                 metadata: msgs[i].metadata,
                 expireTimerSecs: msgs[i].expireTimerSecs,
-                expireAtMs: msgs[i].expireAtMs
+                expireAtMs: msgs[i].expireAtMs,
+                attachments: msgs[i].attachments
             )
             count += 1
         }
@@ -288,7 +289,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             groupId: nil,
             expireTimerSecs: 0,
             profileKey: nil,
-            isRequest: false
+            isRequest: false,
+            attachments: []
         )
         nextMessageId += 1
         pendingMessages.append(msg)

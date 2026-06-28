@@ -977,7 +977,8 @@ final class AppState: ObservableObject {
             kind: 0,
             metadata: nil,
             expireTimerSecs: timer,
-            expireAtMs: nil
+            expireAtMs: nil,
+            attachments: []
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -990,7 +991,7 @@ final class AppState: ObservableObject {
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
                 deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
-                expireTimerSecs: timer, expireAtMs: nil
+                expireTimerSecs: timer, expireAtMs: nil, attachments: []
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -1000,11 +1001,81 @@ final class AppState: ObservableObject {
                 id: messageId, conversationId: conversationId, senderDid: senderAccountId,
                 body: text, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
                 deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
-                expireTimerSecs: timer, expireAtMs: nil
+                expireTimerSecs: timer, expireAtMs: nil, attachments: []
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
         }
+    }
+
+    /// Send an attachment (docs/35): encrypt+upload the blob via core, send a
+    /// message carrying the pointer, and persist+show an optimistic local copy.
+    /// `target` selects DM vs group; `caption` is the optional message body.
+    func sendAttachment(
+        conversationId: String,
+        target: MessageTarget,
+        senderAccountId: String,
+        data: Data,
+        contentType: String,
+        fileName: String?,
+        caption: String = "",
+        width: Int32 = 0,
+        height: Int32 = 0,
+        thumbnail: Data = Data()
+    ) async throws {
+        guard let core = cores[senderAccountId] else { return }
+        let messageId = UUID().uuidString
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let pointer = try await Task.detached {
+            try core.uploadAttachment(
+                plaintext: data, contentType: contentType, fileName: fileName,
+                width: width, height: height, durationMs: 0, thumbnail: thumbnail, flags: 0
+            )
+        }.value
+        try await Task.detached {
+            try core.sendMessageWithAttachments(
+                target: target, body: caption, attachments: [pointer], sentAtMs: nowMs
+            )
+        }.value
+        let stored = StoredMessageFfi(
+            id: messageId, conversationId: conversationId, senderDid: senderAccountId,
+            body: caption, sentAtMs: nowMs, editedAtMs: nil, readAtMs: nowMs,
+            deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false,
+            kind: 0, metadata: nil, expireTimerSecs: 0, expireAtMs: nil, attachments: [pointer]
+        )
+        try await Task.detached { try core.saveMessage(msg: stored) }.value
+        let optimistic = AppState.message(from: stored)
+        if messagesByConversation[conversationId] != nil {
+            messagesByConversation[conversationId]?.append(optimistic)
+        }
+        if let idx = conversations.firstIndex(where: { $0.id == conversationId }) {
+            conversations[idx].lastMessage = caption.isEmpty ? "📎 Attachment" : caption
+            conversations[idx].lastMessageDate = optimistic.sentAt
+        }
+    }
+
+    /// Download (or load the cached) decrypted bytes for an attachment (docs/35),
+    /// caching the blob on disk and recording the local path so subsequent loads
+    /// skip the network.
+    func attachmentData(_ att: AttachmentFfi, accountId: String) async -> Data? {
+        if let path = att.localPath, let d = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+            return d
+        }
+        guard let core = cores[accountId] else { return nil }
+        return try? await Task.detached {
+            let data = try core.downloadAttachment(attachment: att)
+            let dir = FileManager.default
+                .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("attachments", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let name = att.id.isEmpty ? UUID().uuidString : att.id
+            let fileURL = dir.appendingPathComponent(name)
+            try? data.write(to: fileURL)
+            if !att.id.isEmpty {
+                try? core.setAttachmentDownloaded(attachmentId: att.id, localPath: fileURL.path)
+            }
+            return data
+        }.value
     }
 
     /// Update an in-memory message's delivery status by id.
@@ -1302,7 +1373,8 @@ final class AppState: ObservableObject {
             kind: Int(m.kind),
             metadata: m.metadata,
             expireTimerSecs: m.expireTimerSecs,
-            expireAtMs: m.expireAtMs
+            expireAtMs: m.expireAtMs,
+            attachments: m.attachments
         )
     }
 
@@ -1500,7 +1572,8 @@ final class AppState: ObservableObject {
             kind: 0,
             metadata: nil,
             expireTimerSecs: timer,
-            expireAtMs: nil
+            expireAtMs: nil,
+            attachments: []
         )
         try await Task.detached { try core.saveMessage(msg: pending) }.value
 
@@ -1513,7 +1586,7 @@ final class AppState: ObservableObject {
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
                 deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
-                expireTimerSecs: timer, expireAtMs: nil
+                expireTimerSecs: timer, expireAtMs: nil, attachments: []
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -1523,7 +1596,7 @@ final class AppState: ObservableObject {
                 id: messageId, conversationId: conversation.id, senderDid: conversation.accountId,
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
                 deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false, kind: 0, metadata: nil,
-                expireTimerSecs: timer, expireAtMs: nil
+                expireTimerSecs: timer, expireAtMs: nil, attachments: []
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
@@ -1974,7 +2047,8 @@ final class AppState: ObservableObject {
             sentAtMs: sentAtMs,
             readAtMs: nil,
             deliveryStatus: .sent,
-            expireTimerSecs: msg.expireTimerSecs
+            expireTimerSecs: msg.expireTimerSecs,
+            attachments: msg.attachments
         )
         // Only append to the in-memory list if it's already loaded; otherwise
         // leave the entry nil so loadMessagesFromStore() does a full DB load
@@ -2014,7 +2088,8 @@ final class AppState: ObservableObject {
                 // Carry the sender-stamped timer (docs/03 §5); the store starts
                 // the countdown when this message is marked read.
                 expireTimerSecs: msg.expireTimerSecs,
-                expireAtMs: nil
+                expireAtMs: nil,
+                attachments: msg.attachments
             )
             Task.detached { try? core.saveMessage(msg: stored) }
 

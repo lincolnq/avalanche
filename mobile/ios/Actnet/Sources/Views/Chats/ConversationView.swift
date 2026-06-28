@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
@@ -26,6 +27,8 @@ struct ConversationView: View {
     /// keep the readable transcript but lose the composer. Always true for DMs.
     /// Loaded on appear and after leaving.
     @State private var isGroupMember = true
+    /// Selected photo to attach (docs/35); sent as soon as it's picked.
+    @State private var photoItem: PhotosPickerItem?
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
@@ -109,7 +112,10 @@ struct ConversationView: View {
                                 onDelete: { forEveryone in
                                     appState.deleteMessage(message: message, forEveryone: forEveryone, conversation: conversation)
                                 },
-                                onShowHistory: { showHistory(message) }
+                                onShowHistory: { showHistory(message) },
+                                attachmentLoader: { att in
+                                    await appState.attachmentData(att, accountId: conversation.accountId)
+                                }
                             )
                             .id(message.sentAtMs)
                         }
@@ -248,6 +254,15 @@ struct ConversationView: View {
         }
 
         HStack(spacing: 12) {
+            // Attachment picker (docs/35) — hidden while editing a message.
+            if editingMessage == nil {
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Color.avBrand)
+                }
+            }
+
             TextField(editingMessage == nil ? "Message" : "Edit message", text: $messageText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
@@ -266,6 +281,11 @@ struct ConversationView: View {
             if !messages.isEmpty {
                 scrollPosition.scrollTo(edge: .bottom)
             }
+        }
+        .onChange(of: photoItem) {
+            guard let item = photoItem else { return }
+            photoItem = nil
+            sendPickedPhoto(item)
         }
     }
 
@@ -347,6 +367,37 @@ struct ConversationView: View {
         Task {
             historyRevisions = await appState.loadMessageRevisions(message: message, conversation: conversation)
             historyMessage = message
+        }
+    }
+
+    /// Load the picked image, generate a thumbnail, and send it as an
+    /// attachment (docs/35) on the conversation's transport.
+    private func sendPickedPhoto(_ item: PhotosPickerItem) {
+        let caption = messageText
+        messageText = ""
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+            let (thumb, w, h) = makeAttachmentThumbnail(data)
+            let target: MessageTarget = conversation.isGroup
+                ? .group(groupId: conversation.groupId ?? "")
+                : .dm(recipientDid: conversation.recipientDid ?? "")
+            do {
+                try await appState.sendAttachment(
+                    conversationId: conversation.id,
+                    target: target,
+                    senderAccountId: conversation.accountId,
+                    data: data,
+                    contentType: "image/jpeg",
+                    fileName: "photo.jpg",
+                    caption: caption,
+                    width: w,
+                    height: h,
+                    thumbnail: thumb
+                )
+                scrollPosition.scrollTo(edge: .bottom)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

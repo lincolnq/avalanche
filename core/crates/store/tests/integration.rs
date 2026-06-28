@@ -517,3 +517,92 @@ async fn sender_key_shared_is_tracked_per_device() {
     store.clear_sender_key_shared(g).await.unwrap();
     assert_eq!(store.sender_key_unshared_devices(g, bob, &[1, 2]).await.unwrap(), vec![1, 2]);
 }
+
+#[tokio::test]
+async fn attachments_save_load_download_and_cleanup() {
+    use store::attachments::AttachmentRow;
+    use store::messages::HistoryMessage;
+
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    let msg = HistoryMessage {
+        id: "m1".to_string(),
+        conversation_id: "dm-bob".to_string(),
+        sender_did: "did:plc:alice".to_string(),
+        body: "look at these".to_string(),
+        sent_at: Timestamp(1000),
+        edited_at: None,
+        read_at: None,
+        delivery_status: 1,
+        edit_count: 0,
+        deleted_at: None,
+        kind: 0,
+        metadata: None,
+        expire_timer_secs: 0,
+        expire_at: None,
+    };
+    store.save_message(&msg).await.unwrap();
+
+    let row = |id: &str, ord: i64| AttachmentRow {
+        id: id.to_string(),
+        message_id: "m1".to_string(),
+        ordinal: ord,
+        url: format!("https://srv/v1/attachments/{id}"),
+        content_type: "image/jpeg".to_string(),
+        enc_key: vec![7u8; 64],
+        digest: vec![9u8; 32],
+        size_bytes: 12345,
+        file_name: Some(format!("{id}.jpg")),
+        width: Some(800),
+        height: Some(600),
+        duration_ms: None,
+        blurhash: None,
+        thumbnail: Some(vec![1, 2, 3]),
+        caption: None,
+        flags: 0,
+        local_path: None,
+        downloaded_at: None,
+    };
+    store
+        .save_attachments("m1", &[row("a1", 0), row("a2", 1)])
+        .await
+        .unwrap();
+
+    // Loaded in ordinal order with metadata intact.
+    let loaded = store.load_attachments("m1").await.unwrap();
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].id, "a1");
+    assert_eq!(loaded[1].id, "a2");
+    assert_eq!(loaded[0].enc_key, vec![7u8; 64]);
+    assert_eq!(loaded[0].width, Some(800));
+    assert!(loaded[0].local_path.is_none());
+
+    // Mark one downloaded.
+    store
+        .set_attachment_downloaded("a1", "/tmp/a1.jpg", Timestamp(2000))
+        .await
+        .unwrap();
+    let after = store.load_attachments("m1").await.unwrap();
+    assert_eq!(after[0].local_path.as_deref(), Some("/tmp/a1.jpg"));
+    assert_eq!(after[0].downloaded_at, Some(Timestamp(2000)));
+
+    // Re-saving the message's attachments preserves prior download state at the
+    // same ordinal (status-transition re-save must not lose the on-disk file).
+    store
+        .save_attachments("m1", &[row("a1", 0), row("a2", 1)])
+        .await
+        .unwrap();
+    let resaved = store.load_attachments("m1").await.unwrap();
+    assert_eq!(resaved[0].local_path.as_deref(), Some("/tmp/a1.jpg"));
+
+    // Conversation-scoped load.
+    let conv = store
+        .load_attachments_for_conversation("dm-bob")
+        .await
+        .unwrap();
+    assert_eq!(conv.len(), 2);
+
+    // Deleting the conversation cascades (explicitly) to attachments.
+    store.delete_conversation("dm-bob").await.unwrap();
+    assert!(store.load_attachments("m1").await.unwrap().is_empty());
+}

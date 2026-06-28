@@ -77,6 +77,8 @@ struct Message: Identifiable {
     /// Unix-millis deletion deadline once the countdown started (on read), or
     /// nil. The UI schedules the live disappear from this.
     var expireAtMs: Int64? = nil
+    /// Attachments on this message (docs/35); empty for plain text.
+    var attachments: [AttachmentFfi] = []
 
     var sentAt: Date { Date(timeIntervalSince1970: Double(sentAtMs) / 1000.0) }
     var isEdited: Bool { editedAtMs != nil }

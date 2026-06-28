@@ -1,6 +1,6 @@
 # Attachments — Design
 
-Status: draft for review.
+Status: decisions locked (2026-06-27); ready to spec the implementation. See *Decisions* below.
 
 How a user sends a photo, video, audio clip, voice note, PDF, or arbitrary file, end-to-end encrypted, with the homeserver (or its object store) holding only ciphertext it cannot read. This follows Signal's proven model closely; where we diverge it's called out.
 
@@ -42,7 +42,9 @@ Key material is **64 bytes**: a 32-byte AES key ‖ a 32-byte HMAC key, generate
 
 The **digest** in the pointer is `SHA-256(ciphertext ‖ HMAC-tag)` — i.e. over exactly the bytes the recipient downloads. The recipient recomputes it before doing anything else; a mismatch aborts the download with no decryption attempt. This binds the pointer to the exact stored bytes and means a malicious storage layer cannot substitute content.
 
-> **Note vs. the rest of the app.** Messages use AES-256-GCM (the `profile_key` in `content.proto`, the ratchet, etc.). Attachments deliberately use CBC+HMAC instead, for the reasons above — so the `AttachmentPointer.key` field is a 64-byte concatenation, not a GCM key. This is the one spot where attachments diverge from the app's default AEAD. **(Decision to confirm — see Open decisions.)**
+> **Note vs. the rest of the app.** Messages use AES-256-GCM (the `profile_key` in `content.proto`, the ratchet, etc.). Attachments deliberately use CBC+HMAC instead, for the reasons above — so the `AttachmentPointer.key` field is a 64-byte concatenation, not a GCM key. This is the one spot where attachments diverge from the app's default AEAD. **(DECIDED 2026-06-27: copy Signal — CBC+HMAC. See Decisions.)**
+
+> **Implementation note.** The pinned libsignal (`4c460615`) already exposes the primitives we need, so the `crypto` crate *wraps* them rather than reimplementing: `signal_crypto::aes_256_cbc_encrypt`/`aes_256_cbc_decrypt`, `signal_crypto::CryptographicMac::new("HmacSha256", …)`, and `libsignal_protocol::incremental_mac::{Incremental, Validating, calculate_chunk_size}` (Signal's streaming-verification variant, already re-exported via `libsignal-protocol`). Add `signal-crypto` as a workspace dep pinned to the same commit; the transitive `aes`/`cbc`/`hmac`/`sha2` crates are already in the workspace, so no new external dependencies.
 
 ### Padding
 
@@ -50,7 +52,7 @@ Encrypting reveals nothing about content, but *ciphertext length* leaks informat
 
 ## Server: upload & download
 
-Two new authenticated, rate-limited endpoints under `/v1/`, plus a storage abstraction with two backends.
+New endpoints under `/v1/` — authenticated, rate-limited allocate + upload, and an **unauthenticated** download (see below) — plus a storage abstraction with two backends.
 
 ### Allocate an upload slot
 
@@ -82,7 +84,7 @@ Auth: required
 Response: 200 (octet-stream, local backend)  |  302 → presigned GET (S3 backend)
 ```
 
-- **Authenticated.** Any logged-in account on the homeserver may fetch any blob *by id* — knowledge of the (unguessable, opaque) id is the capability, and the id only exists inside an E2E message sent to you. The server cannot enforce "only the intended recipient" because it doesn't know who that is (sealed sender, no plaintext). This matches Signal: the CDN serves by opaque key to any authenticated client; secrecy is the unguessable key + the decryption key, not an ACL.
+- **Unauthenticated.** *(Revised 2026-06-27 — earlier this doc made download authenticated; reversed.)* Anyone who presents the (unguessable, opaque) id may fetch the blob — the id *is* the capability, and it only exists inside an E2E message sent to you. The server cannot enforce "only the intended recipient" anyway (sealed sender, no plaintext). Authenticating the GET would add almost nothing here: the id is a random UUID, not a guessable DID, so it can't be used to probe membership (unlike `GET /v1/profile/{did}`, which *is* authenticated for exactly that reason); and the bytes are E2E ciphertext, so confidentiality is the unguessable id + the decryption key, not an ACL. Leaving download open is what lets a cross-server recipient fetch from the *sender's* homeserver without holding credentials there, and lets a future S3 backend serve the pointer's URL (or a presigned object URL) with no homeserver auth hop. This matches Signal's CDN and the S3 presigned-URL model. **Allocate and upload stay authenticated** — those need an owning account for the size cap, the per-account byte quota, and the upload owner-check.
 - **Range requests** are supported by both backends so large media can stream / resume.
 
 ## Storage backends
@@ -101,12 +103,12 @@ The `attachment_id` is backend-agnostic; switching backends is a config + migrat
 Attachments hang off `TextMessage`, claiming `attachments = 2` from its reserved `2 to 10` block. Design choices:
 
 - A `TextMessage` carries **zero or more** attachment pointers (`repeated`), so an album of photos, or a "PDF + caption" (`body` + one pointer), is one message — no separate media-message type, no mutually-exclusive `oneof` arm.
-- The pointer references an **`attachment_id`**, not a raw URL — the recipient resolves it against *their own* homeserver's download route. (URLs are deployment detail; ids are stable.)
+- The pointer carries a **full download `url`** (e.g. `https://sender-homeserver/v1/attachments/{id}`). *(Revised 2026-06-27 — earlier this doc proposed a bare `attachment_id` resolved against the recipient's own homeserver; a full URL is simpler, the id-stability argument is moot given the ~45-day TTL, and a URL pointing at the homeserver's own download route survives a LocalFs→S3 backend switch since that route 302s to a presigned URL. The server keeps an internal `attachment_id` for storage keying; only the URL crosses the wire.)* The GET is unauthenticated (see *Download*), so the recipient needs no account on the hosting homeserver — it just fetches the URL. Pre-federation the URL points at the shared homeserver; post-federation the recipient's homeserver may proxy-cache and rewrite it (see Federation).
 - Per-attachment metadata travels in the pointer so the UI renders well before the full blob is fetched.
 
 ```protobuf
 message AttachmentPointer {
-  string attachment_id  = 1;   // server-allocated; download key
+  string url            = 1;   // full download URL on the hosting homeserver
   string content_type   = 2;   // MIME
   bytes  key            = 3;   // 64 bytes: AES-256-CBC key ‖ HMAC-SHA-256 key
   bytes  digest         = 4;   // SHA-256 over the exact stored ciphertext+tag
@@ -212,12 +214,65 @@ Cross-server media is out of scope until federation. The open question to resolv
 - **No streaming-upload of in-progress recordings.** Voice notes and videos are finalized, then encrypted-and-uploaded as a whole blob. Live streaming is the Calls/broadcast path (`01` § Calls), not attachments.
 - **No deduplication across attachments.** Fresh key + fresh blob every send (see Forwarding). Dedup would leak equality of content to the storage layer.
 
-## Open decisions
+## Decisions (locked 2026-06-27)
 
-1. **Encryption scheme: CBC+HMAC (Signal-exact) vs reuse AES-256-GCM.** Recommendation above is CBC+HMAC for incremental verification and Signal-parity; it diverges from the app's default AEAD, so this needs an explicit yes before `AttachmentPointer` is added to `content.proto`.
-2. **Default blob TTL** — ~45 days (Signal-parity; longer than the message queue, per *Lifecycle*) vs shorter. Shorter is safer for storage but risks a slow / newly-linked recipient missing a blob; eager download mitigates.
-3. **Per-attachment size cap and per-account quota numbers** — need concrete defaults for the deploy config.
+All resolved; this section is the record. Numbers marked *(config)* are tunables with the stated default — not protocol constants.
+
+1. **Encryption scheme — CBC+HMAC (Signal-exact).** Chosen over reusing AES-256-GCM, for incremental streaming verification of large media and Signal-parity, accepting the one-off divergence from the app's default AEAD. The `crypto` crate wraps libsignal's existing primitives (see *Encryption scheme* implementation note). `AttachmentPointer.key` is the 64-byte concat.
+2. **Default blob TTL — 45 days** *(config)*. Signal-parity; comfortably exceeds the 30-day message-queue retention in `10-server-implementation.md`, so a slow or newly-linked recipient can still pull. Lowerable by a self-hoster.
+3. **Per-attachment size cap — 100 MB** *(config)*. Checked at allocation (declared `size_bytes`) and again at upload. Stays well under the single-PUT/multipart threshold.
+4. **Per-account upload quota — request-rate limit on `POST /v1/attachments` + a rolling ~500 MB/hour bytes cap** *(config)*, both via the existing `middleware/rate_limit.rs` + `rate_limit_counters`. The requirement is that a bytes-per-window cap exists; the number is tunable.
+5. **Storage backend — LocalFs only in the first cut**, built behind the `BlobStore` trait so the S3/presigned-URL backend slots in later with no protocol change. Defers the `object_store` dependency and presigning surface out of the first increment. (The demo server is a single box; LocalFs makes 1:1 media fully useful.)
+6. **Naming — the blob layer is `BlobStore` / `routes/attachments.rs` / `/v1/attachments`**, deliberately NOT "Storage": `routes/storage.rs` + `/v1/storage/*` already exist for the unrelated device-data-sync identity store (`05-device-data-sync.md`).
+
+### Spec-time decisions (2026-06-27, during `/new-feature`)
+
+7. **Pointer is a full `url`, not a bare `attachment_id`** — see the *pointer* section above for the revision and rationale.
+8. **Groups and DMs ship together.** Attachments live in `TextMessage`, and the core `send_to_target` path already handles both DM and group targets with the same `Body`, so group attachments are nearly free. The shared conversation composer gets the picker for both.
+9. **Thumbnails: downscaled inline JPEG, no blurhash generation in this cut.** The `blurhash` proto field stays defined (free, forward-compatible) but is left unpopulated; generation is deferred. `width`/`height` + a small inline `thumbnail` are produced client-side via native image APIs.
+10. **Eager download by default.** Recipients auto-download blobs on receipt (no per-network auto-download settings UI yet). The settings/tap-to-download controls in *On-device storage management* are deferred; the substrate (this PR) supports them later.
+
+### Deferred to the immediate follow-up (not this increment)
+
+- **Link previews** (the `LinkPreview` proto, OG-metadata fetch at compose time, the anti-spoofing render rule). Additive, reuses the attachment system wholesale, has its own privacy invariant — cleaner as the next step right after core attachments land. **Wanted next, explicitly out of the first cut.**
+
+### Federation
+
+Cross-server media stays deferred to Stage 9 (see *Federation* above) — proxy-and-cache is the likely answer.
 
 ## Staging
 
-Attachments are **not yet built** — `content.proto` reserves space (`TextMessage` fields 2–10) but defines no pointer, and there is no server attachment endpoint or storage layer. The work is one focused increment: add `AttachmentPointer` to `content.proto`, build the server `attachments` table + endpoints + storage backends, and the client encrypt/upload/download/render path. It lands well alongside or just after the 1:1 messaging already shipped in Stage 3, and depends on neither groups, projects, nor federation — 1:1 media is fully useful on its own.
+Attachments are **not yet built** — `content.proto` reserves space (`TextMessage` fields 2–10) but defines no pointer, and there is no server attachment endpoint or blob-storage layer (`routes/storage.rs` is the unrelated device-data-sync store). 1:1 media depends on neither groups, projects, nor federation — it is fully useful on its own and lands just after the Stage 3 messaging already shipped.
+
+**First cut (this increment):**
+- `AttachmentPointer` added to `content.proto` as `repeated AttachmentPointer attachments = 2` in `TextMessage`; `key` is the 64-byte CBC+HMAC concat.
+- `crypto` crate: thin attachment encrypt/decrypt + incremental-MAC wrapper over libsignal (per *Encryption scheme* note).
+- Server: `attachments` metadata table, `POST /v1/attachments` (allocate) + `PUT`/`GET /v1/attachments/:id` (LocalFs), the `BlobStore` trait with the `LocalFs` impl, TTL GC task, size/quota limits.
+- Client encrypt → upload → send-pointer → download → verify → decrypt → render, plus blurhash + inline thumbnails — on **iOS, Android, and Desktop** per the cross-platform parity rule.
+
+**Immediate follow-up (next increment):** link previews; then later the S3 `BlobStore` backend.
+
+## Unaddressed TODO — background upload throttling (Lincoln)
+
+*Not implemented in the first cut.* Today an upload that hits the rate limit
+just errors: the server returns `429` (no `Retry-After`) and the client abandons
+the send — no queue, no retry, no backoff (same as everywhere else in the app).
+
+For most actions, erroring on a rate limit is the right behavior. **Upload is
+the exception.** A client legitimately may want to push *everything it's
+currently trying to upload* and not care how long it takes — so uploads should
+run **in the background and self-throttle** rather than fail:
+
+- **Short-term limit (per-minute / burst):** the client should *naturally throttle
+  itself* — back off and keep going at the allowed rate until the queue drains,
+  not surface an error. This wants a `Retry-After` (or equivalent rate signal)
+  from the server's `429` and a background upload queue that paces itself to it.
+- **Long-term cap (per-day-ish):** there still needs to be a hard ceiling. If a
+  client tries to push, say, a full day's worth of its rate limit all at once,
+  *that* should error — the throttle is for pacing legitimate bursts, not for
+  absorbing an unbounded backlog.
+
+So: short-term overage → pace and continue silently; gross overage (≈ a day's
+quota at once) → hard error. Needs server `Retry-After` on the `429`, a
+client-side background upload queue with backoff, and the two-tier (burst vs.
+daily) limit shape. Lincoln considers this an important unaddressed to-do.

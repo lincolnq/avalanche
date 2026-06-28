@@ -946,6 +946,105 @@ impl Client {
         Ok(Some(blob))
     }
 
+    // ── Attachments (docs/35-attachments.md) ──────────────────────────────
+
+    /// Allocate an upload slot for an attachment blob of `ciphertext_size`
+    /// bytes. Returns the server-assigned id, the *upload descriptor* (where and
+    /// how to PUT the bytes — see [`upload_attachment_blob`]), the absolute
+    /// download URL for the E2E pointer, and the blob TTL deadline.
+    ///
+    /// The server enforces the per-attachment size cap and per-account upload
+    /// quota here (before any bytes are sent).
+    pub async fn allocate_attachment_upload(
+        &self,
+        ciphertext_size: u64,
+    ) -> Result<AttachmentUploadSlot, NetError> {
+        let body = serde_json::json!({ "size_bytes": ciphertext_size });
+        let resp = self
+            .send_authed(reqwest::Method::POST, "/v1/attachments", |b| b.json(&body))
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Upload {
+            url: String,
+            method: String,
+            headers: Vec<(String, String)>,
+        }
+        #[derive(serde::Deserialize)]
+        struct R {
+            attachment_id: String,
+            upload: Upload,
+            download_url: String,
+            expires_at_ms: i64,
+        }
+        let r: R = resp.json().await?;
+        Ok(AttachmentUploadSlot {
+            attachment_id: r.attachment_id,
+            upload_url: r.upload.url,
+            upload_method: r.upload.method,
+            upload_headers: r.upload.headers,
+            download_url: r.download_url,
+            expires_at_ms: r.expires_at_ms,
+        })
+    }
+
+    /// Upload the encrypted blob to a previously-allocated `slot` by replaying
+    /// the server's upload descriptor verbatim: a `slot.upload_method` request
+    /// to the absolute `slot.upload_url` carrying exactly `slot.upload_headers`
+    /// plus the body. The client is backend-blind — the descriptor names where
+    /// the bytes go and what auth/headers to send. For the LocalFs backend the
+    /// URL is the homeserver's own route and the headers carry the bearer; for a
+    /// future S3 backend the URL is a presigned PUT and the headers are the
+    /// signed ones, with no client change.
+    pub async fn upload_attachment_blob(
+        &self,
+        slot: &AttachmentUploadSlot,
+        ciphertext: Vec<u8>,
+    ) -> Result<(), NetError> {
+        let method = reqwest::Method::from_bytes(slot.upload_method.as_bytes())
+            .map_err(|_| NetError::Server(0, format!("bad upload method: {}", slot.upload_method)))?;
+        let mut rb = self.http.request(method, &slot.upload_url).body(ciphertext);
+        for (name, value) in &slot.upload_headers {
+            rb = rb.header(name, value);
+        }
+        let resp = rb.send().await?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Download an attachment blob by its (absolute) pointer URL, optionally
+    /// requesting a byte `range` (`(start, end)` inclusive). Returns the raw
+    /// ciphertext bytes; the caller verifies the digest and decrypts.
+    ///
+    /// The download route is **unauthenticated** (docs/35): the unguessable id
+    /// in the URL is the capability, so no bearer token is attached. This is
+    /// what lets a recipient fetch a blob hosted on a homeserver it has no
+    /// account on (e.g. the sender's, pre-federation), and what a future S3
+    /// presigned-URL pointer needs.
+    pub async fn download_attachment(
+        &self,
+        url: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, NetError> {
+        let mut rb = self.http.get(url);
+        if let Some((start, end)) = range {
+            rb = rb.header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
+        }
+        let resp = rb.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     // ── Storage service (docs/05-device-data-sync.md §5) ──────────────────
 
     /// Delta-pull durable-state records with `seq > since` (authenticated).
@@ -1062,6 +1161,24 @@ pub struct StorageItem {
     pub seq: i64,
     pub deleted: bool,
     pub ciphertext: Vec<u8>,
+}
+
+/// A reserved attachment upload slot (docs/35-attachments.md). The `upload_*`
+/// fields are the server's descriptor for where/how to PUT the ciphertext; the
+/// client replays them verbatim so it stays backend-agnostic (LocalFs vs S3).
+pub struct AttachmentUploadSlot {
+    /// Server-assigned opaque id (storage key, internal to the server).
+    pub attachment_id: String,
+    /// Absolute URL to PUT the ciphertext to.
+    pub upload_url: String,
+    /// HTTP method for the upload (e.g. `PUT`).
+    pub upload_method: String,
+    /// Headers to replay verbatim on the upload request (auth, content-type).
+    pub upload_headers: Vec<(String, String)>,
+    /// Absolute download URL to embed in the E2E pointer.
+    pub download_url: String,
+    /// Unix-millis blob TTL deadline.
+    pub expires_at_ms: i64,
 }
 
 /// A page of pulled records plus the cursor to resume from.

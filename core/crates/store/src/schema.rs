@@ -276,6 +276,36 @@ CREATE TABLE IF NOT EXISTS message_revisions (
 CREATE INDEX IF NOT EXISTS idx_message_revisions_target
     ON message_revisions (conversation_id, author_did, target_sent_at, replaced_at);
 
+-- Attachment pointers for a message (docs/35-attachments.md). One row per
+-- attachment; a message with N attachments has N rows ordered by `ordinal`.
+-- Holds the decrypted pointer metadata (key, digest, dimensions) plus local
+-- download state. The full blob is NOT stored here — `local_path` points at the
+-- decrypted file on disk once downloaded; `thumbnail` is a small inline preview
+-- kept for instant render. No FK constraint: SQLite foreign-key enforcement is
+-- off on these connections, so cleanup is explicit (see delete_conversation).
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id             TEXT    NOT NULL PRIMARY KEY,   -- local UUID
+    message_id     TEXT    NOT NULL,               -- message_history.id
+    ordinal        INTEGER NOT NULL DEFAULT 0,     -- position within the message
+    url            TEXT    NOT NULL,               -- download URL on the hosting homeserver
+    content_type   TEXT    NOT NULL,               -- MIME
+    enc_key        BLOB    NOT NULL,               -- 64 bytes: aes ‖ hmac
+    digest         BLOB    NOT NULL,               -- 32 bytes: SHA-256 of stored blob
+    size_bytes     INTEGER NOT NULL,               -- unpadded plaintext size
+    file_name      TEXT,
+    width          INTEGER,
+    height         INTEGER,
+    duration_ms    INTEGER,
+    blurhash       TEXT,
+    thumbnail      BLOB,                            -- small decrypted preview (downscaled JPEG)
+    caption        TEXT,
+    flags          INTEGER NOT NULL DEFAULT 0,
+    local_path     TEXT,                            -- NULL until downloaded
+    downloaded_at  INTEGER                          -- unix millis; NULL until downloaded
+);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_msg
+    ON message_attachments (message_id, ordinal);
+
 -- One reaction per (target message, reactor): PK enforces one-per-person.
 CREATE TABLE IF NOT EXISTS reactions (
     conversation_id  TEXT    NOT NULL,
@@ -354,6 +384,7 @@ pub const IDENTITY_TABLES: &[&str] = &[
     "conversation_settings",
     "recovery_blob_key",
     "message_history",
+    "message_attachments",
     "message_revisions",
     "reactions",
     "account_info_cache",

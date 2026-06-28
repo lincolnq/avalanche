@@ -8,6 +8,7 @@ license.workspace = true
 types              = { workspace = true }
 libsignal-protocol = { workspace = true }
 libsignal-core     = { workspace = true }
+signal-crypto      = { workspace = true }
 zkgroup            = { workspace = true }
 zkcredential       = { workspace = true }
 poksho             = { workspace = true }
@@ -24,3 +25,4 @@ sha2               = { workspace = true }
 [dev-dependencies]
 test-utils = { path = "../test-utils" }
 tokio      = { workspace = true }
+proptest   = { workspace = true }
