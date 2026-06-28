@@ -143,6 +143,7 @@ class MockAppCore(
                 conversationId = convId,
                 groupTitle = null,
                 lastMessage = last,
+                lastMessageAttachmentContentType = last.attachments.firstOrNull()?.contentType,
                 isRequest = false,
                 isBlocked = false,
                 unreadCount = unread,

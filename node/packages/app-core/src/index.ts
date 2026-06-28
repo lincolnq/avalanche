@@ -363,6 +363,10 @@ export interface ConversationSummary {
    *  we know about (e.g. groups we've been invited to) that don't yet have
    *  any persisted messages. */
   lastMessage?: StoredMessage;
+  /** MIME type of {@link lastMessage}'s first attachment, or `undefined` when
+   *  it has none. Lets the chat list preview a caption-less attachment whose
+   *  body is empty (an image type previews as "Photo", else "Attachment"). */
+  lastMessageAttachmentContentType?: string;
   /** Number of unread inbound messages — the chat list's unread badge. Read
    *  from the persisted store, so it is correct for every conversation. */
   unreadCount: number;
@@ -677,6 +681,7 @@ const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
 const conversationSummaryFromNative = (c: native.ConversationSummaryJs): ConversationSummary => ({
   conversationId: c.conversationId,
   lastMessage: c.lastMessage ? storedMessageFromNative(c.lastMessage) : undefined,
+  lastMessageAttachmentContentType: c.lastMessageAttachmentContentType ?? undefined,
   unreadCount: c.unreadCount,
 });
 

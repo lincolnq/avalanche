@@ -202,7 +202,15 @@ fun ChatsView(
                                     )
                                     viewModel.groupEventText(msg, conversation.accountId)
                                 } else {
-                                    val body = conversation.lastMessage
+                                    // Real body wins; for a caption-less attachment (empty
+                                    // body) fall back to a type-aware decoration ("📷 Photo"
+                                    // / "📎 Attachment") derived from the persisted
+                                    // attachment, so live and post-restart previews match.
+                                    val rawBody = conversation.lastMessage ?: ""
+                                    val body: String? = when {
+                                        rawBody.isNotEmpty() -> rawBody
+                                        else -> attachmentPreviewLabel(conversation.lastMessageAttachmentContentType)
+                                    }
                                     if (body == null) {
                                         null
                                     } else {

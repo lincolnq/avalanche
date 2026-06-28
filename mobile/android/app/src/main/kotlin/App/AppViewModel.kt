@@ -1343,6 +1343,22 @@ class AppViewModel(
             val existing = map[conversationId] ?: return@update map
             map + (conversationId to (existing + optimistic))
         }
+        // Bump the chat-list row. Store the real body (the caption, possibly
+        // empty) and the attachment's type — a faithful mirror of what was
+        // persisted. The "📷 Photo" / "📎 Attachment" decoration is derived at
+        // render time (ChatsView), so it survives a restart instead of being a
+        // string that only ever lived in memory.
+        _conversations.update { list ->
+            list.map { c ->
+                if (c.id == conversationId) c.copy(
+                    lastMessage = caption,
+                    lastMessageAttachmentContentType = contentType,
+                    lastMessageSenderDid = senderAccountId,
+                    lastMessageDate = Date(nowMs),
+                ).clearLastMessageEvent()
+                else c
+            }
+        }
     }
 
     /**
@@ -1443,6 +1459,9 @@ class AppViewModel(
                 if (c.id == conversation.id) {
                     c.copy(
                         lastMessage = message.body,
+                        // Mirror the message's attachment type (null for plain
+                        // text, which clears any prior "📷 Photo"/"📎 Attachment").
+                        lastMessageAttachmentContentType = message.attachments.firstOrNull()?.contentType,
                         lastMessageDate = Date(message.sentAtMs),
                         lastMessageSenderDid = message.senderAccountId,
                     )
@@ -1593,6 +1612,7 @@ class AppViewModel(
                 val lastMsg = s.lastMessage
                 val date = lastMsg?.let { Date(it.sentAtMs) }
                 val preview = lastMsg?.body
+                val lastAttachmentCt = s.lastMessageAttachmentContentType
                 val lastKind = lastMsg?.kind?.toInt() ?: 0
                 val lastMeta = lastMsg?.metadata
                 val lastSender = lastMsg?.senderDid
@@ -1616,6 +1636,7 @@ class AppViewModel(
                             recipientDid = null,
                             groupId = groupId,
                             lastMessage = preview,
+                            lastMessageAttachmentContentType = lastAttachmentCt,
                             lastMessageDate = date,
                             lastMessageKind = lastKind,
                             lastMessageMetadata = lastMeta,
@@ -1635,6 +1656,7 @@ class AppViewModel(
                         serverUrl = serverUrl,
                         recipientDid = recipientDid,
                         lastMessage = preview,
+                        lastMessageAttachmentContentType = lastAttachmentCt,
                         lastMessageDate = date,
                         isGroup = false,
                         isRequest = s.isRequest,
@@ -2543,6 +2565,10 @@ class AppViewModel(
     private fun handleIncomingMessage(msg: DecryptedMessage, accountId: String) {
         val senderDid = msg.senderDid
         val text = runCatching { String(msg.plaintext, Charsets.UTF_8) }.getOrElse { "(binary)" }
+        // Type of the first attachment, if any (docs/35) — drives the chat-list
+        // preview ("📷 Photo" / "📎 Attachment") for a caption-less attachment.
+        // `null` for a plain message, which also clears any stale value below.
+        val attachmentCt = msg.attachments.firstOrNull()?.contentType
 
         // Use the sender's timestamp if available, otherwise fall back to local
         // time. This must drive the conversation-row timestamp too (not the
@@ -2570,6 +2596,7 @@ class AppViewModel(
                 list.map { c ->
                     if (c.id == convId) c.copy(
                         lastMessage = text,
+                        lastMessageAttachmentContentType = attachmentCt,
                         lastMessageDate = lastMessageDate,
                         lastMessageSenderDid = senderDid,
                     ).clearLastMessageEvent()
@@ -2587,6 +2614,7 @@ class AppViewModel(
                     list.mapIndexed { idx, c ->
                         if (idx == existingIdx) c.copy(
                             lastMessage = text,
+                            lastMessageAttachmentContentType = attachmentCt,
                             lastMessageDate = lastMessageDate,
                             lastMessageSenderDid = senderDid,
                         ).clearLastMessageEvent()
@@ -2604,6 +2632,7 @@ class AppViewModel(
                     serverUrl = serverUrl,
                     recipientDid = senderDid,
                     lastMessage = text,
+                    lastMessageAttachmentContentType = attachmentCt,
                     lastMessageDate = lastMessageDate,
                     lastMessageSenderDid = senderDid,
                     isGroup = false,

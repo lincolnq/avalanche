@@ -39,7 +39,18 @@ struct ConversationRow: View {
             )
             return appState.groupEventText(m, accountId: conversation.accountId)
         }
-        guard let body = conversation.lastMessage else { return nil }
+        // Real body wins; for a caption-less attachment (empty body) fall back
+        // to a type-aware decoration ("📷 Photo" / "📎 Attachment") derived from
+        // the persisted attachment, so live and post-restart previews match.
+        let rawBody = conversation.lastMessage ?? ""
+        let body: String
+        if !rawBody.isEmpty {
+            body = rawBody
+        } else if let label = attachmentPreviewLabel(contentType: conversation.lastMessageAttachmentContentType) {
+            body = label
+        } else {
+            return nil
+        }
         // Prefix the sender: "You:" for our own messages, the sender's name in
         // groups. Inbound DMs need no prefix — the conversation title is the
         // sender.

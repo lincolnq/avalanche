@@ -535,6 +535,11 @@ pub struct ConversationSummaryFfi {
     /// list falls back to a network fetch in that case.
     pub group_title: Option<String>,
     pub last_message: Option<StoredMessageFfi>,
+    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
+    /// it has none. The chat list renders a type-aware preview (an image type
+    /// previews as "Photo", anything else as "Attachment") for a caption-less
+    /// attachment whose `body` is empty; the blobs themselves are not loaded here.
+    pub last_message_attachment_content_type: Option<String>,
     /// True for a DM from an un-curated, un-blocked sender — an unaccepted
     /// message request (docs/12 §1). The chat list shows a "Message request"
     /// label and the conversation opens into the Accept/Delete/Report gate.
@@ -2551,6 +2556,7 @@ impl AppCore {
                         .and_then(|gid| titles.get(gid).cloned()),
                     conversation_id: c.conversation_id,
                     last_message: c.last_message.map(stored_to_ffi),
+                    last_message_attachment_content_type: c.last_message_attachment_content_type,
                     is_request,
                     is_blocked,
                     unread_count: c.unread_count,

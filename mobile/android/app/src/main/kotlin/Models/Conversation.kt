@@ -19,6 +19,15 @@ data class Conversation(
     /** URL-safe-no-pad base64 group id when this is a group conversation. */
     var groupId: String? = null,
     var lastMessage: String? = null,
+    /**
+     * MIME type of the latest message's first attachment (docs/35), or `null`
+     * when it has none. Mirrors the persisted `message_attachments` rows so the
+     * row can render a type-aware preview ("📷 Photo" / "📎 Attachment") for a
+     * caption-less attachment whose `lastMessage` body is empty — derived at
+     * render time rather than baked into `lastMessage` (which holds only the
+     * persisted body).
+     */
+    var lastMessageAttachmentContentType: String? = null,
     var lastMessageDate: Date? = null,
     /**
      * When the last message is a group system/metadata event (docs/03 §3.6),
@@ -49,6 +58,18 @@ data class Conversation(
         lastMessageKind = 0,
         lastMessageMetadata = null,
     )
+}
+
+/**
+ * Chat-list preview decoration for a message whose body is a caption-less
+ * attachment (docs/35), given the attachment's MIME type. An image type reads
+ * as a photo; anything else is a generic attachment. `null` content type (no
+ * attachment) yields `null`.
+ */
+fun attachmentPreviewLabel(contentType: String?): String? = when {
+    contentType == null -> null
+    contentType.startsWith("image/") -> "📷 Photo"
+    else -> "📎 Attachment"
 }
 
 /**

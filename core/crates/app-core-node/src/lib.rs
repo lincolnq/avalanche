@@ -259,6 +259,10 @@ impl From<StoredMessageJs> for StoredMessageFfi {
 pub struct ConversationSummaryJs {
     pub conversation_id: String,
     pub last_message: Option<StoredMessageJs>,
+    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
+    /// it has none, so the chat list can preview a caption-less attachment whose
+    /// body is empty (an image type previews as "Photo", else "Attachment").
+    pub last_message_attachment_content_type: Option<String>,
     /// Number of unread inbound messages — the chat list's unread badge.
     /// `i64` (not `u64`) to surface as a plain JS number rather than a BigInt,
     /// matching the existing `unread_count` accessor.
@@ -270,6 +274,7 @@ impl From<ConversationSummaryFfi> for ConversationSummaryJs {
         Self {
             conversation_id: c.conversation_id,
             last_message: c.last_message.map(Into::into),
+            last_message_attachment_content_type: c.last_message_attachment_content_type,
             unread_count: c.unread_count as i64,
         }
     }

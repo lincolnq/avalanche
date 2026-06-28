@@ -427,6 +427,9 @@ struct ConversationView: View {
         // message, not a prior "X joined" / metadata line.
         if let idx = appState.conversations.firstIndex(where: { $0.id == conversation.id }) {
             appState.conversations[idx].lastMessage = text
+            // Plain text has no attachment — clear any prior attachment type so
+            // the preview doesn't keep its "📷 Photo" / "📎 Attachment" decoration.
+            appState.conversations[idx].lastMessageAttachmentContentType = nil
             appState.conversations[idx].lastMessageDate = message.sentAt
             appState.conversations[idx].lastMessageSenderDid = conversation.accountId  // "You:"
             appState.conversations[idx].clearLastMessageEvent()

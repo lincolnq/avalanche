@@ -287,10 +287,12 @@ impl IdentityStore {
                 //    Tie-break on `id` (monotonic rowid) for a deterministic pick.
                 let mut stmt = conn.prepare(
                     "SELECT conversation_id, id, sender_did, body, sent_at,
-                            edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at
+                            edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at, attach_ct
                      FROM (
                          SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
                                 m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata, m.expire_timer_secs, m.expire_at,
+                                (SELECT a.content_type FROM message_attachments a
+                                 WHERE a.message_id = m.id ORDER BY a.ordinal ASC LIMIT 1) AS attach_ct,
                                 ROW_NUMBER() OVER (
                                     PARTITION BY m.conversation_id
                                     ORDER BY m.sent_at DESC, m.id DESC
@@ -308,6 +310,7 @@ impl IdentityStore {
                         Ok(ConversationSummary {
                             conversation_id,
                             unread_count,
+                            last_message_attachment_content_type: row.get::<_, Option<String>>(14)?,
                             last_message: Some(HistoryMessage {
                                 id: row.get(1)?,
                                 conversation_id: row.get(0)?,
@@ -349,6 +352,7 @@ impl IdentityStore {
                         unread_count: unread_by_conv.get(&cid).copied().unwrap_or(0),
                         conversation_id: cid,
                         last_message: None,
+                        last_message_attachment_content_type: None,
                     })
                     .collect();
 
@@ -893,6 +897,12 @@ impl IdentityStore {
 pub struct ConversationSummary {
     pub conversation_id: String,
     pub last_message: Option<HistoryMessage>,
+    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
+    /// the last message has no attachments (or there is no last message). Lets
+    /// the chat list render a type-aware preview (an image type previews as
+    /// "Photo", anything else as "Attachment") for a caption-less attachment
+    /// (whose `body` is empty) without loading the attachment blobs.
+    pub last_message_attachment_content_type: Option<String>,
     /// Number of unread inbound messages in this conversation: rows with
     /// `read_at IS NULL` whose `sender_did` is not our own, excluding expired
     /// messages. The chat list renders this directly as the unread badge, so it

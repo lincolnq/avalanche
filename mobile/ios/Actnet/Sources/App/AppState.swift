@@ -1075,7 +1075,14 @@ final class AppState: ObservableObject {
             messagesByConversation[conversationId]?.append(optimistic)
         }
         if let idx = conversations.firstIndex(where: { $0.id == conversationId }) {
-            conversations[idx].lastMessage = caption.isEmpty ? "📎 Attachment" : caption
+            // Store the real body (the caption, possibly empty) and the
+            // attachment's type — a faithful mirror of what was persisted. The
+            // "📷 Photo" / "📎 Attachment" decoration is derived at render time
+            // (ConversationRow), so it survives a restart instead of being a
+            // string that only ever lived in memory.
+            conversations[idx].lastMessage = caption
+            conversations[idx].lastMessageAttachmentContentType = contentType
+            conversations[idx].lastMessageSenderDid = senderAccountId
             conversations[idx].lastMessageDate = optimistic.sentAt
         }
     }
@@ -1340,6 +1347,7 @@ final class AppState: ObservableObject {
                 // DIDs to names at display time. Freezing groupEventText here
                 // would bake in "Unknown" before names are cached.
                 let preview = s.lastMessage?.body
+                let lastAttachmentCt = s.lastMessageAttachmentContentType
                 let lastKind = Int(s.lastMessage?.kind ?? 0)
                 let lastMeta = s.lastMessage?.metadata
                 let lastSender = s.lastMessage?.senderDid
@@ -1364,6 +1372,7 @@ final class AppState: ObservableObject {
                         recipientDid: nil,
                         groupId: groupId,
                         lastMessage: preview,
+                        lastMessageAttachmentContentType: lastAttachmentCt,
                         lastMessageDate: date,
                         lastMessageKind: lastKind,
                         lastMessageMetadata: lastMeta,
@@ -1381,6 +1390,7 @@ final class AppState: ObservableObject {
                     serverUrl: serverUrl,
                     recipientDid: recipientDid,
                     lastMessage: preview,
+                    lastMessageAttachmentContentType: lastAttachmentCt,
                     lastMessageDate: date,
                     isGroup: false,
                     isRequest: s.isRequest,
@@ -2084,6 +2094,10 @@ final class AppState: ObservableObject {
     private func handleIncomingMessage(_ msg: DecryptedMessage, accountId: String) {
         let senderDid = msg.senderDid
         let text = String(data: msg.plaintext, encoding: .utf8) ?? "(binary)"
+        // Type of the first attachment, if any (docs/35) — drives the chat-list
+        // preview ("📷 Photo" / "📎 Attachment") for a caption-less attachment.
+        // `nil` for a plain message, which also clears any stale value below.
+        let attachmentCt = msg.attachments.first?.contentType
 
         // Use the sender's timestamp if available, otherwise fall back to local
         // time. This must drive the conversation-row timestamp too (not the
@@ -2111,6 +2125,7 @@ final class AppState: ObservableObject {
             convId = conv.id
             if let idx = conversations.firstIndex(where: { $0.id == convId }) {
                 conversations[idx].lastMessage = text
+                conversations[idx].lastMessageAttachmentContentType = attachmentCt
                 conversations[idx].lastMessageDate = lastMessageDate
                 conversations[idx].lastMessageSenderDid = senderDid
                 conversations[idx].clearLastMessageEvent()
@@ -2122,6 +2137,7 @@ final class AppState: ObservableObject {
         }) {
             convId = conversations[idx].id
             conversations[idx].lastMessage = text
+            conversations[idx].lastMessageAttachmentContentType = attachmentCt
             conversations[idx].lastMessageDate = lastMessageDate
             conversations[idx].lastMessageSenderDid = senderDid
             conversations[idx].clearLastMessageEvent()
@@ -2137,6 +2153,7 @@ final class AppState: ObservableObject {
                 serverUrl: serverUrl,
                 recipientDid: senderDid,
                 lastMessage: text,
+                lastMessageAttachmentContentType: attachmentCt,
                 lastMessageDate: lastMessageDate,
                 lastMessageSenderDid: senderDid,
                 isGroup: false
