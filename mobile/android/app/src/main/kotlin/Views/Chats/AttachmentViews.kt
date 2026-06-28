@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -105,17 +106,45 @@ fun AttachmentView(
         val bitmap = remember(bytes) {
             bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
         }
+        // Reserve a fixed display box from the attachment's aspect ratio so the
+        // bubble does NOT resize when the full image swaps in for the thumbnail —
+        // that resize is what shifts scroll position and makes images "grow" on
+        // scroll-back. Mirrors iOS, where `scaledToFit` inside a maxWidth/maxHeight
+        // frame derives the size from the aspect ratio (identical for thumb and
+        // full). Falls back to 4:3 when dimensions are unknown (older messages).
+        val (boxW, boxH) = remember(attachment.id, attachment.width, attachment.height) {
+            val maxW = 240f
+            val maxH = 320f
+            val aspect = if (attachment.width > 0 && attachment.height > 0) {
+                attachment.width.toFloat() / attachment.height.toFloat()
+            } else {
+                4f / 3f
+            }
+            if (maxW / aspect <= maxH) maxW.dp to (maxW / aspect).dp
+            else (maxH * aspect).dp to maxH.dp
+        }
+        val shape = RoundedCornerShape(14.dp)
         if (bitmap != null) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = attachment.fileName ?: "Attachment",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
-                    .sizeIn(maxWidth = 240.dp, maxHeight = 320.dp)
-                    .clip(RoundedCornerShape(14.dp)),
+                    .size(boxW, boxH)
+                    .clip(shape),
             )
-        } else if (loading) {
-            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+        } else {
+            // Reserve the same space before any bitmap is ready, so the row height
+            // is stable from the first layout pass.
+            Box(
+                modifier = Modifier
+                    .size(boxW, boxH)
+                    .clip(shape)
+                    .background(LocalAvalancheColors.current.muted.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (loading) CircularProgressIndicator(modifier = Modifier.size(32.dp))
+            }
         }
     } else {
         Row(
