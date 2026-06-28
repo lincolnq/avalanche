@@ -222,6 +222,7 @@ fun ConversationView(
             val data = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
                     .getOrNull()
+                    ?.let { processOutgoingImage(it) }
             } ?: return@launch
             stageImageBytes(data)
         }
@@ -246,6 +247,7 @@ fun ConversationView(
             val data = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
                     .getOrNull()
+                    ?.let { processOutgoingImage(it) }
             } ?: return@launch
             stageImageBytes(data)
         }

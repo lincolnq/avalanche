@@ -145,6 +145,18 @@ Two complementary mechanisms so a chat scrolls instantly without pulling megabyt
 
 For PDFs/docs we render an icon + `file_name` + size; no thumbnail unless the sender's client rasterizes page one.
 
+## Outgoing image processing (client-side, Signal-aligned)
+
+Before upload, the **client re-encodes every outgoing image** rather than shipping the original bytes — matching Signal's pipeline. One pass does three things:
+
+- **Bake in EXIF orientation.** Camera/Photos JPEGs store rotation as an EXIF tag. `UIImage` honors it on display but Android's `BitmapFactory` does not, so an un-normalized photo arrives sideways for `BitmapFactory`-based recipients. Re-encoding from a decoded/upright bitmap makes the stored bytes canonically upright (`imageOrientation == .up` / no rotate tag), so every recipient renders it correctly regardless of decoder.
+- **Strip EXIF/metadata.** A fresh JPEG encode drops the source's GPS coordinates, device model, timestamps, etc. This is a **privacy** requirement (don't leak the sender's location/device to the recipient), and is the main reason we re-encode unconditionally rather than only when rotation is needed. (The earlier orientation-only fix left upright photos passing through with full EXIF — a metadata leak.)
+- **Cap resolution.** The longest edge is capped (currently 2048 px; Signal's "standard" tier is ~1600) and JPEG quality fixed (~0.9). A single tier for now; a user-facing quality toggle and byte-size targeting are possible later.
+
+This is **mobile-side only** — app-core does no image processing (it just encrypts/uploads the bytes it's handed). The shared constants live in `mobile/ios/Shared/OutgoingImage.swift` (`OutgoingImage.maxDimension`/`jpegQuality`, `UIImage.preparedForSending`) and `mobile/android/.../Views/Chats/AttachmentViews.kt` (`OUTGOING_MAX_DIMENSION`/`OUTGOING_JPEG_QUALITY`, `processOutgoingImage`), applied at every ingestion point: photo picker, clipboard paste, and (where supported) the system share-in. HEIC sources are transcoded to JPEG as a side effect.
+
+**Why JPEG, and the forward-compat guarantee.** We send JPEG (not HEIC/WebP) because it decodes everywhere with no dependency — HEIC has unreliable Android decode below API 29 and no desktop/web decode, and WebP has no native *encoder* on iOS (decode is fine). Crucially, the **receive path is already format-agnostic**: the "is it an image" test is a `image/` *prefix* match (not `== image/jpeg`) and decoding uses the system decoders (iOS `CGImageSource`/`UIImage`, Android `BitmapFactory`), both of which decode JPEG **and WebP** by sniffing the bytes. So switching the *send* side to WebP later is backward-compatible with already-shipped clients — they'll decode it fine. That guarantee covers {JPEG, WebP} only; it would **not** extend to HEIC/AVIF, so those stay off the table. If we ever do adopt WebP on send, the realistic shape is uniform WebP on both platforms (accepting an iOS libwebp encoder dependency), gated behind first removing the hard-coded `image/jpeg` content type so the format flows from the encoder.
+
 ## Link previews
 
 *Status: implemented (2026-06-28).* When a message body contains a URL, we show a rich preview card (title, description, image, source domain) — and it reuses the attachment system wholesale, so it needs no new storage machinery. This follows Signal's `Preview` shape exactly.

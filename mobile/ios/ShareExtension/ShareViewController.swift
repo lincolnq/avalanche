@@ -50,7 +50,7 @@ class ShareViewController: UIViewController {
                 self.log.error("share ext: loadObject failed: \(error.localizedDescription, privacy: .public)")
             }
             if let image = object as? UIImage,
-               let data = image.jpegData(compressionQuality: 0.9) {
+               let data = image.preparedForSending() {
                 let ok = AppGroup.writePendingShare(data: data, contentType: "image/jpeg")
                 self.log.log("share ext: wrote pending share (\(data.count) bytes), success=\(ok)")
             } else {

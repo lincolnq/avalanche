@@ -195,6 +195,7 @@ class MainActivity : ComponentActivity() {
                     val data = withContext(Dispatchers.IO) {
                         runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }
                             .getOrNull()
+                            ?.let { processOutgoingImage(it) }
                     }
                     if (data != null) appViewModel.setPendingSharedImage(data, contentType)
                 }

@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.Image
@@ -41,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
@@ -168,6 +171,55 @@ fun makeAttachmentThumbnail(data: ByteArray, maxDimension: Int = 320): Triple<By
     val out = ByteArrayOutputStream()
     thumb.compress(Bitmap.CompressFormat.JPEG, 60, out)
     return Triple(out.toByteArray(), w, h)
+}
+
+// Outgoing-image policy (docs/35), matching the iOS `OutgoingImage` tier and
+// Signal's pipeline: re-encode every sent image to bake in orientation, cap the
+// resolution, and strip EXIF/metadata (GPS, device) as a side effect. Tune here.
+// (Signal's "standard" tier is ~1600px longest edge; we allow a bit more.)
+private const val OUTGOING_MAX_DIMENSION = 2048
+private const val OUTGOING_JPEG_QUALITY = 90
+
+/**
+ * Prepare an image for sending (docs/35): bake in EXIF orientation (which Android's
+ * `BitmapFactory` otherwise ignores → sideways photos), cap the longest edge to
+ * [OUTGOING_MAX_DIMENSION], and JPEG-encode — which drops the source's
+ * EXIF/metadata. Always re-encodes (Signal-style). Returns the original bytes only
+ * if it can't be decoded. Call off the main thread.
+ */
+fun processOutgoingImage(data: ByteArray): ByteArray {
+    val orientation = runCatching {
+        ExifInterface(ByteArrayInputStream(data))
+            .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+    val src = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return data
+    return runCatching {
+        val matrix = Matrix()
+        val longest = maxOf(src.width, src.height)
+        if (longest > OUTGOING_MAX_DIMENSION) {
+            val scale = OUTGOING_MAX_DIMENSION.toFloat() / longest
+            matrix.postScale(scale, scale)
+        }
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+        }
+        val result = if (!matrix.isIdentity) {
+            Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+        } else {
+            src
+        }
+        val out = ByteArrayOutputStream()
+        result.compress(Bitmap.CompressFormat.JPEG, OUTGOING_JPEG_QUALITY, out)
+        if (result != src) result.recycle()
+        out.toByteArray()
+    }.getOrDefault(data).also { src.recycle() }
 }
 
 /**

@@ -470,7 +470,12 @@ struct ConversationView: View {
     private func stagePickedPhoto(_ item: PhotosPickerItem) {
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-            stageImageData(data)
+            // Re-encode for sending off the main thread (docs/35): upright,
+            // resolution-capped, metadata-stripped — Signal-style.
+            let processed = await Task.detached(priority: .userInitiated) {
+                prepareImageForSending(data)
+            }.value
+            stageImageData(processed)
         }
     }
 
@@ -492,7 +497,7 @@ struct ConversationView: View {
     /// match the photo-picker path, which `sendComposed` uploads as image/jpeg.
     private func pasteImage() {
         guard let image = UIPasteboard.general.image,
-              let data = image.jpegData(compressionQuality: 0.9) else { return }
+              let data = image.preparedForSending() else { return }
         stageImageData(data)
     }
 

@@ -127,6 +127,16 @@ func makeAttachmentThumbnail(_ data: Data, maxDimension: CGFloat = 320) -> (thum
     return (jpeg, Int32(size.width), Int32(size.height))
 }
 
+/// Prepare raw image `data` for sending (docs/35): decode, then re-encode upright,
+/// resolution-capped, and metadata-stripped via `UIImage.preparedForSending` —
+/// matching Signal's outgoing-image policy. Falls back to the original bytes only
+/// if the data can't be decoded. Used by the photo-picker path; paste and the
+/// share extension call `preparedForSending` on their `UIImage` directly.
+func prepareImageForSending(_ data: Data) -> Data {
+    guard let image = UIImage(data: data) else { return data }
+    return image.preparedForSending() ?? data
+}
+
 /// A rich link-preview card (docs/35 "Link previews"): the og:image (if any) on
 /// top, then the title and source domain. Tapping opens the URL. The image is a
 /// normal attachment, downloaded via the same `loader` as message attachments.
