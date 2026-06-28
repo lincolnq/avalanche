@@ -92,6 +92,8 @@ interface AppContextValue {
   selectedConversationId: () => string | null;
   selectConversation: (id: string | null) => void;
   reloadConversations: () => Promise<void>;
+  // Reactive: latest group whose metadata changed (T74 membership re-check).
+  groupMetaChange: () => { groupId: string; n: number };
 
   // Track A — message actions
   reactionsFor: (conversation: Conversation, message: Message) => ReactionFfi[];
@@ -206,6 +208,14 @@ export function AppProvider(props: { children: JSX.Element }) {
   // Selected conversation — lifted into context so compose/group/join flows
   // can programmatically open a conversation. ChatsView mirrors this signal.
   const [selectedConversationId, setSelectedConversationId] = createSignal<string | null>(null);
+
+  // Bumps each time a group's metadata changes (incoming GroupMetadataChanged),
+  // carrying the affected groupId. ConversationView tracks this to re-check
+  // membership for the open group without waiting for a conversation switch (T74).
+  const [groupMetaChange, setGroupMetaChange] = createSignal<{ groupId: string; n: number }>({
+    groupId: "",
+    n: 0,
+  });
 
   // Reactive display-name cache: reads are tracked by Solid so components
   // re-render when a resolved name arrives.  A separate plain Set tracks
@@ -1633,7 +1643,11 @@ export function AppProvider(props: { children: JSX.Element }) {
           // so it appears, then refresh the conversation list/preview.
           const gm = ev as Extract<IncomingEvent, { type: "groupMetadataChanged" }>;
           reloadMessagesIfLoaded(`group-${gm.event.groupId}`);
+          // Notify any open ConversationView for this group to re-check
+          // membership (e.g. you were removed by another admin while viewing).
+          setGroupMetaChange((p) => ({ groupId: gm.event.groupId, n: p.n + 1 }));
           needsConversationReload = true;
+          break;
         }
         case "groupInvite":
         case "storageSynced":
@@ -2062,6 +2076,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     selectedConversationId,
     selectConversation: (id) => setSelectedConversationId(id),
     reloadConversations,
+    groupMetaChange,
     reactionsFor,
     loadReactions,
     toggleReaction,

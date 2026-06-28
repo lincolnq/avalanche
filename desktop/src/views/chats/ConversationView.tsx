@@ -94,6 +94,23 @@ export default function ConversationView(props: Props) {
     }
   });
 
+  // Re-check group membership when the open group's metadata changes (T74):
+  // being removed by another admin while viewing the group must flip the
+  // composer to the read-only notice without waiting for a conversation switch.
+  createEffect(() => {
+    const change = app.groupMetaChange(); // track
+    const groupId = props.conversation.groupId;
+    if (!props.conversation.isGroup || !groupId || change.groupId !== groupId) return;
+    const gen = ++groupMemberGen;
+    void app
+      .service()
+      .isGroupMember(groupId)
+      .then((m) => {
+        if (gen === groupMemberGen) setGroupMember(m);
+      })
+      .catch(() => {});
+  });
+
   // Mark all messages read when messages arrive (handles both initial async
   // load and new incoming messages).  Tracking messages().length ensures this
   // re-runs after the async fetch resolves.  This always clears the local
