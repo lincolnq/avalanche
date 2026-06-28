@@ -203,11 +203,15 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   function getServerUrl(accountId: string): string {
-    // Uses `servers[0]` — the first server is the one the account was created
-    // with / joined first.  There is no `isCurrent` field on ServerInfo (the
-    // original code that referenced it was a bug that silently returned "").
-    // TODO(multi-server): pick by a "current server" flag once multi-server
-    // account management is implemented.
+    // Uses `servers[0]`, the server the account was created with / joined first,
+    // which stands in for the account's discovery/home server until multi-server
+    // is modeled. There is no `isCurrent` field on ServerInfo (the original code
+    // that referenced one was a bug that silently returned "").
+    // TODO(multi-server): per docs/53, an identity has one discovery/home server
+    // plus additional memberships; there is no single user-selected "current
+    // server". When multi-server lands, account-level calls should use the
+    // discovery server and group/DM operations should use the conversation's own
+    // server, rather than a global current-server flag.
     return (
       store.accounts
         .find((a) => a.id === accountId)
