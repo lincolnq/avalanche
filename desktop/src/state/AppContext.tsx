@@ -1872,9 +1872,13 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   // Apply an inbound edit (iOS `applyInboundEdit`).
-  // TODO(robustness): matching solely on senderAccountId+sentAtMs can collide
-  // if two messages share the same millisecond timestamp. Additionally match on
-  // serverId once echo reconciliation assigns it.
+  // Matches the target by (senderAccountId, sentAtMs) — identical to iOS
+  // applyInboundEdit. T66 (also match on serverId, to disambiguate two messages
+  // that share a millisecond) is blocked: the messageEdited/messageDeleted wire
+  // events carry no server_id (only conversation_id, author_did, sent_at_ms), so
+  // there is nothing to match against. Closing this needs server_id added to
+  // those events across the protocol + all platforms — a contract change to
+  // raise with the maintainer, not a desktop-only edit.
   function applyInboundEdit(
     cid: string,
     authorDid: string,
