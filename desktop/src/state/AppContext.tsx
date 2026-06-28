@@ -133,6 +133,10 @@ interface AppContextValue {
   generateRecoveryPhrase: () => Promise<string>;
   setupRecoveryFromPhrase: (phrase: string) => Promise<void>;
   recoverFromPhrase: (phrase: string, serverUrl: string, displayName: string) => Promise<void>;
+
+  // Deep links — route a pasted/opened link (conversation/<did>, i/<token>)
+  isDeepLink: (raw: string) => boolean;
+  handleDeepLink: (raw: string) => void;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -626,6 +630,13 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   const trimSlashes = (s: string) => s.replace(/\/+$/, "");
+
+  // True if `raw` is a routable deep link (an avalanche:// or
+  // go.theavalanche.net URL with a recognized action) — lets the recipient
+  // field distinguish a pasted contact/invite link from a bare DID.
+  function isDeepLink(raw: string): boolean {
+    return parseDeepLink(raw) !== null;
+  }
 
   // Route a deep link like iOS AppState.handleDeepLink: open a DM for
   // conversation/<did>, and for i/<token> jump straight to the inviter's DM if
@@ -1367,9 +1378,12 @@ export function AppProvider(props: { children: JSX.Element }) {
     return conv;
   }
 
-  // TODO(track-F): no in-app entry point calls joinViaLink yet. iOS joins a
-  // group purely via deep link (no dedicated UI), so the trigger lands with the
-  // deep-link plumbing in day 5. The handler itself is complete.
+  // The pasted-/opened-link entry (NewConversationView → handleDeepLink) covers
+  // contact and server-invite links (conversation/<did>, i/<token>). A *group*
+  // join link — which would carry the master key + invite-link password
+  // (docs/03 §3.10) into this handler — has no defined URL wire format in iOS or
+  // app-core yet, so there is deliberately no UI that builds those args here.
+  // Wire it once that format exists; the handler itself is complete.
   async function joinViaLink(
     masterKey: number[],
     hostingServerUrl: string,
@@ -2040,6 +2054,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     generateRecoveryPhrase,
     setupRecoveryFromPhrase,
     recoverFromPhrase,
+    isDeepLink,
+    handleDeepLink,
   };
 
   return (
