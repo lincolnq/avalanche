@@ -606,3 +606,80 @@ async fn attachments_save_load_download_and_cleanup() {
     store.delete_conversation("dm-bob").await.unwrap();
     assert!(store.load_attachments("m1").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn load_conversations_reports_last_message_attachment_content_type() {
+    use store::attachments::AttachmentRow;
+    use store::messages::HistoryMessage;
+
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    let msg = |id: &str, conv: &str, body: &str| HistoryMessage {
+        id: id.to_string(),
+        conversation_id: conv.to_string(),
+        sender_did: "did:plc:alice".to_string(),
+        body: body.to_string(),
+        sent_at: Timestamp(1000),
+        edited_at: None,
+        read_at: None,
+        delivery_status: 1,
+        edit_count: 0,
+        deleted_at: None,
+        kind: 0,
+        metadata: None,
+        expire_timer_secs: 0,
+        expire_at: None,
+    };
+
+    // A caption-less photo (empty body, one image attachment).
+    store.save_message(&msg("m1", "dm-bob", "")).await.unwrap();
+    store
+        .save_attachments(
+            "m1",
+            &[AttachmentRow {
+                id: "a1".to_string(),
+                message_id: "m1".to_string(),
+                ordinal: 0,
+                url: "https://srv/v1/attachments/a1".to_string(),
+                content_type: "image/jpeg".to_string(),
+                enc_key: vec![7u8; 64],
+                digest: vec![9u8; 32],
+                size_bytes: 1,
+                file_name: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                blurhash: None,
+                thumbnail: None,
+                caption: None,
+                flags: 0,
+                local_path: None,
+                downloaded_at: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+    // A plain text message with no attachment.
+    store
+        .save_message(&msg("m2", "dm-carol", "hello"))
+        .await
+        .unwrap();
+
+    let convs = store
+        .load_conversations(Timestamp(2000), "did:plc:me")
+        .await
+        .unwrap();
+    let bob = convs.iter().find(|c| c.conversation_id == "dm-bob").unwrap();
+    let carol = convs.iter().find(|c| c.conversation_id == "dm-carol").unwrap();
+
+    // The photo conversation reports its attachment's MIME type even though the
+    // message body is empty — this is what lets the chat list render "Photo"
+    // after a restart instead of a blank preview.
+    assert_eq!(
+        bob.last_message_attachment_content_type.as_deref(),
+        Some("image/jpeg")
+    );
+    // A plain message reports no attachment type.
+    assert_eq!(carol.last_message_attachment_content_type, None);
+}
