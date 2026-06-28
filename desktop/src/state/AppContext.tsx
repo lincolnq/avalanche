@@ -160,13 +160,21 @@ export function AppProvider(props: { children: JSX.Element }) {
   let reloadQueued = false;
   // Conversation ids created in-memory (e.g. an incoming welcome DM) that aren't
   // backed by a row in the local DB. loadConversationsFromStore preserves only
-  // these across a reload — NOT arbitrary DB-absent entries, which would
-  // resurrect conversations the DB intentionally dropped (e.g. left groups).
-  // NOTE: app-core does not persist *incoming* messages, so a received-DM
-  // conversation never appears in a DB summary and stays pending for the whole
-  // session (and is lost on app restart — see the incoming-message handler).
-  // The drop-on-DB-appearance path below still matters for any conversation that
-  // does get persisted (e.g. once an outgoing reply is saved).
+  // these across a reload, NOT arbitrary DB-absent entries, which would resurrect
+  // conversations the DB intentionally dropped (e.g. left groups).
+  //
+  // Persistence is the frontend's responsibility; app-core does not auto-persist
+  // (the client owns local history). On this branch the incoming-message handler
+  // does not call saveMessage yet, so a received-DM conversation is held only
+  // here in memory and is lost on app restart. Day 4 wires up that persistence:
+  // once the handler saves received messages, the conversation shows up in the DB
+  // summaries on the next reload and this set just bridges the brief window until
+  // then. The drop-on-DB-appearance path below returns a conversation to the
+  // normal DB-driven lifecycle once it is persisted (e.g. once an outgoing reply
+  // saves).
+  //
+  // TODO: persist incoming messages in the receive handler (wired up in day 4;
+  // removes the session-only / lost-on-restart gap above).
   const pendingConversations: Set<string> = new Set();
 
   // Event loop lifecycle
