@@ -84,6 +84,7 @@ interface AppContextValue {
   aggregateConnectionState: () => ConnectionState;
   unreadCount: (conversation: Conversation) => number;
   displayName: (did: string, accountId: string) => string;
+  isBot: (did: string) => boolean;
   setPendingInviteToken: (token: string | null) => void;
   validateInvite: (token: string) => Promise<InviteInfo>;
 
@@ -211,6 +212,12 @@ export function AppProvider(props: { children: JSX.Element }) {
   // in-flight fetches to prevent duplicate IPC calls per DID.
   const [displayNameCache, setDisplayNameCache] = createStore<Record<string, string>>({});
   const displayNamePending: Set<string> = new Set();
+
+  // Reactive is-bot cache, same pattern as displayNameCache: components read it
+  // in a tracking scope so a bot avatar (hexagon) resolves once getAccountInfo
+  // returns. A plain Set guards against duplicate in-flight fetches per DID.
+  const [isBotCache, setIsBotCache] = createStore<Record<string, boolean>>({});
+  const isBotPending: Set<string> = new Set();
 
   // Load-once guards
   const loadedConversations = { value: false };
@@ -489,6 +496,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     // update on logout/mode-switch.
     setDisplayNameCache(reconcile({}));
     displayNamePending.clear();
+    setIsBotCache(reconcile({}));
+    isBotPending.clear();
     // Clear persisted accounts, then release the restore guard so a
     // subsequent manual restore or fresh session can proceed cleanly.
     void persistAccounts([]).finally(() => {
@@ -1516,6 +1525,29 @@ export function AppProvider(props: { children: JSX.Element }) {
     return did;
   }
 
+  // Reactive is-bot lookup (docs/54 bot presentation). Returns the cached value
+  // (default false) and fires a getAccountInfo fetch to populate it; the read is
+  // tracked by Solid, so a bot avatar re-renders as a hexagon once resolved. Own
+  // accounts are never bots. Mirrors the displayName cache pattern.
+  function isBot(did: string): boolean {
+    if (store.accounts.some((a) => a.id === did)) return false;
+    const cached = isBotCache[did];
+    if (cached !== undefined) return cached;
+    if (!isBotPending.has(did)) {
+      isBotPending.add(did);
+      void service()
+        .getAccountInfo(did)
+        .then((info) => setIsBotCache(did, info.isBot))
+        .catch((e: unknown) => {
+          console.warn("getAccountInfo (isBot) failed:", did, e);
+        })
+        .finally(() => {
+          isBotPending.delete(did);
+        });
+    }
+    return false;
+  }
+
   // Fire a native notification for an inbound message (mirrors iOS
   // NotificationPresenter.present). Suppressed when the user is already viewing
   // this conversation in a focused window; shown otherwise (window unfocused, or
@@ -2024,6 +2056,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     aggregateConnectionState,
     unreadCount,
     displayName,
+    isBot,
     setPendingInviteToken: (token) => setStore("pendingInviteToken", token),
     validateInvite,
     selectedConversationId,

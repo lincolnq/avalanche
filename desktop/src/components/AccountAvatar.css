@@ -11,6 +11,12 @@
   flex-shrink: 0;
 }
 
+/* Bot accounts render in a pointy-top hexagon instead of a circle (docs/54). */
+.account-avatar.bot {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
 /* 12-hue palette — deterministic per-DID, no inline styles. */
 .avatar-c0  { background: hsl(0,   55%, 45%); }
 .avatar-c1  { background: hsl(30,  55%, 42%); }

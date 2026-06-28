@@ -2,7 +2,7 @@ import { useApp } from "../state/AppContext";
 import type { Conversation } from "../models";
 import { formatRelative } from "../lib/format";
 import { groupEventText } from "../lib/groupEvents";
-import AccountAvatar from "./AccountAvatar";
+import ContactAvatar from "./ContactAvatar";
 import "./ConversationRow.css";
 
 interface Props {
@@ -42,7 +42,14 @@ export default function ConversationRow(props: Props) {
       class={`conversation-row${props.selected ? " selected" : ""}`}
       onClick={() => props.onSelect(props.conversation.id)}
     >
-      <AccountAvatar name={props.conversation.title} did={did} />
+      {/* DMs resolve bot status reactively; groups are never bots (and groupId
+          is not a DID to look up), so force isBot=false for them. */}
+      <ContactAvatar
+        name={props.conversation.title}
+        did={did}
+        isBot={props.conversation.isGroup ? false : undefined}
+      />
+
       <div class="conv-info">
         <div class="conv-title">{props.conversation.title}</div>
         {preview() && <div class="conv-preview">{preview()}</div>}
