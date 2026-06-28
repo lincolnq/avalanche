@@ -220,6 +220,57 @@ def _killpg(proc, sig):
         pass
 
 
+def free_port(port):
+    """Kill whatever is LISTENing on `port` so a restart doesn't collide with an
+    orphaned service from a previous dev run.
+
+    dev.py reaps its own process tree on exit (Job Object on Windows, killpg on
+    POSIX), but a force-killed dev.py — or one whose children were reparented
+    before the job closed — can leave a server bound to 3000, which then makes
+    the next `make dev-all` die with AddrInUse. Clearing the port up front makes
+    the restart self-heal. Best-effort and cross-platform; a no-op when the port
+    is already free or the lookup tool (netstat / lsof) is unavailable."""
+    pids = set()
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True, text=True,
+            ).stdout
+            for line in out.splitlines():
+                if "LISTENING" not in line:
+                    continue
+                cols = line.split()
+                # Columns: Proto  Local-Address  Foreign-Address  State  PID.
+                # The leading colon anchors the match so ":3000" can't hit
+                # ":30000"; works for IPv4 and "[::1]:3000" alike.
+                if len(cols) >= 5 and cols[1].endswith(f":{port}"):
+                    pid = cols[-1]
+                    if pid.isdigit() and pid != "0":
+                        pids.add(pid)
+        else:
+            out = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True,
+            ).stdout
+            pids.update(p for p in out.split() if p.isdigit())
+    except FileNotFoundError:
+        return  # netstat / lsof not on PATH; nothing we can do
+
+    for pid in pids:
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/PID", pid, "/F"],
+                    capture_output=True, check=False,
+                )
+            else:
+                os.kill(int(pid), signal.SIGKILL)
+            print(f"  Freed port {port}: killed stale process {pid}")
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+
+
 def main():
     enable_kill_on_close()
     start_postgres()
@@ -250,6 +301,14 @@ def main():
             "description": project["description"],
         })
         project_launches.append((project, port))
+
+    # Free any port left bound by an orphaned service from a previous dev run
+    # (see free_port) so `make dev-all` self-heals instead of dying with
+    # AddrInUse. The server port comes from SERVER_URL (default 3000); project
+    # ports are the ones assigned above.
+    server_port = urlparse(os.environ.get("SERVER_URL", "http://localhost:3000")).port or 3000
+    for port in [server_port, *(port for _project, port in project_launches)]:
+        free_port(port)
 
     # Launch all services
     processes = []

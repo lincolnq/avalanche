@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/free-port.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "tauri": "tauri"
