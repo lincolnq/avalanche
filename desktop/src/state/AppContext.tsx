@@ -110,6 +110,20 @@ function messageFromFfi(m: StoredMessageFfi): Message {
   };
 }
 
+// Delivery-status progression rank: sending(0) → sent(1) → delivered(2) → read(3).
+// `failed` gets -1 so a failure only applies from a non-terminal state and is
+// never treated as "more advanced" than read. Used by applyDeliveryStatusUpdates
+// to ensure receipts only ever move a message forward.
+function deliveryRank(s: DeliveryStatus): number {
+  switch (s) {
+    case DeliveryStatus.sending:   return 0;
+    case DeliveryStatus.sent:      return 1;
+    case DeliveryStatus.delivered: return 2;
+    case DeliveryStatus.read:      return 3;
+    case DeliveryStatus.failed:    return -1;
+  }
+}
+
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function AppProvider(props: { children: JSX.Element }) {
@@ -138,6 +152,12 @@ export function AppProvider(props: { children: JSX.Element }) {
   // Load-once guards
   const loadedConversations = { value: false };
   const loadedMessages: Set<string> = new Set();
+  // Coalesces forced conversation reloads (the inbound-event handlers plus
+  // safety/group actions) so their store reconciles don't interleave. A reload
+  // requested while one is in flight queues exactly one follow-up rather than
+  // launching a second interleaving load.
+  let reloadInFlight: Promise<void> | null = null;
+  let reloadQueued = false;
   // Conversation ids created in-memory (e.g. an incoming welcome DM) that aren't
   // backed by a row in the local DB. loadConversationsFromStore preserves only
   // these across a reload — NOT arbitrary DB-absent entries, which would
@@ -506,6 +526,45 @@ export function AppProvider(props: { children: JSX.Element }) {
     setStore("conversations", merged);
   }
 
+  // Force a fresh conversation reload, bypassing the load-once guard. Used by
+  // the inbound-event handlers (and later by safety/group actions). If a reload
+  // is already running, queue exactly one follow-up rather than launching a
+  // second interleaving load — this is the "please reload" path, distinct from
+  // the load-once `loadConversationsFromStore`.
+  function reloadConversations(): Promise<void> {
+    if (reloadInFlight) {
+      reloadQueued = true;
+      return reloadInFlight;
+    }
+    loadedConversations.value = false;
+    reloadInFlight = loadConversationsFromStore().finally(() => {
+      reloadInFlight = null;
+      if (reloadQueued) {
+        reloadQueued = false;
+        void reloadConversations();
+      }
+    });
+    return reloadInFlight;
+  }
+
+  // Reload a conversation's timeline from the store, fully replacing the
+  // in-memory copy (matches iOS `reloadMessagesIfLoaded`). Only acts on an
+  // already-loaded conversation, so it never eagerly loads unopened ones. A full
+  // replace is correct because the store is the source of truth: a row missing
+  // from the reload was deliberately deleted (expired by the disappearing-
+  // messages reaper, docs/03 §5, or tombstoned), so it must leave the UI too.
+  function reloadMessagesIfLoaded(cid: string) {
+    if (!loadedMessages.has(cid)) return;
+    void service()
+      .loadMessages(cid)
+      .then((rows) => {
+        setStore("messagesByConversation", cid, rows.map(messageFromFfi));
+      })
+      .catch((e: unknown) => {
+        console.warn("reloadMessagesIfLoaded failed:", cid, e);
+      });
+  }
+
   function loadMessagesFromStore(conversationId: string, _accountId: string) {
     if (loadedMessages.has(conversationId)) return;
     loadedMessages.add(conversationId);
@@ -723,277 +782,59 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   // ── Event loop ────────────────────────────────────────────────────────────
 
+  // Drain a batch of decrypted events (mirrors iOS `AppState.eventLoop`,
+  // AppState.swift). The switch only *collects*; state is applied once after the
+  // loop, so a whole batch triggers at most one conversation reload — this is
+  // what kills the interleaving-reload races the old per-case reloads caused.
+  // Point mutations that don't benefit from batching (edits, deletes) are
+  // applied inline via small named handlers, matching iOS.
   function handleIncomingEvents(events: IncomingEvent[]) {
+    const messages: Extract<IncomingEvent, { type: "message" }>["msg"][] = [];
+    const receiptUpdates: Extract<
+      IncomingEvent,
+      { type: "receiptUpdate" }
+    >["update"][] = [];
+    let needsConversationReload = false;
+
     for (const ev of events) {
       switch (ev.type) {
-        case "message": {
-          const m = ev.msg;
-          const accountId = getActiveAccountId();
-          const conversationId = m.groupId
-            ? `group-${m.groupId}`
-            : `dm-${accountId}-${m.senderDid}`;
-          const senderIsSelf = m.senderDid === accountId;
-
-          if (senderIsSelf && m.sentAtMs !== null) {
-            // Echo of our own outgoing message — update the optimistic entry
-            // in-place by sentAtMs instead of appending a duplicate.
-            // Only match messages that are still in a non-terminal delivery
-            // state (sending/sent); a delivered message is already confirmed
-            // and should not be matched again.
-            setStore("messagesByConversation", conversationId, (prev) =>
-              (prev ?? []).map((existing) =>
-                existing.sentAtMs === m.sentAtMs &&
-                existing.senderAccountId === accountId &&
-                (existing.deliveryStatus === DeliveryStatus.sending ||
-                  existing.deliveryStatus === DeliveryStatus.sent)
-                  ? {
-                      ...existing,
-                      deliveryStatus: DeliveryStatus.delivered,
-                      id: `server-${m.serverId}`,
-                    }
-                  : existing
-              )
-            );
-          } else {
-            // Received from another user — append as a new message.
-            const body = new TextDecoder().decode(new Uint8Array(m.plaintext));
-            const msg: Message = {
-              id: crypto.randomUUID(),
-              conversationId,
-              senderAccountId: m.senderDid,
-              body,
-              sentAtMs: m.sentAtMs ?? Date.now(),
-              deliveryStatus: DeliveryStatus.delivered,
-              editCount: 0,
-              isDeleted: false,
-              kind: 0,
-              expireTimerSecs: m.expireTimerSecs,
-            };
-            setStore("messagesByConversation", conversationId, (prev) => [
-              ...(prev ?? []),
-              msg,
-            ]);
-            // Update conversation preview
-            const convIdx = store.conversations.findIndex(
-              (c) => c.id === conversationId
-            );
-            if (convIdx >= 0) {
-              const previewText =
-                body.length > 100 ? body.slice(0, 100) + "…" : body;
-              setStore(
-                "conversations",
-                convIdx,
-                "lastMessage",
-                previewText
-              );
-              setStore(
-                "conversations",
-                convIdx,
-                "lastMessageDate",
-                m.sentAtMs ?? Date.now()
-              );
-            } else {
-              // Conversation not in the list yet — create it in-memory and
-              // mark it pending so the merge in loadConversationsFromStore
-              // preserves it across reloads until its message lands in the DB.
-              const isGroup = !!m.groupId;
-              const serverUrl = getServerUrl(accountId);
-              const newConv: Conversation = {
-                id: conversationId,
-                title: isGroup ? "Group" : m.senderDid,
-                accountId,
-                serverUrl,
-                recipientDid: isGroup ? undefined : m.senderDid,
-                groupId: m.groupId ?? undefined,
-                lastMessage: body.length > 100 ? body.slice(0, 100) + "…" : body,
-                lastMessageDate: m.sentAtMs ?? Date.now(),
-                lastMessageKind: 0,
-                isGroup,
-                isRequest: false,
-                isBlocked: false,
-              };
-              pendingConversations.add(conversationId);
-              setStore("conversations", (prev) => [newConv, ...prev]);
-            }
-          }
+        case "message":
+          messages.push(ev.msg);
           break;
-        }
-        case "receiptUpdate": {
-          const update = ev.update;
-          const msgs = store.messagesByConversation[update.conversationId];
-          if (msgs) {
-            // Delivery-status progression: sending(0) → sent(1) → delivered(2) → read(3).
-            // `failed`(4) is a terminal error state — it can only be set from a
-            // non-terminal state (not from delivered/read), and it must never be
-            // treated as "more advanced" than read.
-            //
-            // rank() maps the four forward states to their progression order and
-            // gives `failed` a rank of -1 so it can only be applied when the
-            // current state is still in the non-terminal range.
-            function rank(s: DeliveryStatus): number {
-              switch (s) {
-                case DeliveryStatus.sending:   return 0;
-                case DeliveryStatus.sent:      return 1;
-                case DeliveryStatus.delivered: return 2;
-                case DeliveryStatus.read:      return 3;
-                case DeliveryStatus.failed:    return -1; // handled separately
-              }
-            }
-            const incoming = (
-              update.deliveryStatus >= 0 && update.deliveryStatus <= 4
-                ? update.deliveryStatus
-                : DeliveryStatus.sent
-            ) as DeliveryStatus;
-            setStore(
-              "messagesByConversation",
-              update.conversationId,
-              msgs.map((m) => {
-                if (m.sentAtMs !== update.sentAtMs) return m;
-                if (incoming === DeliveryStatus.failed) {
-                  // Only apply `failed` when the message is still non-terminal
-                  // (sending/sent).  A delivered or read message is never
-                  // downgraded to failed by a stale or out-of-order receipt.
-                  if (rank(m.deliveryStatus) <= rank(DeliveryStatus.sent)) {
-                    return { ...m, deliveryStatus: DeliveryStatus.failed };
-                  }
-                  return m;
-                }
-                // For normal forward states, only advance — never go backwards.
-                if (rank(incoming) > rank(m.deliveryStatus)) {
-                  return { ...m, deliveryStatus: incoming };
-                }
-                return m;
-              })
-            );
-          }
+        case "receiptUpdate":
+          receiptUpdates.push(ev.update);
           break;
-        }
         case "messageEdited": {
-          // TODO(robustness): matching solely on senderAccountId+sentAtMs can
-          // collide if two messages share the same millisecond timestamp.
-          // Additionally match on serverId once echo reconciliation assigns it.
-          const edited = ev as Extract<IncomingEvent, { type: "messageEdited" }>;
-          const cid = edited.conversation_id ?? "";
-          if (cid && store.messagesByConversation[cid]) {
-            setStore("messagesByConversation", cid, (prev) =>
-              (prev ?? []).map((m) =>
-                m.senderAccountId === edited.author_did &&
-                m.sentAtMs === edited.sent_at_ms
-                  ? {
-                      ...m,
-                      body: edited.new_body,
-                      editedAtMs: edited.edited_at_ms,
-                      editCount: m.editCount + 1,
-                    }
-                  : m
-              )
-            );
-            // Update conversation preview if the edited message was the
-            // most recent one.
-            const convIdx = store.conversations.findIndex((c) => c.id === cid);
-            if (
-              convIdx >= 0 &&
-              store.conversations[convIdx]?.lastMessageDate === edited.sent_at_ms
-            ) {
-              const previewText =
-                edited.new_body.length > 100
-                  ? edited.new_body.slice(0, 100) + "..."
-                  : edited.new_body;
-              setStore("conversations", convIdx, "lastMessage", previewText);
-            }
-          } else {
-            // Messages not yet loaded or no conversation_id — reload to
-            // pick up the edit from the store.
-            loadedConversations.value = false;
-            void loadConversationsFromStore();
-          }
+          const e = ev as Extract<IncomingEvent, { type: "messageEdited" }>;
+          applyInboundEdit(
+            e.conversation_id ?? "",
+            e.author_did,
+            e.sent_at_ms,
+            e.new_body,
+            e.edited_at_ms
+          );
           break;
         }
         case "messageDeleted": {
-          const del = ev as Extract<IncomingEvent, { type: "messageDeleted" }>;
-          const cid = del.conversation_id ?? "";
-          if (cid && store.messagesByConversation[cid]) {
-            setStore("messagesByConversation", cid, (prev) =>
-              (prev ?? []).map((m) =>
-                m.senderAccountId === del.author_did &&
-                m.sentAtMs === del.sent_at_ms
-                  ? { ...m, isDeleted: true }
-                  : m
-              )
-            );
-            // Update conversation preview if the deleted message was the
-            // most recent one.
-            const convIdx = store.conversations.findIndex((c) => c.id === cid);
-            if (
-              convIdx >= 0 &&
-              store.conversations[convIdx]?.lastMessageDate === del.sent_at_ms
-            ) {
-              setStore("conversations", convIdx, "lastMessage", "[deleted]");
-            }
-          } else {
-            // Messages not yet loaded or no conversation_id — reload to
-            // pick up the deletion tombstone from the store.
-            loadedConversations.value = false;
-            void loadConversationsFromStore();
-          }
+          const d = ev as Extract<IncomingEvent, { type: "messageDeleted" }>;
+          applyInboundDelete(d.conversation_id ?? "", d.author_did, d.sent_at_ms);
           break;
         }
-        case "reactionUpdated": {
-          // TODO: render reactions on messages. For now, reload conversations
-          // to refresh any cached reaction data.
-          // TODO(robustness): concurrent reloads race — see messagesExpired.
-          loadedConversations.value = false;
-          void loadConversationsFromStore();
+        case "reactionUpdated":
+          // day-3 has no on-message reaction rendering yet; a list reload picks
+          // up any cached reaction change. (Real reaction state lands in day 4.)
+          needsConversationReload = true;
           break;
-        }
         case "messagesExpired": {
           const exp = ev as Extract<IncomingEvent, { type: "messagesExpired" }>;
-          for (const cid of exp.conversation_ids) {
-            loadedMessages.delete(cid);
-            void service()
-              .loadMessages(cid)
-              .then((rows) => {
-                const serverMessages = rows.map(messageFromFfi);
-                // Merge: start with the fresh server data, then append any
-                // existing optimistic messages (still in sending/sent state)
-                // that were not yet persisted (no matching entry by
-                // senderAccountId+sentAtMs in the server data).  This
-                // prevents data loss when an expiration event fires before
-                // `saveMessage` completes.
-                setStore("messagesByConversation", cid, (prev) => {
-                  const existing = prev ?? [];
-                  // Build a lookup keyed by `${senderAccountId}:${sentAtMs}`
-                  // for O(1) membership checks.
-                  const serverKeys = new Set(
-                    serverMessages.map(
-                      (m) => `${m.senderAccountId}:${m.sentAtMs}`
-                    )
-                  );
-                  const retained = existing.filter(
-                    (m) =>
-                      (m.deliveryStatus === DeliveryStatus.sending ||
-                        m.deliveryStatus === DeliveryStatus.sent) &&
-                      !serverKeys.has(`${m.senderAccountId}:${m.sentAtMs}`)
-                  );
-                  return [...serverMessages, ...retained];
-                });
-              })
-              .catch((e: unknown) => {
-                console.warn("loadMessages after expiry failed:", cid, e);
-              });
-          }
-          // TODO(robustness): if two events arrive back-to-back, this
-          // launches two concurrent `loadConversationsFromStore()` calls
-          // whose store updates can interleave. Dedup or serialize reloads.
-          loadedConversations.value = false;
-          void loadConversationsFromStore();
+          for (const cid of exp.conversation_ids) reloadMessagesIfLoaded(cid);
+          needsConversationReload = true;
           break;
         }
         case "groupInvite":
         case "groupMetadataChanged":
         case "storageSynced":
-          loadedConversations.value = false;
-          void loadConversationsFromStore();
+          needsConversationReload = true;
           break;
         default:
           console.warn(
@@ -1002,6 +843,201 @@ export function AppProvider(props: { children: JSX.Element }) {
           );
           break;
       }
+    }
+
+    // Apply phase — run once for the whole batch.
+    const accountId = getActiveAccountId();
+    for (const m of messages) handleIncomingMessage(m, accountId);
+    if (receiptUpdates.length) applyDeliveryStatusUpdates(receiptUpdates);
+    if (needsConversationReload) void reloadConversations();
+  }
+
+  // Append or reconcile a single decrypted message (iOS `handleIncomingMessage`).
+  function handleIncomingMessage(
+    m: Extract<IncomingEvent, { type: "message" }>["msg"],
+    accountId: string
+  ) {
+    const conversationId = m.groupId
+      ? `group-${m.groupId}`
+      : `dm-${accountId}-${m.senderDid}`;
+    const senderIsSelf = m.senderDid === accountId;
+
+    if (senderIsSelf && m.sentAtMs !== null) {
+      // Echo of our own outgoing message — update the optimistic entry in-place
+      // by sentAtMs instead of appending a duplicate. Only match messages still
+      // in a non-terminal delivery state (sending/sent); a delivered message is
+      // already confirmed and should not be matched again.
+      setStore("messagesByConversation", conversationId, (prev) =>
+        (prev ?? []).map((existing) =>
+          existing.sentAtMs === m.sentAtMs &&
+          existing.senderAccountId === accountId &&
+          (existing.deliveryStatus === DeliveryStatus.sending ||
+            existing.deliveryStatus === DeliveryStatus.sent)
+            ? {
+                ...existing,
+                deliveryStatus: DeliveryStatus.delivered,
+                id: `server-${m.serverId}`,
+              }
+            : existing
+        )
+      );
+      return;
+    }
+
+    // Received from another user — append as a new message.
+    const body = new TextDecoder().decode(new Uint8Array(m.plaintext));
+    const msg: Message = {
+      id: crypto.randomUUID(),
+      conversationId,
+      senderAccountId: m.senderDid,
+      body,
+      sentAtMs: m.sentAtMs ?? Date.now(),
+      deliveryStatus: DeliveryStatus.delivered,
+      editCount: 0,
+      isDeleted: false,
+      kind: 0,
+      expireTimerSecs: m.expireTimerSecs,
+    };
+    setStore("messagesByConversation", conversationId, (prev) => [
+      ...(prev ?? []),
+      msg,
+    ]);
+
+    // Update conversation preview, or create the conversation in-memory.
+    const convIdx = store.conversations.findIndex((c) => c.id === conversationId);
+    if (convIdx >= 0) {
+      const previewText = body.length > 100 ? body.slice(0, 100) + "…" : body;
+      setStore("conversations", convIdx, "lastMessage", previewText);
+      setStore(
+        "conversations",
+        convIdx,
+        "lastMessageDate",
+        m.sentAtMs ?? Date.now()
+      );
+    } else {
+      // Conversation not in the list yet — create it in-memory and mark it
+      // pending so the merge in loadConversationsFromStore preserves it across
+      // reloads until its message lands in the DB.
+      const isGroup = !!m.groupId;
+      const serverUrl = getServerUrl(accountId);
+      const newConv: Conversation = {
+        id: conversationId,
+        title: isGroup ? "Group" : m.senderDid,
+        accountId,
+        serverUrl,
+        recipientDid: isGroup ? undefined : m.senderDid,
+        groupId: m.groupId ?? undefined,
+        lastMessage: body.length > 100 ? body.slice(0, 100) + "…" : body,
+        lastMessageDate: m.sentAtMs ?? Date.now(),
+        lastMessageKind: 0,
+        isGroup,
+        isRequest: false,
+        isBlocked: false,
+      };
+      pendingConversations.add(conversationId);
+      setStore("conversations", (prev) => [newConv, ...prev]);
+    }
+  }
+
+  // Apply a batch of delivery-status receipts (iOS `applyDeliveryStatusUpdates`).
+  // Receipts only ever move a message forward; `failed` applies only from a
+  // non-terminal state (see `deliveryRank`).
+  function applyDeliveryStatusUpdates(
+    updates: Extract<IncomingEvent, { type: "receiptUpdate" }>["update"][]
+  ) {
+    for (const update of updates) {
+      const msgs = store.messagesByConversation[update.conversationId];
+      if (!msgs) continue;
+      const incoming = (
+        update.deliveryStatus >= 0 && update.deliveryStatus <= 4
+          ? update.deliveryStatus
+          : DeliveryStatus.sent
+      ) as DeliveryStatus;
+      setStore(
+        "messagesByConversation",
+        update.conversationId,
+        msgs.map((m) => {
+          if (m.sentAtMs !== update.sentAtMs) return m;
+          if (incoming === DeliveryStatus.failed) {
+            // Only apply `failed` when the message is still non-terminal
+            // (sending/sent). A delivered or read message is never downgraded
+            // to failed by a stale or out-of-order receipt.
+            if (deliveryRank(m.deliveryStatus) <= deliveryRank(DeliveryStatus.sent)) {
+              return { ...m, deliveryStatus: DeliveryStatus.failed };
+            }
+            return m;
+          }
+          // For normal forward states, only advance — never go backwards.
+          if (deliveryRank(incoming) > deliveryRank(m.deliveryStatus)) {
+            return { ...m, deliveryStatus: incoming };
+          }
+          return m;
+        })
+      );
+    }
+  }
+
+  // Apply an inbound edit (iOS `applyInboundEdit`).
+  // TODO(robustness): matching solely on senderAccountId+sentAtMs can collide
+  // if two messages share the same millisecond timestamp. Additionally match on
+  // serverId once echo reconciliation assigns it.
+  function applyInboundEdit(
+    cid: string,
+    authorDid: string,
+    sentAtMs: number,
+    newBody: string,
+    editedAtMs: number
+  ) {
+    if (cid && store.messagesByConversation[cid]) {
+      setStore("messagesByConversation", cid, (prev) =>
+        (prev ?? []).map((m) =>
+          m.senderAccountId === authorDid && m.sentAtMs === sentAtMs
+            ? {
+                ...m,
+                body: newBody,
+                editedAtMs,
+                editCount: m.editCount + 1,
+              }
+            : m
+        )
+      );
+      // Update conversation preview if the edited message was the most recent.
+      const convIdx = store.conversations.findIndex((c) => c.id === cid);
+      if (
+        convIdx >= 0 &&
+        store.conversations[convIdx]?.lastMessageDate === sentAtMs
+      ) {
+        const previewText =
+          newBody.length > 100 ? newBody.slice(0, 100) + "..." : newBody;
+        setStore("conversations", convIdx, "lastMessage", previewText);
+      }
+    } else {
+      // Messages not loaded or no conversation_id — reload to pick up the edit.
+      void reloadConversations();
+    }
+  }
+
+  // Apply an inbound delete tombstone (iOS `applyInboundDelete`).
+  function applyInboundDelete(cid: string, authorDid: string, sentAtMs: number) {
+    if (cid && store.messagesByConversation[cid]) {
+      setStore("messagesByConversation", cid, (prev) =>
+        (prev ?? []).map((m) =>
+          m.senderAccountId === authorDid && m.sentAtMs === sentAtMs
+            ? { ...m, isDeleted: true }
+            : m
+        )
+      );
+      // Update conversation preview if the deleted message was the most recent.
+      const convIdx = store.conversations.findIndex((c) => c.id === cid);
+      if (
+        convIdx >= 0 &&
+        store.conversations[convIdx]?.lastMessageDate === sentAtMs
+      ) {
+        setStore("conversations", convIdx, "lastMessage", "[deleted]");
+      }
+    } else {
+      // Messages not loaded or no conversation_id — reload to pick up the tombstone.
+      void reloadConversations();
     }
   }
 
