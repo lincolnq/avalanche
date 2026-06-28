@@ -24,16 +24,15 @@ export async function openProjectWindow(
 
   // TODO(Day 4): intercept navigation to go.theavalanche.net and close the
   // modal / emit a deeplink event.
-  // Security: this ephemeral `project-*` window is IPC-isolated by default. The
-  // `allow-all` custom commands are granted only to `windows: ["main"]`
-  // (src-tauri/capabilities/default.json) and this window's label doesn't
-  // match, so a project page can't reach app-core IPC. The thing to guard is
-  // that window scope — broadening it to a glob or adding a `remote` block is
-  // what would hand the native surface to remote content (see
+  // Security: this ephemeral `project-*` window is IPC-isolated. The `allow-all`
+  // commands are granted only to `windows: ["main"]` + local content
+  // (src-tauri/capabilities/default.json); this window's label doesn't match and
+  // its content is remote, so app-core IPC is denied. Verified at runtime:
+  // `invoke('ping')` from a project window rejects with "ping not allowed on
+  // window project-..., allowed on: [windows: main, URL: local]". The thing to
+  // guard is that scope: broadening `allow-all` to a window glob or adding a
+  // `remote` block would hand the native surface to remote content (see
   // src-tauri/permissions/avalanche.toml).
-  // TODO(security, T38): confirm the isolation empirically (an `invoke()` from a
-  // project page's console should be rejected) and add a dedicated capability /
-  // CSP when hardening.
 
   return new Promise((resolve) => {
     try {
