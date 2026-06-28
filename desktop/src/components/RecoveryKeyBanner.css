@@ -3,7 +3,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  background: rgba(240, 160, 48, 0.16);
+  background: var(--color-warning-soft);
   color: var(--color-text);
   font-size: 14px;
 }

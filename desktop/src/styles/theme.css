@@ -17,6 +17,7 @@ body, html { margin: 0; padding: 0; height: 100%; }
   --color-accent: #6B3E50;        /* primary action / accent */
   --color-error: #C0392B;         /* form error text */
   --color-offline: #F0A030;       /* offline/connecting banner */
+  --color-warning-soft: rgba(240, 160, 48, 0.16); /* soft warning fill (recovery banner) */
 
   /* Inputs / surfaces */
   --color-input-border: #D8C8BC;  /* default text-input border */

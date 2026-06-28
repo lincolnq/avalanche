@@ -680,7 +680,10 @@ export function AppProvider(props: { children: JSX.Element }) {
   ): { serverUrl: string; inviterDid: string | null } | null {
     try {
       const b64 = token.replace(/-/g, "+").replace(/_/g, "/");
-      const obj = JSON.parse(atob(b64)) as { s?: unknown; d?: unknown };
+      // Restore the padding makeInviteToken strips, so atob decodes reliably
+      // regardless of webview base64 strictness.
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+      const obj = JSON.parse(atob(padded)) as { s?: unknown; d?: unknown };
       if (typeof obj.s !== "string") return null;
       return { serverUrl: obj.s, inviterDid: typeof obj.d === "string" ? obj.d : null };
     } catch {
@@ -739,11 +742,15 @@ export function AppProvider(props: { children: JSX.Element }) {
   // Desktop has no passkey/PRF, so the phrase-derived seed is the PRF stand-in
   // (see desktop/CLAUDE.md passkey divergence).
   async function setupRecoveryFromPhrase(phrase: string) {
-    const seed = await service().recoveryPhraseToSeed(phrase);
     const accountId = getSoleAccountId();
-    const servers =
-      store.accounts.find((a) => a.id === accountId)?.servers.map((s) => s.url) ?? [];
-    await service().updateRecoveryBlob(seed, servers);
+    const account = accountId === null ? undefined : store.accounts.find((a) => a.id === accountId);
+    if (!account) {
+      // No signed-in account → nothing to secure. Fail loudly rather than
+      // uploading a recovery blob with an empty server list.
+      throw new Error("No account signed in.");
+    }
+    const seed = await service().recoveryPhraseToSeed(phrase);
+    await service().updateRecoveryBlob(seed, account.servers.map((s) => s.url));
   }
 
   // Recovery RESTORE: recompute the DID from the phrase seed + home server URL,
