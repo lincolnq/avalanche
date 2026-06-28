@@ -76,7 +76,7 @@ struct NetworkView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color.avPaper)
-        .listRowBackground(Color.sand50)
+        .listRowBackground(Color.avCard)
     }
 
     private var allServers: [ServerInfo] {

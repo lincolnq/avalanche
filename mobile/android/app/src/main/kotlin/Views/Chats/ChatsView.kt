@@ -106,14 +106,14 @@ fun ChatsView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
-                    navigationIconContentColor = AvalancheColors.Ink,
-                    actionIconContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
+                    navigationIconContentColor = LocalAvalancheColors.current.ink,
+                    actionIconContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -127,7 +127,7 @@ fun ChatsView(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = AvalancheColors.Muted)
+                    CircularProgressIndicator(color = LocalAvalancheColors.current.muted)
                 }
             } else if (sortedConversations.isEmpty()) {
                 // Mirrors iOS ContentUnavailableView
@@ -141,20 +141,20 @@ fun ChatsView(
                     Icon(
                         imageVector = Icons.Filled.Create,
                         contentDescription = null,
-                        tint = AvalancheColors.Muted,
+                        tint = LocalAvalancheColors.current.muted,
                         modifier = Modifier.size(48.dp),
                     )
                     androidx.compose.foundation.layout.Spacer(Modifier.size(16.dp))
                     Text(
                         text = "No conversations yet",
-                        color = AvalancheColors.Ink,
+                        color = LocalAvalancheColors.current.ink,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
                     androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
                     Text(
                         text = "Messages from all your servers will appear here.",
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         fontSize = 14.sp,
                     )
                 }
@@ -163,13 +163,13 @@ fun ChatsView(
                     // Recovery key banner (mirrors iOS .overlay alignment: .top)
                     if (!hasRecoveryKey) {
                         RecoveryKeyBanner()
-                        HorizontalDivider(color = AvalancheColors.Sand300)
+                        HorizontalDivider(color = LocalAvalancheColors.current.divider)
                     }
 
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(AvalancheColors.Paper),
+                            .background(LocalAvalancheColors.current.paper),
                     ) {
                         items(
                             items = sortedConversations,
@@ -229,7 +229,7 @@ fun ChatsView(
                                     .padding(horizontal = 16.dp, vertical = 10.dp),
                             )
                             HorizontalDivider(
-                                color = AvalancheColors.Sand300.copy(alpha = 0.5f),
+                                color = LocalAvalancheColors.current.divider.copy(alpha = 0.5f),
                                 modifier = Modifier.padding(start = 76.dp),
                             )
                         }
@@ -252,7 +252,7 @@ private fun ChatsViewEmptyPreview() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper),
+                .background(LocalAvalancheColors.current.paper),
             contentAlignment = Alignment.Center,
         ) {
             Column(
@@ -261,13 +261,13 @@ private fun ChatsViewEmptyPreview() {
             ) {
                 Text(
                     text = "No conversations yet",
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 18.sp,
                 )
                 Text(
                     text = "Messages from all your servers will appear here.",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     fontSize = 14.sp,
                 )
             }

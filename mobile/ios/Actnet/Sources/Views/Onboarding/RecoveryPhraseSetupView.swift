@@ -104,7 +104,7 @@ struct RecoveryPhraseSetupView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
-        .background(Color.sand200.opacity(0.5))
+        .background(Color.avCard.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 32)
     }
@@ -125,7 +125,7 @@ struct RecoveryPhraseSetupView: View {
                 }
                 .padding(.vertical, 8)
                 .padding(.horizontal, 10)
-                .background(Color.sand200.opacity(0.5))
+                .background(Color.avCard.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }

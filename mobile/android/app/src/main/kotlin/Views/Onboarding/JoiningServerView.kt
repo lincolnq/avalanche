@@ -63,12 +63,12 @@ fun JoiningServerView(
         topBar = {
             TopAppBar(title = { Text("Join Server") })
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(innerPadding)
                 .padding(top = 48.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -80,7 +80,7 @@ fun JoiningServerView(
                 text = "Join ${inviteToken.serverName} as ${existingAccount.displayName}?",
                 style = androidx.compose.material3.MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
                 modifier = Modifier.padding(horizontal = 24.dp),
             )
 
@@ -94,7 +94,7 @@ fun JoiningServerView(
                 ) {
                     Text(
                         text = "View ${inviteToken.serverName}'s privacy policy",
-                        color = AvalancheColors.Brand,
+                        color = LocalAvalancheColors.current.brand,
                     )
                 }
             }
@@ -103,7 +103,7 @@ fun JoiningServerView(
             if (errorMessage != null) {
                 Text(
                     text = errorMessage!!,
-                    color = AvalancheColors.Error,
+                    color = LocalAvalancheColors.current.error,
                     style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 24.dp),
@@ -141,7 +141,7 @@ fun JoiningServerView(
                 if (isJoining) {
                     CircularProgressIndicator(
                         modifier = Modifier.height(24.dp),
-                        color = AvalancheColors.Paper,
+                        color = LocalAvalancheColors.current.paper,
                         strokeWidth = 2.dp,
                     )
                 } else {

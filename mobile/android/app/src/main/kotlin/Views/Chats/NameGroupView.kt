@@ -154,7 +154,7 @@ fun NameGroupView(
                         onClick = { create() },
                         enabled = !creating && trimmedName.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = AvalancheColors.Brand,
+                            containerColor = LocalAvalancheColors.current.brand,
                         ),
                         modifier = Modifier.padding(end = 8.dp),
                     ) {
@@ -162,11 +162,11 @@ fun NameGroupView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
+                    containerColor = LocalAvalancheColors.current.paper,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -205,7 +205,7 @@ fun NameGroupView(
                     Text(
                         text = "Creating on another server isn't supported yet.",
                         fontSize = 12.sp,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 } else if (resolvedServer != null) {
@@ -214,11 +214,11 @@ fun NameGroupView(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(resolvedServer.displayHost, color = AvalancheColors.Ink)
+                        Text(resolvedServer.displayHost, color = LocalAvalancheColors.current.ink)
                         Text(
                             text = "Home",
                             fontSize = 12.sp,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                 }
@@ -244,13 +244,13 @@ fun NameGroupView(
                     Text(
                         text = "No members yet — you can add people after creating the group.",
                         fontSize = 13.sp,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         members.forEachIndexed { index, member ->
                             if (index > 0) {
-                                HorizontalDivider(color = AvalancheColors.Muted.copy(alpha = 0.2f))
+                                HorizontalDivider(color = LocalAvalancheColors.current.muted.copy(alpha = 0.2f))
                             }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -265,7 +265,7 @@ fun NameGroupView(
                                 Spacer(Modifier.width(10.dp))
                                 Text(
                                     text = member.label,
-                                    color = AvalancheColors.Ink,
+                                    color = LocalAvalancheColors.current.ink,
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f),
                                 )
@@ -284,7 +284,7 @@ fun NameGroupView(
                     Text(
                         text = errorMessage!!,
                         fontSize = 12.sp,
-                        color = AvalancheColors.Error,
+                        color = LocalAvalancheColors.current.error,
                     )
                 }
             }
@@ -326,7 +326,7 @@ private fun FormSection(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                color = AvalancheColors.IncomingBubble.copy(alpha = 0.5f),
+                color = LocalAvalancheColors.current.incomingBubble.copy(alpha = 0.5f),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
             )
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -337,7 +337,7 @@ private fun FormSection(
                 text = label.uppercase(),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 letterSpacing = 0.5.sp,
             )
         }
@@ -393,13 +393,13 @@ private fun ServerPicker(
                         ) {
                             Text(
                                 text = server.displayHost,
-                                color = if (isHome) AvalancheColors.Ink else AvalancheColors.Muted,
+                                color = if (isHome) LocalAvalancheColors.current.ink else LocalAvalancheColors.current.muted,
                             )
                             if (isHome) {
                                 Text(
                                     text = "Home",
                                     fontSize = 12.sp,
-                                    color = AvalancheColors.Muted,
+                                    color = LocalAvalancheColors.current.muted,
                                 )
                             }
                         }

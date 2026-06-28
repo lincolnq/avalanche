@@ -57,7 +57,7 @@ fun AddAccountView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(innerPadding)
             .padding(horizontal = 32.dp),
         verticalArrangement = Arrangement.Center,
@@ -87,7 +87,7 @@ fun AddAccountView(
                     .fillMaxWidth()
                     .height(52.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = AvalancheColors.Brand,
+                    contentColor = LocalAvalancheColors.current.brand,
                 ),
             ) {
                 Icon(Icons.Filled.Link, contentDescription = null)
@@ -101,7 +101,7 @@ fun AddAccountView(
             ) {
                 Text(
                     text = "Recover a different identity",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }

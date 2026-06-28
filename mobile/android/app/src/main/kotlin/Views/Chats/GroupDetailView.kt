@@ -247,12 +247,12 @@ fun GroupDetailView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         val s = summary
         when {
@@ -260,7 +260,7 @@ fun GroupDetailView(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(AvalancheColors.Paper)
+                        .background(LocalAvalancheColors.current.paper)
                         .padding(innerPadding),
                 ) {
                     // -------------------------------------------------------
@@ -291,7 +291,7 @@ fun GroupDetailView(
                                             Text(
                                                 text = "Rename",
                                                 fontSize = 14.sp,
-                                                color = AvalancheColors.Brand,
+                                                color = LocalAvalancheColors.current.brand,
                                             )
                                         }
                                     }
@@ -300,13 +300,13 @@ fun GroupDetailView(
                                     Text(
                                         text = s.description,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = AvalancheColors.Muted,
+                                        color = LocalAvalancheColors.current.muted,
                                     )
                                 }
                                 Text(
                                     text = "Revision ${s.revision}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AvalancheColors.Muted,
+                                    color = LocalAvalancheColors.current.muted,
                                 )
                             }
                         }
@@ -351,7 +351,7 @@ fun GroupDetailView(
                                     Text(
                                         text = DisappearingMessagesPicker.label(s.expirySeconds),
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = AvalancheColors.Muted,
+                                        color = LocalAvalancheColors.current.muted,
                                     )
                                 }
                             }
@@ -379,7 +379,7 @@ fun GroupDetailView(
                         }
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 58.dp),
-                            color = AvalancheColors.Sand200,
+                            color = LocalAvalancheColors.current.divider,
                         )
                     }
 
@@ -396,7 +396,7 @@ fun GroupDetailView(
                                 Text(
                                     text = pending.encryptedMemberId,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AvalancheColors.Muted,
+                                    color = LocalAvalancheColors.current.muted,
                                     maxLines = 1,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -416,7 +416,7 @@ fun GroupDetailView(
                                 TextButton(
                                     onClick = { leaveGroup() },
                                     colors = ButtonDefaults.textButtonColors(
-                                        contentColor = AvalancheColors.Error,
+                                        contentColor = LocalAvalancheColors.current.error,
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -428,7 +428,7 @@ fun GroupDetailView(
                                 Text(
                                     text = "You left this group.",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AvalancheColors.Muted,
+                                    color = LocalAvalancheColors.current.muted,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -446,7 +446,7 @@ fun GroupDetailView(
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = AvalancheColors.Brand)
+                    CircularProgressIndicator(color = LocalAvalancheColors.current.brand)
                 }
             }
 
@@ -472,7 +472,7 @@ fun GroupDetailView(
                             Text(
                                 text = errMsg,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = AvalancheColors.Muted,
+                                color = LocalAvalancheColors.current.muted,
                             )
                         }
                     }
@@ -491,7 +491,7 @@ private fun SectionHeader(title: String) {
     Text(
         text = title.uppercase(),
         style = MaterialTheme.typography.labelSmall,
-        color = AvalancheColors.Muted,
+        color = LocalAvalancheColors.current.muted,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
     )
 }
@@ -501,7 +501,7 @@ private fun SectionContainer(content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(AvalancheColors.Sand50),
+            .background(LocalAvalancheColors.current.card),
     ) {
         content()
     }
@@ -510,7 +510,7 @@ private fun SectionContainer(content: @Composable () -> Unit) {
 @Composable
 private fun SectionDivider() {
     HorizontalDivider(
-        color = AvalancheColors.Sand300,
+        color = LocalAvalancheColors.current.divider,
         thickness = 0.5.dp,
         modifier = Modifier.padding(vertical = 8.dp),
     )
@@ -547,10 +547,10 @@ private fun MemberRow(
             Text(
                 text = "Admin",
                 style = MaterialTheme.typography.labelSmall,
-                color = AvalancheColors.Brand,
+                color = LocalAvalancheColors.current.brand,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(AvalancheColors.Brand.copy(alpha = 0.15f))
+                    .background(LocalAvalancheColors.current.brand.copy(alpha = 0.15f))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
         }
@@ -561,7 +561,7 @@ private fun MemberRow(
                     Icon(
                         imageVector = Icons.Default.MoreVert,
                         contentDescription = "Member options",
-                        tint = AvalancheColors.Muted,
+                        tint = LocalAvalancheColors.current.muted,
                     )
                 }
                 DropdownMenu(

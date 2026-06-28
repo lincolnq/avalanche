@@ -184,7 +184,7 @@ private fun DisplayStage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .verticalScroll(scrollState)
             .padding(top = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -202,7 +202,7 @@ private fun DisplayStage(
             text = "These 12 words and your home server are the only way to recover this identity. " +
                     "Store them somewhere safe — anyone with them can access your account.",
             style = MaterialTheme.typography.bodySmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 32.dp),
         )
@@ -213,7 +213,7 @@ private fun DisplayStage(
                 .fillMaxWidth()
                 .padding(horizontal = 32.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(AvalancheColors.Sand200.copy(alpha = 0.5f))
+                .background(LocalAvalancheColors.current.card.copy(alpha = 0.5f))
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -221,7 +221,7 @@ private fun DisplayStage(
             Text(
                 text = "HOME SERVER",
                 style = MaterialTheme.typography.labelSmall,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
             )
             Text(
                 text = inviteToken.serverName,
@@ -232,7 +232,7 @@ private fun DisplayStage(
                 Text(
                     text = inviteToken.serverUrl,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     textAlign = TextAlign.Center,
                 )
             }
@@ -247,7 +247,7 @@ private fun DisplayStage(
         errorMessage?.let { err ->
             Text(
                 text = err,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 32.dp),
             )
@@ -294,13 +294,13 @@ private fun WordGrid(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(AvalancheColors.Sand200.copy(alpha = 0.5f))
+                    .background(LocalAvalancheColors.current.card.copy(alpha = 0.5f))
                     .padding(vertical = 8.dp, horizontal = 10.dp),
             ) {
                 Text(
                     text = "${index + 1}.",
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     modifier = Modifier.width(24.dp),
                     textAlign = TextAlign.End,
                 )
@@ -337,7 +337,7 @@ private fun VerifyStage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .verticalScroll(scrollState)
             .padding(top = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -354,7 +354,7 @@ private fun VerifyStage(
         Text(
             text = "Enter the following words from the phrase you just wrote down.",
             style = MaterialTheme.typography.bodySmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 32.dp),
         )
@@ -394,7 +394,7 @@ private fun VerifyStage(
         errorMessage?.let { err ->
             Text(
                 text = err,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 32.dp),
             )

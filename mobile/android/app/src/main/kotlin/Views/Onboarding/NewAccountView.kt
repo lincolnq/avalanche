@@ -84,12 +84,12 @@ fun NewAccountView(
                 },
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(innerPadding)
             .padding(top = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -98,7 +98,7 @@ fun NewAccountView(
         // Title — mirrors Text("Create a new identity").font(.headline).foregroundStyle(.secondary)
         Text(
             text = "Create a new identity",
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
         )
 
@@ -107,13 +107,13 @@ fun NewAccountView(
             modifier = Modifier
                 .size(100.dp)
                 .clip(CircleShape)
-                .background(AvalancheColors.Sand200),
+                .background(LocalAvalancheColors.current.card),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Filled.CameraAlt,
                 contentDescription = "Add photo",
-                tint = AvalancheColors.Muted,
+                tint = LocalAvalancheColors.current.muted,
                 modifier = Modifier.size(32.dp),
             )
         }
@@ -127,7 +127,7 @@ fun NewAccountView(
                     text = "Your name",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             },
             singleLine = true,
@@ -159,7 +159,7 @@ fun NewAccountView(
                 Text(
                     text = "View ${inviteToken.serverName}'s privacy policy",
                     style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Brand,
+                    color = LocalAvalancheColors.current.brand,
                 )
             }
         }
@@ -174,7 +174,7 @@ fun NewAccountView(
                 Text(
                     text = "Recover an existing identity instead",
                     style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }

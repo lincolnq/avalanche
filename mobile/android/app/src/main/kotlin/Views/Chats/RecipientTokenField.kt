@@ -115,10 +115,10 @@ class RecipientTokenEditText(context: Context) : EditText(context) {
         // Brand tint for the text-selection highlight (all APIs) and the caret
         // (API 29+ via the textCursorDrawable setter; older devices fall back to
         // the platform accent color).
-        highlightColor = AvalancheColors.Brand.copy(alpha = 0.3f).toArgb()
+        highlightColor = avalancheSemanticColors(context).brand.copy(alpha = 0.3f).toArgb()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             textCursorDrawable?.mutate()?.let { caret ->
-                caret.setTint(AvalancheColors.Brand.toArgb())
+                caret.setTint(avalancheSemanticColors(context).brand.toArgb())
                 textCursorDrawable = caret
             }
         }
@@ -286,10 +286,14 @@ class RecipientTokenEditText(context: Context) : EditText(context) {
         val hPad = (9 * density)
         val vPad = (3 * density)
         val trailingGap = (6 * density)
+        // Resolved from the View's night-mode config (this is not a Composable, so
+        // it can't read LocalAvalancheColors); the Activity is recreated on a
+        // light/dark toggle so chips re-render with the right palette.
+        val sem = avalancheSemanticColors(context)
 
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = textSize.coerceAtLeast(14 * density)
-            color = AvalancheColors.Ink.toArgb()
+            color = sem.ink.toArgb()
         }
         // Use the EditText's current text paint size for consistency.
         textPaint.textSize = paint.textSize
@@ -309,7 +313,7 @@ class RecipientTokenEditText(context: Context) : EditText(context) {
         )
         val canvas = Canvas(bmp)
 
-        val brandColor = AvalancheColors.Brand.toArgb()
+        val brandColor = sem.brand.toArgb()
         val bgColor = android.graphics.Color.argb(
             (0.15f * 255).toInt(),
             android.graphics.Color.red(brandColor),
@@ -324,7 +328,7 @@ class RecipientTokenEditText(context: Context) : EditText(context) {
         // Draw label text centered in the pill.
         val textX = hPad
         val textY = vPad - fm.ascent
-        textPaint.color = AvalancheColors.Ink.toArgb()
+        textPaint.color = sem.ink.toArgb()
         canvas.drawText(label, textX, textY, textPaint)
 
         return bmp

@@ -23,7 +23,7 @@ struct PasskeyExplainerView: View {
             // Profile preview
             VStack(spacing: 8) {
                 Circle()
-                    .fill(Color.sand200)
+                    .fill(Color.avCard)
                     .frame(width: 64, height: 64)
                     .overlay {
                         Text(String(displayName.prefix(1)).uppercased())

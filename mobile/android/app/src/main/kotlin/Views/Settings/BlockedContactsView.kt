@@ -84,7 +84,7 @@ fun BlockedContactsView(
         modifier = Modifier
             .padding(innerPadding)
             .fillMaxSize()
-            .background(AvalancheColors.Paper),
+            .background(LocalAvalancheColors.current.paper),
     ) {
         if (!loaded) {
             // Loading state — show placeholder text centered
@@ -94,7 +94,7 @@ fun BlockedContactsView(
             ) {
                 Text(
                     text = "Loading…",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     fontSize = 15.sp,
                 )
             }
@@ -106,7 +106,7 @@ fun BlockedContactsView(
             ) {
                 Text(
                     text = "You haven't blocked anyone.",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     fontSize = 15.sp,
                 )
             }
@@ -124,13 +124,13 @@ fun BlockedContactsView(
                             }
                         },
                     )
-                    HorizontalDivider(color = AvalancheColors.Muted.copy(alpha = 0.2f))
+                    HorizontalDivider(color = LocalAvalancheColors.current.muted.copy(alpha = 0.2f))
                 }
 
                 item {
                     Text(
                         text = "Blocked contacts can’t message you, and you can’t message them. Unblocking reverses both.",
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     )
@@ -167,13 +167,13 @@ private fun BlockedContactRow(
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
                 fontSize = 15.sp,
             )
             Text(
                 text = row.did,
                 fontSize = 11.sp,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -182,7 +182,7 @@ private fun BlockedContactRow(
         OutlinedButton(
             onClick = onUnblock,
             colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = AvalancheColors.Brand,
+                contentColor = LocalAvalancheColors.current.brand,
             ),
         ) {
             Text(
@@ -201,12 +201,12 @@ private fun BlockedContactsViewEmptyPreview() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper),
+                .background(LocalAvalancheColors.current.paper),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = "You haven't blocked anyone.",
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 15.sp,
             )
         }
@@ -217,7 +217,7 @@ private fun BlockedContactsViewEmptyPreview() {
 @Composable
 private fun BlockedContactRowPreview() {
     AvalancheTheme {
-        Box(modifier = Modifier.background(AvalancheColors.Paper)) {
+        Box(modifier = Modifier.background(LocalAvalancheColors.current.paper)) {
             BlockedContactRow(
                 row = ContactRowFfi(
                     did = "did:plc:abc123xyz",

@@ -117,7 +117,7 @@ fun LinkNewDeviceView(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -126,7 +126,7 @@ fun LinkNewDeviceView(
         ) {
             Text(
                 text = "Link this device to an account you're already signed in to on another device. Keep both devices on this screen until linking finishes.",
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
             )
@@ -158,7 +158,7 @@ fun LinkNewDeviceView(
                 ) {
                     Text(
                         text = failed.message,
-                        color = AvalancheColors.Error,
+                        color = LocalAvalancheColors.current.error,
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
                     )
@@ -173,7 +173,7 @@ fun LinkNewDeviceView(
                 }) {
                     Text(
                         text = if (mode == JoinMode.SCAN) "Show a code instead" else "Scan the other device instead",
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                     )
                 }
             }
@@ -192,7 +192,7 @@ private fun ScanSection(
     ) {
         if (phase == JoinPhase.Linking) {
             CircularProgressIndicator()
-            Text("Linking…", color = AvalancheColors.Muted, fontSize = 13.sp)
+            Text("Linking…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
         } else {
             QRCodeCameraView(
                 onScanned = onScanned,
@@ -203,7 +203,7 @@ private fun ScanSection(
             )
             Text(
                 text = "Point this camera at the code shown on the other device.",
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center,
             )
@@ -224,7 +224,7 @@ private fun ShowSection(
             QRCodeImage(text = pairingCode)
             Text(
                 text = pairingCode,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
@@ -236,10 +236,10 @@ private fun ShowSection(
                 Text("Copy code")
             }
             CircularProgressIndicator()
-            Text("Waiting for the other device…", color = AvalancheColors.Muted, fontSize = 13.sp)
+            Text("Waiting for the other device…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
         } else {
             CircularProgressIndicator()
-            Text("Preparing…", color = AvalancheColors.Muted, fontSize = 13.sp)
+            Text("Preparing…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
         }
     }
 }

@@ -89,7 +89,7 @@ fun IdentityPickerView(
             item {
                 Text(
                     text = "Join ${inviteToken.serverName} as…",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
@@ -116,12 +116,12 @@ fun IdentityPickerView(
             item {
                 ActionRow(
                     label = "Create a new identity",
-                    iconTint = AvalancheColors.Brand,
+                    iconTint = LocalAvalancheColors.current.brand,
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Filled.Add,
                             contentDescription = null,
-                            tint = AvalancheColors.Brand,
+                            tint = LocalAvalancheColors.current.brand,
                         )
                     },
                     onClick = onCreateNewAccount,
@@ -166,21 +166,21 @@ private fun ExistingAccountRow(
             Text(
                 text = account.displayName,
                 fontWeight = FontWeight.Medium,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
             val serverNames = account.servers.joinToString(", ") { it.name }
             if (serverNames.isNotEmpty()) {
                 Text(
                     text = serverNames,
                     fontSize = 12.sp,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }
         Icon(
             imageVector = Icons.Filled.ChevronRight,
             contentDescription = null,
-            tint = AvalancheColors.Muted,
+            tint = LocalAvalancheColors.current.muted,
         )
     }
 }
@@ -209,7 +209,7 @@ private fun ActionRow(
         Icon(
             imageVector = Icons.Filled.ChevronRight,
             contentDescription = null,
-            tint = AvalancheColors.Muted,
+            tint = LocalAvalancheColors.current.muted,
         )
     }
 }

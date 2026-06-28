@@ -359,14 +359,14 @@ fun ConversationView(
                             Text(
                                 text = liveConv.title,
                                 style = MaterialTheme.typography.titleMedium,
-                                color = AvalancheColors.Ink,
+                                color = LocalAvalancheColors.current.ink,
                             )
                         }
                     } else {
                         Text(
                             text = liveConv.title,
                             style = MaterialTheme.typography.titleMedium,
-                            color = AvalancheColors.Ink,
+                            color = LocalAvalancheColors.current.ink,
                         )
                     }
                 },
@@ -376,13 +376,13 @@ fun ConversationView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
-                    navigationIconContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
+                    navigationIconContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
         // Zero the content insets so the Scaffold doesn't pad the bottom nav bar
         // itself — we apply the bottom inset explicitly below. Otherwise the
         // nav-bar padding and the IME padding would stack (sum), leaving a
@@ -400,7 +400,7 @@ fun ConversationView(
             // side, so when the keyboard is up the composer sits flush above it,
             // and when it's down it clears the nav bar — no double counting.
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            .background(AvalancheColors.Paper),
+            .background(LocalAvalancheColors.current.paper),
     ) {
         // --- Message list ---
         LazyColumn(
@@ -483,12 +483,12 @@ fun ConversationView(
             Text(
                 text = err,
                 style = MaterialTheme.typography.labelSmall,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
 
-        HorizontalDivider(color = AvalancheColors.Sand300)
+        HorizontalDivider(color = LocalAvalancheColors.current.divider)
 
         // Bottom bar: a blocked DM shows an unblock prompt, an un-accepted
         // request shows the Accept/Delete/Report gate (docs/12 §1), and an
@@ -562,7 +562,7 @@ private fun LeftGroupBar() {
         Text(
             text = "You left this group",
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
         )
     }
 }
@@ -593,21 +593,21 @@ private fun Composer(
                 Icon(
                     imageVector = Icons.Filled.Edit,
                     contentDescription = "Editing",
-                    tint = AvalancheColors.Brand,
+                    tint = LocalAvalancheColors.current.brand,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     text = "Editing message",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = onCancelEdit) {
                     Icon(
                         imageVector = Icons.Filled.Close,
                         contentDescription = "Cancel edit",
-                        tint = AvalancheColors.Muted,
+                        tint = LocalAvalancheColors.current.muted,
                     )
                 }
             }
@@ -628,7 +628,7 @@ private fun Composer(
                     Icon(
                         imageVector = Icons.Filled.AddCircle,
                         contentDescription = "Attach",
-                        tint = AvalancheColors.Brand,
+                        tint = LocalAvalancheColors.current.brand,
                     )
                 }
             }
@@ -644,7 +644,7 @@ private fun Composer(
                 placeholder = {
                     Text(
                         text = if (editingMessage == null) "Message" else "Edit message",
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                     )
                 },
                 keyboardOptions = KeyboardOptions(
@@ -653,15 +653,15 @@ private fun Composer(
                 maxLines = 5,
                 shape = RoundedCornerShape(24.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = AvalancheColors.Sand50,
-                    unfocusedContainerColor = AvalancheColors.Sand50,
-                    disabledContainerColor = AvalancheColors.Sand50,
+                    focusedContainerColor = LocalAvalancheColors.current.card,
+                    unfocusedContainerColor = LocalAvalancheColors.current.card,
+                    disabledContainerColor = LocalAvalancheColors.current.card,
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
                     disabledBorderColor = Color.Transparent,
-                    cursorColor = AvalancheColors.Brand,
-                    focusedTextColor = AvalancheColors.Ink,
-                    unfocusedTextColor = AvalancheColors.Ink,
+                    cursorColor = LocalAvalancheColors.current.brand,
+                    focusedTextColor = LocalAvalancheColors.current.ink,
+                    unfocusedTextColor = LocalAvalancheColors.current.ink,
                 ),
             )
 
@@ -674,14 +674,14 @@ private fun Composer(
                     .padding(bottom = 4.dp)
                     .size(40.dp)
                     .background(
-                        color = if (canSend) AvalancheColors.Brand else AvalancheColors.Sand300,
+                        color = if (canSend) LocalAvalancheColors.current.brand else LocalAvalancheColors.current.divider,
                         shape = CircleShape,
                     ),
             ) {
                 Icon(
                     imageVector = if (editingMessage != null) Icons.Filled.Check else Icons.Filled.ArrowUpward,
                     contentDescription = if (editingMessage != null) "Apply edit" else "Send",
-                    tint = AvalancheColors.Paper,
+                    tint = LocalAvalancheColors.current.paper,
                 )
             }
         }
@@ -711,7 +711,7 @@ private fun MessageRequestGate(
         Text(
             text = "Let $title message you and share your name with them?",
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(
@@ -723,7 +723,7 @@ private fun MessageRequestGate(
                 onClick = { viewModel.reportAndBlock(did = did, accountId = accountId) },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = AvalancheColors.Error,
+                    contentColor = LocalAvalancheColors.current.error,
                 ),
             ) {
                 Text("Block")
@@ -737,7 +737,7 @@ private fun MessageRequestGate(
                 },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = AvalancheColors.Error,
+                    contentColor = LocalAvalancheColors.current.error,
                 ),
             ) {
                 Text("Delete")
@@ -773,7 +773,7 @@ private fun BlockedBar(
         Text(
             text = "You blocked this contact.",
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             modifier = Modifier.weight(1f),
         )
         OutlinedButton(
@@ -808,7 +808,7 @@ fun GroupSystemEventRow(
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
     }

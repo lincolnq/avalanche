@@ -69,7 +69,7 @@ fun ConversationRow(
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .background(color = AvalancheColors.Sand200, shape = avatarShape)
+                .background(color = LocalAvalancheColors.current.card, shape = avatarShape)
                 .clip(avatarShape),
             contentAlignment = Alignment.Center,
         ) {
@@ -95,13 +95,13 @@ fun ConversationRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                 )
                 conversation.lastMessageDate?.let { date ->
                     Text(
                         text = relativeTimeLabel(date),
                         style = MaterialTheme.typography.bodySmall,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         modifier = Modifier.padding(start = 4.dp),
                     )
                 }
@@ -118,7 +118,7 @@ fun ConversationRow(
                         text = "Message request",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
-                        color = AvalancheColors.Brand,
+                        color = LocalAvalancheColors.current.brand,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -127,7 +127,7 @@ fun ConversationRow(
                     Text(
                         text = previewText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -143,7 +143,7 @@ fun ConversationRow(
                         modifier = Modifier
                             .padding(start = 4.dp)
                             .size(18.dp)
-                            .background(color = AvalancheColors.Brand, shape = CircleShape),
+                            .background(color = LocalAvalancheColors.current.brand, shape = CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -160,7 +160,7 @@ fun ConversationRow(
                         modifier = Modifier
                             .padding(start = 4.dp)
                             .background(
-                                color = AvalancheColors.Notification,
+                                color = LocalAvalancheColors.current.notification,
                                 shape = RoundedCornerShape(percent = 50),
                             )
                             .padding(horizontal = 6.dp, vertical = 2.dp),

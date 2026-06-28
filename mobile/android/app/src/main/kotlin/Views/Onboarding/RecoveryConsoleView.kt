@@ -188,17 +188,17 @@ fun RecoveryConsoleView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(innerPadding),
         ) {
             // Scrollable console log — takes all remaining space.
@@ -234,13 +234,13 @@ fun RecoveryConsoleView(
                     Text(
                         text = "Enter your home server URL:",
                         fontSize = 14.sp,
-                        color = AvalancheColors.Ink,
+                        color = LocalAvalancheColors.current.ink,
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = serverUrlInput,
                         onValueChange = { serverUrlInput = it },
-                        placeholder = { Text("https://server.example", color = AvalancheColors.Muted) },
+                        placeholder = { Text("https://server.example", color = LocalAvalancheColors.current.muted) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
@@ -259,7 +259,7 @@ fun RecoveryConsoleView(
                         },
                         enabled = serverUrlInput.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = AvalancheColors.Brand,
+                            containerColor = LocalAvalancheColors.current.brand,
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -276,10 +276,11 @@ fun RecoveryConsoleView(
 //   [!]  -> avError  (rose/red)
 //   [ok] -> avBrand  (plum)
 //   else -> default text
+@Composable
 private fun lineColor(line: String): Color = when {
-    line.startsWith("[!]") -> AvalancheColors.Error
-    line.startsWith("[ok]") -> AvalancheColors.Brand
-    else -> AvalancheColors.Ink
+    line.startsWith("[!]") -> LocalAvalancheColors.current.error
+    line.startsWith("[ok]") -> LocalAvalancheColors.current.brand
+    else -> LocalAvalancheColors.current.ink
 }
 
 // Stub for the PLC directory HTTP lookup.

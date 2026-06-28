@@ -78,12 +78,12 @@ fun LogViewerView(
             TopAppBar(
                 title = { Text("Logs") },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
                 navigationIcon = {
                     TextButton(onClick = onDismiss) {
-                        Text("Close", color = AvalancheColors.Brand)
+                        Text("Close", color = LocalAvalancheColors.current.brand)
                     }
                 },
                 actions = {
@@ -92,7 +92,7 @@ fun LogViewerView(
                             Icon(
                                 Icons.Filled.MoreVert,
                                 contentDescription = "More options",
-                                tint = AvalancheColors.Brand,
+                                tint = LocalAvalancheColors.current.brand,
                             )
                         }
                         DropdownMenu(
@@ -107,7 +107,7 @@ fun LogViewerView(
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("Clear", color = AvalancheColors.Error) },
+                                text = { Text("Clear", color = LocalAvalancheColors.current.error) },
                                 onClick = {
                                     menuExpanded = false
                                     AppLog.clear()
@@ -118,7 +118,7 @@ fun LogViewerView(
                 },
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         androidx.compose.foundation.layout.Column(
             modifier = Modifier
@@ -128,7 +128,7 @@ fun LogViewerView(
             OutlinedTextField(
                 value = filter,
                 onValueChange = { filter = it },
-                placeholder = { Text("Filter…", color = AvalancheColors.Muted) },
+                placeholder = { Text("Filter…", color = LocalAvalancheColors.current.muted) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -140,7 +140,7 @@ fun LogViewerView(
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(AvalancheColors.Paper)
+                        .background(LocalAvalancheColors.current.paper)
                         .padding(8.dp),
                 ) {
                     items(visible, key = { it.id }) { entry ->
@@ -162,11 +162,12 @@ fun LogViewerView(
     }
 }
 
+@Composable
 private fun colorForLevel(level: LogEntry.Level): Color = when (level) {
-    LogEntry.Level.info -> AvalancheColors.Ink
-    LogEntry.Level.warn -> AvalancheColors.Warning
-    LogEntry.Level.error -> AvalancheColors.Error
-    LogEntry.Level.ok -> AvalancheColors.Brand
+    LogEntry.Level.info -> LocalAvalancheColors.current.ink
+    LogEntry.Level.warn -> LocalAvalancheColors.current.warning
+    LogEntry.Level.error -> LocalAvalancheColors.current.error
+    LogEntry.Level.ok -> LocalAvalancheColors.current.brand
 }
 
 private fun copyAllToClipboard(context: Context, entries: List<LogEntry>) {

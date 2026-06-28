@@ -30,29 +30,41 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         initLogging(filter: "info")
         #endif
         UNUserNotificationCenter.current().delegate = self
-        let sand100 = UIColor(red: 1.0, green: 0.945, blue: 0.914, alpha: 1.0)
-        let plum500 = UIColor(red: 0.420, green: 0.243, blue: 0.314, alpha: 1.0)
+        // Adaptive surface/tint: warm cream in light, deep plum in dark. These
+        // mirror Color.avPaper / Color.avBrand (AvalancheColors.swift) but are
+        // built as dynamic UIColors so the UIKit-backed chrome (nav/tab bars,
+        // the UITableView/UICollectionView behind SwiftUI List) adapts too.
+        let paper = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.165, green: 0.086, blue: 0.125, alpha: 1.0)  // plum900
+                : UIColor(red: 1.000, green: 0.945, blue: 0.914, alpha: 1.0)  // sand100
+        }
+        let tint = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.784, green: 0.706, blue: 0.741, alpha: 1.0)  // plum200
+                : UIColor(red: 0.420, green: 0.243, blue: 0.314, alpha: 1.0)  // plum500
+        }
 
         // Global tint
-        UIView.appearance().tintColor = plum500
+        UIView.appearance().tintColor = tint
 
         // Navigation bar
         let navAppearance = UINavigationBarAppearance()
         navAppearance.configureWithOpaqueBackground()
-        navAppearance.backgroundColor = sand100
+        navAppearance.backgroundColor = paper
         UINavigationBar.appearance().standardAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
 
         // Tab bar
         let tabAppearance = UITabBarAppearance()
         tabAppearance.configureWithOpaqueBackground()
-        tabAppearance.backgroundColor = sand100
+        tabAppearance.backgroundColor = paper
         UITabBar.appearance().standardAppearance = tabAppearance
         UITabBar.appearance().scrollEdgeAppearance = tabAppearance
 
         // Table/collection views (backs List in SwiftUI)
-        UITableView.appearance().backgroundColor = sand100
-        UICollectionView.appearance().backgroundColor = sand100
+        UITableView.appearance().backgroundColor = paper
+        UICollectionView.appearance().backgroundColor = paper
 
         return true
     }

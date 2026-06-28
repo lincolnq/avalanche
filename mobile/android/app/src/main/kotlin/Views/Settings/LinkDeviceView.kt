@@ -121,7 +121,7 @@ fun LinkDeviceView(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -130,7 +130,7 @@ fun LinkDeviceView(
         ) {
             Text(
                 text = "Link the other device to this account. Both devices must stay on this screen until linking finishes.",
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
             )
@@ -163,7 +163,7 @@ fun LinkDeviceView(
                 ) {
                     Text(
                         text = failed.message,
-                        color = AvalancheColors.Error,
+                        color = LocalAvalancheColors.current.error,
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
                     )
@@ -201,7 +201,7 @@ private fun ShowSection(
             QRCodeImage(text = pairingCode)
             Text(
                 text = pairingCode,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
@@ -215,7 +215,7 @@ private fun ShowSection(
             StatusFooter(phase)
         } else {
             CircularProgressIndicator()
-            Text("Preparing…", color = AvalancheColors.Muted, fontSize = 13.sp)
+            Text("Preparing…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
         }
     }
 }
@@ -232,7 +232,7 @@ private fun ScanSection(
         when (phase) {
             LinkPhase.Linking -> {
                 CircularProgressIndicator()
-                Text("Linking…", color = AvalancheColors.Muted, fontSize = 13.sp)
+                Text("Linking…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
             }
             LinkPhase.Done -> StatusFooter(phase)
             else -> {
@@ -245,7 +245,7 @@ private fun ScanSection(
                 )
                 Text(
                     text = "Point this camera at the code on the other device.",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center,
                 )
@@ -262,14 +262,14 @@ private fun StatusFooter(phase: LinkPhase) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            Text("Waiting for the other device…", color = AvalancheColors.Muted, fontSize = 13.sp)
+            Text("Waiting for the other device…", color = LocalAvalancheColors.current.muted, fontSize = 13.sp)
         }
         LinkPhase.Done -> Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = AvalancheColors.Brand)
-            Text("Device linked", color = AvalancheColors.Brand, fontSize = 16.sp)
+            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = LocalAvalancheColors.current.brand)
+            Text("Device linked", color = LocalAvalancheColors.current.brand, fontSize = 16.sp)
         }
         else -> {}
     }
@@ -280,7 +280,7 @@ private fun ModeToggle(mode: LinkMode, onToggle: () -> Unit) {
     TextButton(onClick = onToggle) {
         Text(
             text = if (mode == LinkMode.SHOW) "Scan the other device instead" else "Show a code instead",
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
         )
     }
 }

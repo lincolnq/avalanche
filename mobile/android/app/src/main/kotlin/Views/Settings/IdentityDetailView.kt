@@ -118,7 +118,7 @@ fun IdentityDetailView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(innerPadding)
             .verticalScroll(rememberScrollState())
             .padding(bottom = 32.dp),
@@ -130,7 +130,7 @@ fun IdentityDetailView(
         Spacer(Modifier.height(8.dp))
         Text(
             text = account.displayName,
-            color = AvalancheColors.Ink,
+            color = LocalAvalancheColors.current.ink,
             fontSize = 20.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
         )
@@ -191,8 +191,8 @@ fun IdentityDetailView(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.textButtonColors(
-                        containerColor = AvalancheColors.Sand50,
-                        contentColor = AvalancheColors.Ink,
+                        containerColor = LocalAvalancheColors.current.card,
+                        contentColor = LocalAvalancheColors.current.ink,
                     ),
                 ) {
                     Column(
@@ -203,23 +203,23 @@ fun IdentityDetailView(
                     ) {
                         Text(
                             text = "Home server",
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                             fontSize = 11.sp,
                         )
                         Text(
                             text = homeServer.name,
-                            color = AvalancheColors.Ink,
+                            color = LocalAvalancheColors.current.ink,
                         )
                         Text(
                             text = homeServer.url.toString(),
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                             fontSize = 10.sp,
                         )
                     }
                     Icon(
                         Icons.Filled.ChevronRight,
                         contentDescription = null,
-                        tint = AvalancheColors.Muted,
+                        tint = LocalAvalancheColors.current.muted,
                     )
                 }
             }
@@ -230,7 +230,7 @@ fun IdentityDetailView(
         // Privacy disclaimer
         Text(
             text = "Your home server is listed publicly so people can reach you. Your display name, other server memberships, contacts, and messages are not public.",
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -250,8 +250,8 @@ fun IdentityDetailView(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.textButtonColors(
-                    containerColor = AvalancheColors.Sand50,
-                    contentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.card,
+                    contentColor = LocalAvalancheColors.current.ink,
                 ),
             ) {
                 Text(
@@ -262,7 +262,7 @@ fun IdentityDetailView(
                 Icon(
                     Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = AvalancheColors.Muted,
+                    tint = LocalAvalancheColors.current.muted,
                 )
             }
 
@@ -271,8 +271,8 @@ fun IdentityDetailView(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.textButtonColors(
-                    containerColor = AvalancheColors.Sand50,
-                    contentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.card,
+                    contentColor = LocalAvalancheColors.current.ink,
                 ),
             ) {
                 Text(
@@ -283,7 +283,7 @@ fun IdentityDetailView(
                 Icon(
                     Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = AvalancheColors.Muted,
+                    tint = LocalAvalancheColors.current.muted,
                 )
             }
         }
@@ -295,8 +295,8 @@ fun IdentityDetailView(
             onClick = { showDeleteConfirmation = true },
             enabled = !isDeleting,
             colors = ButtonDefaults.buttonColors(
-                containerColor = AvalancheColors.Error,
-                contentColor = AvalancheColors.Paper,
+                containerColor = LocalAvalancheColors.current.error,
+                contentColor = LocalAvalancheColors.current.paper,
             ),
             modifier = Modifier
                 .fillMaxWidth()
@@ -305,7 +305,7 @@ fun IdentityDetailView(
         ) {
             if (isDeleting) {
                 CircularProgressIndicator(
-                    color = AvalancheColors.Paper,
+                    color = LocalAvalancheColors.current.paper,
                     strokeWidth = 2.dp,
                     modifier = Modifier.size(20.dp),
                 )
@@ -348,7 +348,7 @@ fun IdentityDetailView(
                             isDeleting = false
                         }
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = AvalancheColors.Error),
+                    colors = ButtonDefaults.textButtonColors(contentColor = LocalAvalancheColors.current.error),
                 ) {
                     Text("Delete")
                 }
@@ -400,18 +400,18 @@ private fun DetailRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(AvalancheColors.Sand50)
+            .background(LocalAvalancheColors.current.card)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             text = label,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             fontSize = 11.sp,
         )
         Text(
             text = value,
-            color = AvalancheColors.Ink,
+            color = LocalAvalancheColors.current.ink,
             fontSize = if (mono) 12.sp else 16.sp,
             fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
         )
@@ -447,7 +447,9 @@ private fun generateQRBitmap(content: String, sizePx: Int = 512): Bitmap? {
         val hints = mapOf(EncodeHintType.MARGIN to 1)
         val bitMatrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
         val fgColor = AvalancheColors.Plum800.toArgb()
-        val bgColor = AvalancheColors.Paper.toArgb()
+        // Fixed light backing (not the adaptive paper) so the code stays scannable
+        // in dark mode — a dark-on-dark QR can't be read.
+        val bgColor = AvalancheColors.Sand100.toArgb()
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.RGB_565)
         for (x in 0 until sizePx) {
             for (y in 0 until sizePx) {

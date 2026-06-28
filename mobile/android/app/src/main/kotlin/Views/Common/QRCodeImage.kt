@@ -44,7 +44,9 @@ fun generateQrCodeBitmap(content: String, sizePx: Int = 512): Bitmap? = runCatch
     val hints = mapOf(EncodeHintType.MARGIN to 1)
     val bitMatrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
     val fg = AvalancheColors.Plum800.toArgb()
-    val bg = AvalancheColors.Paper.toArgb()
+    // Fixed light backing (not the adaptive paper) so the code stays scannable in
+    // dark mode — a dark-on-dark QR can't be read.
+    val bg = AvalancheColors.Sand100.toArgb()
     val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.RGB_565)
     for (x in 0 until sizePx) {
         for (y in 0 until sizePx) {

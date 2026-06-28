@@ -60,7 +60,7 @@ struct ConversationRow: View {
             let isBot = isBotConversation
             let frame: AnyShape = isBot ? AnyShape(Hexagon()) : AnyShape(Circle())
             frame
-                .fill(Color.sand200)
+                .fill(Color.avCard)
                 .frame(width: 48, height: 48)
                 .overlay {
                     Image(systemName: conversation.isGroup ? "person.3" : "person")

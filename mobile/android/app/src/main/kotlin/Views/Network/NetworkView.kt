@@ -105,12 +105,12 @@ fun NetworkView(
             TopAppBar(
                 title = { Text("Network") },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { paddingValues ->
         if (allServers.isEmpty()) {
             // Empty state — mirrors iOS ContentUnavailableView.
@@ -118,7 +118,7 @@ fun NetworkView(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-                    .background(AvalancheColors.Paper),
+                    .background(LocalAvalancheColors.current.paper),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -128,18 +128,18 @@ fun NetworkView(
                     Icon(
                         imageVector = Icons.Filled.Dns,
                         contentDescription = null,
-                        tint = AvalancheColors.Muted,
+                        tint = LocalAvalancheColors.current.muted,
                     )
                     Text(
                         text = "No servers",
                         style = MaterialTheme.typography.titleMedium,
-                        color = AvalancheColors.Ink,
+                        color = LocalAvalancheColors.current.ink,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         text = "Servers and their Projects will appear here.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                     )
                 }
             }
@@ -148,7 +148,7 @@ fun NetworkView(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-                    .background(AvalancheColors.Paper),
+                    .background(LocalAvalancheColors.current.paper),
             ) {
                 for (server in allServers) {
                     // Section header — server name.
@@ -156,11 +156,11 @@ fun NetworkView(
                         Text(
                             text = server.name,
                             style = MaterialTheme.typography.labelMedium,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                             fontSize = 13.sp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(AvalancheColors.Paper)
+                                .background(LocalAvalancheColors.current.paper)
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
@@ -172,12 +172,12 @@ fun NetworkView(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(AvalancheColors.Sand50)
+                                    .background(LocalAvalancheColors.current.card)
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 CircularProgressIndicator(
-                                    color = AvalancheColors.Brand,
+                                    color = LocalAvalancheColors.current.brand,
                                     strokeWidth = 2.dp,
                                 )
                             }
@@ -186,11 +186,11 @@ fun NetworkView(
                         item(key = "empty-${server.id}") {
                             Text(
                                 text = "No Projects",
-                                color = AvalancheColors.Muted,
+                                color = LocalAvalancheColors.current.muted,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(AvalancheColors.Sand50)
+                                    .background(LocalAvalancheColors.current.card)
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                             )
                         }
@@ -227,7 +227,7 @@ fun NetworkView(
                                     }
                                 },
                             )
-                            HorizontalDivider(color = AvalancheColors.Sand200)
+                            HorizontalDivider(color = LocalAvalancheColors.current.divider)
                         }
                     }
 
@@ -254,7 +254,7 @@ private fun ProjectRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(AvalancheColors.Sand50)
+            .background(LocalAvalancheColors.current.card)
             .clickable(enabled = !isLoading, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -266,24 +266,24 @@ private fun ProjectRow(
             Text(
                 text = project.name,
                 style = MaterialTheme.typography.bodyMedium,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
             Text(
                 text = project.description,
                 style = MaterialTheme.typography.bodySmall,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
             )
         }
         if (isLoading) {
             CircularProgressIndicator(
-                color = AvalancheColors.Brand,
+                color = LocalAvalancheColors.current.brand,
                 strokeWidth = 2.dp,
             )
         } else {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
                 contentDescription = null,
-                tint = AvalancheColors.Muted,
+                tint = LocalAvalancheColors.current.muted,
             )
         }
     }
@@ -325,12 +325,12 @@ fun ProjectWebViewSheet(
                 title = { Text(projectName) },
                 navigationIcon = {
                     androidx.compose.material3.TextButton(onClick = onDismiss) {
-                        Text("Done", color = AvalancheColors.Brand)
+                        Text("Done", color = LocalAvalancheColors.current.brand)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
@@ -363,7 +363,7 @@ private fun NetworkViewEmptyPreview() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper),
+                .background(LocalAvalancheColors.current.paper),
             contentAlignment = Alignment.Center,
         ) {
             Column(
@@ -373,18 +373,18 @@ private fun NetworkViewEmptyPreview() {
                 Icon(
                     imageVector = Icons.Filled.Dns,
                     contentDescription = null,
-                    tint = AvalancheColors.Muted,
+                    tint = LocalAvalancheColors.current.muted,
                 )
                 Text(
                     text = "No servers",
                     style = MaterialTheme.typography.titleMedium,
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = "Servers and their Projects will appear here.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }
@@ -405,7 +405,7 @@ private fun ProjectRowPreview() {
                 isLoading = false,
                 onClick = {},
             )
-            HorizontalDivider(color = AvalancheColors.Sand200)
+            HorizontalDivider(color = LocalAvalancheColors.current.divider)
             ProjectRow(
                 project = ProjectInfo(
                     name = "Phone Banking",

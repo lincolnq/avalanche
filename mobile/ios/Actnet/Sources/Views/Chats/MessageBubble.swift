@@ -85,7 +85,7 @@ struct MessageBubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(isMe ? Color.avOutgoingBubble : Color.avIncomingBubble)
-                .foregroundStyle(isMe ? Color.sand100 : .primary)
+                .foregroundStyle(isMe ? Color.sand100 : Color.avInk)
                 .clipShape(bubbleShape)
                 .overlay(alignment: .bottomTrailing) { metadataOverlay }
             if actionsEnabled {
@@ -279,7 +279,7 @@ struct MessageBubble: View {
     /// so a given member always gets the same color across launches (String's
     /// built-in hashValue is per-process-randomized, so we roll our own).
     private static let senderPalette: [Color] = [
-        .blue, .purple, .pink, .orange, .teal, .indigo, .green, Color.avBrand,
+        .blue, .purple, .pink, .orange, .teal, .indigo, .green, Color.plum400,
     ]
 
     private var senderColor: Color {

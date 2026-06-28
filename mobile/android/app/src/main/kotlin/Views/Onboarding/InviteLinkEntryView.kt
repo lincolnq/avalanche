@@ -92,7 +92,7 @@ fun InviteLinkEntryView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(innerPadding)
             .padding(top = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -115,7 +115,7 @@ fun InviteLinkEntryView(
         if (errorMessage != null) {
             Text(
                 text = errorMessage!!,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 modifier = Modifier.padding(top = 8.dp, start = 32.dp, end = 32.dp),
             )
         }
@@ -130,7 +130,7 @@ fun InviteLinkEntryView(
         ) {
             if (isValidating) {
                 CircularProgressIndicator(
-                    color = AvalancheColors.Paper,
+                    color = LocalAvalancheColors.current.paper,
                     strokeWidth = 2.dp,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )

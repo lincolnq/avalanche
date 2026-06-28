@@ -38,20 +38,20 @@ fun RecoveryKeyBanner(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(AvalancheColors.Warning.copy(alpha = 0.15f))
+                .background(LocalAvalancheColors.current.warning.copy(alpha = 0.15f))
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = Icons.Filled.GppBad,
                 contentDescription = null,
-                tint = AvalancheColors.Warning,
+                tint = LocalAvalancheColors.current.warning,
                 modifier = Modifier.size(20.dp),
             )
             Text(
                 text = "Secure your account",
                 fontSize = 14.sp,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
                 modifier = Modifier.padding(start = 8.dp),
             )
             Spacer(modifier = Modifier.weight(1f))
@@ -60,7 +60,7 @@ fun RecoveryKeyBanner(
                     text = "Set up",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                 )
             }
             IconButton(
@@ -70,7 +70,7 @@ fun RecoveryKeyBanner(
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = "Dismiss",
-                    tint = AvalancheColors.Muted,
+                    tint = LocalAvalancheColors.current.muted,
                     modifier = Modifier.size(12.dp),
                 )
             }
@@ -86,20 +86,20 @@ private fun RecoveryKeyBannerPreview() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(AvalancheColors.Warning.copy(alpha = 0.15f))
+                .background(LocalAvalancheColors.current.warning.copy(alpha = 0.15f))
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = Icons.Filled.GppBad,
                 contentDescription = null,
-                tint = AvalancheColors.Warning,
+                tint = LocalAvalancheColors.current.warning,
                 modifier = Modifier.size(20.dp),
             )
             Text(
                 text = "Secure your account",
                 fontSize = 14.sp,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
                 modifier = Modifier.padding(start = 8.dp),
             )
             Spacer(modifier = Modifier.weight(1f))
@@ -108,7 +108,7 @@ private fun RecoveryKeyBannerPreview() {
                     text = "Set up",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                 )
             }
             IconButton(
@@ -118,7 +118,7 @@ private fun RecoveryKeyBannerPreview() {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = "Dismiss",
-                    tint = AvalancheColors.Muted,
+                    tint = LocalAvalancheColors.current.muted,
                     modifier = Modifier.size(12.dp),
                 )
             }

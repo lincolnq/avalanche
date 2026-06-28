@@ -51,21 +51,21 @@ fun EditHistorySheet(
                 title = { Text("Edit History") },
                 actions = {
                     TextButton(onClick = onDismiss) {
-                        Text("Done", color = AvalancheColors.Brand)
+                        Text("Done", color = LocalAvalancheColors.current.brand)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(innerPadding),
         ) {
             itemsIndexed(revisions) { index, rev ->
@@ -74,7 +74,7 @@ fun EditHistorySheet(
                     atMs = rev.replacedAtMs,
                     label = "Edited",
                 )
-                HorizontalDivider(color = AvalancheColors.Sand300)
+                HorizontalDivider(color = LocalAvalancheColors.current.divider)
             }
             item {
                 EditHistoryRow(
@@ -113,17 +113,17 @@ private fun EditHistoryRow(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
         )
         Text(
             text = body,
             style = MaterialTheme.typography.bodyMedium,
-            color = AvalancheColors.Ink,
+            color = LocalAvalancheColors.current.ink,
         )
         Text(
             text = relativeTime,
             style = MaterialTheme.typography.labelSmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
         )
     }
 }

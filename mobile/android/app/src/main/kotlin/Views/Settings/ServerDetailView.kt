@@ -92,7 +92,7 @@ fun ServerDetailView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(innerPadding)
             .verticalScroll(rememberScrollState())
             .padding(bottom = 32.dp),
@@ -106,14 +106,14 @@ fun ServerDetailView(
             Text(
                 text = server.name,
                 style = MaterialTheme.typography.titleLarge,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
             Spacer(Modifier.height(4.dp))
             SelectionContainer {
                 Text(
                     text = server.url.toString(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }
@@ -127,7 +127,7 @@ fun ServerDetailView(
                     .padding(horizontal = 16.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(AvalancheColors.Sand50)
+                    .background(LocalAvalancheColors.current.card)
                     .padding(12.dp),
             ) {
                 // House icon + label row
@@ -137,20 +137,20 @@ fun ServerDetailView(
                     Icon(
                         imageVector = Icons.Filled.Home,
                         contentDescription = null,
-                        tint = AvalancheColors.Brand,
+                        tint = LocalAvalancheColors.current.brand,
                     )
                     Spacer(Modifier.padding(start = 6.dp))
                     Text(
                         text = "Home server for ${account.displayName}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AvalancheColors.Brand,
+                        color = LocalAvalancheColors.current.brand,
                     )
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = "To change your home server or delete this identity, open the identity detail screen.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }

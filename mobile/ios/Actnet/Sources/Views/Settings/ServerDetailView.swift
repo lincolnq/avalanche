@@ -44,7 +44,7 @@ struct ServerDetailView: View {
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color.avCard, in: RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal)
                 }
 

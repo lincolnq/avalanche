@@ -125,17 +125,17 @@ fun RecoveryExplainerView(
             TopAppBar(
                 title = { Text("Recovery") },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
-                    titleContentColor = AvalancheColors.Ink,
+                    containerColor = LocalAvalancheColors.current.paper,
+                    titleContentColor = LocalAvalancheColors.current.ink,
                 ),
                 navigationIcon = {
                     TextButton(onClick = onNavigateUp) {
-                        Text("Back", color = AvalancheColors.Brand)
+                        Text("Back", color = LocalAvalancheColors.current.brand)
                     }
                 },
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -149,7 +149,7 @@ fun RecoveryExplainerView(
             Icon(
                 imageVector = Icons.Filled.Badge,
                 contentDescription = null,
-                tint = AvalancheColors.Brand,
+                tint = LocalAvalancheColors.current.brand,
                 modifier = Modifier.size(64.dp),
             )
 
@@ -158,7 +158,7 @@ fun RecoveryExplainerView(
             Text(
                 text = "Recover an identity",
                 style = MaterialTheme.typography.titleLarge,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
 
             Spacer(Modifier.height(8.dp))
@@ -166,7 +166,7 @@ fun RecoveryExplainerView(
             Text(
                 text = "Use a passkey or recovery phrase to restore an identity you created on another device.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 32.dp),
             )
@@ -176,7 +176,7 @@ fun RecoveryExplainerView(
                 Text(
                     text = errorMessage!!,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AvalancheColors.Error,
+                    color = LocalAvalancheColors.current.error,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 32.dp),
                 )
@@ -198,8 +198,8 @@ fun RecoveryExplainerView(
                         .fillMaxWidth()
                         .height(52.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AvalancheColors.Brand,
-                        contentColor = AvalancheColors.Paper,
+                        containerColor = LocalAvalancheColors.current.brand,
+                        contentColor = LocalAvalancheColors.current.paper,
                     ),
                 ) {
                     Icon(Icons.Filled.Badge, contentDescription = null)
@@ -211,7 +211,7 @@ fun RecoveryExplainerView(
                     Text(
                         text = "Enter your recovery phrase instead",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AvalancheColors.Brand,
+                        color = LocalAvalancheColors.current.brand,
                     )
                 }
             }
@@ -256,8 +256,8 @@ private fun RecoveryPhraseEntryView(
                 onClick = { onComplete(phrase, serverUrl.trim()) },
                 enabled = phrase.isNotBlank() && serverUrl.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AvalancheColors.Brand,
-                    contentColor = AvalancheColors.Paper,
+                    containerColor = LocalAvalancheColors.current.brand,
+                    contentColor = LocalAvalancheColors.current.paper,
                 ),
             ) {
                 Text("Recover")
@@ -265,7 +265,7 @@ private fun RecoveryPhraseEntryView(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = AvalancheColors.Brand)
+                Text("Cancel", color = LocalAvalancheColors.current.brand)
             }
         },
         title = { Text("Recovery Phrase", style = MaterialTheme.typography.titleMedium) },
@@ -277,7 +277,7 @@ private fun RecoveryPhraseEntryView(
                 Text(
                     text = "Enter your recovery phrase",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                 )
 
                 OutlinedTextField(
@@ -298,7 +298,7 @@ private fun RecoveryPhraseEntryView(
                     Text(
                         text = "Home server",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                     )
                     OutlinedTextField(
                         value = serverUrl,
@@ -316,7 +316,7 @@ private fun RecoveryPhraseEntryView(
                 }
             }
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     )
 }
 
@@ -339,7 +339,7 @@ private fun RecoveryPhraseEntryPreview() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper),
+                .background(LocalAvalancheColors.current.paper),
         ) {
             RecoveryPhraseEntryView(
                 onComplete = { _, _ -> },

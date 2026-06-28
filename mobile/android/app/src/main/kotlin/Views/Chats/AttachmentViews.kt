@@ -81,7 +81,7 @@ fun AttachmentView(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))
-                .background(AvalancheColors.Muted.copy(alpha = 0.15f))
+                .background(LocalAvalancheColors.current.muted.copy(alpha = 0.15f))
                 .clickable {
                     // Tapping a file chip is a no-op placeholder for opening;
                     // full open/save is a follow-up.
@@ -98,7 +98,7 @@ fun AttachmentView(
                 Text(
                     text = formatBytes(attachment.sizeBytes),
                     style = MaterialTheme.typography.labelSmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }

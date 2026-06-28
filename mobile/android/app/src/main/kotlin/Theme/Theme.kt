@@ -124,6 +124,7 @@ fun AvalancheTheme(
     ) {
         CompositionLocalProvider(
             LocalTextSelectionColors provides selectionColors,
+            LocalAvalancheColors provides (if (darkTheme) DarkAvalancheColors else LightAvalancheColors),
             content = content,
         )
     }

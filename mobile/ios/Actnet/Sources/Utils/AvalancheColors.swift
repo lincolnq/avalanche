@@ -1,6 +1,17 @@
 import SwiftUI
+import UIKit
 
 extension Color {
+    /// Builds a color that resolves differently in light vs. dark mode. The raw
+    /// palette (plum*/sand*/accents) stays fixed — only the *semantic* aliases
+    /// below are dynamic, so views keep referring to semantic names and adapt for
+    /// free. Follows the system appearance (no in-app override).
+    static func avDynamic(light: Color, dark: Color) -> Color {
+        Color(UIColor { traits in
+            UIColor(traits.userInterfaceStyle == .dark ? dark : light)
+        })
+    }
+
     // MARK: - Plum (primary brand scale)
     static let plum50  = Color(red: 0.945, green: 0.922, blue: 0.929) // #F1EBED
     static let plum100 = Color(red: 0.863, green: 0.784, blue: 0.808) // #DCC8CE
@@ -30,16 +41,18 @@ extension Color {
     static let moss    = Color(red: 0.420, green: 0.498, blue: 0.302) // #6B7F4D
     static let amber   = Color(red: 0.831, green: 0.627, blue: 0.290) // #D4A04A
 
-    // MARK: - Semantic aliases
-    static let avBrand          = Color.plum500
-    static let avPaper          = Color.sand100
-    static let avInk            = Color.sand900
-    static let avMuted          = Color.sand600
-    static let avOutgoingBubble = Color.plum500
-    static let avIncomingBubble = Color.sand200
-    static let avDarkSurface    = Color.plum900
-    static let avError          = Color.rose700
-    static let avNotification   = Color.rose500
+    // MARK: - Semantic aliases (adaptive — light / dark)
+    // Warm "plum-black" dark theme: deep aubergine surfaces, warm off-white text.
+    static let avBrand          = avDynamic(light: .plum500,  dark: .plum200)
+    static let avPaper          = avDynamic(light: .sand100,  dark: .plum900)
+    static let avInk            = avDynamic(light: .sand900,  dark: .sand50)
+    static let avMuted          = avDynamic(light: .sand600,  dark: .sand300)
+    static let avOutgoingBubble = Color.plum500 // always on plum; stands out in both modes
+    static let avIncomingBubble = avDynamic(light: .sand200,  dark: .plum800)
+    /// Inset cards, field backings, and avatar placeholders.
+    static let avCard           = avDynamic(light: .sand50,   dark: .plum800)
+    static let avError          = avDynamic(light: .rose700,  dark: .rose400)
+    static let avNotification   = Color.rose500 // badge bg w/ white text; reads in both
     static let avSuccess        = Color.moss
     static let avWarning        = Color.amber
 }

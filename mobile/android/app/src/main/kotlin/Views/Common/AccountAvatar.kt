@@ -56,11 +56,11 @@ fun AccountAvatar(
             modifier = Modifier
                 .size(size)
                 .clip(CircleShape)
-                .background(AvalancheColors.Brand.copy(alpha = 0.2f)),
+                .background(LocalAvalancheColors.current.brand.copy(alpha = 0.2f)),
         ) {
             Text(
                 text = initial,
-                color = AvalancheColors.Brand,
+                color = LocalAvalancheColors.current.brand,
                 // iOS uses size * 0.4 as the point size; approximate with sp from dp.
                 fontSize = (size.value * 0.4f).sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,

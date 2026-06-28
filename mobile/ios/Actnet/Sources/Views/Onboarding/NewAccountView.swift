@@ -23,7 +23,7 @@ struct NewAccountView: View {
 
             // TODO: Avatar photo picker
             Circle()
-                .fill(Color.sand200)
+                .fill(Color.avCard)
                 .frame(width: 100, height: 100)
                 .overlay {
                     Image(systemName: "camera")

@@ -83,7 +83,7 @@ struct IdentityDetailView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .padding(12)
-                            .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                            .background(Color.avCard, in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain)
                     }
@@ -108,7 +108,7 @@ struct IdentityDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .padding(12)
-                        .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                        .background(Color.avCard, in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
 
@@ -123,7 +123,7 @@ struct IdentityDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .padding(12)
-                        .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+                        .background(Color.avCard, in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -210,8 +210,10 @@ struct IdentityDetailView: View {
         guard let ciImage = filter.outputImage else { return nil }
         let falseColor = CIFilter.falseColor()
         falseColor.inputImage = ciImage
+        // Fixed light backing (not avPaper) so the code stays scannable in dark
+        // mode — a dark-on-dark QR can't be read.
         falseColor.color0 = CIColor(color: UIColor(Color.plum800))
-        falseColor.color1 = CIColor(color: UIColor(Color.avPaper))
+        falseColor.color1 = CIColor(color: UIColor(Color.sand100))
         guard let colored = falseColor.outputImage else { return nil }
         let transform = CGAffineTransform(scaleX: 10, y: 10)
         let scaled = colored.transformed(by: transform)
@@ -237,6 +239,6 @@ private struct DetailRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.sand50, in: RoundedRectangle(cornerRadius: 8))
+        .background(Color.avCard, in: RoundedRectangle(cornerRadius: 8))
     }
 }

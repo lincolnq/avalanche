@@ -239,11 +239,11 @@ fun ComposeMessageView(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AvalancheColors.Paper,
+                    containerColor = LocalAvalancheColors.current.paper,
                 ),
             )
         },
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -286,7 +286,7 @@ fun ComposeMessageView(
                             Icon(
                                 Icons.Filled.Person,
                                 contentDescription = null,
-                                tint = AvalancheColors.Brand,
+                                tint = LocalAvalancheColors.current.brand,
                                 modifier = Modifier.size(20.dp),
                             )
                             Spacer(Modifier.width(10.dp))
@@ -302,7 +302,7 @@ fun ComposeMessageView(
                             "People",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                     items(peopleResults, key = { it.did }) { c ->
@@ -321,7 +321,7 @@ fun ComposeMessageView(
                             "Other",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                     items(otherResults, key = { it.did }) { c ->
@@ -340,7 +340,7 @@ fun ComposeMessageView(
                             "No more contacts to add.",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             style = MaterialTheme.typography.bodySmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                 }
@@ -404,7 +404,7 @@ private fun AccountPickerRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("From", color = AvalancheColors.Muted, modifier = Modifier.padding(end = 8.dp))
+        Text("From", color = LocalAvalancheColors.current.muted, modifier = Modifier.padding(end = 8.dp))
         ExposedDropdownMenuBox(
             expanded = expanded,
             onExpandedChange = { expanded = it },
@@ -467,7 +467,7 @@ private fun RecipientFieldRow(
                 Text(
                     "To:",
                     modifier = Modifier.align(Alignment.CenterVertically),
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
                 chips.forEach { chip ->
                     InputChip(
@@ -482,15 +482,15 @@ private fun RecipientFieldRow(
                             )
                         },
                         colors = InputChipDefaults.inputChipColors(
-                            containerColor = AvalancheColors.Brand.copy(alpha = 0.15f),
-                            labelColor = AvalancheColors.Ink,
+                            containerColor = LocalAvalancheColors.current.brand.copy(alpha = 0.15f),
+                            labelColor = LocalAvalancheColors.current.ink,
                         ),
                     )
                 }
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
-                    placeholder = { Text("Type a name", color = AvalancheColors.Muted) },
+                    placeholder = { Text("Type a name", color = LocalAvalancheColors.current.muted) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { onSubmit() }),
@@ -510,7 +510,7 @@ private fun RecipientFieldRow(
             Icon(
                 Icons.Filled.AddCircle,
                 contentDescription = "Add recipient",
-                tint = AvalancheColors.Brand,
+                tint = LocalAvalancheColors.current.brand,
                 modifier = Modifier.size(28.dp),
             )
         }
@@ -557,7 +557,7 @@ private fun ActionBar(
             Text(
                 errorMessage,
                 style = MaterialTheme.typography.bodySmall,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
@@ -573,7 +573,7 @@ private fun ActionBar(
                 Button(
                     onClick = onDmTapped,
                     modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AvalancheColors.Brand),
+                    colors = ButtonDefaults.buttonColors(containerColor = LocalAvalancheColors.current.brand),
                 ) {
                     Text("DM")
                 }
@@ -582,7 +582,7 @@ private fun ActionBar(
                     onClick = onDmTapped,
                     modifier = Modifier.weight(1f).height(48.dp),
                     enabled = chips.size == 1,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AvalancheColors.Brand),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalAvalancheColors.current.brand),
                 ) {
                     Text("DM")
                 }
@@ -593,7 +593,7 @@ private fun ActionBar(
                 Button(
                     onClick = onNewGroupTapped,
                     modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AvalancheColors.Brand),
+                    colors = ButtonDefaults.buttonColors(containerColor = LocalAvalancheColors.current.brand),
                 ) {
                     Text(newGroupTitle, maxLines = 1)
                 }
@@ -601,7 +601,7 @@ private fun ActionBar(
                 OutlinedButton(
                     onClick = onNewGroupTapped,
                     modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AvalancheColors.Brand),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalAvalancheColors.current.brand),
                 ) {
                     Text(newGroupTitle, maxLines = 1)
                 }
@@ -646,7 +646,7 @@ private fun ContactPickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = AvalancheColors.Paper,
+        containerColor = LocalAvalancheColors.current.paper,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Header row
@@ -693,11 +693,11 @@ private fun ContactPickerSheet(
                         Icon(
                             Icons.Filled.QrCodeScanner,
                             contentDescription = null,
-                            tint = AvalancheColors.Brand,
+                            tint = LocalAvalancheColors.current.brand,
                             modifier = Modifier.size(32.dp),
                         )
                         Spacer(Modifier.width(10.dp))
-                        Text("Scan QR Code", color = AvalancheColors.Brand)
+                        Text("Scan QR Code", color = LocalAvalancheColors.current.brand)
                     }
                 }
 
@@ -708,7 +708,7 @@ private fun ContactPickerSheet(
                             "People",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                     items(people, key = { it.did }) { c ->
@@ -727,7 +727,7 @@ private fun ContactPickerSheet(
                             "Other",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelSmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                     items(other, key = { it.did }) { c ->
@@ -746,7 +746,7 @@ private fun ContactPickerSheet(
                             "No contacts to add.",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             style = MaterialTheme.typography.bodySmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                         )
                     }
                 }

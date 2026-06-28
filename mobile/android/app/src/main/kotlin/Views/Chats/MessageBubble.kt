@@ -218,7 +218,7 @@ private fun BubbleContent(
             color = if (isMe && !message.isDeleted) {
                 AvalancheColors.Sand100.copy(alpha = 0.8f)
             } else {
-                AvalancheColors.Muted
+                LocalAvalancheColors.current.muted
             },
         )
     }
@@ -226,7 +226,7 @@ private fun BubbleContent(
     if (message.isDeleted) {
         // Dashed border tombstone. Compose has no dashed Modifier.border, so we
         // stroke a dashed rounded rect ourselves via drawBehind + dashPathEffect.
-        val dashColor = AvalancheColors.Muted.copy(alpha = 0.4f)
+        val dashColor = LocalAvalancheColors.current.muted.copy(alpha = 0.4f)
         val density = LocalDensity.current
         val cornerPx = with(density) { 16.dp.toPx() }
         val strokePx = with(density) { 1.dp.toPx() }
@@ -251,15 +251,15 @@ private fun BubbleContent(
                 FlowMessageText(
                     text = AnnotatedString("This message was deleted"),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                    textColor = AvalancheColors.Muted,
+                    textColor = LocalAvalancheColors.current.muted,
                     showMetadata = showMetadata,
                     metadata = metadata,
                 )
             }
         }
     } else {
-        val bgColor = if (isMe) AvalancheColors.OutgoingBubble else AvalancheColors.IncomingBubble
-        val fgColor = if (isMe) AvalancheColors.Sand100 else AvalancheColors.Ink
+        val bgColor = if (isMe) LocalAvalancheColors.current.outgoingBubble else LocalAvalancheColors.current.incomingBubble
+        val fgColor = if (isMe) AvalancheColors.Sand100 else LocalAvalancheColors.current.ink
 
         Box(
             modifier = Modifier
@@ -486,13 +486,13 @@ private fun BubbleContextMenu(
 
         if (isMe) {
             DropdownMenuItem(
-                text = { Text("Delete for Everyone", color = AvalancheColors.Error) },
+                text = { Text("Delete for Everyone", color = LocalAvalancheColors.current.error) },
                 onClick = { onDelete(true) },
             )
         }
 
         DropdownMenuItem(
-            text = { Text("Delete for Me", color = AvalancheColors.Error) },
+            text = { Text("Delete for Me", color = LocalAvalancheColors.current.error) },
             onClick = { onDelete(false) },
         )
     }
@@ -523,8 +523,8 @@ private fun ReactionClusterRow(
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         clusters.forEach { cluster ->
-            val bgColor = if (cluster.mine) AvalancheColors.Brand.copy(alpha = 0.18f) else AvalancheColors.IncomingBubble
-            val borderColor = if (cluster.mine) AvalancheColors.Brand.copy(alpha = 0.5f) else Color.Transparent
+            val bgColor = if (cluster.mine) LocalAvalancheColors.current.brand.copy(alpha = 0.18f) else LocalAvalancheColors.current.incomingBubble
+            val borderColor = if (cluster.mine) LocalAvalancheColors.current.brand.copy(alpha = 0.5f) else Color.Transparent
 
             Box(
                 modifier = Modifier
@@ -543,7 +543,7 @@ private fun ReactionClusterRow(
                         Text(
                             text = "${cluster.count}",
                             fontSize = 10.sp,
-                            color = if (cluster.mine) AvalancheColors.Brand else AvalancheColors.Muted,
+                            color = if (cluster.mine) LocalAvalancheColors.current.brand else LocalAvalancheColors.current.muted,
                         )
                     }
                 }
@@ -573,7 +573,7 @@ private fun InlineDeliveryIcon(status: DeliveryStatus, color: Color) {
         DeliveryStatus.READ -> Icons.Filled.CheckCircle
         DeliveryStatus.FAILED -> Icons.Filled.Error
     }
-    val tint = if (status == DeliveryStatus.FAILED) AvalancheColors.Error else color
+    val tint = if (status == DeliveryStatus.FAILED) LocalAvalancheColors.current.error else color
     Icon(
         imageVector = icon,
         contentDescription = status.name.lowercase(Locale.US),
@@ -615,7 +615,7 @@ private val senderPalette = listOf(
     Color(0xFF00897B), // teal
     Color(0xFF3949AB), // indigo
     Color(0xFF43A047), // green
-    AvalancheColors.Brand, // plum
+    AvalancheColors.Plum400, // plum - fixed (decorative palette read outside composition)
 )
 
 private fun senderColor(did: String): Color {
@@ -663,7 +663,7 @@ private fun MessageBubblePreview() {
     AvalancheTheme {
         Column(
             modifier = Modifier
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

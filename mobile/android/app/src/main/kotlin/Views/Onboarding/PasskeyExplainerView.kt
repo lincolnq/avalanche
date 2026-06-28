@@ -146,7 +146,7 @@ fun PasskeyExplainerView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -158,7 +158,7 @@ fun PasskeyExplainerView(
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
-            color = AvalancheColors.Ink,
+            color = LocalAvalancheColors.current.ink,
         )
 
         // Profile preview
@@ -171,19 +171,19 @@ fun PasskeyExplainerView(
                 modifier = Modifier
                     .size(64.dp)
                     .clip(CircleShape)
-                    .background(AvalancheColors.Sand200),
+                    .background(LocalAvalancheColors.current.card),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
             Text(
                 text = displayName,
                 style = MaterialTheme.typography.titleMedium,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
         }
 
@@ -193,7 +193,7 @@ fun PasskeyExplainerView(
                 "and synced across all your devices. You’ll use it to sign back into this " +
                 "identity if you lose this device.",
             style = MaterialTheme.typography.bodySmall,
-            color = AvalancheColors.Muted,
+            color = LocalAvalancheColors.current.muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 24.dp),
         )
@@ -202,7 +202,7 @@ fun PasskeyExplainerView(
         errorMessage?.let { error ->
             Text(
                 text = error,
-                color = AvalancheColors.Error,
+                color = LocalAvalancheColors.current.error,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 12.dp),
             )
@@ -228,7 +228,7 @@ fun PasskeyExplainerView(
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,
-                        color = AvalancheColors.Paper,
+                        color = LocalAvalancheColors.current.paper,
                     )
                 } else {
                     Icon(
@@ -250,7 +250,7 @@ fun PasskeyExplainerView(
                 Text(
                     text = "Use a recovery phrase instead",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Brand,
+                    color = LocalAvalancheColors.current.brand,
                 )
             }
 
@@ -262,7 +262,7 @@ fun PasskeyExplainerView(
                 Text(
                     text = "Skip recovery setup",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                 )
             }
         }

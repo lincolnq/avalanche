@@ -91,7 +91,7 @@ fun AccountsView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             // This screen is its own nav destination (not inside MainTabView's
             // Scaffold), so it must apply the status-bar inset itself — otherwise
             // the edge-to-edge window draws the top bar under the status bar.
@@ -109,25 +109,25 @@ fun AccountsView(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = AvalancheColors.Ink,
+                    tint = LocalAvalancheColors.current.ink,
                 )
             }
             Text(
                 text = "Accounts",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
             )
             // Balancing spacer so the title stays centered opposite the back button.
             Spacer(modifier = Modifier.width(48.dp))
         }
 
-        HorizontalDivider(color = AvalancheColors.Sand300.copy(alpha = 0.5f))
+        HorizontalDivider(color = LocalAvalancheColors.current.divider.copy(alpha = 0.5f))
 
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper)
+                .background(LocalAvalancheColors.current.paper)
                 // Keep the footer clear of the (edge-to-edge) system nav bar.
                 .navigationBarsPadding(),
             // Breathing room above the first section (the later sections each add
@@ -142,7 +142,7 @@ fun AccountsView(
                             Icon(
                                 imageVector = Icons.Filled.QrCodeScanner,
                                 contentDescription = null,
-                                tint = AvalancheColors.Brand,
+                                tint = LocalAvalancheColors.current.brand,
                                 modifier = Modifier.size(20.dp),
                             )
                         },
@@ -185,7 +185,7 @@ fun AccountsView(
                         val sortedServers = account.servers.sortedBy { it.name }
                         sortedServers.forEachIndexed { idx, server ->
                             HorizontalDivider(
-                                color = AvalancheColors.Sand300.copy(alpha = 0.4f),
+                                color = LocalAvalancheColors.current.divider.copy(alpha = 0.4f),
                                 modifier = Modifier.padding(start = 56.dp),
                             )
                             val isHome = account.servers.firstOrNull()?.id == server.id
@@ -212,7 +212,7 @@ fun AccountsView(
                             Icon(
                                 imageVector = Icons.Filled.Add,
                                 contentDescription = null,
-                                tint = AvalancheColors.Brand,
+                                tint = LocalAvalancheColors.current.brand,
                                 modifier = Modifier.size(20.dp),
                             )
                         },
@@ -230,7 +230,7 @@ fun AccountsView(
                     Text(
                         text = "About",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AvalancheColors.Muted,
+                        color = LocalAvalancheColors.current.muted,
                         modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
                     )
                     SettingsSectionCard {
@@ -239,7 +239,7 @@ fun AccountsView(
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.HelpOutline,
                                     contentDescription = null,
-                                    tint = AvalancheColors.Brand,
+                                    tint = LocalAvalancheColors.current.brand,
                                     modifier = Modifier.size(20.dp),
                                 )
                             },
@@ -265,7 +265,7 @@ fun AccountsView(
                         Text(
                             text = appVersion,
                             style = MaterialTheme.typography.bodySmall,
-                            color = AvalancheColors.Muted,
+                            color = LocalAvalancheColors.current.muted,
                             // Debug-only: tap the version to open the in-app log
                             // viewer (mirrors the iOS debug gesture).
                             modifier = if (BuildConfig.DEBUG) {
@@ -277,7 +277,7 @@ fun AccountsView(
                         Text(
                             text = "Open Source License",
                             style = MaterialTheme.typography.labelSmall,
-                            color = AvalancheColors.Brand,
+                            color = LocalAvalancheColors.current.brand,
                             modifier = Modifier.clickable {
                                 val intent = Intent(
                                     Intent.ACTION_VIEW,
@@ -306,7 +306,7 @@ private fun SettingsSectionCard(
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
         shape = RoundedCornerShape(12.dp),
-        color = AvalancheColors.Sand50,
+        color = LocalAvalancheColors.current.card,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
@@ -356,7 +356,7 @@ private fun SettingsRow(
             Text(
                 text = label ?: "",
                 style = labelStyle,
-                color = AvalancheColors.Ink,
+                color = LocalAvalancheColors.current.ink,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -365,7 +365,7 @@ private fun SettingsRow(
             Icon(
                 imageVector = Icons.Filled.ChevronRight,
                 contentDescription = null,
-                tint = AvalancheColors.Muted,
+                tint = LocalAvalancheColors.current.muted,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -383,17 +383,17 @@ private fun ServerRowContent(server: ServerInfo, isHome: Boolean) {
         Text(
             text = server.name,
             style = MaterialTheme.typography.bodyMedium,
-            color = AvalancheColors.Ink,
+            color = LocalAvalancheColors.current.ink,
         )
         if (isHome) {
             Surface(
                 shape = RoundedCornerShape(50),
-                color = AvalancheColors.Brand.copy(alpha = 0.15f),
+                color = LocalAvalancheColors.current.brand.copy(alpha = 0.15f),
             ) {
                 Text(
                     text = "home",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AvalancheColors.Brand,
+                    color = LocalAvalancheColors.current.brand,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
@@ -431,7 +431,7 @@ private fun AccountsViewPreview() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AvalancheColors.Paper),
+                .background(LocalAvalancheColors.current.paper),
         ) {
             Row(
                 modifier = Modifier
@@ -445,13 +445,13 @@ private fun AccountsViewPreview() {
                     text = "Accounts",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = AvalancheColors.Ink,
+                    color = LocalAvalancheColors.current.ink,
                 )
                 TextButton(onClick = {}) {
-                    Text("Done", color = AvalancheColors.Brand)
+                    Text("Done", color = LocalAvalancheColors.current.brand)
                 }
             }
-            HorizontalDivider(color = AvalancheColors.Sand300.copy(alpha = 0.5f))
+            HorizontalDivider(color = LocalAvalancheColors.current.divider.copy(alpha = 0.5f))
 
             accounts.forEach { account ->
                 SettingsSectionCard(modifier = Modifier.padding(top = 16.dp)) {
@@ -467,7 +467,7 @@ private fun AccountsViewPreview() {
                     )
                     account.servers.sortedBy { it.name }.forEach { server ->
                         HorizontalDivider(
-                            color = AvalancheColors.Sand300.copy(alpha = 0.4f),
+                            color = LocalAvalancheColors.current.divider.copy(alpha = 0.4f),
                             modifier = Modifier.padding(start = 56.dp),
                         )
                         val isHome = account.servers.firstOrNull()?.id == server.id

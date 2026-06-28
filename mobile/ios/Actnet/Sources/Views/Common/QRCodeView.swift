@@ -29,8 +29,10 @@ struct QRCodeView: View {
         guard let ciImage = filter.outputImage else { return nil }
         let falseColor = CIFilter.falseColor()
         falseColor.inputImage = ciImage
+        // Fixed light backing (not avPaper) so the code stays scannable in dark
+        // mode — a dark-on-dark QR can't be read.
         falseColor.color0 = CIColor(color: UIColor(Color.plum800))
-        falseColor.color1 = CIColor(color: UIColor(Color.avPaper))
+        falseColor.color1 = CIColor(color: UIColor(Color.sand100))
         guard let colored = falseColor.outputImage else { return nil }
         let scaled = colored.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
         let context = CIContext()

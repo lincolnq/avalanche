@@ -50,7 +50,7 @@ private fun CutCornerRectanglePreview() {
             modifier = Modifier
                 .size(120.dp, 60.dp)
                 .clip(CutCornerRectangle(cut = 16f))
-                .background(AvalancheColors.Brand),
+                .background(LocalAvalancheColors.current.brand),
         )
     }
 }

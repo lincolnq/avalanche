@@ -99,7 +99,7 @@ private fun HexagonPreview() {
         Box(
             modifier = Modifier
                 .size(80.dp)
-                .background(color = AvalancheColors.Brand, shape = Hexagon()),
+                .background(color = LocalAvalancheColors.current.brand, shape = Hexagon()),
         )
     }
 }

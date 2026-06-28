@@ -52,10 +52,10 @@ fun MainTabView(
     // mirroring iOS RootView's ZStack.
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
-            containerColor = AvalancheColors.Paper,
+            containerColor = LocalAvalancheColors.current.paper,
             bottomBar = {
                 NavigationBar(
-                    containerColor = AvalancheColors.Paper,
+                    containerColor = LocalAvalancheColors.current.paper,
                 ) {
                     NavigationBarItem(
                         selected = selectedTab == AppViewModel.Tab.CHATS,
@@ -68,11 +68,11 @@ fun MainTabView(
                         },
                         label = { Text("Chats") },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AvalancheColors.Brand,
-                            selectedTextColor = AvalancheColors.Brand,
-                            indicatorColor = AvalancheColors.Paper,
-                            unselectedIconColor = AvalancheColors.Muted,
-                            unselectedTextColor = AvalancheColors.Muted,
+                            selectedIconColor = LocalAvalancheColors.current.brand,
+                            selectedTextColor = LocalAvalancheColors.current.brand,
+                            indicatorColor = LocalAvalancheColors.current.paper,
+                            unselectedIconColor = LocalAvalancheColors.current.muted,
+                            unselectedTextColor = LocalAvalancheColors.current.muted,
                         ),
                     )
                     NavigationBarItem(
@@ -86,11 +86,11 @@ fun MainTabView(
                         },
                         label = { Text("Network") },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AvalancheColors.Brand,
-                            selectedTextColor = AvalancheColors.Brand,
-                            indicatorColor = AvalancheColors.Paper,
-                            unselectedIconColor = AvalancheColors.Muted,
-                            unselectedTextColor = AvalancheColors.Muted,
+                            selectedIconColor = LocalAvalancheColors.current.brand,
+                            selectedTextColor = LocalAvalancheColors.current.brand,
+                            indicatorColor = LocalAvalancheColors.current.paper,
+                            unselectedIconColor = LocalAvalancheColors.current.muted,
+                            unselectedTextColor = LocalAvalancheColors.current.muted,
                         ),
                     )
                 }

@@ -39,7 +39,7 @@ fun ContactAvatar(
     size: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val color = AvalancheColors.Brand
+    val color = LocalAvalancheColors.current.brand
     val shape = if (isBot) HexagonShape else CircleShape
 
     val bitmap = remember(imageData) {
@@ -106,7 +106,7 @@ private val HexagonShape: androidx.compose.ui.graphics.Shape =
 @Composable
 private fun ContactAvatarPersonPreview() {
     AvalancheTheme {
-        Box(modifier = Modifier.background(AvalancheColors.Paper)) {
+        Box(modifier = Modifier.background(LocalAvalancheColors.current.paper)) {
             ContactAvatar(name = "Alice Example", size = 40.dp)
         }
     }
@@ -116,7 +116,7 @@ private fun ContactAvatarPersonPreview() {
 @Composable
 private fun ContactAvatarBotPreview() {
     AvalancheTheme {
-        Box(modifier = Modifier.background(AvalancheColors.Paper)) {
+        Box(modifier = Modifier.background(LocalAvalancheColors.current.paper)) {
             ContactAvatar(name = "AdminBot", isBot = true, size = 40.dp)
         }
     }
@@ -126,7 +126,7 @@ private fun ContactAvatarBotPreview() {
 @Composable
 private fun ContactAvatarEmptyNamePreview() {
     AvalancheTheme {
-        Box(modifier = Modifier.background(AvalancheColors.Paper)) {
+        Box(modifier = Modifier.background(LocalAvalancheColors.current.paper)) {
             ContactAvatar(name = "", size = 40.dp)
         }
     }

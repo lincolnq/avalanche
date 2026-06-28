@@ -46,7 +46,7 @@ fun SplashView(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AvalancheColors.Paper)
+            .background(LocalAvalancheColors.current.paper)
             .windowInsetsPadding(WindowInsets.systemBars),
     ) {
         Column(
@@ -64,7 +64,7 @@ fun SplashView(
             )
             Text(
                 text = "Encrypted organizing",
-                color = AvalancheColors.Muted,
+                color = LocalAvalancheColors.current.muted,
                 fontSize = 18.sp,
             )
         }
@@ -95,7 +95,7 @@ fun SplashView(
                     .fillMaxWidth()
                     .height(52.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = AvalancheColors.Brand,
+                    contentColor = LocalAvalancheColors.current.brand,
                 ),
             ) {
                 Icon(Icons.Filled.Link, contentDescription = null)
@@ -106,7 +106,7 @@ fun SplashView(
             TextButton(onClick = onRecover) {
                 Text(
                     text = "Recover account",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     textAlign = TextAlign.Center,
                 )
             }
@@ -114,7 +114,7 @@ fun SplashView(
             TextButton(onClick = onLinkDevice) {
                 Text(
                     text = "Link to an existing device",
-                    color = AvalancheColors.Muted,
+                    color = LocalAvalancheColors.current.muted,
                     textAlign = TextAlign.Center,
                 )
             }
