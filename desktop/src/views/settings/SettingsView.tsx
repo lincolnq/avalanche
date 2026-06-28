@@ -1,13 +1,12 @@
 import { createSignal, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { FiArrowLeft, FiUser, FiUsers, FiSlash, FiTool, FiShield, FiChevronRight } from "solid-icons/fi";
+import { FiArrowLeft, FiUser, FiUsers, FiSlash, FiTool, FiChevronRight } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import AccountAvatar from "../../components/AccountAvatar";
 import AccountsView from "./AccountsView";
 import ServerDetailView from "./ServerDetailView";
 import IdentityDetailView from "./IdentityDetailView";
 import BlockedContactsView from "./BlockedContactsView";
-import RecoveryPhraseSetupView from "./RecoveryPhraseSetupView";
 import DevSettingsView from "./DevSettingsView";
 import type { Account, ServerInfo } from "../../models";
 import "./SettingsView.css";
@@ -31,7 +30,6 @@ export default function SettingsView() {
 
   const [stack, setStack] = createSignal<Screen[]>([{ name: "hub" }]);
   const [showBlocked, setShowBlocked] = createSignal(false);
-  const [showRecovery, setShowRecovery] = createSignal(false);
 
   const current = () => stack()[stack().length - 1];
   const push = (s: Screen) => setStack((prev) => [...prev, s]);
@@ -73,9 +71,6 @@ export default function SettingsView() {
               <button class="settings-row" onClick={() => push({ name: "accounts" })}>
                 <FiUsers size={18} /><span>Accounts</span><FiChevronRight size={16} class="settings-row-chevron" />
               </button>
-              <button class="settings-row" onClick={() => setShowRecovery(true)}>
-                <FiShield size={18} /><span>Recovery key</span><FiChevronRight size={16} class="settings-row-chevron" />
-              </button>
               <button class="settings-row" onClick={() => setShowBlocked(true)}>
                 <FiSlash size={18} /><span>Blocked Contacts</span><FiChevronRight size={16} class="settings-row-chevron" />
               </button>
@@ -91,9 +86,6 @@ export default function SettingsView() {
 
           <Show when={showBlocked()}>
             <BlockedContactsView onClose={() => setShowBlocked(false)} />
-          </Show>
-          <Show when={showRecovery()}>
-            <RecoveryPhraseSetupView onClose={() => setShowRecovery(false)} />
           </Show>
         </div>
       </Match>

@@ -56,7 +56,8 @@ interface AppContextValue {
     serverUrl: string,
     serverName: string,
     displayName: string,
-    inviteToken: string | null
+    inviteToken: string | null,
+    prfOutput: number[]
   ) => Promise<void>;
   restoreAccounts: () => Promise<void>;
   logout: () => void;
@@ -134,7 +135,6 @@ interface AppContextValue {
   deleteIdentity: () => Promise<void>;
   hasRecovery: () => Promise<boolean>;
   generateRecoveryPhrase: () => Promise<string>;
-  setupRecoveryFromPhrase: (phrase: string) => Promise<void>;
   recoverFromPhrase: (phrase: string, serverUrl: string, displayName: string) => Promise<void>;
 
   // Deep links — route a pasted/opened link (conversation/<did>, i/<token>)
@@ -470,7 +470,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     serverUrl: string,
     serverName: string,
     displayName: string,
-    inviteToken: string | null
+    inviteToken: string | null,
+    prfOutput: number[]
   ) {
     const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
     const result = await service().createAccount(
@@ -480,12 +481,12 @@ export function AppProvider(props: { children: JSX.Element }) {
       // "dev-placeholder-key" (iOS uses the Secure Enclave; desktop has no
       // equivalent wired yet).
       "dev-placeholder-key",
-      // Empty PRF output is deliberate: desktop has no WebAuthn passkey/PRF
-      // authenticator, so signup is the single-shot empty-PRF path. This is a
-      // sanctioned divergence from iOS's two-stage PreparedAccount handle — see
-      // "Passkey / recovery divergence" in desktop/CLAUDE.md. Recovery is
-      // offered via a 12-word phrase instead (RecoveryPhraseSetupView).
-      [],
+      // Desktop has no WebAuthn passkey, so signup derives the recovery seed
+      // from a BIP39 phrase the user writes down (RecoveryPhraseSetupView) and
+      // passes it here as the PRF output — exactly iOS's phrase-account mode.
+      // This makes the rotation key + DID reproducible from the phrase, so
+      // recover_from_phrase can locate and decrypt the recovery blob later.
+      prfOutput,
       displayName,
       inviteToken
     );
@@ -735,22 +736,6 @@ export function AppProvider(props: { children: JSX.Element }) {
       // Not on the server (or undecodable) → start onboarding with the token.
       setStore("pendingInviteToken", token);
     }
-  }
-
-  // Recovery SETUP: derive the 32-byte seed from the freshly-generated phrase and
-  // upload the encrypted recovery blob for the signed-in account's servers.
-  // Desktop has no passkey/PRF, so the phrase-derived seed is the PRF stand-in
-  // (see desktop/CLAUDE.md passkey divergence).
-  async function setupRecoveryFromPhrase(phrase: string) {
-    const accountId = getSoleAccountId();
-    const account = accountId === null ? undefined : store.accounts.find((a) => a.id === accountId);
-    if (!account) {
-      // No signed-in account → nothing to secure. Fail loudly rather than
-      // uploading a recovery blob with an empty server list.
-      throw new Error("No account signed in.");
-    }
-    const seed = await service().recoveryPhraseToSeed(phrase);
-    await service().updateRecoveryBlob(seed, account.servers.map((s) => s.url));
   }
 
   // Recovery RESTORE: recompute the DID from the phrase seed + home server URL,
@@ -2138,7 +2123,6 @@ export function AppProvider(props: { children: JSX.Element }) {
     deleteIdentity,
     hasRecovery,
     generateRecoveryPhrase,
-    setupRecoveryFromPhrase,
     recoverFromPhrase,
     isDeepLink,
     handleDeepLink,

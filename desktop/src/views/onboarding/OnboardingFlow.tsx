@@ -7,6 +7,7 @@ import InviteLinkEntryView from "./InviteLinkEntryView";
 import IdentityPickerView from "./IdentityPickerView";
 import NewAccountView from "./NewAccountView";
 import JoiningServerView from "./JoiningServerView";
+import RecoveryPhraseSetupView from "./RecoveryPhraseSetupView";
 import RecoveryExplainerView from "./RecoveryExplainerView";
 import RecoveryConsoleView from "./RecoveryConsoleView";
 
@@ -15,6 +16,7 @@ type Screen =
   | { name: "inviteLinkEntry" }
   | { name: "identityPicker"; inviteInfo: InviteInfo; inviteToken: string }
   | { name: "newAccount"; inviteInfo: InviteInfo; inviteToken: string }
+  | { name: "recoveryPhraseSetup"; inviteInfo: InviteInfo; inviteToken: string; displayName: string }
   | { name: "joiningServer"; inviteInfo: InviteInfo; inviteToken: string; account: Account }
   | { name: "recoveryExplainer" }
   | { name: "recoveryConsole"; phrase: string; serverUrl: string };
@@ -64,6 +66,11 @@ export default function OnboardingFlow() {
       ? (current() as Extract<Screen, { name: "newAccount" }>)
       : null;
 
+  const recoveryPhraseSetupScreen = () =>
+    current().name === "recoveryPhraseSetup"
+      ? (current() as Extract<Screen, { name: "recoveryPhraseSetup" }>)
+      : null;
+
   const joiningServerScreen = () =>
     current().name === "joiningServer"
       ? (current() as Extract<Screen, { name: "joiningServer" }>)
@@ -109,9 +116,22 @@ export default function OnboardingFlow() {
         {(s) => (
           <NewAccountView
             inviteInfo={s().inviteInfo}
-            token={s().inviteToken}
             showRecoverLink={true}
+            onContinue={(displayName) =>
+              navigate({ name: "recoveryPhraseSetup", inviteInfo: s().inviteInfo, inviteToken: s().inviteToken, displayName })
+            }
             onRecover={() => navigate({ name: "recoveryExplainer" })}
+            onBack={goBack}
+          />
+        )}
+      </Match>
+
+      <Match when={recoveryPhraseSetupScreen()}>
+        {(s) => (
+          <RecoveryPhraseSetupView
+            inviteInfo={s().inviteInfo}
+            token={s().inviteToken}
+            displayName={s().displayName}
             onBack={goBack}
           />
         )}

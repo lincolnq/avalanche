@@ -1,40 +1,25 @@
 import { createSignal } from "solid-js";
 import { FiArrowLeft, FiUser } from "solid-icons/fi";
-import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import "./NewAccountView.css";
 
 interface Props {
   inviteInfo: InviteInfo;
-  token: string;
   showRecoverLink: boolean;
+  onContinue: (displayName: string) => void;
   onRecover?: () => void;
   onBack?: () => void;
 }
 
 export default function NewAccountView(props: Props) {
-  const { createAccount } = useApp();
   const [displayName, setDisplayName] = createSignal("");
-  const [isCreating, setIsCreating] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
 
-  async function handleCreate() {
+  function handleContinue() {
     const name = displayName().trim();
-    if (!name || isCreating()) return;
-    setError(null);
-    setIsCreating(true);
-    try {
-      await createAccount(
-        props.inviteInfo.serverUrl,
-        props.inviteInfo.serverName,
-        name,
-        props.token
-      );
-      // createAccount sets isOnboarding = false — App.tsx unmounts the flow.
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Account creation failed");
-      setIsCreating(false);
-    }
+    if (!name) return;
+    // Account creation happens after the recovery-phrase step (the phrase seed
+    // is the signup credential); this just carries the chosen name forward.
+    props.onContinue(name);
   }
 
   return (
@@ -48,25 +33,22 @@ export default function NewAccountView(props: Props) {
           placeholder="Your name"
           value={displayName()}
           onInput={(e) => setDisplayName(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") void handleCreate(); }}
-          disabled={isCreating()}
+          onKeyDown={(e) => { if (e.key === "Enter") handleContinue(); }}
           autofocus
         />
-        {error() && <div class="na-error">{error()}</div>}
         <button
           class="btn-primary na-btn"
-          disabled={!displayName().trim() || isCreating()}
-          onClick={() => void handleCreate()}
+          disabled={!displayName().trim()}
+          onClick={handleContinue}
         >
-          {isCreating() && <span class="spinner" />}
-          {isCreating() ? "Creating…" : "Create Identity"}
+          Continue
         </button>
-        {props.showRecoverLink && props.onRecover && !isCreating() && (
+        {props.showRecoverLink && props.onRecover && (
           <button class="back-btn na-recover" onClick={props.onRecover}>
             Recover an existing identity
           </button>
         )}
-        {props.onBack && !isCreating() && (
+        {props.onBack && (
           <button class="back-btn na-back" onClick={props.onBack}><FiArrowLeft size={14} />Back</button>
         )}
     </div>
