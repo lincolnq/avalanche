@@ -170,6 +170,9 @@ struct ActnetApp: App {
                     .task {
                         appDelegate.appState = appState
                         await appState.restoreAccounts()
+                        // Cold-launch safety net for shares (docs/35): scenePhase
+                        // starts at .active so its onChange won't fire on launch.
+                        appState.handleSharedImage()
                     }
                     .onOpenURL { url in
                         appState.handleDeepLink(url)
@@ -181,6 +184,11 @@ struct ActnetApp: App {
                         // connection on resume so a socket that died while the
                         // app was suspended recovers without a restart.
                         appState.setAppActiveAll(active)
+                        // Safety net for shared images (docs/35): the extension
+                        // opens us via avalanche-share://, but if that open is
+                        // missed, picking it up on foreground still surfaces the
+                        // picker the moment the user switches to the app.
+                        if active { appState.handleSharedImage() }
                     }
             }
         }

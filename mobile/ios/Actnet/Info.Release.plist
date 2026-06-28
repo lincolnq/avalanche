@@ -12,6 +12,18 @@ See Info.Debug.plist for the corresponding debug-only file.
 <dict>
 	<key>RELAY_URL</key>
 	<string>$(RELAY_URL)</string>
+	<!-- Custom scheme the share extension opens to hand off a shared image (docs/35). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>net.theavalanche.app.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>avalanche-share</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

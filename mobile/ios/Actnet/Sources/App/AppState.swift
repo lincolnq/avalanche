@@ -51,6 +51,12 @@ final class AppState: ObservableObject {
     @Published var serviceMode: ServiceMode
     @Published var selectedTab: Tab = .chats
     @Published var navigateToConversation: Conversation?
+    /// An image shared into the app from another app (docs/35), awaiting a
+    /// destination chat. Non-nil drives the share-destination picker in RootView.
+    @Published var pendingSharedImage: PendingSharedImage?
+    /// Image bytes staged for a specific conversation by the share flow, consumed
+    /// (and cleared) by `ConversationView.onAppear`. Keyed by conversation id.
+    @Published var pendingStagedImage: [String: Data] = [:]
     /// ID of the conversation currently visible on screen, or nil. Set by
     /// `ConversationView.onAppear`/`onDisappear`. Used to suppress
     /// notifications for the chat the user is actively reading.
@@ -143,6 +149,12 @@ final class AppState: ObservableObject {
     /// - `https://go.theavalanche.net/i/<token>` (or legacy `/invite/<token>`)
     func handleDeepLink(_ url: URL) {
         print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
+        // An image shared in from another app (docs/35): the share extension wrote
+        // it to the App Group and opened this scheme. Pull it into the picker.
+        if url.scheme == AppGroup.shareURLScheme {
+            handleSharedImage()
+            return
+        }
         guard Self.isDeepLink(url) else { return }
 
         let pathComponents = url.pathComponents.filter { $0 != "/" }
@@ -187,6 +199,26 @@ final class AppState: ObservableObject {
 
     /// Pending invite token from a deep link, picked up by the onboarding flow.
     @Published var pendingInviteToken: String?
+
+    // MARK: - Shared image (docs/35)
+
+    /// Pull a pending shared image out of the App Group container (written by the
+    /// share extension) and surface the destination picker. Called from the
+    /// `avalanche-share://` open and as a foreground safety net.
+    func handleSharedImage() {
+        guard let pending = AppGroup.takePendingShare() else { return }
+        pendingSharedImage = PendingSharedImage(data: pending.data, contentType: pending.contentType)
+    }
+
+    /// Route a shared image to the chosen conversation: stage it for that chat and
+    /// navigate there, where `ConversationView` pre-fills the composer for review.
+    func routeSharedImage(to conversation: Conversation) {
+        guard let pending = pendingSharedImage else { return }
+        pendingStagedImage[conversation.id] = pending.data
+        pendingSharedImage = nil
+        selectedTab = .chats
+        navigateToConversation = conversation
+    }
 
     /// Check if a URL is a deep link for this app.
     static func isDeepLink(_ url: URL) -> Bool {

@@ -5,6 +5,24 @@ options:
     iOS: "18.0"
   xcodeVersion: "16.3"
 
+# Explicit shared scheme for the app so Xcode defaults to it (rather than the
+# non-runnable ShareExtension) after a project regeneration.
+schemes:
+  Actnet:
+    build:
+      targets:
+        Actnet: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
 targets:
   Actnet:
     type: application
@@ -13,6 +31,9 @@ targets:
       - Sources
       - path: ../Generated/app_core.swift
         group: Generated
+      # Shared with the ShareExtension target — App Group handoff helper (docs/35).
+      - path: ../Shared
+        group: Shared
     dependencies:
       # AppCoreFFI.xcframework wraps static .a archives (libapp_core.a). They
       # link into the main executable directly — embedding would copy a raw
@@ -20,6 +41,9 @@ targets:
       # rejects (error 90171/90432).
       - framework: ../AppCoreFFI.xcframework
         embed: false
+      # Share extension — embedded into the app bundle (docs/35).
+      - target: ShareExtension
+        embed: true
     entitlements:
       path: Actnet.entitlements
       properties:
@@ -30,6 +54,9 @@ targets:
         # below. Debug → development (sandbox APNs, paired with Xcode runs);
         # Release → production (used by TestFlight and App Store builds).
         aps-environment: $(APS_ENVIRONMENT)
+        # Shared container for the share-extension → app image handoff (docs/35).
+        com.apple.security.application-groups:
+          - group.net.theavalanche.app
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
@@ -78,3 +105,32 @@ targets:
           # Release has no ATS exceptions — only HTTPS endpoints.
           INFOPLIST_FILE: Info.Release.plist
           SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+  # Share extension (docs/35): receives a shared image from another app, writes
+  # it to the App Group container, and opens the main app to pick a chat. Runs no
+  # app-core — just the file handoff.
+  ShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../ShareExtension
+        group: ShareExtension
+      # The App Group handoff helper, shared with the app target.
+      - path: ../Shared
+        group: Shared
+    entitlements:
+      path: ../ShareExtension/ShareExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.net.theavalanche.app
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 7FVK3RR3TV
+        PRODUCT_BUNDLE_IDENTIFIER: net.theavalanche.app.ShareExtension
+        MARKETING_VERSION: ${MARKETING_VERSION}
+        CURRENT_PROJECT_VERSION: ${CURRENT_PROJECT_VERSION}
+        SWIFT_VERSION: "6.0"
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ../ShareExtension/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Avalanche

@@ -141,7 +141,7 @@ mobile/android/app/src/main/kotlin/
 | `NameGroupView.swift` | `NameGroupView.kt` | `[x]` |
 | `GroupDetailView.swift` | `GroupDetailView.kt` | `[x]` |
 | `EditHistorySheet.swift` | `EditHistorySheet.kt` | `[x]` |
-| — (iOS share-in blocked, docs/02) | `ShareDestinationSheet.kt` | `[x]` Android-only: pick a chat for an image shared in via `ACTION_SEND` |
+| `ShareDestinationView.swift` | `ShareDestinationSheet.kt` | `[x]` pick a chat for an image shared in from another app (docs/35) |
 | `RecipientTokenField.swift` | `RecipientTokenField.kt` | `[x]` (currently unused; composer uses its own chip field) |
 | `RecoveryKeyBanner.swift` | `RecoveryKeyBanner.kt` | `[x]` |
 
@@ -195,7 +195,7 @@ mobile/android/app/src/main/kotlin/
 | `switchMode(mode)` | `[x]` |
 | `sendMessage(...)` / `sendGroupMessage(...)` — optimistic + core | `[x]` |
 | Clipboard image paste → stage in composer (docs/35) | `[x]` (paste button shown when the clipboard holds an image) |
-| Share photo in (`ACTION_SEND`) → destination picker → stage in composer (docs/35) | `[x]` **Android-only** — iOS share-in blocked on the extension sandbox until the shared-DB foundation (docs/02) |
+| Share photo in → destination picker → stage in composer (docs/35) | `[x]` Android: `ACTION_SEND` (real Activity). iOS: share extension → App Group → opens app via responder-chain `openURL` hack (device-only, unsanctioned — see docs/02 WATCH) |
 | `addOptimisticMessage(...)` | `[x]` |
 | `editMessage` / `deleteMessage` / edit-history | `[x]` |
 | `toggleReaction` / `reactions` | `[x]` |

@@ -44,6 +44,9 @@ struct ConversationView: View {
     @State private var dismissedPreviewURL: String?
     /// In-flight debounced preview fetch, cancelled on each keystroke.
     @State private var previewTask: Task<Void, Never>?
+    /// Whether the clipboard currently holds an image, gating the paste button's
+    /// visibility (docs/35). Refreshed on appear, app-active, and pasteboard change.
+    @State private var canPasteImage = false
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
@@ -202,6 +205,12 @@ struct ConversationView: View {
         }
         .onAppear {
             appState.currentConversationId = conversation.id
+            // An image shared/routed into this chat (docs/35): pre-stage it in the
+            // composer for review before sending.
+            if let data = appState.pendingStagedImage[conversation.id] {
+                appState.pendingStagedImage[conversation.id] = nil
+                stageImageData(data)
+            }
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
             appState.loadReactions(conversationId: conversation.id, accountId: conversation.accountId)
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
@@ -282,6 +291,15 @@ struct ConversationView: View {
                         .font(.title2)
                         .foregroundStyle(Color.avBrand)
                 }
+                // Paste an image from the clipboard (docs/35) — shown only when the
+                // clipboard actually holds an image.
+                if canPasteImage {
+                    Button { pasteImage() } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.title3)
+                            .foregroundStyle(Color.avBrand)
+                    }
+                }
             }
 
             TextField(editingMessage == nil ? "Message" : "Edit message", text: $messageText, axis: .vertical)
@@ -308,6 +326,13 @@ struct ConversationView: View {
             guard let item = photoItem else { return }
             photoItem = nil
             stagePickedPhoto(item)
+        }
+        .onAppear { refreshPasteAvailability() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshPasteAvailability() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            refreshPasteAvailability()
         }
     }
 
@@ -445,13 +470,36 @@ struct ConversationView: View {
     private func stagePickedPhoto(_ item: PhotosPickerItem) {
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-            stagedImageData = data
-            // A small decoded thumbnail just for the composer chip; the full
-            // bytes (above) are what gets uploaded on Send.
+            stageImageData(data)
+        }
+    }
+
+    /// Stage raw image bytes in the composer — shared by the photo picker, the
+    /// clipboard paste button, and an incoming share (docs/35). Nothing is
+    /// uploaded or sent until Send; staging again replaces the current image.
+    private func stageImageData(_ data: Data) {
+        stagedImageData = data
+        // A small decoded thumbnail just for the composer chip; the full bytes
+        // (above) are what gets uploaded on Send.
+        Task {
             stagedImageThumb = await Task.detached(priority: .userInitiated) {
                 decodeDownsampledImage(data, maxPixel: 240)
             }.value
         }
+    }
+
+    /// Stage an image from the system clipboard (docs/35). Re-encoded to JPEG to
+    /// match the photo-picker path, which `sendComposed` uploads as image/jpeg.
+    private func pasteImage() {
+        guard let image = UIPasteboard.general.image,
+              let data = image.jpegData(compressionQuality: 0.9) else { return }
+        stageImageData(data)
+    }
+
+    /// Refresh whether the paste button should show — i.e. the clipboard holds an
+    /// image. Cheap; called on appear, on app-active, and on pasteboard change.
+    private func refreshPasteAvailability() {
+        canPasteImage = UIPasteboard.general.hasImages
     }
 
     /// Debounced link-preview generation (docs/35): ~0.6s after the last

@@ -26,6 +26,11 @@ struct RootView: View {
         .sheet(isPresented: $showLogViewer) {
             LogViewerView()
         }
+        // An image shared in from another app (docs/35): pick a destination chat.
+        .sheet(item: $appState.pendingSharedImage) { pending in
+            ShareDestinationView(image: pending)
+                .environmentObject(appState)
+        }
     }
 }
 
