@@ -13,7 +13,10 @@
   font-weight: 700;
   letter-spacing: -1px;
   margin-bottom: 12px;
-  color: var(--color-sidebar);
+  /* --color-sidebar is a fixed deep plum: on the dark background it's darker than
+     the surface, so the wordmark all but vanished in dark mode. Use the primary
+     text token, which adapts per mode and stays high-contrast on both. */
+  color: var(--color-text);
 }
 .splash-tagline {
   font-size: 15px;
