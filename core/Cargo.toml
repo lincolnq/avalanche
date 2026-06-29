@@ -118,3 +118,11 @@ proptest = "1"
 # transitive dependencies pull in the upstream 4.1.3 and we get a diamond.
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
+
+# Strip symbols from linked release artifacts. Purely a size win at no runtime
+# cost: the Android shared lib (libapp_core.so) drops ~24MB → ~18MB, and the
+# server/relay binaries shrink too (the Makefile's manual `strip` becomes
+# redundant). The iOS static lib (.a) is unaffected — Cargo doesn't strip
+# staticlib archives; Xcode strips the final app.
+[profile.release]
+strip = true
