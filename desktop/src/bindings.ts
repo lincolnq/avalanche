@@ -135,6 +135,45 @@ export type AccountResult = {
 };
 
 /**
+ *  An end-to-end-encrypted attachment (docs/35-attachments.md).
+ * 
+ *  One type spans the whole lifecycle: the pointer fields (`url`..`flags`)
+ *  mirror the wire `AttachmentPointer`; `id`/`local_path`/`downloaded_at_ms`
+ *  carry local state once the attachment is persisted/downloaded. A freshly
+ *  uploaded pointer has an empty `id` and no local state.
+ */
+export type AttachmentFfi = {
+	/**  Local row id; empty for a freshly-uploaded pointer not yet persisted. */
+	id: string,
+	/**  Full download URL on the hosting homeserver. */
+	url: string,
+	contentType: string,
+	/**  64-byte attachment key (`aes ‖ hmac`). */
+	key: number[],
+	/**  32-byte SHA-256 of the stored ciphertext blob. */
+	digest: number[],
+	/**  Unpadded plaintext size in bytes. */
+	sizeBytes: number,
+	fileName: string | null,
+	width: number,
+	height: number,
+	durationMs: number,
+	blurhash: string | null,
+	/**  Small decrypted preview (downscaled JPEG); empty if none. */
+	thumbnail: number[],
+	caption: string | null,
+	/**  Bitset (VOICE_NOTE, GIF, ...). */
+	flags: number,
+	/**
+	 *  Filesystem path of the decrypted full blob once downloaded; `None`
+	 *  until the consumer downloads it and records the path via
+	 *  `set_attachment_downloaded`.
+	 */
+	localPath: string | null,
+	downloadedAtMs: number | null,
+};
+
+/**
  *  Liveness of the connection to the homeserver.
  * 
  *  Owned by the `AppCore` background reconnect task; observed by UI via
@@ -180,6 +219,13 @@ export type ConversationSummaryFfi = {
 	groupTitle: string | null,
 	lastMessage: StoredMessageFfi | null,
 	/**
+	 *  MIME type of `last_message`'s first attachment (docs/35), or `None` when
+	 *  it has none. The chat list renders a type-aware preview (an image type
+	 *  previews as "Photo", anything else as "Attachment") for a caption-less
+	 *  attachment whose `body` is empty; the blobs themselves are not loaded here.
+	 */
+	lastMessageAttachmentContentType: string | null,
+	/**
 	 *  True for a DM from an un-curated, un-blocked sender — an unaccepted
 	 *  message request (docs/12 §1). The chat list shows a "Message request"
 	 *  label and the conversation opens into the Accept/Delete/Report gate.
@@ -191,6 +237,13 @@ export type ConversationSummaryFfi = {
 	 *  these into a Blocked section. Always false for groups.
 	 */
 	isBlocked: boolean,
+	/**
+	 *  Number of unread inbound messages — the chat list's unread badge. Read
+	 *  straight from the persisted store (`read_at IS NULL`, excluding our own
+	 *  messages and expired rows), so it is correct for every conversation, not
+	 *  just those whose messages are currently cached in the UI.
+	 */
+	unreadCount: number,
 };
 
 /**
@@ -239,6 +292,17 @@ export type DecryptedMessage = {
 	 *  the verdict so the consumer can decide whether to persist it.
 	 */
 	isRequest: boolean,
+	/**
+	 *  Attachment pointers carried on a text body (docs/35). Empty for messages
+	 *  with no attachments. The consumer persists these via `save_message` and
+	 *  fetches the blobs via `download_attachment`.
+	 */
+	attachments: AttachmentFfi[],
+	/**
+	 *  Link-preview cards (docs/35). Already anti-spoof-filtered: only previews
+	 *  whose `url` occurs in the body are surfaced.
+	 */
+	previews: LinkPreviewFfi[],
 };
 
 /**  A delivery status update for an outgoing message (e.g. read receipt received). */
@@ -473,6 +537,22 @@ export type JoinResultFfi =
  */
 { type: "pending" };
 
+/**
+ *  A rich link-preview card (docs/35). The sender generates it at compose time;
+ *  `image` (the og:image) is a normal [`AttachmentFfi`] so it rides the E2E
+ *  attachment path and the client downloads it like any other blob. `None`
+ *  image means a text-only card.
+ */
+export type LinkPreviewFfi = {
+	/**  The previewed URL — must occur in the message body (anti-spoof). */
+	url: string,
+	title: string,
+	description: string,
+	/**  Article published date, unix millis; 0 = unknown. */
+	dateMs: number,
+	image: AttachmentFfi | null,
+};
+
 /**  A prior body of an edited message, for the edit-history sheet. */
 export type MessageRevisionFfi = {
 	body: string,
@@ -544,6 +624,16 @@ export type StoredMessageFfi = {
 	 *  or `None`. The UI schedules the live disappear from this.
 	 */
 	expireAtMs: number | null,
+	/**
+	 *  Attachments on this message (docs/35), ordered. Empty for plain text.
+	 *  Populated by `load_messages`; persisted by `save_message`.
+	 */
+	attachments: AttachmentFfi[],
+	/**
+	 *  Link-preview cards on this message (docs/35), ordered. Populated by
+	 *  `load_messages`; persisted by `save_message`.
+	 */
+	previews: LinkPreviewFfi[],
 };
 
 /* Tauri Specta runtime */

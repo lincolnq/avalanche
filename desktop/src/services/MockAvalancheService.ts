@@ -49,7 +49,11 @@ export function seedConversations(
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
+      lastMessageAttachmentContentType: null,
+      unreadCount: 0,
       isRequest: false,
       isBlocked: false,
     },
@@ -71,7 +75,11 @@ export function seedConversations(
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
+      lastMessageAttachmentContentType: null,
+      unreadCount: 0,
       isRequest: false,
       isBlocked: false,
     },
@@ -79,6 +87,8 @@ export function seedConversations(
       conversationId: `group-mockgroup3`,
       groupTitle: "Empty Group",
       lastMessage: null,
+      lastMessageAttachmentContentType: null,
+      unreadCount: 0,
       isRequest: false,
       isBlocked: false,
     },
@@ -100,7 +110,11 @@ export function seedConversations(
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
+      lastMessageAttachmentContentType: null,
+      unreadCount: 0,
       isRequest: false,
       isBlocked: false,
     },
@@ -127,6 +141,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
       {
         id: "msg-g1-1",
@@ -143,6 +159,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
       {
         id: "msg-g1-2",
@@ -159,6 +177,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
       {
         id: "msg-g1-3",
@@ -175,6 +195,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
     ];
   }
@@ -195,6 +217,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
     ];
   }
@@ -215,6 +239,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
       {
         id: "msg-dm-1",
@@ -231,6 +257,8 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         metadata: null,
         expireTimerSecs: 0,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       },
     ];
   }
@@ -269,6 +297,8 @@ export class MockAvalancheService implements AvalancheService {
           expireTimerSecs: 0,
           profileKey: null,
           isRequest: false,
+          attachments: [],
+          previews: [],
         },
       });
     }, 1000);

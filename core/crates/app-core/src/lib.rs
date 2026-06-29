@@ -146,6 +146,8 @@ pub struct ProjectInfoFfi {
 /// carry local state once the attachment is persisted/downloaded. A freshly
 /// uploaded pointer has an empty `id` and no local state.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct AttachmentFfi {
     /// Local row id; empty for a freshly-uploaded pointer not yet persisted.
     pub id: String,
@@ -284,6 +286,8 @@ fn ffi_to_attachment_row(
 /// attachment path and the client downloads it like any other blob. `None`
 /// image means a text-only card.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct LinkPreviewFfi {
     /// The previewed URL — must occur in the message body (anti-spoof).
     pub url: String,

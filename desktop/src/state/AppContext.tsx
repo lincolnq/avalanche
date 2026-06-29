@@ -676,6 +676,8 @@ export function AppProvider(props: { children: JSX.Element }) {
         metadata: null,
         expireTimerSecs,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       });
 
     await persist(DeliveryStatus.sending);
@@ -1081,6 +1083,8 @@ export function AppProvider(props: { children: JSX.Element }) {
         metadata: message.metadata ?? null,
         expireTimerSecs: message.expireTimerSecs,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       });
     await persist(DeliveryStatus.sending);
     const bytes = Array.from(new TextEncoder().encode(message.body));
@@ -1432,6 +1436,8 @@ export function AppProvider(props: { children: JSX.Element }) {
         metadata: null,
         expireTimerSecs: m.expireTimerSecs,
         expireAtMs: null,
+        attachments: [],
+        previews: [],
       })
       .catch((err: unknown) => {
         console.warn("saveMessage (incoming) failed:", err);
