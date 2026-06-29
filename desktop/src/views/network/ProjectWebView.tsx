@@ -2,6 +2,30 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ProjectInfoFfi } from "../../services/AvalancheService";
 
 /**
+ * Whether a project URL is safe to load in a webview window (T67 hardening).
+ * Guards against a malicious/compromised project-directory entry opening a
+ * `javascript:`, `file:`, or `data:` window, or plain-http remote content.
+ * Requires `https:`, except `http:` is allowed for loopback hosts because local
+ * dev projects run on `http://localhost:<port>` (see dev.py `project_host`).
+ * iOS imposes no host allowlist — it loads whatever `project.url` is — so we
+ * deliberately don't invent one here; this is purely a scheme/loopback check.
+ */
+export function isAllowedProjectUrl(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "https:") return true;
+  if (parsed.protocol === "http:") {
+    const h = parsed.hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+  }
+  return false;
+}
+
+/**
  * Open a project URL with an auth token in a Tauri WebviewWindow modal.
  * Returns true if the window was created successfully.
  */
@@ -9,6 +33,14 @@ export async function openProjectWindow(
   project: ProjectInfoFfi,
   token: string
 ): Promise<boolean> {
+  // T67: reject anything that isn't https (or http-to-loopback for dev) before
+  // creating a window — a project entry is server-supplied, so a hostile/buggy
+  // one must not be able to open a `javascript:`/`file:`/`data:` webview.
+  if (!isAllowedProjectUrl(project.url)) {
+    console.error("Refusing to open project with unsafe URL:", project.url);
+    return false;
+  }
+
   const label = `project-${crypto.randomUUID().slice(0, 8)}`;
   // Pass the token as a query parameter, matching the iOS reference
   // (mobile/ios/.../NetworkView.swift) and the project interface contract: a
