@@ -4,6 +4,7 @@
 // All FFI types are now derived directly on app-core via the "specta" feature —
 // no more manual ffi_types.rs mirror.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
@@ -36,7 +37,10 @@ struct LinkPreviewMetaFfi {
 // ── App state ─────────────────────────────────────────────────────────────────
 
 struct AppState {
-    app: Mutex<Option<Arc<AppCore>>>,
+    // One live AppCore per signed-in account, keyed by its DID. iOS/Android
+    // run the same shared-inbox model (a `cores` map); every per-account command
+    // resolves its core via `get_app(&state, &account_id)`.
+    cores: Mutex<HashMap<String, Arc<AppCore>>>,
 }
 
 /// Transient handle for the *new device* side of device linking (T71). Kept
@@ -49,12 +53,16 @@ struct DeviceLinkState {
     link: Mutex<Option<Arc<app_core::DeviceLinkNew>>>,
 }
 
-fn get_app(state: &tauri::State<'_, AppState>) -> Result<std::sync::Arc<AppCore>, String> {
+fn get_app(
+    state: &tauri::State<'_, AppState>,
+    account_id: &str,
+) -> Result<std::sync::Arc<AppCore>, String> {
     state
-        .app
+        .cores
         .lock()
         .map_err(|e| format!("lock poisoned: {}", e))?
-        .clone()
+        .get(account_id)
+        .cloned()
         .ok_or_else(|| "no account".to_string())
 }
 
@@ -342,7 +350,7 @@ pub fn run() {
             }
         })
         .manage(AppState {
-            app: Mutex::new(None),
+            cores: Mutex::new(HashMap::new()),
         })
         .manage(DeviceLinkState {
             link: Mutex::new(None),
@@ -378,7 +386,11 @@ fn create_account(
             .map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .insert(did.clone(), app);
     Ok(AccountResult { did, display_name })
 }
 
@@ -392,7 +404,11 @@ fn login(
     let app = AppCore::login(db_path, db_key).map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .insert(did.clone(), app);
     Ok(AccountResult { did, display_name })
 }
 
@@ -411,7 +427,11 @@ fn recover_from_blob(
         .map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .insert(did.clone(), app);
     Ok(AccountResult { did, display_name })
 }
 
@@ -436,7 +456,11 @@ fn recover_from_phrase(
         .map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .insert(did.clone(), app);
     Ok(AccountResult { did, display_name })
 }
 
@@ -517,7 +541,11 @@ async fn device_link_await_step(
         Some(app) => {
             let did = app.did();
             let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-            *app_state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+            app_state
+                .cores
+                .lock()
+                .map_err(|e| format!("lock poisoned: {}", e))?
+                .insert(did.clone(), app);
             *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
             Ok(Some(AccountResult { did, display_name }))
         }
@@ -539,9 +567,10 @@ fn device_link_reset(link_state: tauri::State<'_, DeviceLinkState>) -> Result<()
 #[specta::specta]
 async fn link_create_pairing(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     mailbox_server: Option<String>,
 ) -> Result<String, String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.link_create_pairing(mailbox_server).map_err(|e| e.to_string())
     })
@@ -555,9 +584,10 @@ async fn link_create_pairing(
 #[specta::specta]
 async fn link_accept_pairing(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     code: String,
 ) -> Result<(), String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.link_accept_pairing(code).map_err(|e| e.to_string())
     })
@@ -569,8 +599,8 @@ async fn link_accept_pairing(
 /// bundle. Returns true when done; the TS layer polls this.
 #[tauri::command]
 #[specta::specta]
-async fn link_send_bundle_step(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let app = get_app(&state)?;
+async fn link_send_bundle_step(state: tauri::State<'_, AppState>, account_id: String) -> Result<bool, String> {
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.link_send_bundle_step().map_err(|e| e.to_string())
     })
@@ -591,8 +621,8 @@ async fn link_send_bundle_step(state: tauri::State<'_, AppState>) -> Result<bool
 /// gate.
 #[tauri::command]
 #[specta::specta]
-fn set_app_active(state: tauri::State<'_, AppState>, active: bool) -> Result<(), String> {
-    if let Ok(app) = get_app(&state) {
+fn set_app_active(state: tauri::State<'_, AppState>, account_id: String, active: bool) -> Result<(), String> {
+    if let Ok(app) = get_app(&state, &account_id) {
         app.set_app_active(active);
     }
     Ok(())
@@ -604,8 +634,8 @@ fn set_app_active(state: tauri::State<'_, AppState>, active: bool) -> Result<(),
 /// before sign-in.
 #[tauri::command]
 #[specta::specta]
-fn reconnect_now(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    if let Ok(app) = get_app(&state) {
+fn reconnect_now(state: tauri::State<'_, AppState>, account_id: String) -> Result<(), String> {
+    if let Ok(app) = get_app(&state, &account_id) {
         app.reconnect_now();
     }
     Ok(())
@@ -617,11 +647,12 @@ fn reconnect_now(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[specta::specta]
 fn send_dm(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     recipient_did: String,
     plaintext: Vec<u8>,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_dm(recipient_did, plaintext, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -630,11 +661,12 @@ fn send_dm(
 #[specta::specta]
 fn send_group_message(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     plaintext: Vec<u8>,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_message(app_core::MessageTarget::Group { group_id }, plaintext, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -648,8 +680,9 @@ fn send_group_message(
 #[specta::specta]
 async fn next_events(
     state: tauri::State<'_, AppState>,
+    account_id: String,
 ) -> Result<Vec<app_core::IncomingEvent>, String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || app.next_events().map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
@@ -659,9 +692,10 @@ async fn next_events(
 #[specta::specta]
 fn save_message(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     msg: app_core::StoredMessageFfi,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .save_message(msg)
         .map_err(|e| e.to_string())
 }
@@ -670,8 +704,9 @@ fn save_message(
 #[specta::specta]
 fn load_conversations(
     state: tauri::State<'_, AppState>,
+    account_id: String,
 ) -> Result<Vec<app_core::ConversationSummaryFfi>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .load_conversations()
         .map_err(|e| e.to_string())
 }
@@ -680,9 +715,10 @@ fn load_conversations(
 #[specta::specta]
 fn load_messages(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
 ) -> Result<Vec<app_core::StoredMessageFfi>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .load_messages(conversation_id)
         .map_err(|e| e.to_string())
 }
@@ -691,10 +727,11 @@ fn load_messages(
 #[specta::specta]
 fn mark_messages_read(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
     up_to_sent_at_ms: i64,
 ) -> Result<u64, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .mark_messages_read(conversation_id, up_to_sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -703,9 +740,10 @@ fn mark_messages_read(
 #[specta::specta]
 fn unread_count(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
 ) -> Result<u64, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .unread_count(conversation_id)
         .map_err(|e| e.to_string())
 }
@@ -714,20 +752,20 @@ fn unread_count(
 
 #[tauri::command]
 #[specta::specta]
-fn did(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    Ok(get_app(&state)?.did())
+fn did(state: tauri::State<'_, AppState>, account_id: String) -> Result<String, String> {
+    Ok(get_app(&state, &account_id)?.did())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn device_id(state: tauri::State<'_, AppState>) -> Result<u32, String> {
-    Ok(get_app(&state)?.device_id())
+fn device_id(state: tauri::State<'_, AppState>, account_id: String) -> Result<u32, String> {
+    Ok(get_app(&state, &account_id)?.device_id())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn own_display_name(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    get_app(&state)?
+fn own_display_name(state: tauri::State<'_, AppState>, account_id: String) -> Result<String, String> {
+    get_app(&state, &account_id)?
         .own_display_name()
         .map_err(|e| e.to_string())
 }
@@ -736,17 +774,18 @@ fn own_display_name(state: tauri::State<'_, AppState>) -> Result<String, String>
 #[specta::specta]
 fn set_display_name(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     display_name: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .set_display_name(display_name)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn has_recovery(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    Ok(get_app(&state)?.has_recovery())
+fn has_recovery(state: tauri::State<'_, AppState>, account_id: String) -> Result<bool, String> {
+    Ok(get_app(&state, &account_id)?.has_recovery())
 }
 
 /// Re-encrypt and upload this account's recovery blob for the given PRF output
@@ -758,10 +797,11 @@ fn has_recovery(state: tauri::State<'_, AppState>) -> Result<bool, String> {
 #[specta::specta]
 fn update_recovery_blob(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     prf_output: Vec<u8>,
     servers: Vec<String>,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .update_recovery_blob(prf_output, servers)
         .map_err(|e| e.to_string())
 }
@@ -769,8 +809,8 @@ fn update_recovery_blob(
 /// This account's home (primary) server URL.
 #[tauri::command]
 #[specta::specta]
-fn home_server(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    Ok(get_app(&state)?.home_server())
+fn home_server(state: tauri::State<'_, AppState>, account_id: String) -> Result<String, String> {
+    Ok(get_app(&state, &account_id)?.home_server())
 }
 
 /// Generate a fresh 12-word BIP39 recovery phrase. Stateless — drives the
@@ -803,9 +843,10 @@ fn derive_did_from_passkey(prf_output: Vec<u8>, signup_server_url: String) -> Re
 #[specta::specta]
 fn contact_display_name(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
 ) -> Result<String, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .contact_display_name(did)
         .map_err(|e| e.to_string())
 }
@@ -818,9 +859,10 @@ fn contact_display_name(
 #[specta::specta]
 fn cached_display_names(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     dids: Vec<String>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .cached_display_names(dids)
         .map_err(|e| e.to_string())
 }
@@ -829,9 +871,10 @@ fn cached_display_names(
 #[specta::specta]
 fn get_account_info(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
 ) -> Result<app_core::AccountInfoFfi, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .get_account_info(did)
         .map_err(|e| e.to_string())
 }
@@ -840,17 +883,18 @@ fn get_account_info(
 #[specta::specta]
 fn refresh_contact_profile(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
 ) -> Result<bool, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .refresh_contact_profile(did)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::ContactRowFfi>, String> {
-    get_app(&state)?
+fn list_contacts(state: tauri::State<'_, AppState>, account_id: String) -> Result<Vec<app_core::ContactRowFfi>, String> {
+    get_app(&state, &account_id)?
         .list_contacts()
         .map_err(|e| e.to_string())
 }
@@ -859,10 +903,11 @@ fn list_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::Cont
 #[specta::specta]
 fn touch_contact(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
     curated: bool,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .touch_contact(did, curated)
         .map_err(|e| e.to_string())
 }
@@ -871,10 +916,11 @@ fn touch_contact(
 #[specta::specta]
 fn fetch_and_cache_profile(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
     profile_key: Vec<u8>,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .fetch_and_cache_profile(did, profile_key)
         .map_err(|e| e.to_string())
 }
@@ -883,27 +929,28 @@ fn fetch_and_cache_profile(
 #[specta::specta]
 fn prime_contact_profile(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
     display_name: String,
     profile_key: Vec<u8>,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .prime_contact_profile(did, display_name, profile_key)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn block_contact(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
-    get_app(&state)?
+fn block_contact(state: tauri::State<'_, AppState>, account_id: String, did: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .block_contact(did)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn unblock_contact(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
-    get_app(&state)?
+fn unblock_contact(state: tauri::State<'_, AppState>, account_id: String, did: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .unblock_contact(did)
         .map_err(|e| e.to_string())
 }
@@ -912,18 +959,22 @@ fn unblock_contact(state: tauri::State<'_, AppState>, did: String) -> Result<(),
 
 #[tauri::command]
 #[specta::specta]
-fn leave_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    get_app(&state)?
+fn leave_server(state: tauri::State<'_, AppState>, account_id: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .leave_server()
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn delete_identity(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let result = get_app(&state)?.delete_identity().map_err(|e| e.to_string());
+fn delete_identity(state: tauri::State<'_, AppState>, account_id: String) -> Result<(), String> {
+    let result = get_app(&state, &account_id)?.delete_identity().map_err(|e| e.to_string());
     // Clear session state regardless of result — identity is gone either way.
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .remove(&account_id);
     result
 }
 
@@ -935,8 +986,12 @@ fn delete_identity(state: tauri::State<'_, AppState>) -> Result<(), String> {
 /// the core so the old reconnect task + WS connection die on drop.
 #[tauri::command]
 #[specta::specta]
-fn clear_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
+fn clear_session(state: tauri::State<'_, AppState>, account_id: String) -> Result<(), String> {
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .remove(&account_id);
     Ok(())
 }
 
@@ -944,8 +999,8 @@ fn clear_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-fn fetch_projects(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::ProjectInfoFfi>, String> {
-    get_app(&state)?
+fn fetch_projects(state: tauri::State<'_, AppState>, account_id: String) -> Result<Vec<app_core::ProjectInfoFfi>, String> {
+    get_app(&state, &account_id)?
         .fetch_projects()
         .map_err(|e| e.to_string())
 }
@@ -954,9 +1009,10 @@ fn fetch_projects(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::Pro
 #[specta::specta]
 fn request_project_token(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     project_url: String,
 ) -> Result<String, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .request_project_token(project_url)
         .map_err(|e| e.to_string())
 }
@@ -972,8 +1028,8 @@ fn validate_invite(token: String) -> Result<app_core::InviteInfo, String> {
 
 #[tauri::command]
 #[specta::specta]
-fn connection_state(state: tauri::State<'_, AppState>) -> Result<app_core::ConnectionState, String> {
-    Ok(get_app(&state)?.connection_state())
+fn connection_state(state: tauri::State<'_, AppState>, account_id: String) -> Result<app_core::ConnectionState, String> {
+    Ok(get_app(&state, &account_id)?.connection_state())
 }
 
 /// Async + `spawn_blocking` for the same reason as `next_events`: this parks on
@@ -984,9 +1040,10 @@ fn connection_state(state: tauri::State<'_, AppState>) -> Result<app_core::Conne
 #[specta::specta]
 async fn wait_for_connection_state_change(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     last: app_core::ConnectionState,
 ) -> Result<app_core::ConnectionState, String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.wait_for_connection_state_change(last)
             .map_err(|e| e.to_string())
@@ -1001,11 +1058,12 @@ async fn wait_for_connection_state_change(
 #[specta::specta]
 fn create_group(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     title: String,
     description: String,
     expiry_seconds: u32,
 ) -> Result<app_core::CreatedGroupFfi, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .create_group(title, description, expiry_seconds)
         .map_err(|e| e.to_string())
 }
@@ -1014,9 +1072,10 @@ fn create_group(
 #[specta::specta]
 fn fetch_group_state(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<app_core::GroupSummaryFfi, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .fetch_group_state(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1025,9 +1084,10 @@ fn fetch_group_state(
 #[specta::specta]
 fn cached_group_state(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<Option<app_core::GroupSummaryFfi>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .cached_group_state(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1036,11 +1096,12 @@ fn cached_group_state(
 #[specta::specta]
 fn invite_member(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     recipient_did: String,
     role: i16,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .invite_member(group_id, recipient_did, role)
         .map_err(|e| e.to_string())
 }
@@ -1049,9 +1110,10 @@ fn invite_member(
 #[specta::specta]
 fn accept_invite(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .accept_invite(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1060,9 +1122,10 @@ fn accept_invite(
 #[specta::specta]
 fn decline_invite(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .decline_invite(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1071,9 +1134,10 @@ fn decline_invite(
 #[specta::specta]
 fn cancel_join_request(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .cancel_join_request(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1082,10 +1146,11 @@ fn cancel_join_request(
 #[specta::specta]
 fn approve_join_request(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     encrypted_member_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .approve_join_request(group_id, encrypted_member_id)
         .map_err(|e| e.to_string())
 }
@@ -1094,10 +1159,11 @@ fn approve_join_request(
 #[specta::specta]
 fn deny_join_request(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     encrypted_member_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .deny_join_request(group_id, encrypted_member_id)
         .map_err(|e| e.to_string())
 }
@@ -1106,18 +1172,19 @@ fn deny_join_request(
 #[specta::specta]
 fn remove_member(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     encrypted_member_id: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .remove_member(group_id, encrypted_member_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn leave_group(state: tauri::State<'_, AppState>, group_id: String) -> Result<(), String> {
-    get_app(&state)?
+fn leave_group(state: tauri::State<'_, AppState>, account_id: String, group_id: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .leave_group(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1126,9 +1193,10 @@ fn leave_group(state: tauri::State<'_, AppState>, group_id: String) -> Result<()
 #[specta::specta]
 fn is_group_member(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<bool, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .is_group_member(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1137,11 +1205,12 @@ fn is_group_member(
 #[specta::specta]
 fn change_member_role(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     encrypted_member_id: String,
     new_role: i16,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .change_member_role(group_id, encrypted_member_id, new_role)
         .map_err(|e| e.to_string())
 }
@@ -1150,10 +1219,11 @@ fn change_member_role(
 #[specta::specta]
 fn set_group_expiry(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     expiry_seconds: u32,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .set_group_expiry(group_id, expiry_seconds)
         .map_err(|e| e.to_string())
 }
@@ -1162,10 +1232,11 @@ fn set_group_expiry(
 #[specta::specta]
 fn set_group_title(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
     new_title: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .set_group_title(group_id, new_title)
         .map_err(|e| e.to_string())
 }
@@ -1174,9 +1245,10 @@ fn set_group_title(
 #[specta::specta]
 fn group_expiry_seconds(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<u32, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .group_expiry_seconds(group_id)
         .map_err(|e| e.to_string())
 }
@@ -1185,17 +1257,18 @@ fn group_expiry_seconds(
 #[specta::specta]
 fn apply_pending_group_changes(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     group_id: String,
 ) -> Result<i64, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .apply_pending_group_changes(group_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
-    get_app(&state)?
+fn list_groups(state: tauri::State<'_, AppState>, account_id: String) -> Result<Vec<String>, String> {
+    get_app(&state, &account_id)?
         .list_groups()
         .map_err(|e| e.to_string())
 }
@@ -1204,8 +1277,10 @@ fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String>
 
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)] // gained account_id for multi-account routing
 fn send_reaction(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     target: app_core::MessageTarget,
     target_author: String,
     target_sent_at_ms: i64,
@@ -1213,7 +1288,7 @@ fn send_reaction(
     remove: bool,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_reaction(target, target_author, target_sent_at_ms, emoji, remove, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -1222,12 +1297,13 @@ fn send_reaction(
 #[specta::specta]
 fn send_edit(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     target: app_core::MessageTarget,
     target_sent_at_ms: i64,
     new_body: String,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_edit(target, target_sent_at_ms, new_body, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -1236,13 +1312,14 @@ fn send_edit(
 #[specta::specta]
 fn send_delete(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     target: app_core::MessageTarget,
     target_author: String,
     target_sent_at_ms: i64,
     for_everyone: bool,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_delete(target, target_author, target_sent_at_ms, for_everyone, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -1251,9 +1328,10 @@ fn send_delete(
 #[specta::specta]
 fn load_reactions(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
 ) -> Result<Vec<app_core::ReactionFfi>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .load_reactions(conversation_id)
         .map_err(|e| e.to_string())
 }
@@ -1262,11 +1340,12 @@ fn load_reactions(
 #[specta::specta]
 fn load_message_revisions(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
     author: String,
     sent_at_ms: i64,
 ) -> Result<Vec<app_core::MessageRevisionFfi>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .load_message_revisions(conversation_id, author, sent_at_ms)
         .map_err(|e| e.to_string())
 }
@@ -1279,8 +1358,9 @@ fn load_message_revisions(
 #[specta::specta]
 fn receive_messages(
     state: tauri::State<'_, AppState>,
+    account_id: String,
 ) -> Result<Vec<app_core::DecryptedMessage>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .receive_messages()
         .map_err(|e| e.to_string())
 }
@@ -1289,10 +1369,11 @@ fn receive_messages(
 #[specta::specta]
 fn send_read_receipt(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     recipient_did: String,
     timestamps: Vec<i64>,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .send_read_receipt(recipient_did, timestamps)
         .map_err(|e| e.to_string())
 }
@@ -1301,16 +1382,16 @@ fn send_read_receipt(
 
 #[tauri::command]
 #[specta::specta]
-fn accept_request(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
-    get_app(&state)?
+fn accept_request(state: tauri::State<'_, AppState>, account_id: String, did: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .accept_request(did)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn delete_request(state: tauri::State<'_, AppState>, did: String) -> Result<(), String> {
-    get_app(&state)?
+fn delete_request(state: tauri::State<'_, AppState>, account_id: String, did: String) -> Result<(), String> {
+    get_app(&state, &account_id)?
         .delete_request(did)
         .map_err(|e| e.to_string())
 }
@@ -1319,10 +1400,11 @@ fn delete_request(state: tauri::State<'_, AppState>, did: String) -> Result<(), 
 #[specta::specta]
 fn set_pending_request(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
     pending: bool,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .set_pending_request(did, pending)
         .map_err(|e| e.to_string())
 }
@@ -1331,18 +1413,19 @@ fn set_pending_request(
 #[specta::specta]
 fn report_and_block(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     did: String,
     reason: String,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .report_and_block(did, reason)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_blocked(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::ContactRowFfi>, String> {
-    get_app(&state)?
+fn list_blocked(state: tauri::State<'_, AppState>, account_id: String) -> Result<Vec<app_core::ContactRowFfi>, String> {
+    get_app(&state, &account_id)?
         .list_blocked()
         .map_err(|e| e.to_string())
 }
@@ -1353,9 +1436,10 @@ fn list_blocked(state: tauri::State<'_, AppState>) -> Result<Vec<app_core::Conta
 #[specta::specta]
 fn get_conversation_timer(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     conversation_id: String,
 ) -> Result<Option<u32>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .get_conversation_timer(conversation_id)
         .map_err(|e| e.to_string())
 }
@@ -1364,10 +1448,11 @@ fn get_conversation_timer(
 #[specta::specta]
 fn set_conversation_timer(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     recipient_did: String,
     expiry_secs: Option<u32>,
 ) -> Result<(), String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .set_conversation_timer(recipient_did, expiry_secs)
         .map_err(|e| e.to_string())
 }
@@ -1376,8 +1461,9 @@ fn set_conversation_timer(
 #[specta::specta]
 fn delete_expired_messages(
     state: tauri::State<'_, AppState>,
+    account_id: String,
 ) -> Result<Vec<String>, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .delete_expired_messages()
         .map_err(|e| e.to_string())
 }
@@ -1388,11 +1474,12 @@ fn delete_expired_messages(
 #[specta::specta]
 fn join_via_link(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     master_key: Vec<u8>,
     hosting_server_url: String,
     password: Vec<u8>,
 ) -> Result<app_core::JoinResultFfi, String> {
-    get_app(&state)?
+    get_app(&state, &account_id)?
         .join_via_link(master_key, hosting_server_url, password)
         .map_err(|e| e.to_string())
 }
@@ -1407,6 +1494,7 @@ fn join_via_link(
 #[allow(clippy::too_many_arguments)]
 async fn upload_attachment(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     plaintext: Vec<u8>,
     content_type: String,
     file_name: Option<String>,
@@ -1416,7 +1504,7 @@ async fn upload_attachment(
     thumbnail: Vec<u8>,
     flags: i32,
 ) -> Result<app_core::AttachmentFfi, String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.upload_attachment(
             plaintext, content_type, file_name, width, height, duration_ms, thumbnail, flags,
@@ -1452,9 +1540,10 @@ fn attachment_cache_path(app_handle: &tauri::AppHandle, id: &str) -> Option<std:
 async fn download_attachment(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    account_id: String,
     attachment: app_core::AttachmentFfi,
 ) -> Result<Vec<u8>, String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     let cache_path = attachment_cache_path(&app_handle, &attachment.id);
     tauri::async_runtime::spawn_blocking(move || {
         // Disk-cache hit: skip the network fetch + decryption entirely.
@@ -1495,13 +1584,14 @@ async fn download_attachment(
 #[specta::specta]
 async fn send_message_with_attachments(
     state: tauri::State<'_, AppState>,
+    account_id: String,
     target: app_core::MessageTarget,
     body: String,
     attachments: Vec<app_core::AttachmentFfi>,
     previews: Vec<app_core::LinkPreviewFfi>,
     sent_at_ms: i64,
 ) -> Result<(), String> {
-    let app = get_app(&state)?;
+    let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         app.send_message_with_attachments(target, body, attachments, previews, sent_at_ms)
             .map_err(|e| e.to_string())

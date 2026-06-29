@@ -8,8 +8,8 @@ export const commands = {
 	createAccount: (serverUrl: string, dbPath: string, dbKey: string, prfOutput: number[], displayName: string, inviteToken: string | null) => typedError<AccountResult, string>(__TAURI_INVOKE("create_account", { serverUrl, dbPath, dbKey, prfOutput, displayName, inviteToken })),
 	login: (dbPath: string, dbKey: string) => typedError<AccountResult, string>(__TAURI_INVOKE("login", { dbPath, dbKey })),
 	recoverFromBlob: (serverUrl: string, did: string, prfOutput: number[], dbPath: string, dbKey: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_blob", { serverUrl, did, prfOutput, dbPath, dbKey, displayName })),
-	sendDm: (recipientDid: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_dm", { recipientDid, plaintext, sentAtMs })),
-	sendGroupMessage: (groupId: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_group_message", { groupId, plaintext, sentAtMs })),
+	sendDm: (accountId: string, recipientDid: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_dm", { accountId, recipientDid, plaintext, sentAtMs })),
+	sendGroupMessage: (accountId: string, groupId: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_group_message", { accountId, groupId, plaintext, sentAtMs })),
 	/**
 	 *  Async so it runs off the main thread. `app_core.next_events()` blocks until
 	 *  decrypted events arrive (WebSocket push via app-core's MPSC channel), so it
@@ -17,17 +17,17 @@ export const commands = {
 	 *  `Arc<AppCore>` out of `State` *before* awaiting (a `State` reference cannot be
 	 *  held across an await point) and run the blocking call on the blocking pool.
 	 */
-	nextEvents: () => typedError<IncomingEvent[], string>(__TAURI_INVOKE("next_events")),
-	saveMessage: (msg: StoredMessageFfi) => typedError<null, string>(__TAURI_INVOKE("save_message", { msg })),
-	loadConversations: () => typedError<ConversationSummaryFfi[], string>(__TAURI_INVOKE("load_conversations")),
-	loadMessages: (conversationId: string) => typedError<StoredMessageFfi[], string>(__TAURI_INVOKE("load_messages", { conversationId })),
-	markMessagesRead: (conversationId: string, upToSentAtMs: number) => typedError<number, string>(__TAURI_INVOKE("mark_messages_read", { conversationId, upToSentAtMs })),
-	unreadCount: (conversationId: string) => typedError<number, string>(__TAURI_INVOKE("unread_count", { conversationId })),
-	did: () => typedError<string, string>(__TAURI_INVOKE("did")),
-	deviceId: () => typedError<number, string>(__TAURI_INVOKE("device_id")),
-	ownDisplayName: () => typedError<string, string>(__TAURI_INVOKE("own_display_name")),
-	setDisplayName: (displayName: string) => typedError<null, string>(__TAURI_INVOKE("set_display_name", { displayName })),
-	hasRecovery: () => typedError<boolean, string>(__TAURI_INVOKE("has_recovery")),
+	nextEvents: (accountId: string) => typedError<IncomingEvent[], string>(__TAURI_INVOKE("next_events", { accountId })),
+	saveMessage: (accountId: string, msg: StoredMessageFfi) => typedError<null, string>(__TAURI_INVOKE("save_message", { accountId, msg })),
+	loadConversations: (accountId: string) => typedError<ConversationSummaryFfi[], string>(__TAURI_INVOKE("load_conversations", { accountId })),
+	loadMessages: (accountId: string, conversationId: string) => typedError<StoredMessageFfi[], string>(__TAURI_INVOKE("load_messages", { accountId, conversationId })),
+	markMessagesRead: (accountId: string, conversationId: string, upToSentAtMs: number) => typedError<number, string>(__TAURI_INVOKE("mark_messages_read", { accountId, conversationId, upToSentAtMs })),
+	unreadCount: (accountId: string, conversationId: string) => typedError<number, string>(__TAURI_INVOKE("unread_count", { accountId, conversationId })),
+	did: (accountId: string) => typedError<string, string>(__TAURI_INVOKE("did", { accountId })),
+	deviceId: (accountId: string) => typedError<number, string>(__TAURI_INVOKE("device_id", { accountId })),
+	ownDisplayName: (accountId: string) => typedError<string, string>(__TAURI_INVOKE("own_display_name", { accountId })),
+	setDisplayName: (accountId: string, displayName: string) => typedError<null, string>(__TAURI_INVOKE("set_display_name", { accountId, displayName })),
+	hasRecovery: (accountId: string) => typedError<boolean, string>(__TAURI_INVOKE("has_recovery", { accountId })),
 	/**
 	 *  Re-encrypt and upload this account's recovery blob for the given PRF output
 	 *  and server list. The PRF output must be exactly 32 bytes — desktop has no
@@ -35,9 +35,9 @@ export const commands = {
 	 *  flow, which feeds the 32-byte seed derived from the phrase
 	 *  (`recovery_phrase_to_seed`). See `desktop/CLAUDE.md` (passkey divergence).
 	 */
-	updateRecoveryBlob: (prfOutput: number[], servers: string[]) => typedError<null, string>(__TAURI_INVOKE("update_recovery_blob", { prfOutput, servers })),
+	updateRecoveryBlob: (accountId: string, prfOutput: number[], servers: string[]) => typedError<null, string>(__TAURI_INVOKE("update_recovery_blob", { accountId, prfOutput, servers })),
 	/**  This account's home (primary) server URL. */
-	homeServer: () => typedError<string, string>(__TAURI_INVOKE("home_server")),
+	homeServer: (accountId: string) => typedError<string, string>(__TAURI_INVOKE("home_server", { accountId })),
 	/**
 	 *  Generate a fresh 12-word BIP39 recovery phrase. Stateless — drives the
 	 *  recovery-phrase *setup* flow (desktop has no passkey/PRF path).
@@ -55,45 +55,45 @@ export const commands = {
 	 *  userHandle).
 	 */
 	deriveDidFromPasskey: (prfOutput: number[], signupServerUrl: string) => typedError<string, string>(__TAURI_INVOKE("derive_did_from_passkey", { prfOutput, signupServerUrl })),
-	contactDisplayName: (did: string) => typedError<string, string>(__TAURI_INVOKE("contact_display_name", { did })),
+	contactDisplayName: (accountId: string, did: string) => typedError<string, string>(__TAURI_INVOKE("contact_display_name", { accountId, did })),
 	/**
 	 *  Batch-resolve display names from local storage only (no network) for a set
 	 *  of DIDs — used to warm the name cache on conversation load so chat-list rows
 	 *  render real names immediately instead of flashing raw DIDs (T78). Returns
 	 *  only DIDs with a non-empty cached name.
 	 */
-	cachedDisplayNames: (dids: string[]) => typedError<{ [key in string]: string }, string>(__TAURI_INVOKE("cached_display_names", { dids })),
-	getAccountInfo: (did: string) => typedError<AccountInfoFfi, string>(__TAURI_INVOKE("get_account_info", { did })),
-	refreshContactProfile: (did: string) => typedError<boolean, string>(__TAURI_INVOKE("refresh_contact_profile", { did })),
-	listContacts: () => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_contacts")),
-	touchContact: (did: string, curated: boolean) => typedError<null, string>(__TAURI_INVOKE("touch_contact", { did, curated })),
-	fetchAndCacheProfile: (did: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("fetch_and_cache_profile", { did, profileKey })),
-	primeContactProfile: (did: string, displayName: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("prime_contact_profile", { did, displayName, profileKey })),
-	blockContact: (did: string) => typedError<null, string>(__TAURI_INVOKE("block_contact", { did })),
-	unblockContact: (did: string) => typedError<null, string>(__TAURI_INVOKE("unblock_contact", { did })),
-	leaveServer: () => typedError<null, string>(__TAURI_INVOKE("leave_server")),
-	deleteIdentity: () => typedError<null, string>(__TAURI_INVOKE("delete_identity")),
+	cachedDisplayNames: (accountId: string, dids: string[]) => typedError<{ [key in string]: string }, string>(__TAURI_INVOKE("cached_display_names", { accountId, dids })),
+	getAccountInfo: (accountId: string, did: string) => typedError<AccountInfoFfi, string>(__TAURI_INVOKE("get_account_info", { accountId, did })),
+	refreshContactProfile: (accountId: string, did: string) => typedError<boolean, string>(__TAURI_INVOKE("refresh_contact_profile", { accountId, did })),
+	listContacts: (accountId: string) => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_contacts", { accountId })),
+	touchContact: (accountId: string, did: string, curated: boolean) => typedError<null, string>(__TAURI_INVOKE("touch_contact", { accountId, did, curated })),
+	fetchAndCacheProfile: (accountId: string, did: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("fetch_and_cache_profile", { accountId, did, profileKey })),
+	primeContactProfile: (accountId: string, did: string, displayName: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("prime_contact_profile", { accountId, did, displayName, profileKey })),
+	blockContact: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("block_contact", { accountId, did })),
+	unblockContact: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("unblock_contact", { accountId, did })),
+	leaveServer: (accountId: string) => typedError<null, string>(__TAURI_INVOKE("leave_server", { accountId })),
+	deleteIdentity: (accountId: string) => typedError<null, string>(__TAURI_INVOKE("delete_identity", { accountId })),
 	/**
 	 *  Drops the `Arc<AppCore>` handle so `get_app` returns "no account". Called by
 	 *  the frontend on logout / mode-switch. The TS-owned polling loop has already
 	 *  been stopped, so there is no background thread to cancel — this just releases
 	 *  the core so the old reconnect task + WS connection die on drop.
 	 */
-	clearSession: () => typedError<null, string>(__TAURI_INVOKE("clear_session")),
-	fetchProjects: () => typedError<ProjectInfoFfi[], string>(__TAURI_INVOKE("fetch_projects")),
-	requestProjectToken: (projectUrl: string) => typedError<string, string>(__TAURI_INVOKE("request_project_token", { projectUrl })),
+	clearSession: (accountId: string) => typedError<null, string>(__TAURI_INVOKE("clear_session", { accountId })),
+	fetchProjects: (accountId: string) => typedError<ProjectInfoFfi[], string>(__TAURI_INVOKE("fetch_projects", { accountId })),
+	requestProjectToken: (accountId: string, projectUrl: string) => typedError<string, string>(__TAURI_INVOKE("request_project_token", { accountId, projectUrl })),
 	validateInvite: (token: string) => typedError<InviteInfo, string>(__TAURI_INVOKE("validate_invite", { token })),
-	connectionState: () => typedError<ConnectionState, string>(__TAURI_INVOKE("connection_state")),
+	connectionState: (accountId: string) => typedError<ConnectionState, string>(__TAURI_INVOKE("connection_state", { accountId })),
 	/**
 	 *  Async + `spawn_blocking` for the same reason as `next_events`: this parks on
 	 *  `ffi_runtime().block_on(rx.changed().await)` until the connection state
 	 *  changes, so it must not run on the main thread or it freezes the WebView.
 	 *  `startConnectionLoop` long-polls this concurrently with the event loop.
 	 */
-	waitForConnectionStateChange: (last: ConnectionState) => typedError<ConnectionState, string>(__TAURI_INVOKE("wait_for_connection_state_change", { last })),
-	createGroup: (title: string, description: string, expirySeconds: number) => typedError<CreatedGroupFfi, string>(__TAURI_INVOKE("create_group", { title, description, expirySeconds })),
-	fetchGroupState: (groupId: string) => typedError<GroupSummaryFfi, string>(__TAURI_INVOKE("fetch_group_state", { groupId })),
-	cachedGroupState: (groupId: string) => typedError<{
+	waitForConnectionStateChange: (accountId: string, last: ConnectionState) => typedError<ConnectionState, string>(__TAURI_INVOKE("wait_for_connection_state_change", { accountId, last })),
+	createGroup: (accountId: string, title: string, description: string, expirySeconds: number) => typedError<CreatedGroupFfi, string>(__TAURI_INVOKE("create_group", { accountId, title, description, expirySeconds })),
+	fetchGroupState: (accountId: string, groupId: string) => typedError<GroupSummaryFfi, string>(__TAURI_INVOKE("fetch_group_state", { accountId, groupId })),
+	cachedGroupState: (accountId: string, groupId: string) => typedError<{
 	groupId: string,
 	masterKey: number[],
 	revision: number,
@@ -103,32 +103,32 @@ export const commands = {
 	members: GroupMemberFfi[],
 	pendingInvites: GroupPendingFfi[],
 	pendingApprovals: GroupPendingFfi[],
-} | null, string>(__TAURI_INVOKE("cached_group_state", { groupId })),
-	inviteMember: (groupId: string, recipientDid: string, role: number) => typedError<null, string>(__TAURI_INVOKE("invite_member", { groupId, recipientDid, role })),
-	acceptInvite: (groupId: string) => typedError<null, string>(__TAURI_INVOKE("accept_invite", { groupId })),
-	declineInvite: (groupId: string) => typedError<null, string>(__TAURI_INVOKE("decline_invite", { groupId })),
-	cancelJoinRequest: (groupId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_join_request", { groupId })),
-	approveJoinRequest: (groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("approve_join_request", { groupId, encryptedMemberId })),
-	denyJoinRequest: (groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("deny_join_request", { groupId, encryptedMemberId })),
-	removeMember: (groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("remove_member", { groupId, encryptedMemberId })),
-	leaveGroup: (groupId: string) => typedError<null, string>(__TAURI_INVOKE("leave_group", { groupId })),
-	isGroupMember: (groupId: string) => typedError<boolean, string>(__TAURI_INVOKE("is_group_member", { groupId })),
-	changeMemberRole: (groupId: string, encryptedMemberId: string, newRole: number) => typedError<null, string>(__TAURI_INVOKE("change_member_role", { groupId, encryptedMemberId, newRole })),
-	setGroupExpiry: (groupId: string, expirySeconds: number) => typedError<null, string>(__TAURI_INVOKE("set_group_expiry", { groupId, expirySeconds })),
-	setGroupTitle: (groupId: string, newTitle: string) => typedError<null, string>(__TAURI_INVOKE("set_group_title", { groupId, newTitle })),
-	groupExpirySeconds: (groupId: string) => typedError<number, string>(__TAURI_INVOKE("group_expiry_seconds", { groupId })),
-	applyPendingGroupChanges: (groupId: string) => typedError<number, string>(__TAURI_INVOKE("apply_pending_group_changes", { groupId })),
-	listGroups: () => typedError<string[], string>(__TAURI_INVOKE("list_groups")),
-	sendReaction: (target: MessageTarget, targetAuthor: string, targetSentAtMs: number, emoji: string, remove: boolean, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_reaction", { target, targetAuthor, targetSentAtMs, emoji, remove, sentAtMs })),
-	sendEdit: (target: MessageTarget, targetSentAtMs: number, newBody: string, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_edit", { target, targetSentAtMs, newBody, sentAtMs })),
-	sendDelete: (target: MessageTarget, targetAuthor: string, targetSentAtMs: number, forEveryone: boolean, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_delete", { target, targetAuthor, targetSentAtMs, forEveryone, sentAtMs })),
-	loadReactions: (conversationId: string) => typedError<ReactionFfi[], string>(__TAURI_INVOKE("load_reactions", { conversationId })),
-	loadMessageRevisions: (conversationId: string, author: string, sentAtMs: number) => typedError<MessageRevisionFfi[], string>(__TAURI_INVOKE("load_message_revisions", { conversationId, author, sentAtMs })),
+} | null, string>(__TAURI_INVOKE("cached_group_state", { accountId, groupId })),
+	inviteMember: (accountId: string, groupId: string, recipientDid: string, role: number) => typedError<null, string>(__TAURI_INVOKE("invite_member", { accountId, groupId, recipientDid, role })),
+	acceptInvite: (accountId: string, groupId: string) => typedError<null, string>(__TAURI_INVOKE("accept_invite", { accountId, groupId })),
+	declineInvite: (accountId: string, groupId: string) => typedError<null, string>(__TAURI_INVOKE("decline_invite", { accountId, groupId })),
+	cancelJoinRequest: (accountId: string, groupId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_join_request", { accountId, groupId })),
+	approveJoinRequest: (accountId: string, groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("approve_join_request", { accountId, groupId, encryptedMemberId })),
+	denyJoinRequest: (accountId: string, groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("deny_join_request", { accountId, groupId, encryptedMemberId })),
+	removeMember: (accountId: string, groupId: string, encryptedMemberId: string) => typedError<null, string>(__TAURI_INVOKE("remove_member", { accountId, groupId, encryptedMemberId })),
+	leaveGroup: (accountId: string, groupId: string) => typedError<null, string>(__TAURI_INVOKE("leave_group", { accountId, groupId })),
+	isGroupMember: (accountId: string, groupId: string) => typedError<boolean, string>(__TAURI_INVOKE("is_group_member", { accountId, groupId })),
+	changeMemberRole: (accountId: string, groupId: string, encryptedMemberId: string, newRole: number) => typedError<null, string>(__TAURI_INVOKE("change_member_role", { accountId, groupId, encryptedMemberId, newRole })),
+	setGroupExpiry: (accountId: string, groupId: string, expirySeconds: number) => typedError<null, string>(__TAURI_INVOKE("set_group_expiry", { accountId, groupId, expirySeconds })),
+	setGroupTitle: (accountId: string, groupId: string, newTitle: string) => typedError<null, string>(__TAURI_INVOKE("set_group_title", { accountId, groupId, newTitle })),
+	groupExpirySeconds: (accountId: string, groupId: string) => typedError<number, string>(__TAURI_INVOKE("group_expiry_seconds", { accountId, groupId })),
+	applyPendingGroupChanges: (accountId: string, groupId: string) => typedError<number, string>(__TAURI_INVOKE("apply_pending_group_changes", { accountId, groupId })),
+	listGroups: (accountId: string) => typedError<string[], string>(__TAURI_INVOKE("list_groups", { accountId })),
+	sendReaction: (accountId: string, target: MessageTarget, targetAuthor: string, targetSentAtMs: number, emoji: string, remove: boolean, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_reaction", { accountId, target, targetAuthor, targetSentAtMs, emoji, remove, sentAtMs })),
+	sendEdit: (accountId: string, target: MessageTarget, targetSentAtMs: number, newBody: string, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_edit", { accountId, target, targetSentAtMs, newBody, sentAtMs })),
+	sendDelete: (accountId: string, target: MessageTarget, targetAuthor: string, targetSentAtMs: number, forEveryone: boolean, sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_delete", { accountId, target, targetAuthor, targetSentAtMs, forEveryone, sentAtMs })),
+	loadReactions: (accountId: string, conversationId: string) => typedError<ReactionFfi[], string>(__TAURI_INVOKE("load_reactions", { accountId, conversationId })),
+	loadMessageRevisions: (accountId: string, conversationId: string, author: string, sentAtMs: number) => typedError<MessageRevisionFfi[], string>(__TAURI_INVOKE("load_message_revisions", { accountId, conversationId, author, sentAtMs })),
 	/**
 	 *  Drain decrypted messages from app-core's queue. The Desktop event loop polls
 	 *  `next_events`; this lower-level call is plumbed for parity with iOS/Android.
 	 */
-	receiveMessages: () => typedError<DecryptedMessage[], string>(__TAURI_INVOKE("receive_messages")),
+	receiveMessages: (accountId: string) => typedError<DecryptedMessage[], string>(__TAURI_INVOKE("receive_messages", { accountId })),
 	/**
 	 *  Recover an account from a BIP39 recovery phrase. Mirrors `recover_from_blob`
 	 *  but derives the 32-byte recovery seed from the phrase first
@@ -137,22 +137,22 @@ export const commands = {
 	 *  `prf_output` in the blob recovery path.
 	 */
 	recoverFromPhrase: (phrase: string, serverUrl: string, did: string, dbPath: string, dbKey: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_phrase", { phrase, serverUrl, did, dbPath, dbKey, displayName })),
-	sendReadReceipt: (recipientDid: string, timestamps: number[]) => typedError<null, string>(__TAURI_INVOKE("send_read_receipt", { recipientDid, timestamps })),
-	joinViaLink: (masterKey: number[], hostingServerUrl: string, password: number[]) => typedError<JoinResultFfi, string>(__TAURI_INVOKE("join_via_link", { masterKey, hostingServerUrl, password })),
-	acceptRequest: (did: string) => typedError<null, string>(__TAURI_INVOKE("accept_request", { did })),
-	deleteRequest: (did: string) => typedError<null, string>(__TAURI_INVOKE("delete_request", { did })),
-	setPendingRequest: (did: string, pending: boolean) => typedError<null, string>(__TAURI_INVOKE("set_pending_request", { did, pending })),
-	reportAndBlock: (did: string, reason: string) => typedError<null, string>(__TAURI_INVOKE("report_and_block", { did, reason })),
-	listBlocked: () => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_blocked")),
-	getConversationTimer: (conversationId: string) => typedError<number | null, string>(__TAURI_INVOKE("get_conversation_timer", { conversationId })),
-	setConversationTimer: (recipientDid: string, expirySecs: number | null) => typedError<null, string>(__TAURI_INVOKE("set_conversation_timer", { recipientDid, expirySecs })),
-	deleteExpiredMessages: () => typedError<string[], string>(__TAURI_INVOKE("delete_expired_messages")),
+	sendReadReceipt: (accountId: string, recipientDid: string, timestamps: number[]) => typedError<null, string>(__TAURI_INVOKE("send_read_receipt", { accountId, recipientDid, timestamps })),
+	joinViaLink: (accountId: string, masterKey: number[], hostingServerUrl: string, password: number[]) => typedError<JoinResultFfi, string>(__TAURI_INVOKE("join_via_link", { accountId, masterKey, hostingServerUrl, password })),
+	acceptRequest: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("accept_request", { accountId, did })),
+	deleteRequest: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("delete_request", { accountId, did })),
+	setPendingRequest: (accountId: string, did: string, pending: boolean) => typedError<null, string>(__TAURI_INVOKE("set_pending_request", { accountId, did, pending })),
+	reportAndBlock: (accountId: string, did: string, reason: string) => typedError<null, string>(__TAURI_INVOKE("report_and_block", { accountId, did, reason })),
+	listBlocked: (accountId: string) => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_blocked", { accountId })),
+	getConversationTimer: (accountId: string, conversationId: string) => typedError<number | null, string>(__TAURI_INVOKE("get_conversation_timer", { accountId, conversationId })),
+	setConversationTimer: (accountId: string, recipientDid: string, expirySecs: number | null) => typedError<null, string>(__TAURI_INVOKE("set_conversation_timer", { accountId, recipientDid, expirySecs })),
+	deleteExpiredMessages: (accountId: string) => typedError<string[], string>(__TAURI_INVOKE("delete_expired_messages", { accountId })),
 	/**
 	 *  Encrypt and upload an attachment blob, returning the pointer to send. Async +
 	 *  `spawn_blocking` because the upload does network I/O (mirrors `next_events`'s
 	 *  off-thread pattern so the WebView never freezes).
 	 */
-	uploadAttachment: (plaintext: number[], contentType: string, fileName: string | null, width: number, height: number, durationMs: number, thumbnail: number[], flags: number) => typedError<AttachmentFfi, string>(__TAURI_INVOKE("upload_attachment", { plaintext, contentType, fileName, width, height, durationMs, thumbnail, flags })),
+	uploadAttachment: (accountId: string, plaintext: number[], contentType: string, fileName: string | null, width: number, height: number, durationMs: number, thumbnail: number[], flags: number) => typedError<AttachmentFfi, string>(__TAURI_INVOKE("upload_attachment", { accountId, plaintext, contentType, fileName, width, height, durationMs, thumbnail, flags })),
 	/**
 	 *  Download, verify, and decrypt an attachment blob; returns the plaintext bytes.
 	 *  Caches the decrypted blob on disk and records the path via app-core's
@@ -160,13 +160,13 @@ export const commands = {
 	 *  from disk instead of re-fetching + re-decrypting (mirrors iOS). Async +
 	 *  `spawn_blocking` (network + filesystem I/O).
 	 */
-	downloadAttachment: (attachment: AttachmentFfi) => typedError<number[], string>(__TAURI_INVOKE("download_attachment", { attachment })),
+	downloadAttachment: (accountId: string, attachment: AttachmentFfi) => typedError<number[], string>(__TAURI_INVOKE("download_attachment", { accountId, attachment })),
 	/**
 	 *  Send a message carrying attachments and/or link previews to a DM or group.
 	 *  One path for both targets (the `MessageTarget` fork lives in app-core). Async
 	 *  + `spawn_blocking` (network I/O).
 	 */
-	sendMessageWithAttachments: (target: MessageTarget, body: string, attachments: AttachmentFfi[], previews: LinkPreviewFfi[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_message_with_attachments", { target, body, attachments, previews, sentAtMs })),
+	sendMessageWithAttachments: (accountId: string, target: MessageTarget, body: string, attachments: AttachmentFfi[], previews: LinkPreviewFfi[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_message_with_attachments", { accountId, target, body, attachments, previews, sentAtMs })),
 	/**
 	 *  Open a validated http(s) URL in the OS default browser. The WebView must never
 	 *  navigate to message URLs in-app (A2); link clicks and link-preview card taps
@@ -206,17 +206,17 @@ export const commands = {
 	 *  Existing device: generate this device's pairing code for a new device to
 	 *  enter (show mode). Follow with `link_send_bundle_step` polling.
 	 */
-	linkCreatePairing: (mailboxServer: string | null) => typedError<string, string>(__TAURI_INVOKE("link_create_pairing", { mailboxServer })),
+	linkCreatePairing: (accountId: string, mailboxServer: string | null) => typedError<string, string>(__TAURI_INVOKE("link_create_pairing", { accountId, mailboxServer })),
 	/**
 	 *  Existing device: accept (paste) the new device's pairing code (scan mode).
 	 *  Follow with `link_send_bundle_step` polling.
 	 */
-	linkAcceptPairing: (code: string) => typedError<null, string>(__TAURI_INVOKE("link_accept_pairing", { code })),
+	linkAcceptPairing: (accountId: string, code: string) => typedError<null, string>(__TAURI_INVOKE("link_accept_pairing", { accountId, code })),
 	/**
 	 *  Existing device: one non-blocking step of sealing + sending the provisioning
 	 *  bundle. Returns true when done; the TS layer polls this.
 	 */
-	linkSendBundleStep: () => typedError<boolean, string>(__TAURI_INVOKE("link_send_bundle_step")),
+	linkSendBundleStep: (accountId: string) => typedError<boolean, string>(__TAURI_INVOKE("link_send_bundle_step", { accountId })),
 	/**
 	 *  Tell the core whether the desktop window is foreground-active (focused).
 	 *  Gates the WS keepalive (foreground-only) and, on a transition to active,
@@ -228,14 +228,14 @@ export const commands = {
 	 *  focus events can fire on the onboarding screens, where there's nothing to
 	 *  gate.
 	 */
-	setAppActive: (active: boolean) => typedError<null, string>(__TAURI_INVOKE("set_app_active", { active })),
+	setAppActive: (accountId: string, active: boolean) => typedError<null, string>(__TAURI_INVOKE("set_app_active", { accountId, active })),
 	/**
 	 *  Opportunistically retry/validate connectivity now (the "Reconnect now"
 	 *  action on the offline banner — T72). Wakes the reconnect loop if it's backing
 	 *  off and probes an open socket's liveness. Sync, infallible, cheap. No-op
 	 *  before sign-in.
 	 */
-	reconnectNow: () => typedError<null, string>(__TAURI_INVOKE("reconnect_now")),
+	reconnectNow: (accountId: string) => typedError<null, string>(__TAURI_INVOKE("reconnect_now", { accountId })),
 };
 
 /* Types */
