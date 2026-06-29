@@ -174,6 +174,10 @@ export class DevServerAvalancheService implements AvalancheService {
     return ok(commands.contactDisplayName(did));
   }
 
+  async cachedDisplayNames(dids: string[]): Promise<Record<string, string>> {
+    return ok(commands.cachedDisplayNames(dids));
+  }
+
   async getAccountInfo(did: string): Promise<import("../bindings").AccountInfoFfi> {
     return ok(commands.getAccountInfo(did));
   }

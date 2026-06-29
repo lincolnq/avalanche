@@ -56,6 +56,13 @@ export const commands = {
 	 */
 	deriveDidFromPasskey: (prfOutput: number[], signupServerUrl: string) => typedError<string, string>(__TAURI_INVOKE("derive_did_from_passkey", { prfOutput, signupServerUrl })),
 	contactDisplayName: (did: string) => typedError<string, string>(__TAURI_INVOKE("contact_display_name", { did })),
+	/**
+	 *  Batch-resolve display names from local storage only (no network) for a set
+	 *  of DIDs — used to warm the name cache on conversation load so chat-list rows
+	 *  render real names immediately instead of flashing raw DIDs (T78). Returns
+	 *  only DIDs with a non-empty cached name.
+	 */
+	cachedDisplayNames: (dids: string[]) => typedError<{ [key in string]: string }, string>(__TAURI_INVOKE("cached_display_names", { dids })),
 	getAccountInfo: (did: string) => typedError<AccountInfoFfi, string>(__TAURI_INVOKE("get_account_info", { did })),
 	refreshContactProfile: (did: string) => typedError<boolean, string>(__TAURI_INVOKE("refresh_contact_profile", { did })),
 	listContacts: () => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_contacts")),

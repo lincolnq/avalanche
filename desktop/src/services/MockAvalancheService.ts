@@ -483,6 +483,14 @@ export class MockAvalancheService implements AvalancheService {
     if (did === "did:plc:organizer") return "Jamie (Organizer)";
     return "";
   }
+  async cachedDisplayNames(dids: string[]): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const did of dids) {
+      const name = await this.contactDisplayName(did);
+      if (name) out[did] = name;
+    }
+    return out;
+  }
   async getAccountInfo(did: string): Promise<AccountInfoFfi> {
     return { did, displayName: null, isBot: false };
   }

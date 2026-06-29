@@ -956,6 +956,40 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   // ── Messaging ─────────────────────────────────────────────────────────────
 
+  // DIDs whose display names should be warmed from local storage before the
+  // chat list renders (T78, mirrors iOS displayNameDidsToWarm): DM peers, group
+  // last-message senders, and the actor/target of a group system-event preview.
+  function displayNameDidsToWarm(
+    summaries: ConversationSummaryFfi[],
+    accountId: string
+  ): string[] {
+    const dids = new Set<string>();
+    for (const s of summaries) {
+      const isGroup = s.groupTitle !== null || s.conversationId.startsWith("group-");
+      if (isGroup) {
+        const last = s.lastMessage;
+        if (!last) continue;
+        if (last.senderDid) dids.add(last.senderDid);
+        if (last.kind > 0 && last.metadata) {
+          try {
+            const m = JSON.parse(last.metadata) as {
+              actor_did?: string;
+              target_did?: string;
+            };
+            if (m.actor_did) dids.add(m.actor_did);
+            if (m.target_did) dids.add(m.target_did);
+          } catch {
+            // Unparseable metadata — the preview falls back to the stored body.
+          }
+        }
+      } else {
+        const recipientDid = recipientDidFromConvId(s.conversationId, accountId);
+        if (recipientDid) dids.add(recipientDid);
+      }
+    }
+    return Array.from(dids);
+  }
+
   async function loadConversationsFromStore() {
     if (loadedConversations.value) return;
     loadedConversations.value = true;
@@ -970,6 +1004,24 @@ export function AppProvider(props: { children: JSX.Element }) {
       return;
     }
     const serverUrl = getServerUrl(accountId);
+
+    // Warm the display-name cache from local storage (no network) for every DID
+    // these rows will render — DM peers, plus group last-message senders and
+    // system-event actor/target DIDs — before building titles below. Otherwise
+    // DM rows fall back to the raw DID until the async resolver runs, a visible
+    // flash on cold launch. One bulk FFI call (T78, mirrors iOS
+    // displayNameDidsToWarm + cachedDisplayNames).
+    const warmDids = displayNameDidsToWarm(summaries, accountId);
+    if (warmDids.length) {
+      try {
+        const names = await service().cachedDisplayNames(warmDids);
+        for (const [did, name] of Object.entries(names)) {
+          if (name) setDisplayNameCache(did, name);
+        }
+      } catch {
+        // Local-only warm; a failure just means rows resolve via the async path.
+      }
+    }
 
     const convs: Conversation[] = summaries.map((s) => {
       const isGroup = s.groupTitle !== null || s.conversationId.startsWith("group-");

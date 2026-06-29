@@ -34,6 +34,7 @@ commands.allow = [
   "recovery_phrase_to_seed",
   "derive_did_from_passkey",
   "contact_display_name",
+  "cached_display_names",
   "get_account_info",
   "refresh_contact_profile",
   "list_contacts",

@@ -112,6 +112,8 @@ export interface AvalancheService {
   recoveryPhraseToSeed(phrase: string): Promise<number[]>;
   deriveDidFromPasskey(prfOutput: number[], signupServerUrl: string): Promise<string>;
   contactDisplayName(did: string): Promise<string>;
+  // Batch local-only name resolution to warm the cache on load (T78).
+  cachedDisplayNames(dids: string[]): Promise<Record<string, string>>;
   getAccountInfo(did: string): Promise<import("../bindings").AccountInfoFfi>;
   refreshContactProfile(did: string): Promise<boolean>;
   listContacts(): Promise<import("../bindings").ContactRowFfi[]>;

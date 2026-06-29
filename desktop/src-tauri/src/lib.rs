@@ -123,6 +123,7 @@ pub fn run() {
             recovery_phrase_to_seed,
             derive_did_from_passkey,
             contact_display_name,
+            cached_display_names,
             get_account_info,
             refresh_contact_profile,
             list_contacts,
@@ -775,6 +776,21 @@ fn contact_display_name(
 ) -> Result<String, String> {
     get_app(&state)?
         .contact_display_name(did)
+        .map_err(|e| e.to_string())
+}
+
+/// Batch-resolve display names from local storage only (no network) for a set
+/// of DIDs — used to warm the name cache on conversation load so chat-list rows
+/// render real names immediately instead of flashing raw DIDs (T78). Returns
+/// only DIDs with a non-empty cached name.
+#[tauri::command]
+#[specta::specta]
+fn cached_display_names(
+    state: tauri::State<'_, AppState>,
+    dids: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    get_app(&state)?
+        .cached_display_names(dids)
         .map_err(|e| e.to_string())
 }
 
