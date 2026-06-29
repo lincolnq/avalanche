@@ -204,100 +204,124 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 
 ## Parity Map
 
+Status: `[x]` implemented · `[~]` deliberate divergence (see note) · `[ ]` not yet.
+File names below are the current ones; some iOS-era names in this doc's history
+(`ActnetService`, `renderer/App.tsx`) were renamed during implementation.
+
 ### App Shell
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ActnetApp.swift` | `main/index.ts` + `renderer/App.tsx` | `[ ]` |
-| `RootView.swift` | Root router in `App.tsx` | `[ ]` |
-| `AppState.swift` | `AppContext.tsx` | `[ ]` |
+| `ActnetApp.swift` | `index.tsx` + `App.tsx` | `[x]` |
+| `RootView.swift` | Root router in `App.tsx` | `[x]` |
+| `AppState.swift` | `state/AppContext.tsx` | `[x]` |
 
 ### Models
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `Account.swift` | `Account.ts` | `[ ]` |
-| `Conversation.swift` | `Conversation.ts` | `[ ]` |
-| `Message.swift` | `Message.ts` | `[ ]` |
-| `InviteToken.swift` | `InviteToken.ts` | `[ ]` |
-| `ProjectInfo.swift` | `ProjectInfo.ts` | `[ ]` |
+| `Account.swift` | `models/Account.ts` | `[x]` |
+| `Conversation.swift` | `models/Conversation.ts` | `[x]` |
+| `Message.swift` | `models/Message.ts` | `[x]` |
+| `InviteToken.swift` | `models/InviteToken.ts` | `[x]` |
+| `ProjectInfo.swift` | `models/ProjectInfo.ts` | `[x]` |
 
 ### Services
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ActnetService.swift` protocol | `ActnetService.ts` interface | `[ ]` |
-| `MockActnetService.swift` | `MockActnetService.ts` | `[ ]` |
-| `DevServerActnetService.swift` | `DevServerActnetService.ts` | `[ ]` |
-| UniFFI `AppCore` | Tauri commands (from `src-tauri/src/lib.rs`) via `invoke()` | `[ ]` |
+| `ActnetService.swift` protocol | `services/AvalancheService.ts` interface | `[x]` |
+| `MockActnetService.swift` | `services/MockAvalancheService.ts` | `[x]` |
+| `DevServerActnetService.swift` | `services/DevServerAvalancheService.ts` | `[x]` |
+| UniFFI `AppCore` | Tauri commands (`src-tauri/src/lib.rs`) via `invoke()` | `[x]` |
 
 ### Onboarding
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `SplashView.swift` | `SplashView.tsx` | `[ ]` |
-| `QRScannerView.swift` | `QRScannerView.tsx` (file upload or camera capture) | `[ ]` |
-| `InviteLinkEntryView.swift` | `InviteLinkEntryView.tsx` | `[ ]` |
-| `IdentityPickerView.swift` | `IdentityPickerView.tsx` | `[ ]` |
-| `JoiningServerView.swift` | `JoiningServerView.tsx` | `[ ]` |
-| `NewAccountView.swift` | `NewAccountView.tsx` | `[ ]` |
+| `SplashView.swift` | `onboarding/SplashView.tsx` | `[x]` |
+| `QRScannerView.swift` | (paste-link only; camera/QR not built) | `[~]` |
+| `InviteLinkEntryView.swift` | `onboarding/InviteLinkEntryView.tsx` | `[x]` |
+| `IdentityPickerView.swift` | `onboarding/IdentityPickerView.tsx` | `[x]` |
+| `JoiningServerView.swift` | `onboarding/JoiningServerView.tsx` | `[x]` |
+| `NewAccountView.swift` | `onboarding/NewAccountView.tsx` | `[x]` |
+| — (back-stack driver) | `onboarding/OnboardingFlow.tsx` | `[x]` |
+| `RecoveryPhrase…` (signup credential) | `onboarding/RecoveryPhraseSetupView.tsx` | `[x]` |
+| `RecoveryExplainerView.swift` | `onboarding/RecoveryExplainerView.tsx` | `[x]` |
+| `RecoveryConsoleView.swift` | `onboarding/RecoveryConsoleView.tsx` | `[x]` |
+| `LinkNewDeviceView.swift` (T71, new-device side) | `onboarding/LinkNewDeviceView.tsx` | `[x]` |
 
 ### Navigation
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `MainTabView.swift` (bottom tabs) | `MainLayout.tsx` (left sidebar) | `[ ]` |
+| `MainTabView.swift` (bottom tabs) | `common/MainLayout.tsx` (left sidebar) | `[x]` |
 
 ### Chats
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ChatsView.swift` | `ChatsView.tsx` | `[ ]` |
-| `ConversationRow.swift` | `ConversationRow.tsx` | `[ ]` |
-| `ConversationView.swift` | `ConversationView.tsx` | `[ ]` |
-| `MessageBubble.swift` | `MessageBubble.tsx` | `[ ]` |
-| `ComposeMessageView.swift` | `ComposeMessageView.tsx` | `[ ]` |
-| `RecoveryKeyBanner.swift` | `RecoveryKeyBanner.tsx` | `[ ]` |
+| `ChatsView.swift` | `chats/ChatsView.tsx` | `[x]` |
+| `ConversationRow.swift` | `components/ConversationRow.tsx` | `[x]` |
+| `ConversationView.swift` | `chats/ConversationView.tsx` | `[x]` |
+| `MessageBubble.swift` | `components/MessageBubble.tsx` | `[x]` |
+| `ComposeMessageView.swift` | `components/ComposeMessageView.tsx` | `[x]` |
+| `RecoveryKeyBanner.swift` | `components/RecoveryKeyBanner.tsx` (inert stub, as iOS) | `[x]` |
+| `AttachmentViews.swift` | `components/AttachmentView.tsx` + `components/LinkPreviewCard.tsx` | `[x]` |
+| `EditHistorySheet.swift` | `components/EditHistorySheet.tsx` | `[x]` |
+| `DisappearingMessagesPicker.swift` | `components/DisappearingMessagesPicker.tsx` | `[x]` |
+| group create / detail | `components/NameGroupView.tsx` + `components/GroupDetailView.tsx` | `[x]` |
+| new conversation | `components/NewConversationView.tsx` + `components/RecipientTokenField.tsx` | `[x]` |
 
 ### Calls
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `CallsView.swift` | `CallsView.tsx` | `[ ]` |
+| `CallsView.swift` | (no Calls section on desktop sidebar) | `[~]` |
 
 ### Network
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `NetworkView.swift` | `NetworkView.tsx` | `[ ]` |
-| `ProjectWebView.swift` | `ProjectWebView.tsx` | `[ ]` |
+| `NetworkView.swift` | `network/NetworkView.tsx` | `[x]` |
+| `ProjectWebView.swift` | `network/ProjectWebView.tsx` | `[x]` |
 
-### Common
+### Common / Settings
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `AccountAvatar.swift` | `AccountAvatar.tsx` | `[ ]` |
-| `DevSettingsView.swift` | `DevSettingsView.tsx` | `[ ]` |
+| `AccountAvatar.swift` | `components/AccountAvatar.tsx` | `[x]` |
+| `ContactAvatar.swift` / `Hexagon.swift` | `components/ContactAvatar.tsx` | `[x]` |
+| `DevSettingsView.swift` | `settings/DevSettingsView.tsx` | `[x]` |
+| settings hub | `settings/SettingsView.tsx` | `[x]` |
+| `AccountsView.swift` | `settings/AccountsView.tsx` | `[x]` |
+| identity / server detail | `settings/IdentityDetailView.tsx` + `settings/ServerDetailView.tsx` | `[x]` |
+| blocked contacts | `settings/BlockedContactsView.tsx` | `[x]` |
+| `LinkDeviceView.swift` (T71, existing-device side) | `settings/LinkDeviceView.tsx` | `[x]` |
+| `OfflineBanner` + reconnect | `components/OfflineBanner.tsx` | `[x]` |
 
 ### State Behaviors (AppContext mirrors AppState)
 
 | Behavior | Status |
 |---|---|
-| Account restoration on launch | `[ ]` |
-| `createAccount(serverUrl, serverName, displayName)` | `[ ]` |
-| `joinServer(serverUrl, serverName, existingAccountId)` | `[ ]` |
-| `switchMode(mode)` | `[ ]` |
-| `sendMessage(...)` — optimistic + core via IPC | `[ ]` |
-| `markAllMessagesRead(conversationId, accountId)` | `[ ]` |
-| `loadMessagesFromStore(conversationId, accountId)` | `[ ]` |
-| `findOrCreateDMConversation(recipientDid, accountId)` | `[ ]` |
-| WebSocket loop per account (Node.js, reconnect on error) | `[ ]` |
-| `handleIncomingMessage()` | `[ ]` |
-| `applyDeliveryStatusUpdates()` | `[ ]` |
-| `fetchProjects(serverUrl)` | `[ ]` |
-| `requestProjectToken(accountId, projectUrl)` | `[ ]` |
-| Conversation persistence (tauri-plugin-store) | `[ ]` |
-| `unreadCount(for:)` | `[ ]` |
+| Account restoration on launch | `[x]` |
+| `createAccount(...)` (recovery-phrase credential) | `[x]` |
+| `joinServer(...)` | `[x]` |
+| `switchMode(mode)` (mock/devserver) | `[~]` (mock is test-only, not a runtime mode) |
+| `sendMessage(...)` / `sendMessageWithAttachments(...)` — optimistic + core via IPC | `[x]` |
+| `markAllMessagesRead(conversationId, accountId)` | `[x]` |
+| `loadMessagesFromStore(conversationId, accountId)` | `[x]` |
+| `findOrCreateDMConversation(recipientDid, accountId)` | `[x]` |
+| TS-owned event loop (`nextEvents()` poll; reconnect in core) | `[x]` |
+| `handleIncomingMessage()` / `handleIncomingEvents()` | `[x]` |
+| `applyDeliveryStatusUpdates()` | `[x]` |
+| Multi-device sync events (`conversationUpdated`, foreground `setAppActive`) | `[x]` |
+| Device linking (`completeDeviceLink` / `linkSendBundle`, T71) | `[x]` |
+| Warm display-name cache on load (`cachedDisplayNames`, T78) | `[x]` |
+| `fetchProjects()` / `requestProjectToken()` | `[x]` |
+| Conversation list derived from SQLCipher store | `[x]` |
+| `unreadCount(for:)` (authoritative seed from core) | `[x]` |
+| Multi-account (one shared inbox over all identities) | `[ ]` (single-account today — see Deferred) |
 
 ---
 
