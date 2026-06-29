@@ -9,6 +9,11 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
+import android.util.LruCache
+import androidx.compose.ui.platform.LocalDensity
+import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -78,6 +83,50 @@ fun openUrlInBrowser(context: Context, rawUrl: String) {
 
 private val SCHEME_PREFIX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
+// Decode caps (longest edge, px) matching iOS: a photo shown in a ~240dp bubble
+// must not decode at full resolution. 960 for message images, 520 for the smaller
+// link-preview image (mirrors iOS `decodeDownsampledImage` maxPixel values).
+private const val MESSAGE_IMAGE_MAX_PIXEL = 960
+private const val LINK_PREVIEW_MAX_PIXEL = 520
+
+// Image decode is CPU-heavy; cap concurrency to 2 so a fling's worth of decodes
+// can't saturate every core and starve the UI thread (gfxinfo "Slow UI thread").
+private val imageDecodeDispatcher = Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+
+/**
+ * Decode [data] downsampled so its longest edge is at most ~[maxPixel] px, via
+ * `BitmapFactory.inSampleSize` — the full-resolution bitmap is never materialized.
+ * Mirrors iOS `decodeDownsampledImage`. Call OFF the main thread.
+ */
+fun decodeDownsampledBitmap(data: ByteArray, maxPixel: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+    val longest = maxOf(bounds.outWidth, bounds.outHeight)
+    if (longest <= 0) return null
+    var sample = 1
+    while (longest / (sample * 2) >= maxPixel) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    return BitmapFactory.decodeByteArray(data, 0, data.size, opts)
+}
+
+/**
+ * App-wide LRU cache of decoded message-image bitmaps, keyed by attachment id.
+ * Compose's `LazyColumn` disposes off-screen rows, so without this every scroll-back
+ * re-decodes the blob (jank + a thumbnail→full flash); the cache makes scroll-back
+ * instant and keeps decode work off the hot path. (iOS holds the decoded image in
+ * per-row `@State` that its more retentive `List` keeps alive; Compose needs an
+ * explicit cache for the same effect.) Sized to ~1/8 of the heap.
+ */
+object MessageImageCache {
+    private val maxKb = (Runtime.getRuntime().maxMemory() / 1024 / 4)
+        .coerceIn(8L * 1024, Int.MAX_VALUE.toLong()).toInt()
+    private val cache = object : LruCache<String, Bitmap>(maxKb) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
+    fun get(key: String): Bitmap? = if (key.isEmpty()) null else cache.get(key)
+    fun put(key: String, value: Bitmap) { if (key.isNotEmpty()) cache.put(key, value) }
+}
+
 /**
  * Renders a single message attachment (docs/35-attachments.md). Images show the
  * inline thumbnail immediately (a fast placeholder), then load the full blob;
@@ -89,23 +138,12 @@ fun AttachmentView(
     loader: suspend (AttachmentFfi) -> ByteArray?,
 ) {
     val isImage = attachment.contentType.startsWith("image/")
-    var fullData by remember(attachment.id) { mutableStateOf<ByteArray?>(null) }
-    var loading by remember(attachment.id) { mutableStateOf(false) }
 
     if (isImage) {
-        // Kick off the full-resolution load; the inline thumbnail shows until it
-        // arrives.
-        LaunchedEffect(attachment.id) {
-            if (fullData == null) {
-                loading = true
-                fullData = loader(attachment)
-                loading = false
-            }
-        }
-        val bytes = fullData ?: attachment.thumbnail.takeIf { it.isNotEmpty() }
-        val bitmap = remember(bytes) {
-            bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-        }
+        // Stable cache key (local row id, falling back to the blob URL for
+        // not-yet-persisted rows).
+        val cacheKey = attachment.id.ifEmpty { attachment.url }
+
         // Reserve a fixed display box from the attachment's aspect ratio so the
         // bubble does NOT resize when the full image swaps in for the thumbnail —
         // that resize is what shifts scroll position and makes images "grow" on
@@ -123,10 +161,51 @@ fun AttachmentView(
             if (maxW / aspect <= maxH) maxW.dp to (maxW / aspect).dp
             else (maxH * aspect).dp to maxH.dp
         }
+        // Decode only to the box's pixel size (capped), not a fixed 960px: a multi-MB
+        // photo shown in a ~240dp bubble was decoding to a multi-MB bitmap — slow,
+        // GC-heavy, and so big the cache thrashed. Sizing the decode to the display
+        // box cuts bitmap memory several-fold.
+        val density = LocalDensity.current
+        val targetPx = remember(boxW, boxH, density) {
+            with(density) { maxOf(boxW.toPx(), boxH.toPx()).toInt() }
+                .coerceIn(1, MESSAGE_IMAGE_MAX_PIXEL)
+        }
+
+        // Decoded bitmaps held in state + an app-wide cache so neither a
+        // recomposition (typing) nor a scroll-back re-decodes — mirrors iOS, which
+        // decodes downsampled, off the main thread, and holds the result. Seeded
+        // from the cache so a scroll-back shows the full image instantly.
+        var fullBitmap by remember(attachment.id) { mutableStateOf(MessageImageCache.get(cacheKey)) }
+        var thumbBitmap by remember(attachment.id) { mutableStateOf<Bitmap?>(null) }
+        var loading by remember(attachment.id) { mutableStateOf(false) }
+
+        LaunchedEffect(attachment.id) {
+            // Instant low-res placeholder from the inline thumbnail (decoded off the
+            // main thread, capped concurrency), unless the full image is cached.
+            if (fullBitmap == null && attachment.thumbnail.isNotEmpty()) {
+                thumbBitmap = withContext(imageDecodeDispatcher) {
+                    decodeDownsampledBitmap(attachment.thumbnail, targetPx)
+                }
+            }
+            if (fullBitmap == null) {
+                loading = true
+                val data = loader(attachment)
+                val decoded = data?.let {
+                    withContext(imageDecodeDispatcher) { decodeDownsampledBitmap(it, targetPx) }
+                }
+                if (decoded != null) {
+                    MessageImageCache.put(cacheKey, decoded)
+                    fullBitmap = decoded
+                }
+                loading = false
+            }
+        }
+
         val shape = RoundedCornerShape(14.dp)
-        if (bitmap != null) {
+        val shown = fullBitmap ?: thumbBitmap
+        if (shown != null) {
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = shown.asImageBitmap(),
                 contentDescription = attachment.fileName ?: "Attachment",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -265,14 +344,26 @@ fun LinkPreviewCard(
 ) {
     val colors = LocalAvalancheColors.current
     val context = LocalContext.current
-    var imageData by remember(preview.url) { mutableStateOf<ByteArray?>(null) }
+    // Decode the og:image downsampled and off the main thread, hold it, AND cache
+    // it — same anti-jank treatment as message images. Seeding from the cache is
+    // what stops the preview from vanishing and re-decoding on every scroll-back
+    // (Compose disposes the off-screen row). Mirrors iOS LinkPreviewCard.
+    var bitmap by remember(preview.url) {
+        mutableStateOf(preview.image?.let { MessageImageCache.get(it.url) })
+    }
 
     LaunchedEffect(preview.url) {
         val img = preview.image
-        if (imageData == null && img != null) imageData = loader(img)
-    }
-    val bitmap = remember(imageData) {
-        imageData?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        if (bitmap == null && img != null) {
+            val data = loader(img)
+            val decoded = data?.let {
+                withContext(imageDecodeDispatcher) { decodeDownsampledBitmap(it, LINK_PREVIEW_MAX_PIXEL) }
+            }
+            if (decoded != null) {
+                MessageImageCache.put(img.url, decoded)
+                bitmap = decoded
+            }
+        }
     }
     val domain = remember(preview.url) {
         runCatching { java.net.URI(preview.url).host?.removePrefix("www.") }.getOrNull() ?: preview.url
@@ -285,9 +376,10 @@ fun LinkPreviewCard(
             .background(if (isMe) colors.outgoingBubble.copy(alpha = 0.6f) else colors.incomingBubble)
             .clickable { openUrlInBrowser(context, preview.url) },
     ) {
-        if (bitmap != null) {
+        val previewBitmap = bitmap
+        if (previewBitmap != null) {
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = previewBitmap.asImageBitmap(),
                 contentDescription = preview.title.ifEmpty { domain },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxWidth().height(130.dp),

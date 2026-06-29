@@ -192,4 +192,9 @@ dependencies {
 
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    // Composition tracing: makes composable functions appear as named slices in a
+    // Perfetto system trace, so scroll/recomposition profiling shows real names
+    // (e.g. MessageBubble) instead of anonymous "recompose" blocks. Debug-only;
+    // version managed by the Compose BOM above.
+    debugImplementation("androidx.compose.runtime:runtime-tracing")
 }
