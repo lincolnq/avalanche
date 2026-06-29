@@ -1,0 +1,25 @@
+/* Full-screen overlay that hosts the onboarding flow when adding a second
+   account to an already signed-in session (multi-account). The main UI stays
+   mounted underneath (its per-account loops keep running); this just covers it
+   with an opaque surface and a Cancel affordance. */
+.add-account-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.add-account-overlay-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.add-account-overlay-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}

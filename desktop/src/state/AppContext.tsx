@@ -37,6 +37,11 @@ interface PersistedAccount {
 interface AppStore {
   accounts: Account[];
   isOnboarding: boolean;
+  // True while the onboarding flow is being run to ADD an account to an already
+  // signed-in session ("Sign in to another account"). Distinct from
+  // isOnboarding (first-run / signed-out): the main UI stays mounted underneath
+  // and the existing accounts' loops keep running. Cleared by enterApp.
+  isAddingAccount: boolean;
   serviceMode: ServiceMode;
   selectedTab: "chats" | "network";
   conversations: Conversation[];
@@ -55,7 +60,10 @@ interface AppStore {
 
 interface AppContextValue {
   store: AppStore;
+  // Account-less service for factory + pure calls (createAccount, validateInvite,
+  // recoveryPhraseToSeed, …). Per-account calls go through serviceFor(accountId).
   service: () => AvalancheService;
+  serviceFor: (accountId: string) => AvalancheService;
   setSelectedTab: (tab: "chats" | "network") => void;
   createAccount: (
     serverUrl: string,
@@ -91,6 +99,7 @@ interface AppContextValue {
     previews: LinkPreviewFfi[]
   ) => Promise<void>;
   uploadAttachment: (
+    accountId: string,
     plaintext: number[],
     contentType: string,
     fileName: string | null,
@@ -100,7 +109,7 @@ interface AppContextValue {
     thumbnail: number[],
     flags: number
   ) => Promise<AttachmentFfi>;
-  downloadAttachment: (attachment: AttachmentFfi) => Promise<number[]>;
+  downloadAttachment: (accountId: string, attachment: AttachmentFfi) => Promise<number[]>;
   fetchLinkPreview: (url: string) => Promise<LinkPreviewMetaFfi>;
   openExternal: (url: string) => Promise<void>;
   loadConversationsFromStore: () => Promise<void>;
@@ -113,7 +122,7 @@ interface AppContextValue {
   aggregateConnectionState: () => ConnectionState;
   unreadCount: (conversation: Conversation) => number;
   displayName: (did: string, accountId: string) => string;
-  isBot: (did: string) => boolean;
+  isBot: (did: string, accountId: string) => boolean;
   setPendingInviteToken: (token: string | null) => void;
   validateInvite: (token: string) => Promise<InviteInfo>;
 
@@ -141,6 +150,7 @@ interface AppContextValue {
     expirySeconds: number
   ) => Promise<Conversation>;
   joinViaLink: (
+    accountId: string,
     masterKey: number[],
     hostingServerUrl: string,
     password: number[]
@@ -151,19 +161,27 @@ interface AppContextValue {
   acceptRequest: (conversation: Conversation) => Promise<void>;
   deleteRequest: (conversation: Conversation) => Promise<void>;
   reportAndBlock: (conversation: Conversation, reason: string) => Promise<void>;
-  blockContact: (did: string) => Promise<void>;
-  unblockContact: (did: string) => Promise<void>;
-  listBlocked: () => Promise<ContactRowFfi[]>;
-  getConversationTimer: (conversationId: string) => Promise<number | null>;
-  setConversationTimer: (recipientDid: string, expirySecs: number | null) => Promise<void>;
+  blockContact: (accountId: string, did: string) => Promise<void>;
+  unblockContact: (accountId: string, did: string) => Promise<void>;
+  // Aggregated across all accounts; each row carries its owning accountId.
+  listBlocked: () => Promise<Array<ContactRowFfi & { accountId: string }>>;
+  getConversationTimer: (accountId: string, conversationId: string) => Promise<number | null>;
+  setConversationTimer: (
+    accountId: string,
+    recipientDid: string,
+    expirySecs: number | null
+  ) => Promise<void>;
 
   // Track E — settings / account lifecycle
   setAccountDisplayName: (accountId: string, displayName: string) => Promise<void>;
-  leaveServer: () => Promise<void>;
-  deleteIdentity: () => Promise<void>;
-  hasRecovery: () => Promise<boolean>;
+  leaveServer: (accountId: string) => Promise<void>;
+  deleteIdentity: (accountId: string) => Promise<void>;
+  hasRecovery: (accountId: string) => Promise<boolean>;
   generateRecoveryPhrase: () => Promise<string>;
   recoverFromPhrase: (phrase: string, serverUrl: string, displayName: string) => Promise<void>;
+  // "Sign in to another account" — additive onboarding over the live session.
+  startAddAccount: () => void;
+  cancelAddAccount: () => void;
 
   // Device linking (T71). New-device side (onboarding, account-less):
   // deviceLinkShowCode (show mode) or deviceLinkEnterCode (paste mode), then
@@ -174,9 +192,9 @@ interface AppContextValue {
   deviceLinkEnterCode: (code: string) => Promise<void>;
   deviceLinkComplete: () => Promise<void>;
   deviceLinkCancel: () => Promise<void>;
-  linkShowCode: () => Promise<string>;
-  linkEnterCode: (code: string) => Promise<void>;
-  linkSendBundle: () => Promise<void>;
+  linkShowCode: (accountId: string) => Promise<string>;
+  linkEnterCode: (accountId: string, code: string) => Promise<void>;
+  linkSendBundle: (accountId: string) => Promise<void>;
 
   // Deep links — route a pasted/opened link (conversation/<did>, i/<token>)
   isDeepLink: (raw: string) => boolean;
@@ -185,10 +203,10 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
-function makeService(mode: ServiceMode): AvalancheService {
+function makeService(mode: ServiceMode, accountId = ""): AvalancheService {
   return mode === ServiceMode.Mock
     ? new MockAvalancheService()
-    : new DevServerAvalancheService();
+    : new DevServerAvalancheService(accountId);
 }
 
 // A conversation summary is a group iff it carries a group title or its id uses
@@ -283,6 +301,7 @@ export function AppProvider(props: { children: JSX.Element }) {
   const [store, setStore] = createStore<AppStore>({
     accounts: [],
     isOnboarding: true,
+    isAddingAccount: false,
     serviceMode: ServiceMode.DevServer,
     selectedTab: "chats",
     conversations: [],
@@ -296,9 +315,53 @@ export function AppProvider(props: { children: JSX.Element }) {
     closeToTray: true,
   });
 
-  const [service, setService] = createSignal<AvalancheService>(
-    makeService(ServiceMode.DevServer)
-  );
+  // One AvalancheService per signed-in account, keyed by accountId — the desktop
+  // analog of iOS/Android's `cores` map (all identities share one inbox; there
+  // is no "active" account). `serviceFor(accountId)` resolves the per-account
+  // service: a DevServer instance binds its accountId into every Tauri command;
+  // a Mock instance holds that account's own seeded state. Account-less factory
+  // and pure calls (createAccount, validateInvite, recoveryPhraseToSeed, …) use
+  // `onboardingService()`.
+  const services = new Map<string, AvalancheService>();
+  // The service for the account currently being added (createAccount / login /
+  // recover / device-link). For Mock it accumulates that account's seeded state
+  // and becomes the account's service on success (then we rotate a fresh one for
+  // the next add); for DevServer it's an unbound instance used only for the
+  // account-less calls above. Per-instance, never a module global
+  // (desktop/CLAUDE.md "Mock/dev services hold per-instance state").
+  let onboardingSvc: AvalancheService = makeService(store.serviceMode);
+
+  function onboardingService(): AvalancheService {
+    return onboardingSvc;
+  }
+
+  function serviceFor(accountId: string): AvalancheService {
+    const existing = services.get(accountId);
+    if (existing) return existing;
+    // DevServer is stateless per account — bind lazily so a restored account
+    // resolves even before registerAccountService runs. For Mock, a missing
+    // entry means it was never registered (the seeded state lives in the
+    // instance), so fall back to the onboarding instance keyed under this id.
+    if (store.serviceMode === ServiceMode.DevServer) {
+      const bound = new DevServerAvalancheService(accountId);
+      services.set(accountId, bound);
+      return bound;
+    }
+    services.set(accountId, onboardingSvc);
+    return onboardingSvc;
+  }
+
+  // Register the just-created/restored account's service. Mock: the onboarding
+  // instance carries the seeded state, so it becomes this account's service and
+  // we rotate a fresh one for the next add. DevServer: bind a fresh instance.
+  function registerAccountService(accountId: string) {
+    if (store.serviceMode === ServiceMode.Mock) {
+      services.set(accountId, onboardingSvc);
+      onboardingSvc = makeService(ServiceMode.Mock);
+    } else {
+      services.set(accountId, new DevServerAvalancheService(accountId));
+    }
+  }
 
   // Selected conversation — lifted into context so compose/group/join flows
   // can programmatically open a conversation. ChatsView mirrors this signal.
@@ -344,30 +407,26 @@ export function AppProvider(props: { children: JSX.Element }) {
   // drop-on-DB-appearance path below then hands it back to normal lifecycle.
   const pendingConversations: Set<string> = new Set();
 
-  // Event loop lifecycle
-  let eventLoopRunning = false;
-  let connLoopRunning = false;
-  let eventLoopTimeout: ReturnType<typeof setTimeout> | undefined;
+  // Event + connection loop lifecycle, one of each per account (mirrors iOS
+  // eventTasks/stateTasks and Android eventJobs/stateJobs). A loop runs while its
+  // accountId is in `loops`; teardown removes the id and clears any pending retry
+  // timer. `startPollingFor` is idempotent (guards on map membership), so the
+  // restore + add-account paths can both call it without spawning duplicate loops
+  // that would process every event twice (desktop/CLAUDE.md "Background loops").
+  type LoopHandle = {
+    eventRunning: boolean;
+    connRunning: boolean;
+    eventTimeout?: ReturnType<typeof setTimeout>;
+  };
+  const loops = new Map<string, LoopHandle>();
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /**
-   * The single account whose session this context drives today. Multi-account
-   * is not yet implemented on desktop.
-   *
-   * NOTE: the eventual multi-account model is NOT a "currently active" identity
-   * the user switches between — all identities share one inbox (per the mobile
-   * design). So this helper is a stopgap, not a forward-compatible abstraction:
-   * when multi-account lands, callers that assume a single active account will
-   * need to fan out over `store.accounts` / merge per-account state rather than
-   * just swap which account this returns.
-   */
-  function getSoleAccountId(): string | null {
-    // Returns `null` (not `""`) when no account is signed in, so callers can
-    // distinguish "no account" from a valid DID — an empty-string sentinel
-    // could collide with real data in edge cases (e.g. a stale event loop
-    // after logout).
-    return store.accounts[0]?.id ?? null;
+  // Resolve the owning accountId of a conversation already in the store. Used by
+  // the few context methods that receive only a conversationId (not the whole
+  // Conversation) to route per-account service calls. Returns null if unknown.
+  function accountIdForConversation(conversationId: string): string | null {
+    return store.conversations.find((c) => c.id === conversationId)?.accountId ?? null;
   }
 
   function getServerUrl(accountId: string): string {
@@ -449,9 +508,14 @@ export function AppProvider(props: { children: JSX.Element }) {
     void persistCloseToTray(on);
   }
 
-  // Manual "Reconnect now" (offline banner). Best-effort — no-op when signed out.
+  // Manual "Reconnect now" (offline banner). Best-effort — wakes every signed-in
+  // account's reconnect loop (mirrors iOS, which drives connectivity per core).
   function reconnectNow() {
-    void service().reconnectNow().catch(() => { /* signed out / unavailable */ });
+    for (const account of store.accounts) {
+      void serviceFor(account.id)
+        .reconnectNow()
+        .catch(() => { /* signed out / unavailable */ });
+    }
   }
 
   // ── Init: read persisted mode on mount ───────────────────────────────────
@@ -504,7 +568,13 @@ export function AppProvider(props: { children: JSX.Element }) {
   getCurrentWindow()
     .onFocusChanged(({ payload: focused }) => {
       if (focused) {
-        void service().setAppActive(true).catch(() => { /* offline / signed out */ });
+        // Push foreground-active to every account (iOS setIsAppActive loops all
+        // cores) so each one's keepalive + opportunistic reconnect fires.
+        for (const account of store.accounts) {
+          void serviceFor(account.id)
+            .setAppActive(true)
+            .catch(() => { /* offline / signed out */ });
+        }
       }
     })
     .then((un) => { focusUnlisten = un; })
@@ -520,8 +590,12 @@ export function AppProvider(props: { children: JSX.Element }) {
   function enterApp() {
     loadedConversations.value = false;
     void loadConversationsFromStore();
-    startPolling();
+    // Idempotent per account: existing loops are not restarted; a newly added
+    // account's loops start here. This is what makes "sign in another account"
+    // additive — the first account's loops keep running untouched.
+    for (const account of store.accounts) startPollingFor(account.id);
     setStore("isOnboarding", false);
+    setStore("isAddingAccount", false);
   }
 
   // Only restore once per session.  SplashView.onMount fires on every
@@ -530,17 +604,24 @@ export function AppProvider(props: { children: JSX.Element }) {
   let restored = false;
 
   async function restoreAccounts() {
-    if (restoring || restored) return;
+    // Never re-restore once any account is signed in — SplashView.onMount fires
+    // restoreAccounts, and that splash is also shown by the "Sign in to another
+    // account" overlay over a live session. Without the accounts-present guard,
+    // re-mounting it would re-login (re-open the DB of) accounts that are already
+    // running. The create/recover paths handle adding accounts additively.
+    if (restoring || restored || store.accounts.length > 0) return;
     restoring = true;
 
     try {
       const persisted = await persistedAccounts();
       if (persisted.length === 0) return;
 
-      const svc = service();
       for (const p of persisted) {
         try {
-          const result = await svc.login(p.dbPath, "dev-placeholder-key");
+          // login is account-less (returns the DID); register the per-account
+          // service under that DID so every later call routes to its core.
+          const result = await onboardingService().login(p.dbPath, "dev-placeholder-key");
+          registerAccountService(result.did);
           const account: Account = {
             id: result.did,
             displayName: result.displayName || p.displayName,
@@ -579,7 +660,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     prfOutput: number[]
   ) {
     const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
-    const result = await service().createAccount(
+    const result = await onboardingService().createAccount(
       serverUrl,
       dbPath,
       // DB key: a placeholder until OS-keychain integration. Mirrors mobile's
@@ -595,6 +676,8 @@ export function AppProvider(props: { children: JSX.Element }) {
       displayName,
       inviteToken
     );
+    // Bind this account's service before any per-account call routes to it.
+    registerAccountService(result.did);
 
     const serverInfo: ServerInfo = {
       id: serverUrl,
@@ -630,13 +713,14 @@ export function AppProvider(props: { children: JSX.Element }) {
   const LINK_TIMEOUT_MS = 180_000;
 
   // New device, show mode: generate this device's pairing code to display.
+  // Account-less (no account yet) → onboarding service.
   async function deviceLinkShowCode(): Promise<string> {
-    return service().deviceLinkCreatePairing(null);
+    return onboardingService().deviceLinkCreatePairing(null);
   }
 
   // New device, paste mode: accept the existing device's pairing code.
   async function deviceLinkEnterCode(code: string): Promise<void> {
-    await service().deviceLinkAcceptPairing(code);
+    await onboardingService().deviceLinkAcceptPairing(code);
   }
 
   // New device: poll until the provisioning bundle arrives, then install the
@@ -647,9 +731,12 @@ export function AppProvider(props: { children: JSX.Element }) {
     const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
     const deadline = Date.now() + LINK_TIMEOUT_MS;
     for (;;) {
-      const result = await service().deviceLinkAwaitStep(dbPath, "dev-placeholder-key");
+      const result = await onboardingService().deviceLinkAwaitStep(dbPath, "dev-placeholder-key");
       if (result) {
-        const serverUrl = await service().homeServer();
+        // The backend has installed the linked core keyed by this DID; bind its
+        // service so homeServer() (per-account) and the loops route correctly.
+        registerAccountService(result.did);
+        const serverUrl = await serviceFor(result.did).homeServer();
         const serverInfo: ServerInfo = {
           id: serverUrl,
           name: serverUrl,
@@ -675,7 +762,7 @@ export function AppProvider(props: { children: JSX.Element }) {
         return;
       }
       if (Date.now() >= deadline) {
-        await service().deviceLinkReset().catch(() => {});
+        await onboardingService().deviceLinkReset().catch(() => {});
         throw new Error("Device link timed out. Please try again.");
       }
       await new Promise((r) => setTimeout(r, LINK_POLL_MS));
@@ -684,24 +771,25 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   // New device: abandon an in-progress pairing (view teardown / cancel).
   async function deviceLinkCancel(): Promise<void> {
-    await service().deviceLinkReset().catch(() => {});
+    await onboardingService().deviceLinkReset().catch(() => {});
   }
 
   // Existing device, show mode: generate this device's pairing code to display.
-  async function linkShowCode(): Promise<string> {
-    return service().linkCreatePairing(null);
+  // Per-account: the user is linking a new device to a specific identity.
+  async function linkShowCode(accountId: string): Promise<string> {
+    return serviceFor(accountId).linkCreatePairing(null);
   }
 
   // Existing device, paste mode: accept the new device's pairing code.
-  async function linkEnterCode(code: string): Promise<void> {
-    await service().linkAcceptPairing(code);
+  async function linkEnterCode(accountId: string, code: string): Promise<void> {
+    await serviceFor(accountId).linkAcceptPairing(code);
   }
 
   // Existing device: poll until the provisioning bundle has been sealed + sent.
-  async function linkSendBundle(): Promise<void> {
+  async function linkSendBundle(accountId: string): Promise<void> {
     const deadline = Date.now() + LINK_TIMEOUT_MS;
     for (;;) {
-      const done = await service().linkSendBundleStep();
+      const done = await serviceFor(accountId).linkSendBundleStep();
       if (done) return;
       if (Date.now() >= deadline) {
         throw new Error("Device link timed out. Please try again.");
@@ -711,15 +799,21 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   function resetSession() {
-    // Drop the Rust AppCore handle so the old reconnect task + WS connection
-    // die on drop.  The TS-owned polling loop has already been stopped by
-    // stopPolling() above, so clear_session doesn't need to cancel any thread.
-    service().clearSession().catch(() => {});
+    // Full logout: stop every account's loops and drop every core (each old
+    // reconnect task + WS connection dies on drop). The TS loops are torn down
+    // first, so clearSession just releases the backend cores.
+    stopPolling();
+    for (const account of store.accounts) {
+      serviceFor(account.id).clearSession().catch(() => {});
+    }
+    services.clear();
+    // Fresh onboarding service so mock state (storedMessages, pendingEvents,
+    // mockDid) can't bleed into the next session — never a module global.
+    onboardingSvc = makeService(store.serviceMode);
     // Block restoreAccounts from re-entering while we clear persisted state.
     // Otherwise SplashView.onMount fires restoreAccounts before persistAccounts([])
     // completes, finding stale accounts and auto-signing-in — undoing the logout.
     restoring = true;
-    stopPolling();
     setStore(
       produce((s) => {
         s.accounts = [];
@@ -751,10 +845,9 @@ export function AppProvider(props: { children: JSX.Element }) {
   }
 
   function logout() {
+    // resetSession already drops every core, clears the services map, and rotates
+    // a fresh onboarding service — nothing more to do for a full sign-out.
     resetSession();
-    // Fresh service instance so mock state (storedMessages, pendingEvents, etc.)
-    // doesn't bleed into the next session.
-    setService(makeService(store.serviceMode));
   }
 
   async function joinServer(
@@ -788,13 +881,28 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   // ── Track E: settings / account lifecycle ──────────────────────────────────
 
-  // Tear down all local session state and return to onboarding. Single-account
-  // desktop has one core, so removing the (only) account empties the session —
-  // identical teardown to logout(), but reached after a server-side leave or
-  // identity delete rather than a voluntary sign-out.
-  function removeAccountLocally() {
-    resetSession();
-    setService(makeService(store.serviceMode));
+  // Remove ONE account from the device after a server-side leave or identity
+  // delete, leaving the other signed-in accounts running (shared-inbox model).
+  // If it was the last account, fall back to a full reset → onboarding.
+  async function removeAccountLocally(accountId: string) {
+    stopPollingFor(accountId);
+    // Drop the backend core (no-op if delete_identity already removed it).
+    await serviceFor(accountId).clearSession().catch(() => {});
+    services.delete(accountId);
+    setStore(
+      produce((s) => {
+        s.accounts = s.accounts.filter((a) => a.id !== accountId);
+        delete s.connectionStates[accountId];
+      })
+    );
+    const persisted = await persistedAccounts();
+    await persistAccounts(persisted.filter((p) => p.did !== accountId));
+    if (store.accounts.length === 0) {
+      resetSession();
+    } else {
+      // Rebuild the merged conversation list from the remaining accounts.
+      await reloadConversations();
+    }
   }
 
   // Update the user's display name on the core, then mirror it into the in-memory
@@ -802,7 +910,7 @@ export function AppProvider(props: { children: JSX.Element }) {
   async function setAccountDisplayName(accountId: string, displayName: string) {
     const trimmed = displayName.trim();
     if (!trimmed) return;
-    await service().setDisplayName(trimmed);
+    await serviceFor(accountId).setDisplayName(trimmed);
     const idx = store.accounts.findIndex((a) => a.id === accountId);
     if (idx >= 0) setStore("accounts", idx, "displayName", trimmed);
     const persisted = await persistedAccounts();
@@ -817,28 +925,28 @@ export function AppProvider(props: { children: JSX.Element }) {
   // then drop the account from the device. The UI only offers this for non-home
   // memberships (ServerDetailView gates it). Throws on failure, leaving the
   // account in place so the user can retry.
-  async function leaveServer() {
-    await service().leaveServer();
-    removeAccountLocally();
+  async function leaveServer(accountId: string) {
+    await serviceFor(accountId).leaveServer();
+    await removeAccountLocally(accountId);
   }
 
   // Mirrors iOS AppState.deleteIdentity: the core leaves every server, submits a
   // PLC tombstone, and wipes local rows; then we drop the account from the
   // device. Throws (leaving state intact) if the tombstone couldn't be submitted.
-  async function deleteIdentity() {
-    await service().deleteIdentity();
-    removeAccountLocally();
+  async function deleteIdentity(accountId: string) {
+    await serviceFor(accountId).deleteIdentity();
+    await removeAccountLocally(accountId);
   }
 
-  function hasRecovery(): Promise<boolean> {
-    return service().hasRecovery().catch((e: unknown) => {
+  function hasRecovery(accountId: string): Promise<boolean> {
+    return serviceFor(accountId).hasRecovery().catch((e: unknown) => {
       console.warn("hasRecovery failed:", e);
       return false;
     });
   }
 
   function generateRecoveryPhrase(): Promise<string> {
-    return service().generateRecoveryPhrase();
+    return onboardingService().generateRecoveryPhrase();
   }
 
   // ── Deep links (T61) ────────────────────────────────────────────────────────
@@ -903,7 +1011,9 @@ export function AppProvider(props: { children: JSX.Element }) {
     const { action, arg } = parsed;
 
     if (action === "conversation") {
-      const accountId = getSoleAccountId();
+      // No conversation context in a bare contact link, so default to the first
+      // account (iOS does the same for ambiguous deep links — AppState.swift).
+      const accountId = store.accounts[0]?.id ?? null;
       if (!arg || accountId === null) return;
       const conv = findOrCreateDMConversation(arg, accountId);
       setStore("selectedTab", "chats");
@@ -936,13 +1046,15 @@ export function AppProvider(props: { children: JSX.Element }) {
   // RecoveryExplainerView.recoverWithPhrase → recoverAccount. On success the
   // account is added and the app enters the main UI (same path as createAccount).
   async function recoverFromPhrase(phrase: string, serverUrl: string, displayName: string) {
-    const seed = await service().recoveryPhraseToSeed(phrase);
-    const did = await service().deriveDidFromPasskey(seed, serverUrl);
+    // recoveryPhraseToSeed / deriveDidFromPasskey / recoverFromPhrase are all
+    // account-less (no core yet) → onboarding service.
+    const seed = await onboardingService().recoveryPhraseToSeed(phrase);
+    const did = await onboardingService().deriveDidFromPasskey(seed, serverUrl);
     if (store.accounts.some((a) => a.id === did)) {
       throw new Error("This identity is already signed in on this device.");
     }
     const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
-    const result = await service().recoverFromPhrase(
+    const result = await onboardingService().recoverFromPhrase(
       phrase,
       serverUrl,
       did,
@@ -950,6 +1062,8 @@ export function AppProvider(props: { children: JSX.Element }) {
       "dev-placeholder-key",
       displayName
     );
+    // Bind the restored account's service before per-account calls route to it.
+    registerAccountService(result.did);
     const serverInfo: ServerInfo = {
       id: serverUrl,
       name: serverUrl,
@@ -1006,78 +1120,100 @@ export function AppProvider(props: { children: JSX.Element }) {
     if (loadedConversations.value) return;
     loadedConversations.value = true;
 
-    const summaries = await service().loadConversations().catch(() => [] as ConversationSummaryFfi[]);
-    const accountId = getSoleAccountId();
-    if (accountId === null) {
-      // No account signed in — nothing to load. Reset the guard so a later load
-      // (once an account enters) isn't permanently suppressed.
+    if (store.accounts.length === 0) {
+      // No account signed in — reset the guard so a later load (once an account
+      // enters) isn't permanently suppressed.
       loadedConversations.value = false;
       setStore("conversations", []);
       return;
     }
-    const serverUrl = getServerUrl(accountId);
 
-    // Warm the display-name cache from local storage (no network) for every DID
-    // these rows will render — DM peers, plus group last-message senders and
-    // system-event actor/target DIDs — before building titles below. Otherwise
-    // DM rows fall back to the raw DID until the async resolver runs, a visible
-    // flash on cold launch. One bulk FFI call (T78, mirrors iOS
-    // displayNameDidsToWarm + cachedDisplayNames).
-    const warmDids = displayNameDidsToWarm(summaries, accountId);
-    if (warmDids.length) {
-      try {
-        const names = await service().cachedDisplayNames(warmDids);
-        for (const [did, name] of Object.entries(names)) {
-          if (name) setDisplayNameCache(did, name);
+    // Build the merged inbox across every signed-in account (shared-inbox model).
+    // Group conversation ids (`group-<groupId>`) are NOT account-scoped — matching
+    // iOS/Android — so a group two of your identities both belong to dedups to a
+    // single row owned by the first account that materializes it (`groupSeen`).
+    // DM ids embed the owning account (`dm-<accountId>-<peer>`) so they're already
+    // globally unique. Each account's rows are loaded from that account's own core.
+    // Fetch every account's summaries (and warm its name cache) concurrently —
+    // the loads are independent per core, so N accounts cost ~1× latency, not N×.
+    // Processing below stays in account order so the group dedup is deterministic.
+    const accountsList = store.accounts.slice();
+    const perAccount = await Promise.all(
+      accountsList.map(async (account) => {
+        const accountId = account.id;
+        const summaries = await serviceFor(accountId)
+          .loadConversations()
+          .catch(() => [] as ConversationSummaryFfi[]);
+        // Warm the display-name cache from this account's local store (no network)
+        // before building titles — avoids DM rows flashing the raw DID on cold
+        // launch (T78, mirrors iOS displayNameDidsToWarm + cachedDisplayNames).
+        const warmDids = displayNameDidsToWarm(summaries, accountId);
+        if (warmDids.length) {
+          try {
+            const names = await serviceFor(accountId).cachedDisplayNames(warmDids);
+            for (const [did, name] of Object.entries(names)) {
+              if (name) setDisplayNameCache(did, name);
+            }
+          } catch {
+            // Local-only warm; a failure just means rows resolve via the async path.
+          }
         }
-      } catch {
-        // Local-only warm; a failure just means rows resolve via the async path.
-      }
-    }
+        return { account, summaries };
+      })
+    );
 
-    const convs: Conversation[] = summaries.map((s) => {
-      const isGroup = isGroupSummary(s);
-      const groupId = s.conversationId.startsWith("group-")
-        ? s.conversationId.slice("group-".length)
-        : undefined;
-      const recipientDid = !isGroup
-        ? recipientDidFromConvId(s.conversationId, accountId) ?? undefined
-        : undefined;
-      const title =
-        isGroup
+    const all: Conversation[] = [];
+    const groupSeen = new Set<string>();
+    for (const { account, summaries } of perAccount) {
+      const accountId = account.id;
+      const serverUrl = getServerUrl(accountId);
+      for (const s of summaries) {
+        const isGroup = isGroupSummary(s);
+        // Dedup shared groups across accounts: first account to surface it wins.
+        if (isGroup && groupSeen.has(s.conversationId)) continue;
+        if (isGroup) groupSeen.add(s.conversationId);
+
+        const groupId = s.conversationId.startsWith("group-")
+          ? s.conversationId.slice("group-".length)
+          : undefined;
+        const recipientDid = !isGroup
+          ? recipientDidFromConvId(s.conversationId, accountId) ?? undefined
+          : undefined;
+        const title = isGroup
           ? s.groupTitle ?? "Group"
           : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
 
-      // Caption-less attachment messages have an empty body — preview them as
-      // "Photo"/"Attachment" using the summary's attachment content type (iOS
-      // chat-list parity).
-      const lastBody = s.lastMessage?.body ?? "";
-      const lastPreview =
-        lastBody.trim().length === 0 && s.lastMessageAttachmentContentType
-          ? attachmentPlaceholder(s.lastMessageAttachmentContentType)
-          : s.lastMessage?.body ?? undefined;
+        // Caption-less attachment messages have an empty body — preview them as
+        // "Photo"/"Attachment" using the summary's attachment content type (iOS
+        // chat-list parity).
+        const lastBody = s.lastMessage?.body ?? "";
+        const lastPreview =
+          lastBody.trim().length === 0 && s.lastMessageAttachmentContentType
+            ? attachmentPlaceholder(s.lastMessageAttachmentContentType)
+            : s.lastMessage?.body ?? undefined;
 
-      return {
-        id: s.conversationId,
-        title,
-        accountId,
-        serverUrl,
-        recipientDid,
-        groupId,
-        lastMessage: lastPreview,
-        lastMessageDate: s.lastMessage?.sentAtMs ?? undefined,
-        lastMessageKind: s.lastMessage?.kind ?? 0,
-        lastMessageMetadata: s.lastMessage?.metadata ?? undefined,
-        lastMessageSenderDid: s.lastMessage?.senderDid ?? undefined,
-        isGroup,
-        isRequest: s.isRequest,
-        isBlocked: s.isBlocked,
-        // Authoritative unread seed from core (excludes own + expired). (A5)
-        unreadCount: s.unreadCount,
-      };
-    });
+        all.push({
+          id: s.conversationId,
+          title,
+          accountId,
+          serverUrl,
+          recipientDid,
+          groupId,
+          lastMessage: lastPreview,
+          lastMessageDate: s.lastMessage?.sentAtMs ?? undefined,
+          lastMessageKind: s.lastMessage?.kind ?? 0,
+          lastMessageMetadata: s.lastMessage?.metadata ?? undefined,
+          lastMessageSenderDid: s.lastMessage?.senderDid ?? undefined,
+          isGroup,
+          isRequest: s.isRequest,
+          isBlocked: s.isBlocked,
+          // Authoritative unread seed from core (excludes own + expired). (A5)
+          unreadCount: s.unreadCount,
+        });
+      }
+    }
 
-    const dbIds = new Set(convs.map((c) => c.id));
+    const dbIds = new Set(all.map((c) => c.id));
     // A pending conversation that now appears in the DB is fully persisted —
     // stop tracking it so it follows normal DB-driven lifecycle from here on.
     for (const id of dbIds) pendingConversations.delete(id);
@@ -1086,7 +1222,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     const preserved = store.conversations.filter(
       (c) => !dbIds.has(c.id) && pendingConversations.has(c.id)
     );
-    const merged = [...convs, ...preserved].sort(
+    const merged = [...all, ...preserved].sort(
       (a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
     );
     setStore("conversations", merged);
@@ -1121,7 +1257,9 @@ export function AppProvider(props: { children: JSX.Element }) {
   // messages reaper, docs/03 §5, or tombstoned), so it must leave the UI too.
   function reloadMessagesIfLoaded(cid: string) {
     if (!loadedMessages.has(cid)) return;
-    void service()
+    const accountId = accountIdForConversation(cid);
+    if (accountId === null) return;
+    void serviceFor(accountId)
       .loadMessages(cid)
       .then((rows) => {
         setStore("messagesByConversation", cid, rows.map(messageFromFfi));
@@ -1131,11 +1269,11 @@ export function AppProvider(props: { children: JSX.Element }) {
       });
   }
 
-  function loadMessagesFromStore(conversationId: string, _accountId: string) {
+  function loadMessagesFromStore(conversationId: string, accountId: string) {
     if (loadedMessages.has(conversationId)) return;
     loadedMessages.add(conversationId);
 
-    void service()
+    void serviceFor(accountId)
       .loadMessages(conversationId)
       .then((rows) => {
         const messages = rows.map(messageFromFfi);
@@ -1206,7 +1344,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     // send. "sending" is persisted up front (and awaited) so a crash or refresh
     // mid-send is recoverable. Matches iOS AppState.sendMessage.
     const persist = (status: DeliveryStatus) =>
-      service().saveMessage(
+      serviceFor(senderAccountId).saveMessage(
         buildStoredMessage({
           id: messageId,
           conversationId,
@@ -1260,13 +1398,19 @@ export function AppProvider(props: { children: JSX.Element }) {
     // DM disappearing-messages timer is keyed by peer DID in app-core's store
     // (save/load_conversation_expiry), so read it with recipientDid — not the
     // full conversation id — to match what the wire envelope is stamped with.
-    const timer = (await service().getConversationTimer(recipientDid).catch(() => null)) ?? 0;
+    const timer =
+      (await serviceFor(senderAccountId).getConversationTimer(recipientDid).catch(() => null)) ?? 0;
     await sendOptimistic(
       conversationId,
       text,
       senderAccountId,
       timer,
-      (sentAtMs) => service().sendDm(recipientDid, Array.from(new TextEncoder().encode(text)), sentAtMs),
+      (sentAtMs) =>
+        serviceFor(senderAccountId).sendDm(
+          recipientDid,
+          Array.from(new TextEncoder().encode(text)),
+          sentAtMs
+        ),
       "Send failed"
     );
   }
@@ -1274,13 +1418,14 @@ export function AppProvider(props: { children: JSX.Element }) {
   async function sendGroupMessage(conversation: Conversation, text: string) {
     if (!conversation.groupId) return;
     const groupId = conversation.groupId;
-    const timer = (await service().groupExpirySeconds(groupId).catch(() => 0)) ?? 0;
+    const svc = serviceFor(conversation.accountId);
+    const timer = (await svc.groupExpirySeconds(groupId).catch(() => 0)) ?? 0;
     await sendOptimistic(
       conversation.id,
       text,
       conversation.accountId,
       timer,
-      (sentAtMs) => service().sendGroupMessage(groupId, Array.from(new TextEncoder().encode(text)), sentAtMs),
+      (sentAtMs) => svc.sendGroupMessage(groupId, Array.from(new TextEncoder().encode(text)), sentAtMs),
       "Group send failed"
     );
   }
@@ -1296,17 +1441,18 @@ export function AppProvider(props: { children: JSX.Element }) {
     previews: LinkPreviewFfi[]
   ) {
     const target = messageTargetFor(conversation);
+    const svc = serviceFor(conversation.accountId);
     const timer =
       target.type === "group"
-        ? (await service().groupExpirySeconds(target.group_id).catch(() => 0)) ?? 0
-        : (await service().getConversationTimer(target.recipient_did).catch(() => null)) ?? 0;
+        ? (await svc.groupExpirySeconds(target.group_id).catch(() => 0)) ?? 0
+        : (await svc.getConversationTimer(target.recipient_did).catch(() => null)) ?? 0;
     await sendOptimistic(
       conversation.id,
       text,
       conversation.accountId,
       timer,
       (sentAtMs) =>
-        service().sendMessageWithAttachments(target, text, attachments, previews, sentAtMs),
+        svc.sendMessageWithAttachments(target, text, attachments, previews, sentAtMs),
       "Send failed",
       attachments,
       previews
@@ -1316,7 +1462,10 @@ export function AppProvider(props: { children: JSX.Element }) {
   // ── Attachments / link previews / external links (thin service pass-throughs,
   // kept on the context so views never reach the service directly and Mock mode
   // keeps working) ─────────────────────────────────────────────────────────────
+  // Attachments encrypt/decrypt with the owning account's keys, so they route to
+  // that account's core (accountId threaded from the conversation in the view).
   function uploadAttachment(
+    accountId: string,
     plaintext: number[],
     contentType: string,
     fileName: string | null,
@@ -1326,7 +1475,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     thumbnail: number[],
     flags: number
   ): Promise<AttachmentFfi> {
-    return service().uploadAttachment(
+    return serviceFor(accountId).uploadAttachment(
       plaintext,
       contentType,
       fileName,
@@ -1338,16 +1487,17 @@ export function AppProvider(props: { children: JSX.Element }) {
     );
   }
 
-  function downloadAttachment(attachment: AttachmentFfi): Promise<number[]> {
-    return service().downloadAttachment(attachment);
+  function downloadAttachment(accountId: string, attachment: AttachmentFfi): Promise<number[]> {
+    return serviceFor(accountId).downloadAttachment(attachment);
   }
 
+  // Link-preview fetch + external-open are pure Rust commands (no core) → account-less.
   function fetchLinkPreview(url: string): Promise<LinkPreviewMetaFfi> {
-    return service().fetchLinkPreview(url);
+    return onboardingService().fetchLinkPreview(url);
   }
 
   function openExternal(url: string): Promise<void> {
-    return service().openExternal(url);
+    return onboardingService().openExternal(url);
   }
 
   function markAllMessagesRead(conversationId: string, accountId: string) {
@@ -1374,7 +1524,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     });
     if (changed) {
       setStore("messagesByConversation", conversationId, updated);
-      void service()
+      void serviceFor(accountId)
         .markMessagesRead(conversationId, now)
         .catch((e: unknown) => {
           console.warn("markMessagesRead failed:", e);
@@ -1395,7 +1545,7 @@ export function AppProvider(props: { children: JSX.Element }) {
         newlyReadSentAt.length > 0
       ) {
         const recipientDid = conv.recipientDid;
-        void service()
+        void serviceFor(accountId)
           .sendReadReceipt(recipientDid, newlyReadSentAt)
           .catch((e: unknown) => {
             console.warn("sendReadReceipt failed:", e);
@@ -1485,8 +1635,10 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   function loadReactions(conversationId: string) {
     if (loadedReactions.has(conversationId)) return;
+    const accountId = accountIdForConversation(conversationId);
+    if (accountId === null) return;
     loadedReactions.add(conversationId);
-    void service()
+    void serviceFor(accountId)
       .loadReactions(conversationId)
       .then((rows) => {
         setStore("reactionsByConversation", conversationId, rows);
@@ -1542,7 +1694,7 @@ export function AppProvider(props: { children: JSX.Element }) {
         ];
     setStore("reactionsByConversation", convId, next);
 
-    void service()
+    void serviceFor(conversation.accountId)
       .sendReaction(
         messageTargetFor(conversation),
         targetAuthor,
@@ -1586,7 +1738,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       const preview = trimmed.length > 100 ? trimmed.slice(0, 100) + "…" : trimmed;
       setStore("conversations", convIdx, "lastMessage", preview);
     }
-    void service()
+    void serviceFor(conversation.accountId)
       .sendEdit(messageTargetFor(conversation), message.sentAtMs, trimmed, now)
       .catch((e: unknown) => {
         console.warn("sendEdit failed:", e);
@@ -1597,7 +1749,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     conversation: Conversation,
     message: Message
   ): Promise<MessageRevisionFfi[]> {
-    return service()
+    return serviceFor(conversation.accountId)
       .loadMessageRevisions(
         conversation.id,
         message.senderAccountId,
@@ -1653,7 +1805,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       message.senderAccountId,
       message.sentAtMs
     );
-    void service()
+    void serviceFor(conversation.accountId)
       .sendDelete(
         messageTargetFor(conversation),
         message.senderAccountId,
@@ -1679,8 +1831,9 @@ export function AppProvider(props: { children: JSX.Element }) {
     );
     // Persist each state (same contract as the original optimistic send) so the
     // retried message survives a reload regardless of outcome. Matches iOS.
+    const svc = serviceFor(conversation.accountId);
     const persist = (status: DeliveryStatus) =>
-      service().saveMessage(
+      svc.saveMessage(
         buildStoredMessage({
           id: message.id,
           conversationId: conversation.id,
@@ -1701,9 +1854,9 @@ export function AppProvider(props: { children: JSX.Element }) {
     const bytes = Array.from(new TextEncoder().encode(message.body));
     try {
       if (conversation.isGroup && conversation.groupId) {
-        await service().sendGroupMessage(conversation.groupId, bytes, sentAtMs);
+        await svc.sendGroupMessage(conversation.groupId, bytes, sentAtMs);
       } else if (conversation.recipientDid) {
-        await service().sendDm(conversation.recipientDid, bytes, sentAtMs);
+        await svc.sendDm(conversation.recipientDid, bytes, sentAtMs);
       } else {
         throw new Error("no transport target");
       }
@@ -1740,12 +1893,13 @@ export function AppProvider(props: { children: JSX.Element }) {
     recipientDids: string[],
     expirySeconds: number
   ): Promise<Conversation> {
-    const created = await service().createGroup(title, "", expirySeconds);
+    const svc = serviceFor(accountId);
+    const created = await svc.createGroup(title, "", expirySeconds);
     const groupId = created.groupId;
     // Best-effort fan-out: one failed invite must not abort the rest.
     for (const did of recipientDids) {
       try {
-        await service().inviteMember(groupId, did, 0);
+        await svc.inviteMember(groupId, did, 0);
       } catch (e) {
         console.warn("inviteMember failed for", did, e);
       }
@@ -1761,11 +1915,12 @@ export function AppProvider(props: { children: JSX.Element }) {
   // app-core yet, so there is deliberately no UI that builds those args here.
   // Wire it once that format exists; the handler itself is complete.
   async function joinViaLink(
+    accountId: string,
     masterKey: number[],
     hostingServerUrl: string,
     password: number[]
   ): Promise<JoinResultFfi> {
-    const result = await service().joinViaLink(masterKey, hostingServerUrl, password);
+    const result = await serviceFor(accountId).joinViaLink(masterKey, hostingServerUrl, password);
     await reloadConversations();
     return result;
   }
@@ -1773,7 +1928,7 @@ export function AppProvider(props: { children: JSX.Element }) {
   async function leaveGroup(conversation: Conversation) {
     if (!conversation.groupId) return;
     try {
-      await service().leaveGroup(conversation.groupId);
+      await serviceFor(conversation.accountId).leaveGroup(conversation.groupId);
     } catch (e) {
       // Don't flip the UI to the irreversible read-only "you left" state when
       // the server-side leave didn't actually happen — the user is still a
@@ -1793,59 +1948,83 @@ export function AppProvider(props: { children: JSX.Element }) {
 
   async function acceptRequest(conversation: Conversation) {
     if (!conversation.recipientDid) return;
-    await service().acceptRequest(conversation.recipientDid).catch((e: unknown) => {
-      console.warn("acceptRequest failed:", e);
-    });
+    await serviceFor(conversation.accountId)
+      .acceptRequest(conversation.recipientDid)
+      .catch((e: unknown) => {
+        console.warn("acceptRequest failed:", e);
+      });
     await reloadConversations();
   }
 
   async function deleteRequest(conversation: Conversation) {
     if (!conversation.recipientDid) return;
-    await service().deleteRequest(conversation.recipientDid).catch((e: unknown) => {
-      console.warn("deleteRequest failed:", e);
-    });
+    await serviceFor(conversation.accountId)
+      .deleteRequest(conversation.recipientDid)
+      .catch((e: unknown) => {
+        console.warn("deleteRequest failed:", e);
+      });
     if (selectedConversationId() === conversation.id) setSelectedConversationId(null);
     await reloadConversations();
   }
 
   async function reportAndBlock(conversation: Conversation, reason: string) {
     if (!conversation.recipientDid) return;
-    await service().reportAndBlock(conversation.recipientDid, reason).catch((e: unknown) => {
-      console.warn("reportAndBlock failed:", e);
-    });
+    await serviceFor(conversation.accountId)
+      .reportAndBlock(conversation.recipientDid, reason)
+      .catch((e: unknown) => {
+        console.warn("reportAndBlock failed:", e);
+      });
     await reloadConversations();
   }
 
-  async function blockContact(did: string) {
-    await service().blockContact(did).catch((e: unknown) => {
+  async function blockContact(accountId: string, did: string) {
+    await serviceFor(accountId).blockContact(did).catch((e: unknown) => {
       console.warn("blockContact failed:", e);
     });
     await reloadConversations();
   }
 
-  async function unblockContact(did: string) {
-    await service().unblockContact(did).catch((e: unknown) => {
+  async function unblockContact(accountId: string, did: string) {
+    await serviceFor(accountId).unblockContact(did).catch((e: unknown) => {
       console.warn("unblockContact failed:", e);
     });
     await reloadConversations();
   }
 
-  function listBlocked(): Promise<ContactRowFfi[]> {
-    return service().listBlocked().catch((e: unknown) => {
-      console.warn("listBlocked failed:", e);
-      return [] as ContactRowFfi[];
-    });
+  // Blocked contacts are per-account; aggregate across every signed-in account so
+  // the settings list shows them all, each row tagged with its owning accountId.
+  async function listBlocked(): Promise<Array<ContactRowFfi & { accountId: string }>> {
+    // Per-account lists are independent — fetch them concurrently, then flatten.
+    const perAccount = await Promise.all(
+      store.accounts.map(async (account) => {
+        const accountRows = await serviceFor(account.id)
+          .listBlocked()
+          .catch((e: unknown) => {
+            console.warn("listBlocked failed:", e);
+            return [] as ContactRowFfi[];
+          });
+        return accountRows.map((r) => ({ ...r, accountId: account.id }));
+      })
+    );
+    return perAccount.flat();
   }
 
-  function getConversationTimer(conversationId: string): Promise<number | null> {
-    return service().getConversationTimer(conversationId).catch((e: unknown) => {
+  function getConversationTimer(
+    accountId: string,
+    conversationId: string
+  ): Promise<number | null> {
+    return serviceFor(accountId).getConversationTimer(conversationId).catch((e: unknown) => {
       console.warn("getConversationTimer failed:", e);
       return null;
     });
   }
 
-  async function setConversationTimer(recipientDid: string, expirySecs: number | null) {
-    await service().setConversationTimer(recipientDid, expirySecs).catch((e: unknown) => {
+  async function setConversationTimer(
+    accountId: string,
+    recipientDid: string,
+    expirySecs: number | null
+  ) {
+    await serviceFor(accountId).setConversationTimer(recipientDid, expirySecs).catch((e: unknown) => {
       console.warn("setConversationTimer failed:", e);
     });
   }
@@ -1877,7 +2056,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     // Guard against duplicate in-flight fetches for the same DID.
     if (!displayNamePending.has(did)) {
       displayNamePending.add(did);
-      void service()
+      void serviceFor(accountId)
         .contactDisplayName(did)
         .then((name) => {
           // Always cache — even empty strings — to prevent infinite refetch.
@@ -1898,7 +2077,6 @@ export function AppProvider(props: { children: JSX.Element }) {
           displayNamePending.delete(did);
         });
     }
-    void accountId; // suppress lint
     return did;
   }
 
@@ -1906,13 +2084,13 @@ export function AppProvider(props: { children: JSX.Element }) {
   // (default false) and fires a getAccountInfo fetch to populate it; the read is
   // tracked by Solid, so a bot avatar re-renders as a hexagon once resolved. Own
   // accounts are never bots. Mirrors the displayName cache pattern.
-  function isBot(did: string): boolean {
+  function isBot(did: string, accountId: string): boolean {
     if (store.accounts.some((a) => a.id === did)) return false;
     const cached = isBotCache[did];
     if (cached !== undefined) return cached;
     if (!isBotPending.has(did)) {
       isBotPending.add(did);
-      void service()
+      void serviceFor(accountId)
         .getAccountInfo(did)
         .then((info) => setIsBotCache(did, info.isBot))
         .catch((e: unknown) => {
@@ -1954,7 +2132,10 @@ export function AppProvider(props: { children: JSX.Element }) {
   // what kills the interleaving-reload races the old per-case reloads caused.
   // Point mutations that don't benefit from batching (edits, deletes) are
   // applied inline via small named handlers, matching iOS.
-  function handleIncomingEvents(events: IncomingEvent[]) {
+  // `accountId` is the account whose event loop delivered this batch — every
+  // event here belongs to that account (used to attribute incoming messages /
+  // new conversations to the right identity in the shared inbox).
+  function handleIncomingEvents(events: IncomingEvent[], accountId: string) {
     const messages: Extract<IncomingEvent, { type: "message" }>["msg"][] = [];
     const receiptUpdates: Extract<
       IncomingEvent,
@@ -2040,13 +2221,9 @@ export function AppProvider(props: { children: JSX.Element }) {
       }
     }
 
-    // Apply phase — run once for the whole batch.
-    const accountId = getSoleAccountId();
-    // No account (e.g. a stale event-loop drain mid-logout): can't attribute
-    // incoming messages to a conversation, so skip them.
-    if (accountId !== null) {
-      for (const m of messages) handleIncomingMessage(m, accountId);
-    }
+    // Apply phase — run once for the whole batch, attributed to this loop's
+    // account.
+    for (const m of messages) handleIncomingMessage(m, accountId);
     if (receiptUpdates.length) applyDeliveryStatusUpdates(receiptUpdates);
     if (needsConversationReload) void reloadConversations();
   }
@@ -2128,7 +2305,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     // (which are saved) survive. readAtMs stays null (unread) until the
     // conversation is opened; the store starts the disappearing-messages
     // countdown on read. Mirrors iOS AppState.
-    void service()
+    void serviceFor(accountId)
       .saveMessage(
         buildStoredMessage({
           id: msg.id,
@@ -2190,7 +2367,7 @@ export function AppProvider(props: { children: JSX.Element }) {
       pendingConversations.add(conversationId);
       setStore("conversations", (prev) => [newConv, ...prev]);
       if (isRequest) {
-        void service()
+        void serviceFor(accountId)
           .setPendingRequest(m.senderDid, true)
           .catch((e: unknown) => {
             console.warn("setPendingRequest failed:", e);
@@ -2343,87 +2520,112 @@ export function AppProvider(props: { children: JSX.Element }) {
     setStore("reactionsByConversation", cid, next);
   }
 
-  function startEventLoop() {
-    if (eventLoopRunning) return;
-    eventLoopRunning = true;
+  function loopHandle(accountId: string): LoopHandle {
+    let h = loops.get(accountId);
+    if (!h) {
+      h = { eventRunning: false, connRunning: false };
+      loops.set(accountId, h);
+    }
+    return h;
+  }
 
-    // Unified async polling loop.  `nextEvents()` blocks until decrypted
-    // events arrive (WebSocket push via app-core's channel), then drains the
-    // batch.  The Tauri command is async — it parks on the tokio runtime, so
-    // the JS event loop stays responsive.  Both DevServer and Mock mode use
-    // the same pattern; the ordering race is gone because the consumer owns
-    // the cadence.
+  // Per-account event loop. `nextEvents()` blocks until decrypted events arrive
+  // for THIS account (WebSocket push via app-core's channel), then drains the
+  // batch attributed to it. The Tauri command is async — it parks on the tokio
+  // runtime, so the JS event loop stays responsive. Idempotent: guarded by the
+  // per-account handle so a second startPollingFor (restore + add-account both
+  // call it) never doubles the loop and processes every event twice.
+  function startEventLoopFor(accountId: string) {
+    if (!accountId) return;
+    const h = loopHandle(accountId);
+    if (h.eventRunning) return;
+    h.eventRunning = true;
+
+    const svc = serviceFor(accountId);
     const loop = async () => {
-      if (!eventLoopRunning) return;
+      if (!h.eventRunning) return;
       try {
-        const events = await service().nextEvents();
-        handleIncomingEvents(events);
-        if (eventLoopRunning) void loop();
+        const events = await svc.nextEvents();
+        // A poll in flight when the account was torn down (logout / leave /
+        // delete) still resolves here; re-check before applying so we never
+        // attribute events to a removed account (mirrors iOS's post-await
+        // `guard !Task.isCancelled`). The old single-loop code relied on
+        // getSoleAccountId() returning null for this; the per-account loops
+        // need the explicit check.
+        if (!h.eventRunning) return;
+        handleIncomingEvents(events, accountId);
+        if (h.eventRunning) void loop();
       } catch {
-        if (eventLoopRunning) {
-          eventLoopTimeout = setTimeout(() => void loop(), 1000);
+        if (h.eventRunning) {
+          h.eventTimeout = setTimeout(() => void loop(), 1000);
         }
       }
     };
     void loop();
   }
 
-  // Mirror iOS `connectionStateLoop` (AppState.swift:1427): seed from the
-  // current snapshot, then block on `waitForConnectionStateChange` and copy
-  // each state the core emits into `connectionStates[accountId]`. The Rust
-  // core owns reconnection and surfaces its progress as `reconnecting` /
-  // `connected` states, so this loop is a thin mirror — connectivity churn
-  // flows through as ConnectionState values, NOT as JS-side retries. A throw
-  // means the core/session is gone, which is terminal (we deliberately do not
-  // layer a second backoff scheme on top of the core's own reconnect logic).
-  function startConnectionLoop() {
-    if (connLoopRunning) return;
-    const accountId = getSoleAccountId();
-    // Guard against empty DID: prevents storing connection state at key ""
-    // which would pollute the aggregate with a phantom connection.  This
-    // also catches the transient state after resetSession clears accounts
-    // but before enterApp re-establishes a session.
+  // Per-account connection loop (mirrors iOS `connectionStateLoop`): seed from
+  // the current snapshot, then block on `waitForConnectionStateChange` and copy
+  // each state the core emits into `connectionStates[accountId]`. The Rust core
+  // owns reconnection and surfaces its progress as `reconnecting` / `connected`
+  // states, so this loop is a thin mirror — connectivity churn flows through as
+  // ConnectionState values, NOT as JS-side retries. A throw means the core/
+  // session is gone, which is terminal.
+  function startConnectionLoopFor(accountId: string) {
     if (!accountId) return;
-    connLoopRunning = true;
+    const h = loopHandle(accountId);
+    if (h.connRunning) return;
+    h.connRunning = true;
 
+    const svc = serviceFor(accountId);
     const loop = async (last: ConnectionState) => {
-      while (connLoopRunning) {
+      while (h.connRunning) {
         let next: ConnectionState;
         try {
-          next = await service().waitForConnectionStateChange(last);
+          next = await svc.waitForConnectionStateChange(last);
         } catch {
-          connLoopRunning = false;
+          h.connRunning = false;
           break;
         }
-        if (!connLoopRunning) break;
+        if (!h.connRunning) break;
         last = next;
         setStore("connectionStates", accountId, next);
       }
     };
 
-    void service()
+    void svc
       .connectionState()
       .then((state) => {
         setStore("connectionStates", accountId, state);
         void loop(state);
       })
       .catch(() => {
-        connLoopRunning = false;
+        h.connRunning = false;
       });
   }
 
-  function startPolling() {
-    startEventLoop();
-    startConnectionLoop();
+  function startPollingFor(accountId: string) {
+    startEventLoopFor(accountId);
+    startConnectionLoopFor(accountId);
   }
 
-  function stopPolling() {
-    eventLoopRunning = false;
-    connLoopRunning = false;
-    if (eventLoopTimeout) {
-      clearTimeout(eventLoopTimeout);
-      eventLoopTimeout = undefined;
+  // Tear down ONE account's loops (leave / delete / remove). Clears the
+  // per-account handle so a later startPollingFor cleanly restarts it.
+  function stopPollingFor(accountId: string) {
+    const h = loops.get(accountId);
+    if (!h) return;
+    h.eventRunning = false;
+    h.connRunning = false;
+    if (h.eventTimeout) {
+      clearTimeout(h.eventTimeout);
+      h.eventTimeout = undefined;
     }
+    loops.delete(accountId);
+  }
+
+  // Tear down every account's loops (full logout / provider unmount).
+  function stopPolling() {
+    for (const accountId of Array.from(loops.keys())) stopPollingFor(accountId);
   }
 
   onCleanup(stopPolling);
@@ -2445,12 +2647,25 @@ export function AppProvider(props: { children: JSX.Element }) {
   });
 
   async function validateInvite(token: string): Promise<InviteInfo> {
-    return service().validateInvite(token);
+    return onboardingService().validateInvite(token);
+  }
+
+  // Begin the "Sign in to another account" flow: run the onboarding UI on top of
+  // the live session without tearing it down. createAccount / recoverFromPhrase /
+  // device-link all append + enterApp (which clears isAddingAccount), so the
+  // existing accounts and their loops keep running throughout.
+  function startAddAccount() {
+    setStore("isAddingAccount", true);
+  }
+
+  function cancelAddAccount() {
+    setStore("isAddingAccount", false);
   }
 
   const ctx: AppContextValue = {
     store,
-    service,
+    service: onboardingService,
+    serviceFor,
     setSelectedTab: (tab) => setStore("selectedTab", tab),
     createAccount,
     restoreAccounts,
@@ -2506,6 +2721,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     hasRecovery,
     generateRecoveryPhrase,
     recoverFromPhrase,
+    startAddAccount,
+    cancelAddAccount,
     deviceLinkShowCode,
     deviceLinkEnterCode,
     deviceLinkComplete,
