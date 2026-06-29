@@ -173,6 +173,43 @@ export const commands = {
 	 *  image is found or the image fetch fails — never errors on a missing image.
 	 */
 	fetchLinkPreview: (url: string) => typedError<LinkPreviewMetaFfi, string>(__TAURI_INVOKE("fetch_link_preview", { url })),
+	/**
+	 *  New device: generate this device's pairing code (show mode). Creates the
+	 *  handshake handle and stores it for the subsequent `device_link_await_step`.
+	 */
+	deviceLinkCreatePairing: (mailboxServer: string | null) => typedError<string, string>(__TAURI_INVOKE("device_link_create_pairing", { mailboxServer })),
+	/**
+	 *  New device: accept (paste) the existing device's pairing code (scan mode).
+	 *  Stores the handshake handle for the subsequent `device_link_await_step`.
+	 */
+	deviceLinkAcceptPairing: (code: string) => typedError<null, string>(__TAURI_INVOKE("device_link_accept_pairing", { code })),
+	/**
+	 *  New device: one non-blocking step toward completing the link. Returns the
+	 *  linked account (and installs it as the active account in `AppState`) once the
+	 *  bundle has arrived; `None` while still waiting. Requires a prior
+	 *  `device_link_create_pairing` / `device_link_accept_pairing`.
+	 */
+	deviceLinkAwaitStep: (dbPath: string, dbKey: string) => typedError<{
+	did: string,
+	displayName: string,
+} | null, string>(__TAURI_INVOKE("device_link_await_step", { dbPath, dbKey })),
+	/**  New device: abandon an in-progress pairing (cancel / view teardown). */
+	deviceLinkReset: () => typedError<null, string>(__TAURI_INVOKE("device_link_reset")),
+	/**
+	 *  Existing device: generate this device's pairing code for a new device to
+	 *  enter (show mode). Follow with `link_send_bundle_step` polling.
+	 */
+	linkCreatePairing: (mailboxServer: string | null) => typedError<string, string>(__TAURI_INVOKE("link_create_pairing", { mailboxServer })),
+	/**
+	 *  Existing device: accept (paste) the new device's pairing code (scan mode).
+	 *  Follow with `link_send_bundle_step` polling.
+	 */
+	linkAcceptPairing: (code: string) => typedError<null, string>(__TAURI_INVOKE("link_accept_pairing", { code })),
+	/**
+	 *  Existing device: one non-blocking step of sealing + sending the provisioning
+	 *  bundle. Returns true when done; the TS layer polls this.
+	 */
+	linkSendBundleStep: () => typedError<boolean, string>(__TAURI_INVOKE("link_send_bundle_step")),
 };
 
 /* Types */

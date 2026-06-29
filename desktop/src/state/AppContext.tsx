@@ -156,6 +156,19 @@ interface AppContextValue {
   generateRecoveryPhrase: () => Promise<string>;
   recoverFromPhrase: (phrase: string, serverUrl: string, displayName: string) => Promise<void>;
 
+  // Device linking (T71). New-device side (onboarding, account-less):
+  // deviceLinkShowCode (show mode) or deviceLinkEnterCode (paste mode), then
+  // deviceLinkComplete polls until the account arrives (then persists + enters).
+  // Existing-device side (settings, signed in): linkShowCode or linkEnterCode,
+  // then linkSendBundle polls until the bundle is delivered.
+  deviceLinkShowCode: () => Promise<string>;
+  deviceLinkEnterCode: (code: string) => Promise<void>;
+  deviceLinkComplete: () => Promise<void>;
+  deviceLinkCancel: () => Promise<void>;
+  linkShowCode: () => Promise<string>;
+  linkEnterCode: (code: string) => Promise<void>;
+  linkSendBundle: () => Promise<void>;
+
   // Deep links — route a pasted/opened link (conversation/<did>, i/<token>)
   isDeepLink: (raw: string) => boolean;
   handleDeepLink: (raw: string) => void;
@@ -538,6 +551,94 @@ export function AppProvider(props: { children: JSX.Element }) {
     });
 
     enterApp();
+  }
+
+  // ── Device linking (T71) ────────────────────────────────────────────────────
+  // Poll cadence mirrors iOS AppState (1s interval, 180s deadline). The TS layer
+  // drives the loop so it stays cancellable, per docs/04 §4.2 (no long-lived,
+  // uncancellable FFI call).
+  const LINK_POLL_MS = 1000;
+  const LINK_TIMEOUT_MS = 180_000;
+
+  // New device, show mode: generate this device's pairing code to display.
+  async function deviceLinkShowCode(): Promise<string> {
+    return service().deviceLinkCreatePairing(null);
+  }
+
+  // New device, paste mode: accept the existing device's pairing code.
+  async function deviceLinkEnterCode(code: string): Promise<void> {
+    await service().deviceLinkAcceptPairing(code);
+  }
+
+  // New device: poll until the provisioning bundle arrives, then install the
+  // linked account and enter the app — the same completion as createAccount
+  // (account row + persisted record + enterApp). The home server is learned
+  // from the bundle (homeServer()), not from user input.
+  async function deviceLinkComplete(): Promise<void> {
+    const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
+    const deadline = Date.now() + LINK_TIMEOUT_MS;
+    for (;;) {
+      const result = await service().deviceLinkAwaitStep(dbPath, "dev-placeholder-key");
+      if (result) {
+        const serverUrl = await service().homeServer();
+        const serverInfo: ServerInfo = {
+          id: serverUrl,
+          name: serverUrl,
+          url: serverUrl,
+          displayHost: displayHost(serverUrl, serverUrl),
+        };
+        const account: Account = {
+          id: result.did,
+          displayName: result.displayName,
+          avatarData: null,
+          servers: [serverInfo],
+        };
+        if (!store.accounts.some((a) => a.id === result.did)) {
+          setStore("accounts", (prev) => [...prev, account]);
+        }
+        await addPersistedAccount({
+          did: result.did,
+          displayName: account.displayName,
+          dbPath,
+          servers: [{ id: serverUrl, name: serverUrl, url: serverUrl }],
+        });
+        enterApp();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        await service().deviceLinkReset().catch(() => {});
+        throw new Error("Device link timed out. Please try again.");
+      }
+      await new Promise((r) => setTimeout(r, LINK_POLL_MS));
+    }
+  }
+
+  // New device: abandon an in-progress pairing (view teardown / cancel).
+  async function deviceLinkCancel(): Promise<void> {
+    await service().deviceLinkReset().catch(() => {});
+  }
+
+  // Existing device, show mode: generate this device's pairing code to display.
+  async function linkShowCode(): Promise<string> {
+    return service().linkCreatePairing(null);
+  }
+
+  // Existing device, paste mode: accept the new device's pairing code.
+  async function linkEnterCode(code: string): Promise<void> {
+    await service().linkAcceptPairing(code);
+  }
+
+  // Existing device: poll until the provisioning bundle has been sealed + sent.
+  async function linkSendBundle(): Promise<void> {
+    const deadline = Date.now() + LINK_TIMEOUT_MS;
+    for (;;) {
+      const done = await service().linkSendBundleStep();
+      if (done) return;
+      if (Date.now() >= deadline) {
+        throw new Error("Device link timed out. Please try again.");
+      }
+      await new Promise((r) => setTimeout(r, LINK_POLL_MS));
+    }
   }
 
   function resetSession() {
@@ -2276,6 +2377,13 @@ export function AppProvider(props: { children: JSX.Element }) {
     hasRecovery,
     generateRecoveryPhrase,
     recoverFromPhrase,
+    deviceLinkShowCode,
+    deviceLinkEnterCode,
+    deviceLinkComplete,
+    deviceLinkCancel,
+    linkShowCode,
+    linkEnterCode,
+    linkSendBundle,
     isDeepLink,
     handleDeepLink,
   };

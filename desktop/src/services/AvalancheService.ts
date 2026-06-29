@@ -67,6 +67,20 @@ export interface AvalancheService {
     displayName: string
   ): Promise<import("../bindings").AccountResult>;
 
+  // Device linking (T71). New-device side (account-less) drives
+  // create/accept → poll deviceLinkAwaitStep until it returns the account;
+  // existing-device side drives create/accept → poll linkSendBundleStep.
+  deviceLinkCreatePairing(mailboxServer: string | null): Promise<string>;
+  deviceLinkAcceptPairing(code: string): Promise<void>;
+  deviceLinkAwaitStep(
+    dbPath: string,
+    dbKey: string
+  ): Promise<import("../bindings").AccountResult | null>;
+  deviceLinkReset(): Promise<void>;
+  linkCreatePairing(mailboxServer: string | null): Promise<string>;
+  linkAcceptPairing(code: string): Promise<void>;
+  linkSendBundleStep(): Promise<boolean>;
+
   // Core messaging
   sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void>;
   sendGroupMessage(groupId: string, plaintext: number[], sentAtMs: number): Promise<void>;

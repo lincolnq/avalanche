@@ -352,6 +352,40 @@ export class MockAvalancheService implements AvalancheService {
     return { did, displayName };
   }
 
+  // ── Device linking (T71) — no real handshake in mock mode; these stubs let
+  // the linking UI be walked end-to-end. The new-device poll completes on the
+  // first step (returns a fresh mock account); the existing-device poll reports
+  // done immediately.
+
+  async deviceLinkCreatePairing(_mailboxServer: string | null): Promise<string> {
+    return "av1.mock-pairing-code";
+  }
+
+  async deviceLinkAcceptPairing(_code: string): Promise<void> {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  async deviceLinkAwaitStep(_dbPath: string, _dbKey: string): Promise<AccountResult | null> {
+    await new Promise((r) => setTimeout(r, 800));
+    this.mockDid = makeMockDid();
+    return { did: this.mockDid, displayName: "Linked Device" };
+  }
+
+  async deviceLinkReset(): Promise<void> {}
+
+  async linkCreatePairing(_mailboxServer: string | null): Promise<string> {
+    return "av1.mock-pairing-code";
+  }
+
+  async linkAcceptPairing(_code: string): Promise<void> {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  async linkSendBundleStep(): Promise<boolean> {
+    await new Promise((r) => setTimeout(r, 800));
+    return true;
+  }
+
   async sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
     void sentAtMs;

@@ -90,4 +90,11 @@ commands.allow = [
   "send_message_with_attachments",
   "open_external",
   "fetch_link_preview",
+  "device_link_create_pairing",
+  "device_link_accept_pairing",
+  "device_link_await_step",
+  "device_link_reset",
+  "link_create_pairing",
+  "link_accept_pairing",
+  "link_send_bundle_step",
 ]

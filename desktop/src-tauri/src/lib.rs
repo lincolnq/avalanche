@@ -39,6 +39,16 @@ struct AppState {
     app: Mutex<Option<Arc<AppCore>>>,
 }
 
+/// Transient handle for the *new device* side of device linking (T71). Kept
+/// separate from `AppState` because the joining device has no account yet —
+/// `device_link_await_step` moves the linked account into `AppState.app` once
+/// the provisioning bundle arrives, then clears this. Mirrors iOS keeping a
+/// `DeviceLinkNew` alive on the linking view and dropping it on teardown
+/// (`LinkNewDeviceView.swift`).
+struct DeviceLinkState {
+    link: Mutex<Option<Arc<app_core::DeviceLinkNew>>>,
+}
+
 fn get_app(state: &tauri::State<'_, AppState>) -> Result<std::sync::Arc<AppCore>, String> {
     state
         .app
@@ -148,6 +158,15 @@ pub fn run() {
             send_message_with_attachments,
             open_external,
             fetch_link_preview,
+            // Device linking (Day-6 B1 / T71). New-device (account-less) side
+            // uses DeviceLinkState; existing-device side operates on AppState.
+            device_link_create_pairing,
+            device_link_accept_pairing,
+            device_link_await_step,
+            device_link_reset,
+            link_create_pairing,
+            link_accept_pairing,
+            link_send_bundle_step,
         ]);
 
     // Codegen path (never compiled into the shipped app): write bindings.ts and
@@ -211,6 +230,9 @@ pub fn run() {
         })
         .manage(AppState {
             app: Mutex::new(None),
+        })
+        .manage(DeviceLinkState {
+            link: Mutex::new(None),
         })
         .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
@@ -303,6 +325,144 @@ fn recover_from_phrase(
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
     *state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
     Ok(AccountResult { did, display_name })
+}
+
+// ── Device linking (T71) ──────────────────────────────────────────────────────
+//
+// Two sides, both driven by a TS poll loop (1s interval, 180s timeout — see
+// AppContext.completeDeviceLink / linkSendBundle, mirroring iOS):
+//   * New device (account-less): `DeviceLinkState` holds a `DeviceLinkNew`.
+//     create/accept a pairing code, then poll `device_link_await_step` until the
+//     linked account arrives and is moved into `AppState.app`.
+//   * Existing device (signed in): operates on the live `AppCore` in `AppState`.
+//     create/accept a pairing code, then poll `link_send_bundle_step` until true.
+// All steps do network I/O against the mailbox, so they run on the blocking pool
+// (`spawn_blocking`) rather than the WebView thread — same rule as `next_events`.
+
+/// New device: generate this device's pairing code (show mode). Creates the
+/// handshake handle and stores it for the subsequent `device_link_await_step`.
+#[tauri::command]
+#[specta::specta]
+async fn device_link_create_pairing(
+    link_state: tauri::State<'_, DeviceLinkState>,
+    mailbox_server: Option<String>,
+) -> Result<String, String> {
+    let link = app_core::DeviceLinkNew::new();
+    let handle = link.clone();
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        handle.create_pairing(mailbox_server).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(link);
+    Ok(code)
+}
+
+/// New device: accept (paste) the existing device's pairing code (scan mode).
+/// Stores the handshake handle for the subsequent `device_link_await_step`.
+#[tauri::command]
+#[specta::specta]
+async fn device_link_accept_pairing(
+    link_state: tauri::State<'_, DeviceLinkState>,
+    code: String,
+) -> Result<(), String> {
+    let link = app_core::DeviceLinkNew::new();
+    let handle = link.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        handle.accept_pairing(code).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(link);
+    Ok(())
+}
+
+/// New device: one non-blocking step toward completing the link. Returns the
+/// linked account (and installs it as the active account in `AppState`) once the
+/// bundle has arrived; `None` while still waiting. Requires a prior
+/// `device_link_create_pairing` / `device_link_accept_pairing`.
+#[tauri::command]
+#[specta::specta]
+async fn device_link_await_step(
+    link_state: tauri::State<'_, DeviceLinkState>,
+    app_state: tauri::State<'_, AppState>,
+    db_path: String,
+    db_key: String,
+) -> Result<Option<AccountResult>, String> {
+    let link = link_state
+        .link
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .clone()
+        .ok_or_else(|| "no pairing in progress".to_string())?;
+    let linked = tauri::async_runtime::spawn_blocking(move || {
+        link.await_link_step(db_path, db_key).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    match linked {
+        Some(app) => {
+            let did = app.did();
+            let display_name = app.own_display_name().map_err(|e| e.to_string())?;
+            *app_state.app.lock().map_err(|e| format!("lock poisoned: {}", e))? = Some(app);
+            *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
+            Ok(Some(AccountResult { did, display_name }))
+        }
+        None => Ok(None),
+    }
+}
+
+/// New device: abandon an in-progress pairing (cancel / view teardown).
+#[tauri::command]
+#[specta::specta]
+fn device_link_reset(link_state: tauri::State<'_, DeviceLinkState>) -> Result<(), String> {
+    *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
+    Ok(())
+}
+
+/// Existing device: generate this device's pairing code for a new device to
+/// enter (show mode). Follow with `link_send_bundle_step` polling.
+#[tauri::command]
+#[specta::specta]
+async fn link_create_pairing(
+    state: tauri::State<'_, AppState>,
+    mailbox_server: Option<String>,
+) -> Result<String, String> {
+    let app = get_app(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.link_create_pairing(mailbox_server).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Existing device: accept (paste) the new device's pairing code (scan mode).
+/// Follow with `link_send_bundle_step` polling.
+#[tauri::command]
+#[specta::specta]
+async fn link_accept_pairing(
+    state: tauri::State<'_, AppState>,
+    code: String,
+) -> Result<(), String> {
+    let app = get_app(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.link_accept_pairing(code).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Existing device: one non-blocking step of sealing + sending the provisioning
+/// bundle. Returns true when done; the TS layer polls this.
+#[tauri::command]
+#[specta::specta]
+async fn link_send_bundle_step(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    let app = get_app(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.link_send_bundle_step().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ── Core messaging ────────────────────────────────────────────────────────────

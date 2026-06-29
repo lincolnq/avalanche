@@ -5,6 +5,7 @@ import "./SplashView.css";
 interface SplashViewProps {
   onEnterLink: () => void;
   onRecover: () => void;
+  onLinkDevice: () => void;
 }
 
 export default function SplashView(props: SplashViewProps) {
@@ -21,6 +22,9 @@ export default function SplashView(props: SplashViewProps) {
       <div class="splash-actions">
         <button class="btn-primary splash-btn" onClick={props.onEnterLink}>
           Enter Invite Link
+        </button>
+        <button class="splash-recover-link" onClick={props.onLinkDevice}>
+          Link to another device
         </button>
         <button class="splash-recover-link" onClick={props.onRecover}>
           Recover an identity

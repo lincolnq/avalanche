@@ -1,6 +1,6 @@
 import { createSignal, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { FiArrowLeft, FiUser, FiUsers, FiSlash, FiTool, FiChevronRight } from "solid-icons/fi";
+import { FiArrowLeft, FiUser, FiUsers, FiSlash, FiSmartphone, FiTool, FiChevronRight } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import AccountAvatar from "../../components/AccountAvatar";
 import AccountsView from "./AccountsView";
@@ -8,6 +8,7 @@ import ServerDetailView from "./ServerDetailView";
 import IdentityDetailView from "./IdentityDetailView";
 import BlockedContactsView from "./BlockedContactsView";
 import DevSettingsView from "./DevSettingsView";
+import LinkDeviceView from "./LinkDeviceView";
 import type { Account, ServerInfo } from "../../models";
 import "./SettingsView.css";
 
@@ -16,6 +17,7 @@ type Screen =
   | { name: "accounts" }
   | { name: "identity"; account: Account }
   | { name: "server"; account: Account; server: ServerInfo }
+  | { name: "linkDevice" }
   | { name: "dev" };
 
 /**
@@ -71,6 +73,11 @@ export default function SettingsView() {
               <button class="settings-row" onClick={() => push({ name: "accounts" })}>
                 <FiUsers size={18} /><span>Accounts</span><FiChevronRight size={16} class="settings-row-chevron" />
               </button>
+              <Show when={soleAccount()}>
+                <button class="settings-row" onClick={() => push({ name: "linkDevice" })}>
+                  <FiSmartphone size={18} /><span>Link a device</span><FiChevronRight size={16} class="settings-row-chevron" />
+                </button>
+              </Show>
               <button class="settings-row" onClick={() => setShowBlocked(true)}>
                 <FiSlash size={18} /><span>Blocked Contacts</span><FiChevronRight size={16} class="settings-row-chevron" />
               </button>
@@ -104,6 +111,10 @@ export default function SettingsView() {
 
       <Match when={serverScreen()}>
         {(s) => <ServerDetailView account={s().account} server={s().server} onBack={pop} />}
+      </Match>
+
+      <Match when={current().name === "linkDevice"}>
+        <LinkDeviceView onBack={pop} />
       </Match>
 
       <Match when={current().name === "dev"}>

@@ -56,6 +56,36 @@ export class DevServerAvalancheService implements AvalancheService {
     return ok(commands.recoverFromPhrase(phrase, serverUrl, did, dbPath, dbKey, displayName));
   }
 
+  // ── Device linking (T71) ───────────────────────────────────────────
+
+  async deviceLinkCreatePairing(mailboxServer: string | null): Promise<string> {
+    return ok(commands.deviceLinkCreatePairing(mailboxServer));
+  }
+
+  async deviceLinkAcceptPairing(code: string): Promise<void> {
+    await ok(commands.deviceLinkAcceptPairing(code));
+  }
+
+  async deviceLinkAwaitStep(dbPath: string, dbKey: string): Promise<AccountResult | null> {
+    return ok(commands.deviceLinkAwaitStep(dbPath, dbKey));
+  }
+
+  async deviceLinkReset(): Promise<void> {
+    await ok(commands.deviceLinkReset());
+  }
+
+  async linkCreatePairing(mailboxServer: string | null): Promise<string> {
+    return ok(commands.linkCreatePairing(mailboxServer));
+  }
+
+  async linkAcceptPairing(code: string): Promise<void> {
+    await ok(commands.linkAcceptPairing(code));
+  }
+
+  async linkSendBundleStep(): Promise<boolean> {
+    return ok(commands.linkSendBundleStep());
+  }
+
   // ── Core messaging ─────────────────────────────────────────────────
 
   async sendDm(recipientDid: string, plaintext: number[], sentAtMs: number): Promise<void> {

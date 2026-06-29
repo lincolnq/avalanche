@@ -10,6 +10,7 @@ import JoiningServerView from "./JoiningServerView";
 import RecoveryPhraseSetupView from "./RecoveryPhraseSetupView";
 import RecoveryExplainerView from "./RecoveryExplainerView";
 import RecoveryConsoleView from "./RecoveryConsoleView";
+import LinkNewDeviceView from "./LinkNewDeviceView";
 
 type Screen =
   | { name: "splash" }
@@ -19,7 +20,8 @@ type Screen =
   | { name: "recoveryPhraseSetup"; inviteInfo: InviteInfo; inviteToken: string; displayName: string }
   | { name: "joiningServer"; inviteInfo: InviteInfo; inviteToken: string; account: Account }
   | { name: "recoveryExplainer" }
-  | { name: "recoveryConsole"; phrase: string; serverUrl: string };
+  | { name: "recoveryConsole"; phrase: string; serverUrl: string }
+  | { name: "linkDevice" };
 
 export default function OnboardingFlow() {
   const { store, validateInvite, setPendingInviteToken } = useApp();
@@ -87,6 +89,7 @@ export default function OnboardingFlow() {
         <SplashView
           onEnterLink={() => navigate({ name: "inviteLinkEntry" })}
           onRecover={() => navigate({ name: "recoveryExplainer" })}
+          onLinkDevice={() => navigate({ name: "linkDevice" })}
         />
       </Match>
 
@@ -158,6 +161,10 @@ export default function OnboardingFlow() {
         {(s) => (
           <RecoveryConsoleView phrase={s().phrase} serverUrl={s().serverUrl} onBack={goBack} />
         )}
+      </Match>
+
+      <Match when={current().name === "linkDevice"}>
+        <LinkNewDeviceView onBack={goBack} />
       </Match>
     </Switch>
   );
