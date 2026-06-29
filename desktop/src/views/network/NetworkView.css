@@ -36,7 +36,7 @@
 .server-url {
   font-size: 13px;
   color: var(--color-text-secondary);
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .server-host {

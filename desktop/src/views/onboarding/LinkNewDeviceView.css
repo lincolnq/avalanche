@@ -35,7 +35,7 @@
 
 .ld-input {
   width: 100%;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .ld-code {
@@ -44,7 +44,7 @@
   border-radius: 8px;
   background: var(--color-input-bg);
   border: 1px solid var(--color-input-border);
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   line-height: 1.5;
   color: var(--color-text);

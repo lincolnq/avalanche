@@ -15,6 +15,15 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Form controls don't inherit font-family by default — they use the browser's
+   UA control font, which reads as a different typeface from the rest of the UI
+   (most visible on the .btn-* buttons, e.g. "Link a device"). Make them inherit
+   the app font. Elements that deliberately set a monospace family (DIDs,
+   recovery words, pairing codes) override this with their own font-family. */
+button, input, select, textarea {
+  font-family: inherit;
+}
+
 /* Semantic color tokens. Light values live in :root; the dark overrides live in
    the `prefers-color-scheme: dark` block below. Views reference only the semantic
    names (never raw hex), so they adapt for free — mirrors the iOS palette in
