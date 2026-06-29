@@ -29,12 +29,12 @@
   white-space: pre-wrap;
 }
 .mine .bubble {
-  background: var(--color-sidebar);
-  color: var(--color-bg);
+  background: var(--color-bubble-out);
+  color: var(--color-bubble-out-text);
   border-bottom-right-radius: 4px;
 }
 .theirs .bubble {
-  background: rgba(107, 62, 80, 0.12);
+  background: var(--color-bubble-in);
   color: var(--color-text);
   border-bottom-left-radius: 4px;
 }

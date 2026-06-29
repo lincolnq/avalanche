@@ -6,7 +6,7 @@
   padding: 8px 10px;
   border: 1.5px solid var(--color-input-border);
   border-radius: var(--radius-input);
-  background: #fff;
+  background: var(--color-surface);
 }
 .recipient-field:focus-within {
   border-color: var(--color-accent);

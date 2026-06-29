@@ -52,7 +52,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid var(--color-divider);
   border-radius: 10px;
   padding: 12px 14px;
@@ -105,7 +105,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid var(--color-divider);
   border-radius: 10px;
   padding: 14px;
