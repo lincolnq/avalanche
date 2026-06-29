@@ -52,6 +52,28 @@
   white-space: nowrap;
 }
 
+.conv-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Owning-identity badge (multi-account): brand-colored circle with the account's
+   initial, mirroring iOS. Full display name shown on hover via the title attr. */
+.conv-account-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .unread-badge {
   background: var(--color-error);
   color: #fff;

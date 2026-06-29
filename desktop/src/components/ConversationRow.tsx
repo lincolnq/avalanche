@@ -1,3 +1,4 @@
+import { Show } from "solid-js";
 import { useApp } from "../state/AppContext";
 import type { Conversation } from "../models";
 import { formatRelative } from "../lib/format";
@@ -12,7 +13,13 @@ interface Props {
 }
 
 export default function ConversationRow(props: Props) {
-  const { unreadCount, displayName } = useApp();
+  const { store, unreadCount, displayName } = useApp();
+  // Multi-account: show a small badge with the owning identity's initial so the
+  // merged inbox makes clear which account each chat belongs to. Only when more
+  // than one account is signed in (mirrors iOS ConversationRow.showAccountIndicator).
+  const owner = () => store.accounts.find((a) => a.id === props.conversation.accountId);
+  const showAccountIndicator = () => store.accounts.length > 1;
+  const ownerInitial = () => (owner()?.displayName?.trim()?.[0] ?? "?").toUpperCase();
   // Reactive accessor (not a captured value): re-reads on every
   // messagesByConversation change, so the unread badge clears the instant a
   // conversation is opened (markAllMessagesRead), not only after the row
@@ -61,7 +68,14 @@ export default function ConversationRow(props: Props) {
             {formatRelative(props.conversation.lastMessageDate)}
           </span>
         )}
-        {unread() > 0 && <span class="unread-badge">{unread()}</span>}
+        <div class="conv-badges">
+          <Show when={showAccountIndicator()}>
+            <span class="conv-account-badge" title={owner()?.displayName ?? ""}>
+              {ownerInitial()}
+            </span>
+          </Show>
+          {unread() > 0 && <span class="unread-badge">{unread()}</span>}
+        </div>
       </div>
     </div>
   );
