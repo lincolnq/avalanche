@@ -321,7 +321,7 @@ File names below are the current ones; some iOS-era names in this doc's history
 | `fetchProjects()` / `requestProjectToken()` | `[x]` |
 | Conversation list derived from SQLCipher store | `[x]` |
 | `unreadCount(for:)` (authoritative seed from core) | `[x]` |
-| Multi-account (one shared inbox over all identities) | `[ ]` (single-account today — see Deferred) |
+| Multi-account (one shared inbox over all identities) | `[x]` |
 
 ---
 
@@ -374,11 +374,22 @@ File names below are the current ones; some iOS-era names in this doc's history
 - System tray integration (optional: keep app running in background)
 - Native notifications via `tauri-plugin-notification`
 
-### Phase 8 — Multi-account (day 6, required before Desktop is "complete")
+### Phase 8 — Multi-account (day 7) ✅ implemented
 
-Desktop currently runs a **single account**: `src-tauri` holds one
-`Mutex<Option<Arc<AppCore>>>` and every Tauri command resolves that one core, so
-the frontend's `getActiveAccountId()` (`AppContext.tsx`) is just a mirror of it.
+**Status: done.** `src-tauri` now holds a `Mutex<HashMap<String, Arc<AppCore>>>`
+keyed by accountId; every per-account Tauri command takes an `account_id` and
+resolves its core via `get_app(&state, &account_id)`; factory commands insert
+into the map keyed by the returned DID; `next_events`/`wait_for_connection_state_change`
+run per account. The frontend runs one event loop + one connection loop per
+account (`startPollingFor`, idempotent), resolves a per-account service via
+`serviceFor(accountId)`, merges every account's conversations into one sorted
+inbox, and offers "Sign in to another account" (additive onboarding over the
+live session). Group conversation ids stay un-account-scoped (`group-<groupId>`),
+matching iOS/Android. The historical single-account design is recorded below.
+
+Desktop previously ran a **single account**: `src-tauri` held one
+`Mutex<Option<Arc<AppCore>>>` and every Tauri command resolved that one core, so
+the frontend's `getActiveAccountId()` (`AppContext.tsx`) was just a mirror of it.
 iOS and Android already run **multiple accounts concurrently** — a `cores` map
 keyed by accountId, per-account event/connection loops, all merged into one
 shared inbox (there is no "currently active" identity to switch between). See
@@ -419,5 +430,5 @@ and their conversations show up in one merged list, matching iOS/Android.
 
 ## Deferred / Known Limitations
 
-- **Single-account only (until day 6).** Desktop holds one `AppCore` and assumes one account throughout (`getActiveAccountId`, `accounts[0]`). Multi-account (one shared inbox over all identities, like iOS/Android) is required for parity and is tracked as **Phase 8 / day 6** above. Desktop is not "complete" until this lands.
+- ~~**Single-account only (until day 6).**~~ **Resolved (day 7).** Desktop now runs multiple `AppCore` instances concurrently (one shared inbox over all identities, like iOS/Android) — see **Phase 8** above.
 - **tauri-plugin-store metadata exposure.** The identity list (own DIDs, display names, server URLs, DB filename) is stored as a plain JSON file in the OS app-data directory (`%APPDATA%\actnet\` on Windows, `~/Library/Application Support/actnet/` on macOS, `~/.local/share/actnet/` on Linux). It is protected only by OS-level filesystem permissions — not encrypted, not keyed from hardware-backed crypto. Desktop sandboxing is weaker than mobile: any process running as the same user has straightforward read access. An attacker (or malware at user privilege) gets enough to link the device to specific orgs. Message content and the contact graph are not exposed — they live inside the per-identity SQLCipher DBs. The fix would be a small `manifest.db` encrypted with a key stored in the platform credential store (Windows DPAPI / Credential Manager, macOS Keychain, Linux Secret Service). Deferred because the sensitivity of the leaked metadata is low relative to the cross-platform implementation complexity. See the analogous iOS note in `docs/02-todos-deferred.md`.

@@ -52,9 +52,11 @@ All Rust core calls flow: `Solid → invoke() → src-tauri/src/lib.rs → app-c
 `startEventLoop()` in `AppContext.tsx` polls `nextEvents()` in a loop. The
 Tauri command blocks on the Rust side (`ffi_runtime().block_on`) and returns
 via IPC when events arrive — the JS event loop stays responsive. Each poll
-parks one blocking-pool thread for the duration of the call (the event loop and
-the connection-state loop run concurrently, so steady state is two), but each
-loop serializes its own calls — no unbounded fan-out. Events queue in
+parks one blocking-pool thread for the duration of the call. With multi-account
+(day 7) there is one event loop + one connection-state loop **per signed-in
+account**, so steady state is `2 × N` parked blocking-pool threads for `N`
+accounts (well within tokio's default 512-thread blocking pool at realistic N).
+Each loop serializes its own calls — no unbounded fan-out. Events queue in
 app-core's MPSC channel between polls. No registration race — the consumer
 initiates every fetch.
 
@@ -258,7 +260,8 @@ so the UI doesn't show a green indicator before any connection exists.
 
 `nextEvents()` blocks on the Rust side until decrypted events arrive, then
 returns via IPC. The TS side calls it in a loop, which parks one blocking-pool
-thread per in-flight call (the connection-state loop adds a second). Each loop
+thread per in-flight call (the connection-state loop adds a second — and with
+multi-account it is one of each per signed-in account, so `2 × N`). Each loop
 serializes its own calls. Do not reintroduce a Rust background thread or
 `app_handle.emit(…)` — the loop is the single unified path for both DevServer
 and Mock mode.
