@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.get_login_creds"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "net.theavalanche.app",
+      "sha256_cert_fingerprints": [
+        "E0:E9:C5:6D:9A:92:81:B8:57:5B:64:9B:28:FE:4F:40:C0:EE:6B:D3:AE:B1:1E:5B:5B:81:68:E8:11:AC:6D:C5",
+        "41:AD:7E:33:17:14:2B:B5:7F:01:9F:94:E6:B3:FC:D6:AB:70:15:82:C4:2A:7B:EA:45:2E:8C:06:05:23:3E:5A"
+      ]
+    }
+  }
+]

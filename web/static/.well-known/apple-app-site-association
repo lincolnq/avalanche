@@ -1,0 +1,14 @@
+{
+  "webcredentials": {
+    "apps": ["7FVK3RR3TV.net.theavalanche.app"]
+  },
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "7FVK3RR3TV.net.theavalanche.app",
+        "paths": ["*"]
+      }
+    ]
+  }
+}
