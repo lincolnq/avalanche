@@ -196,6 +196,15 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.android.embedded)
 
+    // Passkeys (docs/50): Credential Manager drives the WebAuthn create/get
+    // ceremonies. The PRF extension yields the 32 deterministic bytes the Rust
+    // core turns into the DID rotation key + recovery-blob key — the iOS analog
+    // is ASAuthorization + ASAuthorizationPublicKeyCredentialPRFAssertionInput.
+    // play-services-auth bridges to Google Password Manager; on degoogled
+    // Android a framework credential provider is used instead.
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // Composition tracing: makes composable functions appear as named slices in a

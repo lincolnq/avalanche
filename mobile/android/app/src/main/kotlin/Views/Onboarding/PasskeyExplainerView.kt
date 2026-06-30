@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -63,51 +64,49 @@ fun PasskeyExplainerView(
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // ------------------------------------------------------------------
     // Register with a passkey (Android Credential Manager analog of the
-    // iOS ASAuthorization passkey ceremony).
+    // iOS ASAuthorization passkey ceremony). Mirrors iOS
+    // PasskeyExplainerView.registerWithPasskey().
     // ------------------------------------------------------------------
     fun registerWithPasskey() {
         isRegistering = true
         errorMessage = null
         scope.launch {
             try {
-                // TODO(opus): Android passkey registration uses the Credential Manager API
-                // (androidx.credentials.CreatePublicKeyCredentialRequest). The iOS flow calls
-                // PasskeyManager.register() which drives an ASAuthorization sheet.
-                // On Android, launch CredentialManager.createCredential() here, parse the
-                // CBOR attestation, extract the PRF output (or HMAC-Secret extension), and
-                // derive the rotation key exactly as iOS does.
-                //
-                // Stub: skip to the "no passkey" path until Credential Manager is wired.
-                throw UnsupportedOperationException(
-                    "Passkey registration via Android Credential Manager is not yet implemented. " +
-                        "Use 'Recovery phrase' or 'Skip' for now."
+                // Stage 1: run the passkey ceremony first. The credential's
+                // user.id is set to the signup server URL — that's what lets
+                // recovery recompute the DID later without prompting the user.
+                val passkey = PasskeyManager.register(
+                    context = context.findActivity(),
+                    signupServerUrl = inviteToken.serverUrl,
+                    displayName = "$displayName @ ${inviteToken.serverName}",
                 )
 
-                // When implemented the code should be:
-                //
-                // val passkeyResult = PasskeyManager.register(
-                //     serverUrl = inviteToken.serverUrl,
-                //     displayName = "$displayName @ ${inviteToken.serverName}",
-                //     activity = <Activity>,        // TODO(opus): inject via LocalContext
-                // )
-                //
-                // val prepared = viewModel.prepareAccount(
-                //     serverUrl = inviteToken.serverUrl,
-                //     prfOutput = passkeyResult.prfOutput,
-                // )
-                //
-                // viewModel.finalizePreparedAccount(
-                //     prepared = prepared,
-                //     serverUrl = inviteToken.serverUrl,
-                //     serverName = inviteToken.serverName,
-                //     displayName = displayName,
-                //     inviteToken = inviteToken.token,
-                // )
-                //
-                // inviteToken.postOnboardingRedirect?.let { onHandleDeepLink(it) }
+                // Stage 2: derive the rotation key from the PRF output and build
+                // both PLC ops. The DID drops out of this.
+                val prepared = viewModel.prepareAccount(
+                    serverUrl = inviteToken.serverUrl,
+                    prfOutput = passkey.prfOutput,
+                )
+
+                // Stage 3: submit the PLC ops, encrypt the recovery blob with the
+                // PRF-derived key, and register with the homeserver.
+                viewModel.finalizePreparedAccount(
+                    prepared = prepared,
+                    serverUrl = inviteToken.serverUrl,
+                    serverName = inviteToken.serverName,
+                    displayName = displayName,
+                    inviteToken = inviteToken.token,
+                )
+                // finalizePreparedAccount sets isOnboarding = false, which
+                // navigates to MainTabView.
+                inviteToken.postOnboardingRedirect?.let { onHandleDeepLink(it) }
+            } catch (e: PasskeyException.Cancelled) {
+                // User cancelled — don't show an error, just re-enable buttons.
+                isRegistering = false
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Passkey registration failed"
                 isRegistering = false

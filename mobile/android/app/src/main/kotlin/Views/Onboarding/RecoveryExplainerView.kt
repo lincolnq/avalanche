@@ -103,20 +103,26 @@ fun RecoveryExplainerView(
         }
     }
 
+    // Mirrors iOS RecoveryExplainerView.recoverWithPasskey(): run the WebAuthn
+    // assertion, recompute the DID deterministically from the PRF output + the
+    // signup server URL stored in the userHandle, then hand off to the console.
     fun recoverWithPasskey() {
         errorMessage = null
         scope.launch {
-            // TODO(opus): Use Android Credential Manager (androidx.credentials) to perform
-            // a WebAuthn assertion and extract the PRF output + userHandle.
-            // The iOS path calls PasskeyManager().authenticate(anchor:) which uses
-            // ASAuthorizationPlatformPublicKeyCredentialProvider. The Android analog is
-            // CredentialManager.getCredential() with a GetPublicKeyCredentialOption.
-            // Once we have the assertion result we call:
-            //   val prfOutput: ByteArray = result.prfOutput  // from CBOR of authenticatorData
-            //   val signupServerUrl: String = result.userHandle.decodeToString()
-            //   val derivedDid = deriveDidFromPasskey(prfOutput, signupServerUrl)
-            // then finishRecovery(prfOutput, derivedDid).
-            errorMessage = "Passkey recovery is not yet implemented on Android."
+            try {
+                val passkey = PasskeyManager.authenticate(context = context.findActivity())
+                val derivedDid = withContext(Dispatchers.IO) {
+                    deriveDidFromPasskey(
+                        prfOutput = passkey.prfOutput,
+                        signupServerUrl = passkey.signupServerUrl,
+                    )
+                }
+                finishRecovery(passkey.prfOutput, derivedDid) { msg -> errorMessage = msg }
+            } catch (e: PasskeyException.Cancelled) {
+                // User cancelled — stay on the screen, no error.
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Passkey recovery failed"
+            }
         }
     }
 

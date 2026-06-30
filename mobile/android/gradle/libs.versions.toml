@@ -11,6 +11,10 @@ coroutines = "1.11.0"
 kotlinxSerialization = "1.11.0"
 camerax = "1.6.1"
 zxing = "4.3.0"
+# Credential Manager — WebAuthn passkey registration/assertion (docs/50). The
+# play-services-auth provider bridges to Google Password Manager; on degoogled
+# Android a framework credential provider (e.g. 1Password) is used instead.
+credentials = "1.5.0"
 jna = "5.19.1"
 googleServices = "4.4.2"
 firebaseBom = "33.7.0"
@@ -43,6 +47,8 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxing" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
