@@ -91,6 +91,16 @@ pub const ACTION_DEVICE_LINK: &str = "device_link";
 pub const LIMIT_DEVICE_LINK: i32 = 30;
 pub const WINDOW_DEVICE_LINK: i64 = 3600;
 
+// OAuth Project login (docs/25). Both endpoints are unauthenticated (called by
+// the Project, an OAuth client), so per-IP. Device-authorization starts a login;
+// token is polled during the device grant, so it's the looser of the two.
+pub const ACTION_OAUTH_DEVICE_AUTH: &str = "oauth_device_auth";
+pub const LIMIT_OAUTH_DEVICE_AUTH: i32 = 60;
+pub const WINDOW_OAUTH_DEVICE_AUTH: i64 = 3600;
+pub const ACTION_OAUTH_TOKEN: &str = "oauth_token";
+pub const LIMIT_OAUTH_TOKEN: i32 = 1200;
+pub const WINDOW_OAUTH_TOKEN: i64 = 3600;
+
 // ── Group endpoints ─────────────────────────────────────────────────────────
 
 // Per-account: group creation is cheap server-side but every legitimate user

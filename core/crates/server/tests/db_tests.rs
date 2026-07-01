@@ -1514,3 +1514,125 @@ async fn delete_member_cascades_all_device_pseudonyms() {
     server::db::groups::delete_member(&mut *tx, &gid, &emi).await.unwrap();
     assert!(server::db::groups::member_pseudonyms(&mut *tx, &gid, &emi).await.unwrap().is_empty());
 }
+
+// ── OAuth grants (docs/25 project login) ─────────────────────────────────────
+
+use server::db::oauth_grants;
+
+#[tokio::test]
+async fn oauth_auth_code_create_get_and_single_use_consume() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let account_id =
+        server::db::accounts::create(&mut *tx, "did:plc:oauthauthcode001", None, false).await.unwrap();
+
+    oauth_grants::create_auth_code(
+        &mut *tx,
+        "code-abc",
+        account_id,
+        "cid-1",
+        "https://proj.test",
+        "https://proj.test/cb",
+        "challenge-xyz",
+        "S256",
+        Some("openid"),
+        120,
+    )
+    .await
+    .unwrap();
+
+    let g = oauth_grants::get(&mut *tx, "code-abc").await.unwrap().expect("grant exists");
+    assert_eq!(g.grant_type, "auth_code");
+    assert_eq!(g.status, "approved");
+    assert_eq!(g.account_id, Some(account_id));
+    assert_eq!(g.redirect_uri.as_deref(), Some("https://proj.test/cb"));
+    assert_eq!(g.code_challenge.as_deref(), Some("challenge-xyz"));
+    assert!(g.auth_time.is_some());
+
+    // Single-use: first consume flips approved→consumed, second is a no-op.
+    assert_eq!(oauth_grants::consume(&mut *tx, "code-abc").await.unwrap(), 1);
+    assert_eq!(oauth_grants::consume(&mut *tx, "code-abc").await.unwrap(), 0);
+    let g2 = oauth_grants::get(&mut *tx, "code-abc").await.unwrap().unwrap();
+    assert_eq!(g2.status, "consumed");
+}
+
+#[tokio::test]
+async fn oauth_device_grant_pending_then_approve() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let account_id =
+        server::db::accounts::create(&mut *tx, "did:plc:oauthdevice001", None, false).await.unwrap();
+
+    oauth_grants::create_device(
+        &mut *tx,
+        "device-code-1",
+        "WXYZ-2345",
+        "cid-1",
+        "https://proj.test",
+        None,
+        600,
+    )
+    .await
+    .unwrap();
+
+    // Findable while pending by its user_code.
+    let found = oauth_grants::find_pending_device_by_user_code(&mut *tx, "WXYZ-2345")
+        .await
+        .unwrap()
+        .expect("pending grant");
+    assert_eq!(found.code, "device-code-1");
+    assert_eq!(found.account_id, None);
+
+    // Approve binds the account + token and stamps auth_time.
+    let n = oauth_grants::approve_device(&mut *tx, "device-code-1", account_id, "access-tok-1")
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+
+    let g = oauth_grants::get(&mut *tx, "device-code-1").await.unwrap().unwrap();
+    assert_eq!(g.status, "approved");
+    assert_eq!(g.account_id, Some(account_id));
+    assert_eq!(g.access_token.as_deref(), Some("access-tok-1"));
+    assert!(g.auth_time.is_some());
+
+    // No longer findable as pending; a second approve is a no-op.
+    assert!(oauth_grants::find_pending_device_by_user_code(&mut *tx, "WXYZ-2345")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        oauth_grants::approve_device(&mut *tx, "device-code-1", account_id, "access-tok-2")
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn oauth_delete_expired_removes_only_expired() {
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let account_id =
+        server::db::accounts::create(&mut *tx, "did:plc:oauthexpiry001", None, false).await.unwrap();
+
+    // One already-expired (negative lifetime), one live.
+    oauth_grants::create_auth_code(
+        &mut *tx, "expired-code", account_id, "cid-1", "https://proj.test",
+        "https://proj.test/cb", "chal", "S256", None, -10,
+    )
+    .await
+    .unwrap();
+    oauth_grants::create_device(
+        &mut *tx, "live-code", "LIVE-2345", "cid-1", "https://proj.test", None, 600,
+    )
+    .await
+    .unwrap();
+
+    let deleted = oauth_grants::delete_expired(&mut *tx).await.unwrap();
+    assert!(deleted >= 1);
+    assert!(oauth_grants::get(&mut *tx, "expired-code").await.unwrap().is_none());
+    assert!(oauth_grants::get(&mut *tx, "live-code").await.unwrap().is_some());
+}

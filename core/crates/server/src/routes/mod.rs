@@ -24,6 +24,7 @@ mod health;
 mod info;
 mod invites;
 pub(crate) mod messages;
+mod oauth;
 mod prekeys;
 mod profile;
 mod projects;
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
         .merge(websocket::routes())
         .merge(did::routes())
         .merge(projects::routes())
+        .merge(oauth::routes())
         .merge(push::routes())
         .merge(accounts::routes())
         .merge(recovery::routes())

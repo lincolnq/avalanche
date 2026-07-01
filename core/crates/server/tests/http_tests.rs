@@ -65,6 +65,9 @@ async fn test_state_with(
         message_expiry_max_secs: 30 * 86400,
         prekey_low_threshold: 10,
         project_token_lifetime_secs: 3600,
+        oauth_auth_code_lifetime_secs: 120,
+        oauth_device_code_lifetime_secs: 600,
+        oauth_device_poll_interval_secs: 5,
         projects_json: "[]".into(),
         relay_url: None,
         server_name: "Test".into(),
@@ -1676,4 +1679,267 @@ async fn link_device_bad_signature_returns_401() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── OAuth Project login (docs/25) ────────────────────────────────────────────
+
+/// A test AppState with one registered OAuth login client and (by default) a
+/// zero poll-interval so device-grant happy-path tests don't hit `slow_down`.
+async fn oauth_test_state() -> AppState {
+    let mut state = test_state().await;
+    state.config.projects_json = r#"[
+        {"name":"Proj","url":"https://proj.test","description":"p",
+         "client_id":"cid-test","redirect_uris":["https://proj.test/cb"],"official":true}
+    ]"#
+    .to_string();
+    state.config.oauth_device_poll_interval_secs = 0;
+    state
+}
+
+async fn body_json(resp: axum::response::Response) -> Value {
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn post_form(app: &axum::Router, uri: &str, body: &str) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn pkce_challenge(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+#[tokio::test]
+async fn oauth_authorization_code_flow_end_to_end() {
+    let app = routes::router().with_state(oauth_test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+    let did = reg["did"].as_str().unwrap().to_string();
+
+    let verifier = "test-verifier-0123456789-abcdefghijklmnopqrstuvwx";
+    let challenge = pkce_challenge(verifier);
+
+    // App mints the auth code post-consent (session-auth).
+    let body = serde_json::json!({
+        "client_id": "cid-test",
+        "redirect_uri": "https://proj.test/cb",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/oauth/authorize-code")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let code = body_json(resp).await["code"].as_str().unwrap().to_string();
+
+    // Project exchanges the code (+ verifier) for an access token.
+    let form = format!(
+        "grant_type=authorization_code&code={code}&redirect_uri=https%3A%2F%2Fproj.test%2Fcb&code_verifier={verifier}&client_id=cid-test"
+    );
+    let resp = post_form(&app, "/v1/oauth/token", &form).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tok = body_json(resp).await;
+    assert_eq!(tok["token_type"], "Bearer");
+    assert!(tok["auth_time"].as_i64().is_some());
+    let access = tok["access_token"].as_str().unwrap().to_string();
+
+    // The access token is a project token: verify resolves the DID.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/project-token/verify?token={access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v["did"], did);
+    assert_eq!(v["project_url"], "https://proj.test");
+
+    // Single-use: replaying the code fails.
+    let resp = post_form(&app, "/v1/oauth/token", &form).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn oauth_authorization_code_wrong_verifier_rejected() {
+    let app = routes::router().with_state(oauth_test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    let body = serde_json::json!({
+        "client_id": "cid-test",
+        "redirect_uri": "https://proj.test/cb",
+        "code_challenge": pkce_challenge("the-real-verifier-aaaaaaaaaaaaaaaaaaaaaaaa"),
+        "code_challenge_method": "S256",
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/oauth/authorize-code")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let code = body_json(resp).await["code"].as_str().unwrap().to_string();
+
+    let form = format!(
+        "grant_type=authorization_code&code={code}&redirect_uri=https%3A%2F%2Fproj.test%2Fcb&code_verifier=WRONG-verifier-bbbbbbbbbbbbbbbbbbbbbbbb&client_id=cid-test"
+    );
+    let resp = post_form(&app, "/v1/oauth/token", &form).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn oauth_authorize_code_rejects_unregistered_redirect_uri() {
+    let app = routes::router().with_state(oauth_test_state().await);
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+
+    let body = serde_json::json!({
+        "client_id": "cid-test",
+        "redirect_uri": "https://evil.test/cb",
+        "code_challenge": pkce_challenge("v-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        "code_challenge_method": "S256",
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/oauth/authorize-code")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn oauth_device_flow_end_to_end() {
+    let app = routes::router().with_state(oauth_test_state().await);
+
+    // Project starts a device grant.
+    let resp = post_form(&app, "/v1/oauth/device_authorization", "client_id=cid-test").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let da = body_json(resp).await;
+    let device_code = da["device_code"].as_str().unwrap().to_string();
+    let user_code = da["user_code"].as_str().unwrap().to_string();
+    assert!(da["verification_uri_complete"].as_str().unwrap().contains("/authorize?"));
+
+    let poll = format!("grant_type={DEVICE_GRANT}&device_code={device_code}&client_id=cid-test");
+
+    // Before approval → authorization_pending.
+    let resp = post_form(&app, "/v1/oauth/token", &poll).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "authorization_pending");
+
+    // Phone consents and approves (session-auth).
+    let reg = register_dummy(&app).await;
+    let token = reg["session_token"].as_str().unwrap().to_string();
+    let did = reg["did"].as_str().unwrap().to_string();
+    let approve = serde_json::json!({ "user_code": user_code, "client_id": "cid-test" });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/oauth/device/approve")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&approve).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // After approval → access token; verify resolves the approver's DID.
+    let resp = post_form(&app, "/v1/oauth/token", &poll).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let access = body_json(resp).await["access_token"].as_str().unwrap().to_string();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/project-token/verify?token={access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["did"], did);
+
+    // Single-use: a second poll after collection fails.
+    let resp = post_form(&app, "/v1/oauth/token", &poll).await;
+    assert_eq!(body_json(resp).await["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn oauth_device_flow_slow_down_on_rapid_poll() {
+    let mut state = oauth_test_state().await;
+    state.config.oauth_device_poll_interval_secs = 3600; // force slow_down on the 2nd poll
+    let app = routes::router().with_state(state);
+
+    let resp = post_form(&app, "/v1/oauth/device_authorization", "client_id=cid-test").await;
+    let device_code = body_json(resp).await["device_code"].as_str().unwrap().to_string();
+    let poll = format!("grant_type={DEVICE_GRANT}&device_code={device_code}&client_id=cid-test");
+
+    let resp = post_form(&app, "/v1/oauth/token", &poll).await;
+    assert_eq!(body_json(resp).await["error"], "authorization_pending");
+    let resp = post_form(&app, "/v1/oauth/token", &poll).await;
+    assert_eq!(body_json(resp).await["error"], "slow_down");
+}
+
+#[tokio::test]
+async fn oauth_device_authorization_unknown_client_rejected() {
+    let app = routes::router().with_state(oauth_test_state().await);
+    let resp = post_form(&app, "/v1/oauth/device_authorization", "client_id=nope").await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(resp).await["error"], "invalid_client");
+}
+
+#[tokio::test]
+async fn oauth_token_unsupported_grant_type() {
+    let app = routes::router().with_state(oauth_test_state().await);
+    let resp = post_form(&app, "/v1/oauth/token", "grant_type=password&username=x").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "unsupported_grant_type");
 }

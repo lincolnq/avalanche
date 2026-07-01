@@ -116,6 +116,20 @@ pub fn spawn_all(state: AppState) {
     ));
 
     tokio::spawn(run_periodic(
+        "oauth_grant_expiry",
+        Duration::from_secs(60),
+        pool.clone(),
+        |pool| async move {
+            let mut conn = pool.acquire().await?;
+            let n = db::oauth_grants::delete_expired(&mut conn).await?;
+            if n > 0 {
+                tracing::info!(count = n, "expired oauth grants deleted");
+            }
+            Ok(())
+        },
+    ));
+
+    tokio::spawn(run_periodic(
         "rate_limit_cleanup",
         Duration::from_secs(3600),
         pool.clone(),

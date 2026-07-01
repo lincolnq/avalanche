@@ -24,6 +24,7 @@ pub mod did;
 pub mod groups;
 pub mod group_messages;
 pub mod messages;
+pub mod oauth_grants;
 pub mod prekeys;
 pub mod profiles;
 pub mod projects;

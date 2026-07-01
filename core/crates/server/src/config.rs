@@ -70,6 +70,16 @@ pub struct Config {
     pub prekey_low_threshold: i64,
     /// Project token lifetime in seconds (default: 1 hour).
     pub project_token_lifetime_secs: i64,
+    /// OAuth authorization-code lifetime in seconds (docs/25, same-device
+    /// front-end). Short: the code is exchanged for a token immediately.
+    /// Default: 2 minutes (a little slack over 60s for clock skew).
+    pub oauth_auth_code_lifetime_secs: i64,
+    /// OAuth device-code lifetime in seconds (docs/25, cross-device front-end).
+    /// Long enough to scan a QR and consent on a phone. Default: 10 minutes.
+    pub oauth_device_code_lifetime_secs: i64,
+    /// Minimum interval in seconds a Project must wait between device-grant
+    /// token polls (RFC 8628 `interval`/`slow_down`). Default: 5 seconds.
+    pub oauth_device_poll_interval_secs: i64,
     /// Installed Projects as JSON array: [{"name":"...","url":"...","description":"..."}].
     pub projects_json: String,
     /// Push relay URL (e.g. "http://localhost:3002"). If unset, push is disabled.
@@ -151,6 +161,18 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
+            oauth_auth_code_lifetime_secs: std::env::var("OAUTH_AUTH_CODE_LIFETIME_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(120),
+            oauth_device_code_lifetime_secs: std::env::var("OAUTH_DEVICE_CODE_LIFETIME_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(600),
+            oauth_device_poll_interval_secs: std::env::var("OAUTH_DEVICE_POLL_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
             projects_json: std::env::var("PROJECTS")
                 .unwrap_or_else(|_| "[]".to_string()),
             relay_url: std::env::var("RELAY_URL").ok(),
