@@ -1,0 +1,76 @@
+.link-device {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.ld-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.ld-subtitle {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.ld-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.ld-btn {
+  width: 100%;
+}
+
+.ld-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Small, muted, single-line fallback beneath the QR — mirrors iOS
+   (`Text(code)` footnote monospaced, truncated) and Android (`12sp, muted,
+   Monospace, maxLines=1, Ellipsis`). The QR is the primary path; this is just
+   for manual entry on a device that can't scan. */
+.ld-code {
+  max-width: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ld-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ld-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.ld-error {
+  font-size: 14px;
+  color: var(--color-error);
+}
+
+.ld-back {
+  margin-top: 4px;
+}

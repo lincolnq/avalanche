@@ -1,0 +1,6 @@
+*.db
+*.db-shm
+*.db-wal
+*.db.device
+*.db.device-shm
+*.db.device-wal

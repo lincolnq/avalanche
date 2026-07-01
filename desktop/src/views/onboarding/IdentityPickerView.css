@@ -1,0 +1,84 @@
+.identity-picker {
+  display: flex;
+  flex-direction: column;
+  padding: 48px 32px 32px;
+  background: var(--color-bg);
+  min-height: 100vh;
+  font-family: var(--font-sans);
+}
+.ip-header {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-sidebar);
+  margin: 0 0 4px;
+}
+.ip-subtitle {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 28px;
+}
+.ip-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px;
+}
+.ip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+  max-width: 480px;
+}
+.ip-account-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--color-surface);
+  border: 1.5px solid #E8D8CC;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  max-width: 480px;
+}
+.ip-account-row:hover { background: rgba(107, 62, 80, 0.08); border-color: var(--color-accent); }
+.ip-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.ip-account-info { display: flex; flex-direction: column; flex: 1; }
+.ip-account-name { font-size: 15px; font-weight: 600; color: var(--color-text); }
+.ip-account-servers { font-size: 12px; color: var(--color-text-secondary); margin-top: 1px; }
+.ip-chevron { color: var(--color-text-secondary); font-size: 18px; }
+.ip-chevron-push { color: var(--color-text-secondary); font-size: 18px; margin-left: auto; }
+.ip-action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-surface);
+  border: 1.5px solid #E8D8CC;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  transition: background 0.12s, border-color 0.12s;
+  max-width: 480px;
+}
+.ip-action-row:hover { background: rgba(107, 62, 80, 0.08); border-color: var(--color-accent); }
+.ip-action-new { color: var(--color-accent); }
+.ip-back {
+  margin-top: 8px;
+}

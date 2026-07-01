@@ -204,100 +204,124 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 
 ## Parity Map
 
+Status: `[x]` implemented · `[~]` deliberate divergence (see note) · `[ ]` not yet.
+File names below are the current ones; some iOS-era names in this doc's history
+(`ActnetService`, `renderer/App.tsx`) were renamed during implementation.
+
 ### App Shell
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ActnetApp.swift` | `main/index.ts` + `renderer/App.tsx` | `[ ]` |
-| `RootView.swift` | Root router in `App.tsx` | `[ ]` |
-| `AppState.swift` | `AppContext.tsx` | `[ ]` |
+| `ActnetApp.swift` | `index.tsx` + `App.tsx` | `[x]` |
+| `RootView.swift` | Root router in `App.tsx` | `[x]` |
+| `AppState.swift` | `state/AppContext.tsx` | `[x]` |
 
 ### Models
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `Account.swift` | `Account.ts` | `[ ]` |
-| `Conversation.swift` | `Conversation.ts` | `[ ]` |
-| `Message.swift` | `Message.ts` | `[ ]` |
-| `InviteToken.swift` | `InviteToken.ts` | `[ ]` |
-| `ProjectInfo.swift` | `ProjectInfo.ts` | `[ ]` |
+| `Account.swift` | `models/Account.ts` | `[x]` |
+| `Conversation.swift` | `models/Conversation.ts` | `[x]` |
+| `Message.swift` | `models/Message.ts` | `[x]` |
+| `InviteToken.swift` | `models/InviteToken.ts` | `[x]` |
+| `ProjectInfo.swift` | `models/ProjectInfo.ts` | `[x]` |
 
 ### Services
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ActnetService.swift` protocol | `ActnetService.ts` interface | `[ ]` |
-| `MockActnetService.swift` | `MockActnetService.ts` | `[ ]` |
-| `DevServerActnetService.swift` | `DevServerActnetService.ts` | `[ ]` |
-| UniFFI `AppCore` | Tauri commands (from `src-tauri/src/lib.rs`) via `invoke()` | `[ ]` |
+| `ActnetService.swift` protocol | `services/AvalancheService.ts` interface | `[x]` |
+| `MockActnetService.swift` | `services/MockAvalancheService.ts` | `[x]` |
+| `DevServerActnetService.swift` | `services/DevServerAvalancheService.ts` | `[x]` |
+| UniFFI `AppCore` | Tauri commands (`src-tauri/src/lib.rs`) via `invoke()` | `[x]` |
 
 ### Onboarding
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `SplashView.swift` | `SplashView.tsx` | `[ ]` |
-| `QRScannerView.swift` | `QRScannerView.tsx` (file upload or camera capture) | `[ ]` |
-| `InviteLinkEntryView.swift` | `InviteLinkEntryView.tsx` | `[ ]` |
-| `IdentityPickerView.swift` | `IdentityPickerView.tsx` | `[ ]` |
-| `JoiningServerView.swift` | `JoiningServerView.tsx` | `[ ]` |
-| `NewAccountView.swift` | `NewAccountView.tsx` | `[ ]` |
+| `SplashView.swift` | `onboarding/SplashView.tsx` | `[x]` |
+| `QRScannerView.swift` | (paste-link only; camera/QR not built) | `[~]` |
+| `InviteLinkEntryView.swift` | `onboarding/InviteLinkEntryView.tsx` | `[x]` |
+| `IdentityPickerView.swift` | `onboarding/IdentityPickerView.tsx` | `[x]` |
+| `JoiningServerView.swift` | `onboarding/JoiningServerView.tsx` | `[x]` |
+| `NewAccountView.swift` | `onboarding/NewAccountView.tsx` | `[x]` |
+| — (back-stack driver) | `onboarding/OnboardingFlow.tsx` | `[x]` |
+| `RecoveryPhrase…` (signup credential) | `onboarding/RecoveryPhraseSetupView.tsx` | `[x]` |
+| `RecoveryExplainerView.swift` | `onboarding/RecoveryExplainerView.tsx` | `[x]` |
+| `RecoveryConsoleView.swift` | `onboarding/RecoveryConsoleView.tsx` | `[x]` |
+| `LinkNewDeviceView.swift` (T71, new-device side) | `onboarding/LinkNewDeviceView.tsx` | `[x]` |
 
 ### Navigation
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `MainTabView.swift` (bottom tabs) | `MainLayout.tsx` (left sidebar) | `[ ]` |
+| `MainTabView.swift` (bottom tabs) | `common/MainLayout.tsx` (left sidebar) | `[x]` |
 
 ### Chats
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `ChatsView.swift` | `ChatsView.tsx` | `[ ]` |
-| `ConversationRow.swift` | `ConversationRow.tsx` | `[ ]` |
-| `ConversationView.swift` | `ConversationView.tsx` | `[ ]` |
-| `MessageBubble.swift` | `MessageBubble.tsx` | `[ ]` |
-| `ComposeMessageView.swift` | `ComposeMessageView.tsx` | `[ ]` |
-| `RecoveryKeyBanner.swift` | `RecoveryKeyBanner.tsx` | `[ ]` |
+| `ChatsView.swift` | `chats/ChatsView.tsx` | `[x]` |
+| `ConversationRow.swift` | `components/ConversationRow.tsx` | `[x]` |
+| `ConversationView.swift` | `chats/ConversationView.tsx` | `[x]` |
+| `MessageBubble.swift` | `components/MessageBubble.tsx` | `[x]` |
+| `ComposeMessageView.swift` | `components/ComposeMessageView.tsx` | `[x]` |
+| `RecoveryKeyBanner.swift` | `components/RecoveryKeyBanner.tsx` (inert stub, as iOS) | `[x]` |
+| `AttachmentViews.swift` | `components/AttachmentView.tsx` + `components/LinkPreviewCard.tsx` | `[x]` |
+| `EditHistorySheet.swift` | `components/EditHistorySheet.tsx` | `[x]` |
+| `DisappearingMessagesPicker.swift` | `components/DisappearingMessagesPicker.tsx` | `[x]` |
+| group create / detail | `components/NameGroupView.tsx` + `components/GroupDetailView.tsx` | `[x]` |
+| new conversation | `components/NewConversationView.tsx` + `components/RecipientTokenField.tsx` | `[x]` |
 
 ### Calls
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `CallsView.swift` | `CallsView.tsx` | `[ ]` |
+| `CallsView.swift` | (no Calls section on desktop sidebar) | `[~]` |
 
 ### Network
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `NetworkView.swift` | `NetworkView.tsx` | `[ ]` |
-| `ProjectWebView.swift` | `ProjectWebView.tsx` | `[ ]` |
+| `NetworkView.swift` | `network/NetworkView.tsx` | `[x]` |
+| `ProjectWebView.swift` | `network/ProjectWebView.tsx` | `[x]` |
 
-### Common
+### Common / Settings
 
 | iOS | Desktop | Status |
 |---|---|---|
-| `AccountAvatar.swift` | `AccountAvatar.tsx` | `[ ]` |
-| `DevSettingsView.swift` | `DevSettingsView.tsx` | `[ ]` |
+| `AccountAvatar.swift` | `components/AccountAvatar.tsx` | `[x]` |
+| `ContactAvatar.swift` / `Hexagon.swift` | `components/ContactAvatar.tsx` | `[x]` |
+| `DevSettingsView.swift` | `settings/DevSettingsView.tsx` | `[x]` |
+| settings hub | `settings/SettingsView.tsx` | `[x]` |
+| `AccountsView.swift` | `settings/AccountsView.tsx` | `[x]` |
+| identity / server detail | `settings/IdentityDetailView.tsx` + `settings/ServerDetailView.tsx` | `[x]` |
+| blocked contacts | `settings/BlockedContactsView.tsx` | `[x]` |
+| `LinkDeviceView.swift` (T71, existing-device side) | `settings/LinkDeviceView.tsx` | `[x]` |
+| `OfflineBanner` + reconnect | `components/OfflineBanner.tsx` | `[x]` |
 
 ### State Behaviors (AppContext mirrors AppState)
 
 | Behavior | Status |
 |---|---|
-| Account restoration on launch | `[ ]` |
-| `createAccount(serverUrl, serverName, displayName)` | `[ ]` |
-| `joinServer(serverUrl, serverName, existingAccountId)` | `[ ]` |
-| `switchMode(mode)` | `[ ]` |
-| `sendMessage(...)` — optimistic + core via IPC | `[ ]` |
-| `markAllMessagesRead(conversationId, accountId)` | `[ ]` |
-| `loadMessagesFromStore(conversationId, accountId)` | `[ ]` |
-| `findOrCreateDMConversation(recipientDid, accountId)` | `[ ]` |
-| WebSocket loop per account (Node.js, reconnect on error) | `[ ]` |
-| `handleIncomingMessage()` | `[ ]` |
-| `applyDeliveryStatusUpdates()` | `[ ]` |
-| `fetchProjects(serverUrl)` | `[ ]` |
-| `requestProjectToken(accountId, projectUrl)` | `[ ]` |
-| Conversation persistence (tauri-plugin-store) | `[ ]` |
-| `unreadCount(for:)` | `[ ]` |
+| Account restoration on launch | `[x]` |
+| `createAccount(...)` (recovery-phrase credential) | `[x]` |
+| `joinServer(...)` | `[x]` |
+| `switchMode(mode)` (mock/devserver) | `[~]` (mock is test-only, not a runtime mode) |
+| `sendMessage(...)` / `sendMessageWithAttachments(...)` — optimistic + core via IPC | `[x]` |
+| `markAllMessagesRead(conversationId, accountId)` | `[x]` |
+| `loadMessagesFromStore(conversationId, accountId)` | `[x]` |
+| `findOrCreateDMConversation(recipientDid, accountId)` | `[x]` |
+| TS-owned event loop (`nextEvents()` poll; reconnect in core) | `[x]` |
+| `handleIncomingMessage()` / `handleIncomingEvents()` | `[x]` |
+| `applyDeliveryStatusUpdates()` | `[x]` |
+| Multi-device sync events (`conversationUpdated`, foreground `setAppActive`) | `[x]` |
+| Device linking (`completeDeviceLink` / `linkSendBundle`, T71) | `[x]` |
+| Warm display-name cache on load (`cachedDisplayNames`, T78) | `[x]` |
+| `fetchProjects()` / `requestProjectToken()` | `[x]` |
+| Conversation list derived from SQLCipher store | `[x]` |
+| `unreadCount(for:)` (authoritative seed from core) | `[x]` |
+| Multi-account (one shared inbox over all identities) | `[x]` |
 
 ---
 
@@ -350,6 +374,51 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 - System tray integration (optional: keep app running in background)
 - Native notifications via `tauri-plugin-notification`
 
+### Phase 8 — Multi-account (day 7) ✅ implemented
+
+**Status: done.** `src-tauri` now holds a `Mutex<HashMap<String, Arc<AppCore>>>`
+keyed by accountId; every per-account Tauri command takes an `account_id` and
+resolves its core via `get_app(&state, &account_id)`; factory commands insert
+into the map keyed by the returned DID; `next_events`/`wait_for_connection_state_change`
+run per account. The frontend runs one event loop + one connection loop per
+account (`startPollingFor`, idempotent), resolves a per-account service via
+`serviceFor(accountId)`, merges every account's conversations into one sorted
+inbox, and offers "Sign in to another account" (additive onboarding over the
+live session). Group conversation ids stay un-account-scoped (`group-<groupId>`),
+matching iOS/Android. The historical single-account design is recorded below.
+
+Desktop previously ran a **single account**: `src-tauri` held one
+`Mutex<Option<Arc<AppCore>>>` and every Tauri command resolved that one core, so
+the frontend's `getActiveAccountId()` (`AppContext.tsx`) was just a mirror of it.
+iOS and Android already run **multiple accounts concurrently** — a `cores` map
+keyed by accountId, per-account event/connection loops, all merged into one
+shared inbox (there is no "currently active" identity to switch between). See
+`docs/53-multi-account-ux.md` for the UX, and `restoreAccounts`/`cores` in
+`mobile/ios/.../App/AppState.swift` + `mobile/android/.../App/AppViewModel.kt`
+for the reference implementation.
+
+Port that model to Desktop:
+- **Backend:** `AppState.app: Mutex<Option<Arc<AppCore>>>` becomes a map keyed by
+  accountId; `get_app` resolves per account; every command takes an `account_id`;
+  `next_events` / `wait_for_connection_state_change` run per account; account
+  lifecycle commands add/remove map entries instead of replacing the one slot.
+- **Frontend:** account-aware service (`serviceFor(accountId)` or pass the id);
+  one event + connection loop per account (loop over `store.accounts`); remove
+  `getActiveAccountId` (its 2 call sites take the accountId from their own
+  per-account loop); add a "sign in another account" onboarding path that spins
+  up a second core without tearing down the first.
+- **Already half-built:** `connectionStates` is keyed by accountId and
+  `aggregateConnectionState` already merges across accounts; conversation IDs
+  already embed the account (`dm-${accountId}-${senderDid}`). One gap to resolve:
+  `group-${groupId}` is not account-scoped.
+
+Spec-first (per the repo "spec before code" rule) against `docs/53` + the mobile
+implementations. Best done as a fresh branch off `main` after day-3/4/5 land, so
+it doesn't disrupt the in-review stack.
+
+**Done when:** two accounts can be signed in at once, both receive in real time,
+and their conversations show up in one merged list, matching iOS/Android.
+
 ---
 
 ## Open Questions
@@ -361,4 +430,5 @@ Everything else — conversation list, message bubbles, delivery indicators, net
 
 ## Deferred / Known Limitations
 
+- ~~**Single-account only (until day 6).**~~ **Resolved (day 7).** Desktop now runs multiple `AppCore` instances concurrently (one shared inbox over all identities, like iOS/Android) — see **Phase 8** above.
 - **tauri-plugin-store metadata exposure.** The identity list (own DIDs, display names, server URLs, DB filename) is stored as a plain JSON file in the OS app-data directory (`%APPDATA%\actnet\` on Windows, `~/Library/Application Support/actnet/` on macOS, `~/.local/share/actnet/` on Linux). It is protected only by OS-level filesystem permissions — not encrypted, not keyed from hardware-backed crypto. Desktop sandboxing is weaker than mobile: any process running as the same user has straightforward read access. An attacker (or malware at user privilege) gets enough to link the device to specific orgs. Message content and the contact graph are not exposed — they live inside the per-identity SQLCipher DBs. The fix would be a small `manifest.db` encrypted with a key stored in the platform credential store (Windows DPAPI / Credential Manager, macOS Keychain, Linux Secret Service). Deferred because the sensitivity of the leaked metadata is low relative to the cross-platform implementation complexity. See the analogous iOS note in `docs/02-todos-deferred.md`.

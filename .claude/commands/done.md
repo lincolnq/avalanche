@@ -1,5 +1,15 @@
 You are performing the post-implementation review for the current feature branch. Work through every step in order. Do not open a PR until step 6 completes without issues.
 
+## Step 0 — Code review
+
+Run `/code-review` first. Present the findings. If the developer wants to fix anything, stop here — call `/done` again after fixes are applied.
+
+If no fixes needed, run `/pr-review`. Present its findings. If the developer wants to fix anything — whether blockers or should-fix items — stop here. Call `/done` again after fixes are applied.
+
+Only proceed to step 1 when both `/code-review` and `/pr-review` have run and the developer has chosen not to make further changes.
+
+---
+
 ## Step 1 — Identify what was implemented
 
 Run `git diff main...HEAD --stat`. List every changed file grouped by layer (Rust crates, napi, TypeScript, iOS/Swift, server, docs/migrations). State the feature name and the exact backlog line from `docs/02-todos-deferred.md` that this implements.
@@ -53,6 +63,24 @@ Review the diff against each Critical Design Pattern in the root `CLAUDE.md`:
 
 Stop and fix any violation before proceeding.
 
+**TypeScript checks:** If the diff touches any `.ts` or `.tsx` files:
+- Grep for `as any` — flag every occurrence as a blocker
+- Grep for `console.log` — flag every occurrence, remove before PR
+
+**Solid store mutation check:** If the diff touches any `.tsx` files that use `AppContext`, grep for direct assignments to store fields (patterns like `state.x =`, `store.x =`) outside of a `setStore()` or `produce()` call. These silently fail to update the UI in Solid — flag as blocker.
+
+**Scaffold artifact check:** Grep the diff for `src-tauri/gen/` — if it appears in any staged file path, it is a blocker. That directory is generated and must never be committed.
+
+**Desktop/Tauri only:** If the diff touches `desktop/src-tauri/src/lib.rs` or `desktop/src-tauri/capabilities/default.json`, run this consistency check:
+
+1. Extract every command name from `generate_handler![...]` in `lib.rs`
+2. Extract every entry from the `"permissions"` array in `capabilities/default.json`
+3. Any command in `generate_handler!` but missing from `capabilities/default.json` is a blocker — `invoke()` will fail silently at runtime even though the code compiles.
+
+Fix any mismatch before proceeding.
+
+**Cross-platform parity:** If the diff touches any file under `desktop/src/`, `mobile/ios/`, or `mobile/android/`, check the root `CLAUDE.md` parity rule: any feature added or changed on one platform must be on all three. List which platforms were touched and which were not. If a platform was skipped intentionally (e.g. deferred), add a `// TODO(parity):` comment and a new entry in `docs/02-todos-deferred.md`.
+
 ---
 
 ## Step 5 — TODO deletion
@@ -71,18 +99,13 @@ If this PR merges a server-side change that requires a matching client-side upda
 
 Run `make test && make check && make clippy` and confirm all pass. If anything fails, fix and re-run before continuing.
 
-Draft the PR using `.github/pull_request_template.md`. Fill in every applicable section:
+Show the developer a summary of what will be submitted (changed files, any unresolved TODOs, any NEEDS REVIEW assumptions) and wait for explicit confirmation before running `gh pr create`.
 
-**Title:** Short, under 70 characters.
+**Title:** Under 70 characters.
 
-**Summary:** What was implemented and why — reference the backlog item by its exact wording.
+**Body:** One sentence of context if needed, then a tight bullet list:
+- What changed (be specific — file or layer, not "implemented feature X")
+- Anything still rough or deferred
+- Any NEEDS REVIEW assumptions from step 2
 
-**Layer checklist:** Check off every applicable item in the template's server / mobile-FFI / crypto sections.
-
-**Test evidence:** Which test layers were exercised and whether they pass. For e2e tests requiring a running server, note whether they were run locally or deferred.
-
-**Assumptions for reviewer:** The numbered assumption list from step 2. Put any NEEDS REVIEW items first, bolded.
-
-**TODO deletion:** Confirm the backlog line was removed.
-
-Then run `gh pr create --title "<title>" --body "<body>"` with the drafted content.
+No headers. No "Summary" section. No restatements of what the diff already shows. The reviewer can read code.

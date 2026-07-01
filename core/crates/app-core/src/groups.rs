@@ -178,6 +178,8 @@ pub enum JoinResult {
 /// **append-only** — the numeric `kind_code` is persisted in
 /// `message_history.kind`.
 #[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub enum GroupEventKind {
     /// A pending invitee accepted (promoted themselves into the group).
     MemberJoined,
@@ -240,6 +242,8 @@ pub fn kind_code(kind: GroupEventKind) -> i64 {
 /// (docs/03 §3.6). Persisted as a system row in `message_history` and surfaced
 /// to the UI via `IncomingEvent::GroupMetadataChanged`.
 #[derive(uniffi::Record, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct GroupMetadataEvent {
     /// URL-safe-no-pad base64 group_id this entry belongs to.
     pub group_id: String,

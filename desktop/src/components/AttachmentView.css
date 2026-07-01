@@ -1,0 +1,56 @@
+.attachment-image {
+  display: block;
+  max-width: 240px;
+  max-height: 320px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--color-input-bg);
+}
+
+/* While only the inline thumbnail is available, soften it (mirrors iOS). */
+.attachment-blurred {
+  filter: blur(8px);
+}
+
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-input-border);
+  border-radius: 12px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.attachment-file:hover {
+  background: var(--color-surface);
+}
+
+.attachment-file:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.attachment-file-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attachment-file-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-file-size {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}

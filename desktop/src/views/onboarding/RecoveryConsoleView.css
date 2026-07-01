@@ -1,0 +1,46 @@
+.recovery-console {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.recovery-console-header {
+  padding: 20px 24px 12px;
+  font-size: 18px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.recovery-console-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.recovery-console-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.recovery-console-info {
+  color: var(--color-text);
+}
+.recovery-console-ok {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.recovery-console-error {
+  color: var(--color-error);
+}
+
+.recovery-console-actions {
+  padding: 16px 24px 24px;
+  display: flex;
+  justify-content: center;
+}

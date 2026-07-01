@@ -126,6 +126,21 @@ touch one branch, grep for its sibling and change both. (The deeper fix is to
 collapse the mobile send onto the unified `send_message(target:)` path so the
 split can't exist — do that when it's in scope.)
 
+## Feature conventions
+
+- **Group/admin actions surface a system message by default.** Any group
+  membership or metadata change — join, leave, invite, remove, role change
+  (admin grant/revoke), title/description/expiry/policy change — must appear as
+  a system line in the conversation timeline. app-core already persists these as
+  `message_history` rows with `kind > 0` (the `kind_code` offset; docs/03 §3.6)
+  and emits `IncomingEvent::GroupMetadataChanged`, so every UI must (a) render
+  `kind > 0` rows as centered system text (resolving actor/target DIDs to display
+  names via the structured `metadata`, falling back to the row `body`), and
+  (b) refresh the affected group's timeline on `GroupMetadataChanged`. When you
+  add a new group action, it surfaces a system message **unless the design doc
+  explicitly says it should be silent** (e.g. DM `TimerChange` is deliberately
+  silent — `app-core/src/messaging.rs`). This applies on all three platforms.
+
 ## Subsystem docs
 
 Each subsystem has its own CLAUDE.md with workflow and conventions specific to that layer:
@@ -140,6 +155,7 @@ Each subsystem has its own CLAUDE.md with workflow and conventions specific to t
 - **Spec before code.** Before writing implementation code for a new feature, write a spec covering what changes, what files are touched, what assumptions are being made, and a test plan. Use `/new-feature` to run the full workflow. Wait for explicit approval before implementing.
 - **Assumptions audit.** After completing an implementation, list what was assumed but not explicitly verified.
 - **Strong config defaults, not mandatory vars.** A new config value should have a default that just works for the base case — the documented/canonical deployment — so nothing has to be set for a standard install. Derive the default from how we actually deploy (e.g. the `avalanche.service` systemd `WorkingDirectory`/`ReadWritePaths`, the `install.sh` paths), have the deploy ensure it (create the dir, set ownership), and let other deployments take their cue and override via env. Dev overrides in `dev.py` / the `Makefile` dev targets. Reserve "refuse to start unless set" for things with no safe default at all (real secrets) — not for paths/sizes/limits where a sensible default exists.
+- **Never make a breaking interface/contract change without explicit review.** A "contract" is anything other code or other people depend on: a shared/public API or endpoint shape, the wire/protocol format, the FFI surface, a cross-platform behavior contract (iOS/Android/Desktop parity), the project interface (e.g. how a project webview receives its auth token), DB schema/migrations, or any persisted format. If a change would alter one of these, **stop and surface it** — do not just implement it, even if it looks like an improvement (including security hardening). Explain the change and its blast radius and wait for the maintainer's explicit go-ahead; the maintainer reviews it with the project owner before it proceeds. When the change is genuinely warranted, make it consistently across every consumer (e.g. all three platforms) in the same change, not on one platform unilaterally. Prefer an additive/backward-compatible path; if you can't avoid a break, say so explicitly.
 
 ## UniFFI / Mobile Workflow
 

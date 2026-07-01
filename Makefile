@@ -96,7 +96,7 @@ APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/d
 APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
 APP_CORE_DIST := node/packages/app-core/dist/index.js
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-minify-test android-bindings dev relay relay-release server-release dev-all node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-minify-test android-bindings dev relay relay-release server-release dev-all dev-desktop node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build desktop
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -265,8 +265,20 @@ server-release:
 	@ls -lh dist/avalanche-server
 	@echo "Built dist/avalanche-server — copy to droplet with scp."
 
+desktop:
+	cd desktop && npm run tauri dev
+
+desktop-bindings:
+	cd desktop/src-tauri && cargo run --features codegen
+
 dev-all:
 	python3 dev.py
+
+dev-desktop:
+	python3 dev.py & \
+	DEV_PID=$$!; \
+	trap 'kill $$DEV_PID 2>/dev/null' EXIT; \
+	cd desktop && npm run tauri dev
 
 dev-invite:
 	@python3 dev-invite.py

@@ -1,0 +1,228 @@
+/* Shared design tokens + reusable component classes for the Avalanche desktop UI.
+   Colors and the font stack live here only — views reference them via var(--…)
+   in their co-located .css files. */
+
+*, *::before, *::after { box-sizing: border-box; }
+body, html { margin: 0; padding: 0; height: 100%; }
+
+/* Global defaults so every surface and any text without an explicit color tracks
+   the theme. Without these, un-colored labels fall back to the UA default
+   (black) — fine on the light background, invisible on the dark one. Views that
+   set their own color/background still override these. */
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* Form controls don't inherit font-family by default — they use the browser's
+   UA control font, which reads as a different typeface from the rest of the UI
+   (most visible on the .btn-* buttons, e.g. "Link a device"). Make them inherit
+   the app font. Elements that deliberately set a monospace family (DIDs,
+   recovery words, pairing codes) override this with their own font-family. */
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+/* Semantic color tokens. Light values live in :root; the dark overrides live in
+   the `prefers-color-scheme: dark` block below. Views reference only the semantic
+   names (never raw hex), so they adapt for free — mirrors the iOS palette in
+   `mobile/ios/Actnet/Sources/Utils/AvalancheColors.swift` (Plum/Sand scales,
+   adaptive semantic aliases). Dark mode follows the OS appearance; no in-app toggle. */
+:root {
+  /* Opt the WebView into both appearances so native form controls, the canvas
+     default, and scrollbars track the OS theme (and there's no white flash). */
+  color-scheme: light dark;
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Palette (light) */
+  --color-bg: #FFF1E9;            /* primary background — sand100 / avPaper */
+  --color-text: #1F1815;          /* primary text — sand900 / avInk */
+  --color-text-secondary: #6E6258;/* muted/secondary text — sand600 / avMuted */
+  --color-sidebar: #2A1620;       /* dark sidebar / hero surfaces — plum900 (fixed) */
+  --color-accent: #6B3E50;        /* primary action / accent — plum500 (used as a fill
+                                     with #fff text, so it stays a mid-plum in both modes) */
+  --color-primary: #6B3E50;       /* alias of accent for fills (NetworkView) */
+  --color-surface: #FFF8F1;       /* inset cards / list-item backings — sand50 / avCard */
+  --color-error: #C0392B;         /* form error text — avError */
+  --color-offline: #F0A030;       /* offline/connecting banner — amber (fixed) */
+  --color-warning-soft: rgba(240, 160, 48, 0.16); /* soft warning fill (recovery banner) */
+
+  /* Message bubbles (mirror iOS avOutgoingBubble / avIncomingBubble) */
+  --color-bubble-out: #6B3E50;        /* outgoing — plum500, fixed in both modes */
+  --color-bubble-out-text: #FFFFFF;
+  --color-bubble-in: #F4E7D9;         /* incoming — sand200 / (dark) plum800 */
+
+  /* Inputs / surfaces */
+  --color-input-border: #D8C8BC;  /* default text-input border */
+  --color-input-bg: #FFFFFF;      /* text-input fill */
+  --color-divider: rgba(42, 22, 32, 0.12);
+  --color-scrollbar: rgba(127, 127, 127, 0.4); /* readable on light + dark */
+
+  /* Shape */
+  --radius-input: 10px;
+  --radius-button: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #2A1620;            /* plum900 */
+    --color-text: #FFF8F1;          /* sand50 */
+    --color-text-secondary: #E5D4C0;/* sand300 */
+    --color-sidebar: #1C0F16;       /* darker than bg, for sidebar separation */
+    /* --color-accent stays plum500: it backs #fff-text buttons, so it must not
+       lighten to plum200 (would fail contrast). */
+    --color-surface: #3C1F2D;       /* plum800 / avCard dark */
+    --color-error: #D17579;         /* rose400 / avError dark */
+    --color-bubble-in: #3C1F2D;     /* plum800 */
+    --color-input-border: #4D2939;  /* plum700 */
+    --color-input-bg: #3C1F2D;      /* plum800 */
+    --color-divider: rgba(255, 248, 241, 0.12);
+  }
+}
+
+/* ── Reusable component classes (verbatim-duplicated rules, now centralized) ── */
+
+.btn-primary {
+  padding: 14px;
+  border: none;
+  border-radius: var(--radius-button);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-primary:hover {
+  opacity: 0.9;
+}
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-secondary {
+  padding: 14px;
+  border: 1.5px solid var(--color-accent);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-secondary:hover {
+  background: rgba(107, 62, 80, 0.08);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-danger {
+  padding: 14px;
+  border: 1.5px solid var(--color-error);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-error);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-danger:hover {
+  background: rgba(192, 57, 43, 0.08);
+}
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Shared settings sub-screen header (Back + title), used by every
+   settings/*.tsx sub-view rendered inside the SettingsView hub. */
+.settings-subheader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.settings-subheader h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-error {
+  color: var(--color-error);
+  font-size: 14px;
+  margin: 0;
+}
+
+.text-input {
+  padding: 12px 16px;
+  border: 1.5px solid var(--color-input-border);
+  border-radius: var(--radius-input);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.text-input:focus {
+  border-color: var(--color-accent);
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.back-btn:hover {
+  color: var(--color-text);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ── Thin scrollbar (centralized) ─────────────────────────────────────── */
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar);
+  border-radius: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

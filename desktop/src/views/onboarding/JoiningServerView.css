@@ -1,0 +1,49 @@
+.joining-server {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 64px 32px 32px;
+  background: var(--color-bg);
+  min-height: 100vh;
+  font-family: var(--font-sans);
+}
+.js-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
+.js-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-sidebar);
+  text-align: center;
+  margin: 0 0 32px;
+  max-width: 360px;
+  line-height: 1.4;
+}
+.js-error {
+  color: var(--color-error);
+  font-size: 13px;
+  margin-bottom: 16px;
+  text-align: center;
+  max-width: 400px;
+}
+.js-btn {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.js-back {
+  margin-top: 16px;
+}

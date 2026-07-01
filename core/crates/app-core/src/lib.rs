@@ -131,6 +131,8 @@ pub fn init_logging(filter: String) {
 
 /// A Project available on the homeserver.
 #[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct ProjectInfoFfi {
     pub name: String,
     pub url: String,
@@ -144,6 +146,8 @@ pub struct ProjectInfoFfi {
 /// carry local state once the attachment is persisted/downloaded. A freshly
 /// uploaded pointer has an empty `id` and no local state.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct AttachmentFfi {
     /// Local row id; empty for a freshly-uploaded pointer not yet persisted.
     pub id: String,
@@ -282,6 +286,8 @@ fn ffi_to_attachment_row(
 /// attachment path and the client downloads it like any other blob. `None`
 /// image means a text-only card.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct LinkPreviewFfi {
     /// The previewed URL — must occur in the message body (anti-spoof).
     pub url: String,
@@ -383,6 +389,8 @@ fn ffi_to_link_preview_row(
 
 /// A decrypted inbound message.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct DecryptedMessage {
     pub server_id: i64,
     pub sender_did: String,
@@ -421,6 +429,8 @@ pub struct DecryptedMessage {
 
 /// A message from local history (persisted in SQLCipher).
 #[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct StoredMessageFfi {
     pub id: String,
     pub conversation_id: String,
@@ -461,6 +471,8 @@ pub struct StoredMessageFfi {
 /// identity `(target_author, target_sent_at_ms)`. The UI clusters these by
 /// target and by emoji.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct ReactionFfi {
     pub conversation_id: String,
     pub target_author: String,
@@ -472,6 +484,8 @@ pub struct ReactionFfi {
 
 /// A prior body of an edited message, for the edit-history sheet.
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct MessageRevisionFfi {
     pub body: String,
     pub replaced_at_ms: i64,
@@ -483,6 +497,8 @@ pub struct MessageRevisionFfi {
 /// `AppCoreInner::send_to_target`. (Plain-text sends keep their own
 /// `send_dm` / `send_group_message` entry points.)
 #[derive(uniffi::Enum, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(tag = "type", rename_all = "camelCase"))]
 pub enum MessageTarget {
     Dm { recipient_did: String },
     Group { group_id: String },
@@ -527,6 +543,8 @@ fn stored_to_ffi(m: store::messages::HistoryMessage) -> StoredMessageFfi {
 /// invited to) that hasn't seen any messages yet — the UI typically renders
 /// it with a placeholder preview.
 #[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct ConversationSummaryFfi {
     pub conversation_id: String,
     /// For group conversations, the group's title resolved from
@@ -557,6 +575,8 @@ pub struct ConversationSummaryFfi {
 
 /// A delivery status update for an outgoing message (e.g. read receipt received).
 #[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct DeliveryStatusUpdate {
     pub conversation_id: String,
     pub sent_at_ms: i64,
@@ -567,6 +587,8 @@ pub struct DeliveryStatusUpdate {
 /// `master_key` is the 32-byte zkgroup master key (caller stashes for
 /// invite links).
 #[derive(uniffi::Record, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct CreatedGroupFfi {
     pub group_id: String,
     pub master_key: Vec<u8>,
@@ -574,6 +596,8 @@ pub struct CreatedGroupFfi {
 
 /// A member's row in a group, decrypted under the group key.
 #[derive(uniffi::Record, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct GroupMemberFfi {
     pub did: String,
     /// URL-safe-no-pad base64 of the encrypted_member_id. Pass this verbatim
@@ -587,6 +611,8 @@ pub struct GroupMemberFfi {
 /// A pending invite or approval entry. `timestamp_ms` carries either
 /// `invited_at_ms` (for invites) or `requested_at_ms` (for approvals).
 #[derive(uniffi::Record, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct GroupPendingFfi {
     pub encrypted_member_id: String,
     pub timestamp_ms: i64,
@@ -594,6 +620,8 @@ pub struct GroupPendingFfi {
 
 /// Snapshot of a group's decrypted state.
 #[derive(uniffi::Record, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct GroupSummaryFfi {
     pub group_id: String,
     pub master_key: Vec<u8>,
@@ -608,6 +636,8 @@ pub struct GroupSummaryFfi {
 
 /// Outcome of `join_via_link`.
 #[derive(uniffi::Enum, Debug, Clone, Copy)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(tag = "type", rename_all = "camelCase"))]
 pub enum JoinResultFfi {
     /// Admitted directly into `member_credentials` (OpenLink policy).
     Member,
@@ -657,6 +687,8 @@ fn summary_to_ffi(s: groups::GroupSummary) -> GroupSummaryFfi {
 /// list. `display_name` is the cached profile display name (empty if no
 /// profile has been fetched yet — callers fall back to the DID).
 #[derive(uniffi::Record, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct ContactRowFfi {
     pub did: String,
     pub display_name: String,
@@ -670,6 +702,8 @@ pub struct ContactRowFfi {
 /// exchanged via encrypted profile bundles (client-to-client), never stored on
 /// the server.
 #[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct AccountInfoFfi {
     pub did: String,
     pub display_name: Option<String>,
@@ -681,6 +715,8 @@ pub struct AccountInfoFfi {
 /// Owned by the `AppCore` background reconnect task; observed by UI via
 /// `connection_state()` and `wait_for_connection_state_change()`.
 #[derive(uniffi::Enum, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(tag = "type", rename_all = "camelCase"))]
 pub enum ConnectionState {
     /// Initial state; reconnect task hasn't run yet.
     Disconnected,
@@ -695,6 +731,8 @@ pub enum ConnectionState {
 /// A single event surfaced to the FFI from the background reconnect task.
 /// Drained in batches by `next_events()`.
 #[derive(uniffi::Enum, Debug, Clone)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(tag = "type", rename_all = "camelCase"))]
 pub enum IncomingEvent {
     /// A decrypted content message.
     Message { msg: DecryptedMessage },
@@ -3288,6 +3326,8 @@ pub fn derive_did_from_passkey(
 
 /// Decoded invite token info returned to the mobile layer.
 #[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
 pub struct InviteInfo {
     pub server_url: String,
     pub server_name: String,

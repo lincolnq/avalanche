@@ -1,16 +1,16 @@
-// actnet testbot — the first demo Project on the platform.
+// actnet testbot - the first demo Project on the platform.
 //
 // A standalone HTTP service that serves a tiny web UI and spins up AI chatbot
 // accounts on demand. Each bot is a full Signal-protocol participant: it
 // registers on the homeserver, holds its own identity keys, and sends/receives
-// encrypted DMs via `@actnet/app-core`. Bots converse using Claude Haiku
-// (falling back to an echo when no API key is configured).
+// encrypted DMs via `@actnet/app-core`. Bots converse using Claude Haiku; an
+// Anthropic key is required (configured via `.env` - see `loadDotenv`).
 //
 // Lifecycle / state:
 //   - All bot state is in-memory: the `botsByUser` registry dies when the
 //     service restarts. Each bot's SQLCipher store is a throwaway file under
 //     the OS temp dir (app-core has no in-memory store binding for node), so
-//     restarting the service abandons every bot identity — matching the
+//     restarting the service abandons every bot identity - matching the
 //     original Rust testbot's ephemeral semantics.
 //   - Each bot runs one `for await` event loop over its own AppCore. Node is
 //     single-threaded, so a bot processes its messages sequentially with no
@@ -21,7 +21,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { AppCore, initLogging, type SendTarget } from "@actnet/app-core";
 
@@ -31,11 +32,41 @@ const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 interface Env {
   homeserverUrl: string;
   anthropicApiKey?: string;
+  anthropicAuthToken?: string;
+  anthropicBaseUrl: string;
   bindHost: string;
   bindPort: number;
   logLevel: string;
   sharedSecret?: string;
   basePath: string;
+}
+
+/**
+ * Load the repo-root `.env` into `process.env` before reading config, so the
+ * bot picks up its `ANTHROPIC_*` credentials regardless of how it's launched:
+ * `npm start` (cwd = package dir), `dev.py`, or directly from the repo root.
+ *
+ * Walks up from this module looking for the nearest `.env`. Uses Node's
+ * built-in parser (`process.loadEnvFile`), which strips the `export ` prefix
+ * the repo's `.env` uses and does NOT override variables already present in the
+ * real environment - so an explicit shell/systemd value still wins, matching
+ * dev.py's `setdefault` rule. A missing `.env` is non-fatal (the vars may be
+ * supplied directly by the environment, e.g. in production).
+ */
+function loadDotenv(): void {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    const candidate = join(dir, ".env");
+    try {
+      process.loadEnvFile(candidate);
+      console.log(`testbot: loaded env from ${candidate}`);
+      return;
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return; // reached filesystem root, no .env found
+      dir = parent;
+    }
+  }
 }
 
 function readEnv(): Env {
@@ -57,6 +88,8 @@ function readEnv(): Env {
   return {
     homeserverUrl: process.env.HOMESERVER_URL ?? "http://localhost:3000",
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,
+    anthropicAuthToken: process.env.ANTHROPIC_AUTH_TOKEN || undefined,
+    anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com",
     bindHost,
     bindPort,
     basePath,
@@ -136,9 +169,6 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
         h1 { font-size: 24px; }
         button { font-size: 18px; padding: 12px 24px; cursor: pointer; background: #007AFF; color: white; border: none; border-radius: 8px; }
         button:disabled { background: #999; }
-        a.openbtn { display: inline-block; font-size: 18px; padding: 12px 24px; margin-top: 16px; background: #007AFF; color: white; border-radius: 8px; text-decoration: none; }
-        /* Must out-specify a.openbtn (0-1-1), so scope the hide rule to the element+class. */
-        a.openbtn.hidden { display: none; }
         #status { margin-top: 16px; color: #666; }
     </style>
 </head>
@@ -147,7 +177,6 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
     <p>Tap below to start a conversation with an AI chatbot. The bot will send you an encrypted DM.</p>
     <button id="textme" onclick="textMe()">Text Me</button>
     <div id="status"></div>
-    <a id="openlink" class="openbtn hidden" href="#">Click to open the conversation</a>
     <script>
         const params = new URLSearchParams(window.location.search);
         const token = params.get('token');
@@ -173,16 +202,8 @@ const indexHtml = (basePath: string) => `<!DOCTYPE html>
                     return;
                 }
                 const data = await resp.json();
-                status.textContent = 'Bot created!';
-                // Reveal a real link for the user to tap. A genuine tap is the
-                // user gesture both platforms require to hand a verified link off
-                // to the app (Android App Link / iOS Universal Link); a JS
-                // window.location after the await has no live gesture, so Chrome
-                // keeps it in the browser. The tap fixes that on both platforms
-                // with one code path — no intent:// / UA sniffing needed.
-                const link = document.getElementById('openlink');
-                link.href = 'https://go.theavalanche.net/conversation/' + data.bot.did;
-                link.classList.remove('hidden');
+                status.textContent = 'Bot created! Opening conversation...';
+                window.location.href = 'https://go.theavalanche.net/conversation/' + data.bot.did;
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
                 btn.disabled = false;
@@ -204,7 +225,7 @@ interface ConversationMessage {
  * launch its background message loop. Returns the bot's public handle.
  */
 async function spawnBot(env: Env, userDid: string): Promise<BotInfo> {
-  // Throwaway SQLCipher store in a temp dir — the bot identity is meant to die
+  // Throwaway SQLCipher store in a temp dir - the bot identity is meant to die
   // with the process. Empty passphrase is fine for a disposable store.
   const dbPath = join(mkdtempSync(join(tmpdir(), "actnet-testbot-")), "store.db");
   // Present the bootstrap secret (as a plain-member token, no project) so the
@@ -275,7 +296,7 @@ async function runBotLoop(
     const displayName = await core.contactDisplayName(msg.senderDid);
 
     conversation.push({ role: "user", content: msg.body });
-    const response = await generateResponse(env.anthropicApiKey, conversation, displayName || undefined);
+    const response = await generateResponse(env, conversation, displayName || undefined);
     conversation.push({ role: "assistant", content: response });
 
     console.log(`testbot: bot ${botDid} >>> to ${msg.senderDid}: ${JSON.stringify(response)}`);
@@ -291,27 +312,60 @@ async function runBotLoop(
 
 // ── Claude API ───────────────────────────────────────────────────────────────
 
+// This bot talks to an Anthropic-compatible `/v1/messages` endpoint. To point
+// it at real Claude models (rather than a compatible provider), set these in
+// your `.env` (see `loadDotenv` / `.env.example`):
+//
+//   ANTHROPIC_BASE_URL  The API host. For Claude, use https://api.anthropic.com
+//                       (the default if unset). The bot always POSTs to
+//                       `${ANTHROPIC_BASE_URL}/v1/messages`. Point this at a
+//                       compatible provider (e.g. DeepSeek's Anthropic-compatible
+//                       endpoint) only if you're not using first-party Claude.
+//   ANTHROPIC_API_KEY   Your Claude API key, created in the Anthropic Console
+//                       (console.anthropic.com -> Settings -> API keys). Sent as
+//                       the `x-api-key` header below. ANTHROPIC_AUTH_TOKEN is an
+//                       alternative bearer credential (e.g. for proxies/gateways).
+//   ANTHROPIC_MODEL     The model ID. Use an exact ID, no date suffix. Current
+//                       Claude IDs: claude-opus-4-8 (most capable),
+//                       claude-sonnet-4-6 (balanced), claude-haiku-4-5 (fastest /
+//                       cheapest -- this bot's default tier via HAIKU_MODEL).
+//                       ANTHROPIC_DEFAULT_HAIKU_MODEL overrides this if set.
+
 /**
- * Ask Claude Haiku for the next reply. With no API key configured, falls back
- * to echoing the user's last message so the demo still works offline.
+ * Ask Claude Haiku for the next reply. If no API key is configured the bot runs
+ * in echo mode (echoes the user's last message) so local dev needs zero setup;
+ * on an API error or request failure it likewise falls back to echoing, so the
+ * conversation always progresses.
  */
 async function generateResponse(
-  apiKey: string | undefined,
+  env: Env,
   conversation: ConversationMessage[],
   userDisplayName: string | undefined,
 ): Promise<string> {
+  const apiKey = env.anthropicApiKey ?? env.anthropicAuthToken;
+  // No key configured → echo mode (warned once at startup in `main`). Keeps
+  // local dev / `make dev-all` working with zero required configuration.
   if (!apiKey) return echoResponse(conversation);
 
+  const model = process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+    ?? process.env.ANTHROPIC_MODEL
+    ?? HAIKU_MODEL;
+
   let systemPrompt =
-    "You are a friendly chatbot on the actnet platform. Keep your responses " +
-    "concise and conversational. You're chatting with an activist — be " +
+    "You are a friendly chatbot on the Avalanche platform. Keep your responses " +
+    "concise and conversational. You're chatting with an activist - be " +
     "supportive and helpful.";
   if (userDisplayName) {
-    systemPrompt += ` The user's display name is ${userDisplayName}.`;
+    // Sanitize: strip/replace characters that break JSON or trip strict
+    // providers (control chars, en/em dashes, curly quotes) - common in
+    // display names set from mobile keyboards.
+    const safe = userDisplayName.replace(/[\u0000-\u001f\u007f-\u009f\u2013\u2014\u2018\u2019\u201c\u201d]/g, "'");
+    systemPrompt += ` The user's display name is ${safe}.`;
   }
 
+  console.log(`testbot: API call model=${model} url=${env.anthropicBaseUrl}/v1/messages`);
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    const resp = await fetch(`${env.anthropicBaseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
@@ -319,7 +373,7 @@ async function generateResponse(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model,
         max_tokens: 1024,
         system: systemPrompt,
         messages: conversation.map((m) => ({ role: m.role, content: m.content })),
@@ -329,15 +383,25 @@ async function generateResponse(
       console.error(`testbot: claude API error ${resp.status}: ${await resp.text()}`);
       return echoResponse(conversation);
     }
-    const body = (await resp.json()) as { content?: Array<{ text?: string }> };
-    return body.content?.[0]?.text ?? "I'm having trouble thinking right now. Try again?";
+    const body = (await resp.json()) as { content?: Array<{ type?: string; text?: string; thinking?: string }> };
+    // Some models (deepseek-v4-*) return a "thinking" block first; skip
+    // those and use the first "text" block.  Fall back to thinking text
+    // if no text block is present.
+    const textBlock = body.content?.find((b) => b.type === "text");
+    const thinkingBlock = body.content?.find((b) => b.type === "thinking");
+    const text = textBlock?.text ?? thinkingBlock?.thinking;
+    if (!text) {
+      console.error("testbot: unexpected API response shape:", JSON.stringify(body).slice(0, 200));
+      return "(Unexpected API response - check logs)";
+    }
+    return text;
   } catch (e) {
     console.error(`testbot: claude API request failed: ${(e as Error).message}`);
     return echoResponse(conversation);
   }
 }
 
-/** Offline fallback: echo the user's most recent message. */
+/** Fallback when the API errors or is unreachable: echo the user's last message. */
 function echoResponse(conversation: ConversationMessage[]): string {
   const lastUser = [...conversation].reverse().find((m) => m.role === "user");
   return `(echo) You said: ${lastUser?.content ?? "..."}`;
@@ -382,11 +446,16 @@ async function handleRequest(env: Env, req: IncomingMessage, res: ServerResponse
 }
 
 function main(): void {
+  loadDotenv();
   const env = readEnv();
   initLogging(env.logLevel);
 
-  if (!env.anthropicApiKey) {
-    console.warn("testbot: ANTHROPIC_API_KEY not set — bots will echo messages instead of using Claude");
+  if (!env.anthropicApiKey && !env.anthropicAuthToken) {
+    console.warn(
+      "testbot: no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN configured — " +
+        "running in echo mode (replies echo your message). Set one in .env " +
+        "(see .env.example) for AI replies. Local dev / `make dev-all` needs no key.",
+    );
   }
 
   const server = createServer((req, res) => {

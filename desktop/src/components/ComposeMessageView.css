@@ -1,0 +1,222 @@
+/* ── Row layout ─────────────────────────────────────────────────────────── */
+
+.compose-row-wrap {
+  flex-shrink: 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-divider);
+}
+
+.compose-editing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 18px;
+  font-size: 12px;
+  color: var(--color-accent);
+  border-bottom: 1px solid var(--color-divider);
+}
+.compose-editing-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.compose-editing-cancel:hover {
+  color: var(--color-text);
+}
+
+.compose-row {
+  display: flex;
+  align-items: flex-end;        /* buttons sit flush with input baseline */
+  gap: 4px;                     /* spacing between adjacent icon buttons */
+  padding: 10px 12px;           /* block padding above/below the row */
+  background: var(--color-bg);
+}
+
+/* ── Attachment button + hidden file input ─────────────────────────────── */
+
+.compose-attach-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: none;
+  color: var(--color-text-secondary);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color 150ms;
+}
+.compose-attach-btn:hover { color: var(--color-accent); }
+.compose-attach-btn:disabled { opacity: 0.4; cursor: default; }
+
+.compose-file-input {
+  display: none;
+}
+
+/* ── Staged attachments / preview strip ────────────────────────────────── */
+
+.compose-staging {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 18px 0;
+  align-items: flex-start;
+}
+
+.staged-chip {
+  position: relative;
+}
+
+.staged-chip-image {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--color-input-border);
+}
+
+.staged-chip-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-input-border);
+  font-size: 0.82rem;
+}
+.staged-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.staged-chip-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Pill input wrap ───────────────────────────────────────────────────── */
+
+.compose-input-wrap {
+  flex: 1;
+  position: relative;           /* anchor for the expand tab */
+  margin: 0 6px;                /* small fixed side margins to neighbors */
+}
+.compose-input-wrap.expanded {
+  margin: 0;                    /* margin collapses in expanded mode */
+}
+
+/* ── The pill itself ───────────────────────────────────────────────────── */
+
+.compose-input {
+  width: 100%;
+  min-height: 32px;
+  max-height: 72px;             /* ~2-3 lines collapsed */
+  padding: 6px 12px;            /* 12px H inset, 6px V inset */
+  border-radius: 18px;          /* pill shape */
+  border: 1px solid transparent;/* invisible at rest */
+  background: rgba(107, 62, 80, 0.05); /* slightly elevated surface */
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+  outline: none;                /* no default focus ring */
+  overflow-y: auto;
+  overflow-x: hidden;
+  word-break: break-word;
+  caret-color: transparent;     /* hidden until mounted */
+  transition: border-color 150ms, background-color 150ms;
+}
+.compose-input.mounted {
+  caret-color: var(--color-accent);
+}
+.compose-input:focus {
+  border-color: var(--color-accent);
+  background: rgba(107, 62, 80, 0.08);
+}
+.compose-input::placeholder {
+  color: var(--color-text-secondary);
+  font-style: normal;
+  font-weight: 400;
+}
+.compose-input:disabled {
+  opacity: 0.5;
+}
+.compose-input.expanded {
+  max-height: 212px;            /* generous expanded cap */
+}
+
+/* ── Expand/collapse tab ───────────────────────────────────────────────── */
+
+.compose-expand-tab {
+  position: absolute;
+  top: -12px;                   /* half-overlaps the pill's top edge */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 24px;
+  border-radius: 12px;          /* detached pill */
+  border: none;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 180ms;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.compose-input-wrap:hover .compose-expand-tab {
+  opacity: 1;
+}
+.compose-expand-tab:hover {
+  color: var(--color-text);
+  background: rgba(107, 62, 80, 0.06);
+}
+
+/* ── Send button ───────────────────────────────────────────────────────── */
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: none;             /* no background at rest */
+  color: var(--color-accent);   /* accent icon fill */
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: opacity 150ms;
+}
+.send-btn:hover { opacity: 0.75; }
+.send-btn:disabled { opacity: 0.3; cursor: default; }

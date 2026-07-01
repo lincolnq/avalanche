@@ -1,0 +1,190 @@
+.groupdetail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(42, 22, 32, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.groupdetail {
+  width: min(460px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border-radius: var(--radius-button);
+  box-shadow: 0 12px 40px rgba(42, 22, 32, 0.3);
+  overflow: hidden;
+}
+
+.groupdetail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.groupdetail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.groupdetail-close:hover {
+  background: var(--color-divider);
+}
+
+.groupdetail-body {
+  padding: 8px 16px 16px;
+  overflow-y: auto;
+}
+
+.groupdetail-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.groupdetail-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.groupdetail-section:last-child {
+  border-bottom: none;
+}
+
+.groupdetail-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+}
+
+.groupdetail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groupdetail-group-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.groupdetail-revision {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.groupdetail-rename {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.groupdetail-rename .text-input {
+  width: 100%;
+}
+.groupdetail-rename-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.groupdetail-link-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.groupdetail-link-btn:hover {
+  text-decoration: underline;
+}
+.groupdetail-link-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  text-decoration: none;
+}
+.groupdetail-link-btn.danger {
+  color: var(--color-error);
+}
+
+.groupdetail-readonly {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.groupdetail-member,
+.groupdetail-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.groupdetail-member-name {
+  font-size: 14px;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupdetail-spacer {
+  flex: 1;
+}
+
+.groupdetail-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(107, 62, 80, 0.15);
+  color: var(--color-accent);
+}
+
+.groupdetail-pending-id {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+.groupdetail-pending-id.readonly {
+  padding: 6px 0;
+}
+
+.groupdetail-leave {
+  border: none;
+  background: transparent;
+  color: var(--color-error);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.groupdetail-leave:hover {
+  text-decoration: underline;
+}

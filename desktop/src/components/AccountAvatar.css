@@ -1,0 +1,32 @@
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* Bot accounts render in a pointy-top hexagon instead of a circle (docs/54). */
+.account-avatar.bot {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+/* 12-hue palette — deterministic per-DID, no inline styles. */
+.avatar-c0  { background: hsl(0,   55%, 45%); }
+.avatar-c1  { background: hsl(30,  55%, 42%); }
+.avatar-c2  { background: hsl(60,  50%, 38%); }
+.avatar-c3  { background: hsl(90,  50%, 38%); }
+.avatar-c4  { background: hsl(150, 50%, 38%); }
+.avatar-c5  { background: hsl(180, 50%, 38%); }
+.avatar-c6  { background: hsl(210, 55%, 45%); }
+.avatar-c7  { background: hsl(240, 50%, 50%); }
+.avatar-c8  { background: hsl(270, 50%, 45%); }
+.avatar-c9  { background: hsl(300, 50%, 42%); }
+.avatar-c10 { background: hsl(330, 55%, 45%); }
+.avatar-c11 { background: hsl(15,  55%, 45%); }

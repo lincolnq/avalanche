@@ -1,0 +1,53 @@
+.recovery-explainer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.recovery-explainer-back {
+  margin: 20px 24px 0;
+  align-self: flex-start;
+}
+
+.recovery-explainer-body {
+  flex: 1;
+  max-width: 440px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.recovery-explainer-body h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.recovery-explainer-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.recovery-explainer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.recovery-explainer-phrase {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.recovery-explainer-action {
+  margin-top: 8px;
+}

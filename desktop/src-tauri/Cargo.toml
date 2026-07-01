@@ -1,0 +1,51 @@
+[package]
+name = "avalanche-desktop"
+version = "0.1.0"
+description = "Avalanche Desktop"
+license = "AGPL-3.0-only"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "avalanche_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+codegen = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-store = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-notification = "2"
+# Forwards a second instance's launch to the running one. We extract the
+# avalanche:// URL from the second instance's argv ourselves (see lib.rs) rather
+# than relying on the `deep-link` feature's auto-forward, which doesn't fire
+# reliably for the second-instance argv path on Windows.
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+specta-typescript = "0.0.12"
+app-core = { path = "../../core/crates/app-core", features = ["specta"] }
+tokio = { version = "1", features = ["rt"] }
+# Opens validated http(s) links in the OS default browser (A2: clickable links,
+# A4: link-preview card taps). A scoped command — not a broad plugin — keeps the
+# minimal command surface (see desktop/CLAUDE.md security constraints).
+open = "5"
+# Link-preview OG fetch (A4). The WebView cannot fetch external URLs
+# (connect-src ipc:), so the fetch + parse lives here. rustls-tls avoids an
+# OpenSSL build dependency on Windows.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+scraper = "0.20"
+
+# zkgroup depends on a Signal fork of curve25519-dalek (it has private fields
+# zkgroup needs to reach into for Ristretto-based proofs). The fork is API-
+# compatible with crates.io 4.1.x for everything else. Without this patch,
+# transitive dependencies pull in the upstream 4.1.3 and we get a diamond.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

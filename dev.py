@@ -117,7 +117,162 @@ def build_node_bots():
     subprocess.run(["make", "node-adminbot-build", "node-testbot-build"], cwd=REPO_DIR, check=True)
 
 
+# Keep the Job Object handle alive for the whole process lifetime. The job is
+# configured to kill all member processes when its last handle closes, so this
+# handle must NOT be garbage-collected / closed early.
+_job_handle = None
+
+
+def enable_kill_on_close():
+    """Make every descendant process die when dev.py does — even if the terminal
+    window is closed and Python never runs its signal handlers.
+
+    On Windows, `Popen.terminate()` only kills the *direct* child, but our workers
+    are grandchildren (cargo -> avalanche-server.exe, fnm -> node) so they orphan.
+    Fix: put dev.py itself into a Job Object with KILL_ON_JOB_CLOSE. Child
+    processes automatically inherit the job, so the whole tree is terminated by
+    the OS when dev.py exits for any reason (Ctrl-C, terminate, or window close).
+    No-op on non-Windows, where killing the process group handles this instead."""
+    global _job_handle
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+            ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    JobObjectExtendedLimitInformation = 9
+
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        print("warning: CreateJobObject failed; orphaned processes may persist")
+        return
+
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not kernel32.SetInformationJobObject(
+        job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
+    ):
+        print("warning: SetInformationJobObject failed; orphaned processes may persist")
+        return
+
+    # Nested jobs (Win8+) let this succeed even if the terminal already placed us
+    # in a job; descendants join this inner job and inherit kill-on-close.
+    if not kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()):
+        print("warning: AssignProcessToJobObject failed; orphaned processes may persist")
+        return
+
+    _job_handle = job
+
+
+# On POSIX, give each child its own process group (start_new_session) so cleanup
+# can signal the whole subtree — including grandchildren like the cargo-spawned
+# server binary and the fnm-spawned node bots — with killpg. On Windows the Job
+# Object (enable_kill_on_close) provides the equivalent kill-the-tree guarantee.
+_POPEN_KW = {} if sys.platform == "win32" else {"start_new_session": True}
+
+
+def _killpg(proc, sig):
+    """Best-effort: signal a child's entire process group (POSIX only). Ignores
+    a process that already exited or that we can't signal."""
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def free_port(port):
+    """Kill whatever is LISTENing on `port` so a restart doesn't collide with an
+    orphaned service from a previous dev run.
+
+    dev.py reaps its own process tree on exit (Job Object on Windows, killpg on
+    POSIX), but a force-killed dev.py — or one whose children were reparented
+    before the job closed — can leave a server bound to 3000, which then makes
+    the next `make dev-all` die with AddrInUse. Clearing the port up front makes
+    the restart self-heal. Best-effort and cross-platform; a no-op when the port
+    is already free or the lookup tool (netstat / lsof) is unavailable."""
+    pids = set()
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True, text=True,
+            ).stdout
+            for line in out.splitlines():
+                if "LISTENING" not in line:
+                    continue
+                cols = line.split()
+                # Columns: Proto  Local-Address  Foreign-Address  State  PID.
+                # The leading colon anchors the match so ":3000" can't hit
+                # ":30000"; works for IPv4 and "[::1]:3000" alike.
+                if len(cols) >= 5 and cols[1].endswith(f":{port}"):
+                    pid = cols[-1]
+                    if pid.isdigit() and pid != "0":
+                        pids.add(pid)
+        else:
+            out = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True,
+            ).stdout
+            pids.update(p for p in out.split() if p.isdigit())
+    except FileNotFoundError:
+        return  # netstat / lsof not on PATH; nothing we can do
+
+    for pid in pids:
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/PID", pid, "/F"],
+                    capture_output=True, check=False,
+                )
+            else:
+                os.kill(int(pid), signal.SIGKILL)
+            print(f"  Freed port {port}: killed stale process {pid}")
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+
+
 def main():
+    enable_kill_on_close()
     start_postgres()
 
     # Build the server while Postgres starts up. Project services are Node
@@ -147,6 +302,14 @@ def main():
         })
         project_launches.append((project, port))
 
+    # Free any port left bound by an orphaned service from a previous dev run
+    # (see free_port) so `make dev-all` self-heals instead of dying with
+    # AddrInUse. The server port comes from SERVER_URL (default 3000); project
+    # ports are the ones assigned above.
+    server_port = urlparse(os.environ.get("SERVER_URL", "http://localhost:3000")).port or 3000
+    for port in [server_port, *(port for _project, port in project_launches)]:
+        free_port(port)
+
     # Launch all services
     processes = []
 
@@ -166,6 +329,7 @@ def main():
     processes.append(subprocess.Popen(
         ["cargo", "run", "-p", "server"],
         cwd=CORE_DIR,
+        **_POPEN_KW,
         # Dev runs CLOSED registration (the prod default) so the dev clients
         # exercise the same admission path prod uses. Clients present the shared
         # secret below; testbot/adminbot read DEV_SHARED_SECRET to build a
@@ -180,6 +344,7 @@ def main():
         processes.append(subprocess.Popen(
             node_cmd([project["dist"]]),
             cwd=NODE_DIR,
+            **_POPEN_KW,
             env={
                 **os.environ,
                 project["bind_env"]: f"0.0.0.0:{port}",
@@ -202,6 +367,7 @@ def main():
     processes.append(subprocess.Popen(
         node_cmd(["packages/adminbot/dist/index.js"]),
         cwd=NODE_DIR,
+        **_POPEN_KW,
         stdout=adminbot_log,
         stderr=subprocess.STDOUT,
         env={
@@ -218,16 +384,38 @@ def main():
         },
     ))
 
-    # Wait for all processes; kill them all on Ctrl-C or if any exits
+    # Tear down the whole tree on Ctrl-C, terminal close, or if any child exits.
+    # POSIX: signal each child's process group so grandchildren (cargo's server
+    # binary, fnm's node bots) die too. Windows: terminate the direct children
+    # for a prompt shutdown; the Job Object kills any grandchildren when we exit.
     def cleanup(*_args):
+        if sys.platform == "win32":
+            for p in processes:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+            for p in processes:
+                try:
+                    p.wait(timeout=5)
+                except Exception:
+                    pass
+            sys.exit(0)
         for p in processes:
-            p.terminate()
+            _killpg(p, signal.SIGTERM)
         for p in processes:
-            p.wait()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _killpg(p, signal.SIGKILL)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
+    # Terminal close: with start_new_session the children no longer receive the
+    # terminal's SIGHUP directly, so dev.py catches it and tears the tree down.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, cleanup)
 
     try:
         while True:

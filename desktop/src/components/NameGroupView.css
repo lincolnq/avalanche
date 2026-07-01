@@ -1,0 +1,83 @@
+.name-group {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+}
+
+.name-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.name-group-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--color-text);
+}
+
+/* Balances the back button so the title stays centered. */
+.name-group-header-spacer {
+  width: 56px;
+}
+
+.name-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.name-group-name {
+  width: 100%;
+}
+
+.name-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.name-group-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+}
+
+.name-group-member {
+  font-size: 14px;
+  color: var(--color-text);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-divider);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-group-member:last-child {
+  border-bottom: none;
+}
+
+.name-group-empty {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.form-error {
+  font-size: 13px;
+  color: var(--color-error);
+}
+
+.name-group-actions {
+  display: flex;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-divider);
+}
+.name-group-actions .btn-primary {
+  flex: 1;
+}

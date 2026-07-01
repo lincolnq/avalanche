@@ -1,0 +1,130 @@
+.phrase-setup {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.phrase-setup-back {
+  margin: 20px 24px 0;
+  align-self: flex-start;
+}
+
+.phrase-setup-body {
+  flex: 1;
+  overflow-y: auto;
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 16px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.phrase-setup-body h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.phrase-setup-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.phrase-setup-loading {
+  color: var(--color-text-secondary);
+  text-align: center;
+  padding: 48px 0;
+}
+
+.phrase-setup-server {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-align: center;
+}
+
+.phrase-setup-server-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.phrase-setup-server-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.phrase-setup-server-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  user-select: text;
+}
+
+.phrase-setup-words {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: phrase-word;
+}
+
+.phrase-setup-word {
+  counter-increment: phrase-word;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  user-select: text;
+}
+
+.phrase-setup-word::before {
+  content: counter(phrase-word) ". ";
+  color: var(--color-text-secondary);
+}
+
+.phrase-setup-quiz {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.phrase-setup-quiz-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.phrase-setup-quiz-row span {
+  width: 80px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.phrase-setup-quiz-row .text-input {
+  flex: 1;
+}
+
+.phrase-setup-action {
+  align-self: stretch;
+}
+
+.phrase-setup-verify-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}

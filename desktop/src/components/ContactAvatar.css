@@ -1,0 +1,34 @@
+.contact-avatar {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* Bots render in a pointy-top hexagon instead of a circle (docs/54). The shape
+   is the bot signal; the clip-path overrides the circular border-radius. */
+.contact-avatar.bot {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+.contact-avatar-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-accent);
+  background: var(--color-bg);
+  border-radius: 50%;
+  padding: 1px;
+}
+
+/* Reuse the 12-hue palette defined in AccountAvatar.css (.avatar-c0…c11). */

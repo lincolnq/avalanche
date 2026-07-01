@@ -1,0 +1,120 @@
+.newconv-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(42, 22, 32, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.newconv {
+  width: min(460px, 92vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border-radius: var(--radius-button);
+  box-shadow: 0 12px 40px rgba(42, 22, 32, 0.3);
+  overflow: hidden;
+}
+
+.newconv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.newconv-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.newconv-close:hover {
+  background: var(--color-divider);
+}
+
+.newconv-recipients {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.newconv-contacts {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+
+.newconv-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: transparent;
+  cursor: pointer;
+}
+.newconv-contact:hover {
+  background: var(--color-divider);
+}
+
+.newconv-contact-name {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.newconv-contact-did {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.newconv-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.newconv-actions {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-divider);
+}
+.newconv-actions > button {
+  flex: 1;
+}
+
+/* Account picker (shown only when more than one identity is signed in). */
+.newconv-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+}
+.newconv-account-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.newconv-account-select {
+  flex: 1;
+}

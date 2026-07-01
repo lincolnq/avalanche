@@ -1,0 +1,35 @@
+/* Settings "Link a device" panel. The shared .ld-* content classes (subtitle,
+   code, status, btn, input, error, copy, back) are defined once in
+   ../onboarding/LinkNewDeviceView.css and reused here from the global bundle —
+   the same cross-view sharing this app already uses for .btn-primary /
+   .settings-subheader. Only the settings-panel layout lives here. */
+
+.link-device-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ld-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text);
+}
+
+.ld-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 460px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.ld-done {
+  color: var(--color-accent);
+  font-weight: 500;
+}
