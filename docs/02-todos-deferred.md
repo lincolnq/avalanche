@@ -62,6 +62,7 @@
 
 ## Project-wide
 - Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`
+- Group/DM discriminator on the FFI: `ConversationSummaryFfi` (`core/crates/app-core/src/lib.rs`) carries no group/DM flag, so every client re-derives it from the `conversation_id` prefix (`group-` vs `dm-`) — iOS `AppState.groupId(from:)`, Android `groupIdFromConversationId` in `AppViewModel`, Desktop `isGroupSummary` in `AppContext.tsx`. Add an `is_group: bool` to the struct, populated at the `load_conversations` build site from the `MessageTarget` core already branches on (`lib.rs:250-251`), alongside `is_request` / `is_blocked`, then drop the prefix parsing in all three clients. Cross-platform FFI change — do as a focused follow-up post-desktop-merge (raised in PR #9 review, `discussion_r3500344919`).
 
 ## Big milestones (not yet started)
 - First-party Projects: channel directory, team assignment, action-day map, Q&A bot, collab docs, engagement tracking
