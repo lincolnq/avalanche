@@ -101,7 +101,7 @@ fn verify_pkce(verifier: &str, challenge: &str, method: &str) -> bool {
     let digest = Sha256::digest(verifier.as_bytes());
     let computed = BASE64_URL_SAFE_NO_PAD.encode(digest);
     // Length-checked equality; both are fixed-length base64url of a 32-byte hash.
-    computed.as_bytes().len() == challenge.as_bytes().len()
+    computed.len() == challenge.len()
         && computed
             .as_bytes()
             .iter()

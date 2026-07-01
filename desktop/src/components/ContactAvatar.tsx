@@ -1,4 +1,3 @@
-import { Show } from "solid-js";
 import { initials, avatarColorIndex } from "../lib/format";
 import { useApp } from "../state/AppContext";
 import "./ContactAvatar.css";
@@ -26,9 +25,6 @@ export default function ContactAvatar(props: Props) {
   return (
     <div class={`contact-avatar avatar-c${avatarColorIndex(props.did)}${bot() ? " bot" : ""}`}>
       {initials(props.name) || "?"}
-      <Show when={bot()}>
-        <span class="contact-avatar-badge" aria-label="Bot" title="Bot">⬡</span>
-      </Show>
     </div>
   );
 }

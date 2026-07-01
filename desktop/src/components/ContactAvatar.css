@@ -19,16 +19,4 @@
   clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
 }
 
-.contact-avatar-badge {
-  position: absolute;
-  bottom: -2px;
-  right: -2px;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--color-accent);
-  background: var(--color-bg);
-  border-radius: 50%;
-  padding: 1px;
-}
-
 /* Reuse the 12-hue palette defined in AccountAvatar.css (.avatar-c0…c11). */
