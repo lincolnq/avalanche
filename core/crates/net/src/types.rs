@@ -243,6 +243,12 @@ pub struct ProjectInfo {
     pub name: String,
     pub url: String,
     pub description: String,
+    /// OAuth login client id (docs/25), if this Project supports login.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Server-vouched official flag (docs/54).
+    #[serde(default)]
+    pub official: bool,
 }
 
 /// Response from requesting a Project token.
@@ -250,6 +256,20 @@ pub struct ProjectInfo {
 pub struct ProjectTokenResponse {
     pub token: String,
     pub expires_at: String,
+}
+
+/// Response from minting an OAuth authorization code (docs/25, same-device
+/// front-end): the code the app hands back to the Project via the redirect.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OauthAuthorizeCodeResponse {
+    pub code: String,
+}
+
+/// Response from approving a device-grant login (docs/25, cross-device
+/// front-end): the Project URL the user just signed in to.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OauthDeviceApproveResponse {
+    pub project_url: String,
 }
 
 // ── Recovery ────────────────────────────────────────────────────────────────

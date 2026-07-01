@@ -38,11 +38,19 @@ pub struct ProjectInfoJs {
     pub name: String,
     pub url: String,
     pub description: String,
+    pub client_id: Option<String>,
+    pub official: bool,
 }
 
 impl From<ProjectInfoFfi> for ProjectInfoJs {
     fn from(p: ProjectInfoFfi) -> Self {
-        Self { name: p.name, url: p.url, description: p.description }
+        Self {
+            name: p.name,
+            url: p.url,
+            description: p.description,
+            client_id: p.client_id,
+            official: p.official,
+        }
     }
 }
 
@@ -1188,6 +1196,41 @@ impl AppCore {
     pub async fn request_project_token(&self, project_url: String) -> napi::Result<String> {
         let core = self.inner.clone();
         tokio::task::spawn_blocking(move || core.request_project_token(project_url))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    /// Project login, same-device front-end (docs/25): mint an OAuth
+    /// authorization code post-consent.
+    #[napi]
+    pub async fn oauth_issue_code(
+        &self,
+        client_id: String,
+        redirect_uri: String,
+        code_challenge: String,
+        code_challenge_method: String,
+        scope: Option<String>,
+    ) -> napi::Result<String> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            core.oauth_issue_code(client_id, redirect_uri, code_challenge, code_challenge_method, scope)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)
+    }
+
+    /// Project login, cross-device front-end (docs/25): approve a pending
+    /// device-grant `user_code` post-consent. Returns the Project URL.
+    #[napi]
+    pub async fn oauth_approve_device(
+        &self,
+        user_code: String,
+        client_id: String,
+    ) -> napi::Result<String> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.oauth_approve_device(user_code, client_id))
             .await
             .map_err(join_err)?
             .map_err(to_napi)

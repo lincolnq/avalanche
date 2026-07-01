@@ -80,9 +80,11 @@ Status: ✅ done · 🚧 partial · ⬜ not started · n/a not applicable
 | WebSocket reconnect with backoff | ✅ | ⬜ | ✅ | ✅ |
 | Recovery blob upload / refresh | ✅ | ⬜ | ✅ | ⬜ |
 | Project webview (token-scoped, IPC-isolated) | ✅ | ⬜ | ✅ | n/a |
+| Project login "Sign in with Avalanche" (OAuth, docs/25) | ✅ | ✅ | ⬜ | ⬜ |
 
 ## Notes
 
 - **Android**: UniFFI generates Kotlin bindings as a byproduct of the iOS build (`make bindings`). The Kotlin glue exists; the UI layer does not.
 - **Desktop**: Uses Tauri with a Solid/TypeScript frontend. `app-core` is exposed via Tauri commands (`src-tauri/src/lib.rs`) — no napi layer. The messaging UI (DMs, groups, contacts, attachments, link previews, reactions/edit/delete, disappearing timers, device linking, tray, dark mode) is implemented; remaining divergences are passkey signup (recovery-phrase only by design), QR generation (paste-link path only — 🚧), and full multi-account (single-account model today — 🚧). See `docs/61-desktop-implementation.md`.
 - **Bots/Node**: Adminbot uses account creation, DMs, groups (create/invite), and admin events. Other features are available via the napi API but not exercised by any shipped bot.
+- **Project login (docs/25)**: Desktop is intentionally deferred — the desktop app registers no deep-link handler yet, so it can't be a login *authorizer*; desktop *users* are served by authorizing from their phone (the cross-device QR flow). Tracked in `docs/02-todos-deferred.md` (desktop deep-link handler → desktop-as-authorizer). Bots/Node expose `oauthIssueCode`/`oauthApproveDevice` via napi (⬜ = no shipped bot uses them yet, but the surface is present).

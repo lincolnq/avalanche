@@ -280,6 +280,8 @@ interface AppCoreProtocol {
 
     @Throws(AppErrorFfi::class) fun fetchProjects(): List<ProjectInfoFfi>
     @Throws(AppErrorFfi::class) fun requestProjectToken(projectUrl: String): String
+    @Throws(AppErrorFfi::class) fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String
+    @Throws(AppErrorFfi::class) fun oauthApproveDevice(userCode: String, clientId: String): String
 
     @Throws(AppErrorFfi::class)
     fun registerPushToken(
@@ -455,6 +457,10 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
 
     override fun fetchProjects(): List<ProjectInfoFfi> = core.fetchProjects()
     override fun requestProjectToken(projectUrl: String): String = core.requestProjectToken(projectUrl)
+    override fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String =
+        core.oauthIssueCode(clientId, redirectUri, codeChallenge, codeChallengeMethod, scope)
+    override fun oauthApproveDevice(userCode: String, clientId: String): String =
+        core.oauthApproveDevice(userCode, clientId)
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) =
         core.registerPushToken(deviceToken, platform, relayUrl, environment)
     override fun unregisterPushToken(relayUrl: String) = core.unregisterPushToken(relayUrl)
@@ -665,6 +671,8 @@ open class MockAppCoreProtocol : AppCoreProtocol {
 
     override fun fetchProjects(): List<ProjectInfoFfi> = emptyList()
     override fun requestProjectToken(projectUrl: String): String = ""
+    override fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String = ""
+    override fun oauthApproveDevice(userCode: String, clientId: String): String = ""
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) {}
     override fun unregisterPushToken(relayUrl: String) {}
 

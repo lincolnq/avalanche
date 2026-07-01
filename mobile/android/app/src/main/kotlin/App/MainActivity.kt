@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -715,6 +717,32 @@ fun AppNavGraph(
         ShareDestinationSheet(
             viewModel = appViewModel,
             onDismiss = { appViewModel.clearPendingSharedImage() },
+        )
+    }
+
+    // "Sign in with Avalanche" consent (docs/25).
+    val pendingLogin by appViewModel.pendingLoginRequest.collectAsState()
+    pendingLogin?.let { req ->
+        ProjectLoginConsentDialog(
+            request = req,
+            onApprove = { appViewModel.approveLogin(req) },
+            onCancel = { appViewModel.cancelLogin() },
+        )
+    }
+    val loginError by appViewModel.loginError.collectAsState()
+    loginError?.let { error ->
+        val message = when (error) {
+            is ProjectLoginError.NoAccountOnServer -> {
+                val host = android.net.Uri.parse(error.serverUrl).host ?: error.serverUrl
+                "You don’t have an account on $host. Join that server, then try signing in again."
+            }
+            is ProjectLoginError.Failed -> error.message
+        }
+        AlertDialog(
+            onDismissRequest = { appViewModel.clearLoginError() },
+            title = { Text("Can’t sign in") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { appViewModel.clearLoginError() }) { Text("OK") } },
         )
     }
 }

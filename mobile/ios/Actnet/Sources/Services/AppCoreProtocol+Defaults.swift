@@ -95,6 +95,8 @@ extension AppCoreProtocol {
 
     func fetchProjects() throws -> [ProjectInfoFfi] { [] }
     func requestProjectToken(projectUrl: String) throws -> String { "" }
+    func oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?) throws -> String { "" }
+    func oauthApproveDevice(userCode: String, clientId: String) throws -> String { "" }
     func registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) throws {}
     func unregisterPushToken(relayUrl: String) throws {}
 

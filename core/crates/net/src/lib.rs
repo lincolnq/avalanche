@@ -519,6 +519,65 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    // ── Project login / OAuth (docs/25) ──────────────────────────────────
+
+    /// Mint an OAuth authorization code after the user consents on this device
+    /// (same-device front-end). Returns the `code` the app hands back to the
+    /// Project via the registered `redirect_uri`.
+    pub async fn oauth_issue_code(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+        code_challenge: &str,
+        code_challenge_method: &str,
+        scope: Option<&str>,
+    ) -> Result<String, NetError> {
+        let body = serde_json::json!({
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "scope": scope,
+        });
+        let resp = self
+            .send_authed(reqwest::Method::POST, "/v1/oauth/authorize-code", |b| b.json(&body))
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        let parsed: OauthAuthorizeCodeResponse = resp.json().await?;
+        Ok(parsed.code)
+    }
+
+    /// Approve a cross-device (device-grant) login after the user consents on
+    /// this device (cross-device front-end). Binds this account to the pending
+    /// `user_code` and mints the token the polling Project collects. Returns the
+    /// Project URL the user just signed in to.
+    pub async fn oauth_approve_device(
+        &self,
+        user_code: &str,
+        client_id: &str,
+    ) -> Result<String, NetError> {
+        let body = serde_json::json!({
+            "user_code": user_code,
+            "client_id": client_id,
+        });
+        let resp = self
+            .send_authed(reqwest::Method::POST, "/v1/oauth/device/approve", |b| b.json(&body))
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+
+        let parsed: OauthDeviceApproveResponse = resp.json().await?;
+        Ok(parsed.project_url)
+    }
+
     // ── Abuse ────────────────────────────────────────────────────────────
 
     /// Submit an abuse report to the caller's own homeserver (docs/12 §3). The

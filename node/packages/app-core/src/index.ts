@@ -194,6 +194,10 @@ export interface ProjectInfo {
   url: string;
   /** Short description shown in the Projects list. */
   description: string;
+  /** OAuth login client id (docs/25), if this Project supports login. */
+  clientId?: string | null;
+  /** Server-vouched official flag (docs/54), shown as the verified badge. */
+  official: boolean;
 }
 
 /**
@@ -1364,6 +1368,42 @@ export class AppCore {
    */
   async requestProjectToken(projectUrl: string): Promise<string> {
     return await this._native.requestProjectToken(projectUrl);
+  }
+
+  /**
+   * Project login ("Sign in with Avalanche"), same-device front-end (docs/25).
+   * After the user consents in-app, mint an OAuth authorization code bound to
+   * this account and the PKCE challenge. Redirect the browser to
+   * `redirectUri?code=<returned>&state=...`. `codeChallengeMethod` is normally
+   * `"S256"`.
+   *
+   * @category Projects
+   */
+  async oauthIssueCode(
+    clientId: string,
+    redirectUri: string,
+    codeChallenge: string,
+    codeChallengeMethod: string,
+    scope?: string,
+  ): Promise<string> {
+    return await this._native.oauthIssueCode(
+      clientId,
+      redirectUri,
+      codeChallenge,
+      codeChallengeMethod,
+      scope,
+    );
+  }
+
+  /**
+   * Project login, cross-device front-end (docs/25). After the user consents
+   * in-app to a login started on another device, approve the pending
+   * `userCode`. Returns the Project URL just signed in to.
+   *
+   * @category Projects
+   */
+  async oauthApproveDevice(userCode: string, clientId: string): Promise<string> {
+    return await this._native.oauthApproveDevice(userCode, clientId);
   }
 
   // ── local message history ───────────────────────────────────────────────

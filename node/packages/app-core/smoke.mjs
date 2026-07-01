@@ -35,6 +35,8 @@ for (const method of [
   "downloadAttachment",
   "sendWithAttachments",
   "setAttachmentDownloaded",
+  "oauthIssueCode",
+  "oauthApproveDevice",
 ]) {
   if (typeof AppCore.prototype[method] !== "function") {
     console.error(`unexpected: AppCore.prototype.${method} is not a function`);

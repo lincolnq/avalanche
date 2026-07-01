@@ -31,6 +31,28 @@ struct RootView: View {
             ShareDestinationView(image: pending)
                 .environmentObject(appState)
         }
+        // "Sign in with Avalanche" consent (docs/25).
+        .sheet(item: $appState.pendingLoginRequest) { req in
+            ProjectLoginConsentView(request: req)
+                .environmentObject(appState)
+        }
+        .alert(
+            "Can’t sign in",
+            isPresented: Binding(
+                get: { appState.loginError != nil },
+                set: { if !$0 { appState.loginError = nil } }
+            ),
+            presenting: appState.loginError
+        ) { _ in
+            Button("OK", role: .cancel) { appState.loginError = nil }
+        } message: { error in
+            switch error {
+            case .noAccountOnServer(let server):
+                Text("You don’t have an account on \(URL(string: server)?.host ?? server). Join that server, then try signing in again.")
+            case .failed(let message):
+                Text(message)
+            }
+        }
     }
 }
 

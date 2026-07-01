@@ -27,6 +27,14 @@ struct ProjectInfo {
     name: String,
     url: String,
     description: String,
+    /// OAuth login client id (docs/25), if this Project supports "Sign in with
+    /// Avalanche". Lets clients resolve a login request's `client_id` to this
+    /// Project's name/official flag for the consent screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_id: Option<String>,
+    /// Server-vouched official flag (docs/54), shown as the verified badge.
+    #[serde(default)]
+    official: bool,
 }
 
 async fn list_projects(

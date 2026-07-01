@@ -2,6 +2,7 @@ package net.theavalanche.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.lifecycle.ViewModel
@@ -195,6 +196,15 @@ class AppViewModel(
     private val _pendingInviteToken = MutableStateFlow<String?>(null)
     val pendingInviteToken: StateFlow<String?> = _pendingInviteToken.asStateFlow()
 
+    /** A parsed `authorize` deep link awaiting consent (docs/25). */
+    private val _pendingLoginRequest = MutableStateFlow<ProjectLoginRequest?>(null)
+    val pendingLoginRequest: StateFlow<ProjectLoginRequest?> = _pendingLoginRequest.asStateFlow()
+    /** A structured login failure the UI surfaces and a Project/app can hook. */
+    private val _loginError = MutableStateFlow<ProjectLoginError?>(null)
+    val loginError: StateFlow<ProjectLoginError?> = _loginError.asStateFlow()
+    fun clearLoginError() { _loginError.value = null }
+    fun cancelLogin() { _pendingLoginRequest.value = null }
+
     /**
      * The validated invite the onboarding flow is currently acting on. Set once a
      * QR/link is resolved; read by IdentityPickerView / NewAccountView /
@@ -344,6 +354,12 @@ class AppViewModel(
         if (!isDeepLink(uri)) return
 
         val segments = uri.pathSegments.filter { it != "/" && it.isNotEmpty() }
+        // "Sign in with Avalanche" (docs/25): `/authorize?...` carries its params
+        // in the query string, so it's handled before the path-segment guard.
+        if (segments.firstOrNull() == "authorize") {
+            handleAuthorizeDeepLink(uri)
+            return
+        }
         if (segments.size < 2) return
         val action = segments[0]
 
@@ -2027,7 +2043,7 @@ class AppViewModel(
         val core = cores[account.id] ?: return emptyList()
         return withContext(Dispatchers.IO) {
             runCatching {
-                core.fetchProjects().map { ProjectInfo(name = it.name, url = it.url, description = it.description) }
+                core.fetchProjects().map { ProjectInfo(name = it.name, url = it.url, description = it.description, clientId = it.clientId, official = it.official) }
             }.onFailure {
                 AppLog.warn("projects", "Failed to fetch projects: ${it.message}")
             }.getOrElse { emptyList() }
@@ -2041,6 +2057,118 @@ class AppViewModel(
     suspend fun requestProjectToken(accountId: String, projectUrl: String): String {
         val core = cores[accountId] ?: throw IllegalStateException("No account")
         return withContext(Dispatchers.IO) { core.requestProjectToken(projectUrl = projectUrl) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Project login ("Sign in with Avalanche", docs/25)
+    // Mirrors iOS AppState project-login methods.
+    // -----------------------------------------------------------------------
+
+    private fun normalizedServer(s: String): String = s.trimEnd('/')
+
+    /**
+     * Parse an `authorize` deep link and, if the user has an account on the
+     * target homeserver, stage a consent request; otherwise surface the
+     * structured no-account failure.
+     */
+    fun handleAuthorizeDeepLink(uri: Uri) {
+        val clientId = uri.getQueryParameter("client_id")
+        val serverUrl = uri.getQueryParameter("server_url")
+        if (clientId == null || serverUrl == null) {
+            AppLog.info("Login", "authorize link missing client_id/server_url")
+            return
+        }
+        val account = _accounts.value.firstOrNull { acct ->
+            acct.servers.any { normalizedServer(it.url.toString()) == normalizedServer(serverUrl) }
+        }
+        if (account == null) {
+            AppLog.info("Login", "no account on $serverUrl")
+            _loginError.value = ProjectLoginError.NoAccountOnServer(serverUrl)
+            return
+        }
+
+        val userCode = uri.getQueryParameter("user_code")
+        val redirectUri = uri.getQueryParameter("redirect_uri")
+        val codeChallenge = uri.getQueryParameter("code_challenge")
+        val flow: ProjectLoginFlow = when {
+            userCode != null -> ProjectLoginFlow.Device(userCode)
+            redirectUri != null && codeChallenge != null -> ProjectLoginFlow.AuthorizationCode(
+                redirectUri = redirectUri,
+                codeChallenge = codeChallenge,
+                codeChallengeMethod = uri.getQueryParameter("code_challenge_method") ?: "S256",
+                state = uri.getQueryParameter("state"),
+            )
+            else -> {
+                AppLog.info("Login", "authorize link missing flow params")
+                return
+            }
+        }
+
+        val req = ProjectLoginRequest(
+            clientId = clientId,
+            serverUrl = serverUrl,
+            accountId = account.id,
+            scope = uri.getQueryParameter("scope"),
+            flow = flow,
+        )
+        _pendingLoginRequest.value = req
+        viewModelScope.launch { resolveLoginProjectMetadata(req.id, serverUrl, clientId) }
+    }
+
+    private suspend fun resolveLoginProjectMetadata(id: String, serverUrl: String, clientId: String) {
+        val match = fetchProjects(serverUrl).firstOrNull { it.clientId == clientId } ?: return
+        val current = _pendingLoginRequest.value
+        if (current?.id == id) {
+            _pendingLoginRequest.value = current.copy(
+                projectName = match.name,
+                projectUrl = match.url,
+                official = match.official,
+            )
+        }
+    }
+
+    /**
+     * Approve a staged login: mint the code (same-device, then redirect the
+     * browser) or approve the device grant (cross-device).
+     */
+    fun approveLogin(req: ProjectLoginRequest) {
+        val core = cores[req.accountId]
+        if (core == null) {
+            _loginError.value = ProjectLoginError.Failed("No account for this login")
+            _pendingLoginRequest.value = null
+            return
+        }
+        viewModelScope.launch {
+            try {
+                when (val flow = req.flow) {
+                    is ProjectLoginFlow.Device -> {
+                        withContext(Dispatchers.IO) { core.oauthApproveDevice(flow.userCode, req.clientId) }
+                        _pendingLoginRequest.value = null
+                    }
+                    is ProjectLoginFlow.AuthorizationCode -> {
+                        val code = withContext(Dispatchers.IO) {
+                            core.oauthIssueCode(req.clientId, flow.redirectUri, flow.codeChallenge, flow.codeChallengeMethod, req.scope)
+                        }
+                        _pendingLoginRequest.value = null
+                        openLoginRedirect(flow.redirectUri, code, flow.state)
+                    }
+                }
+            } catch (e: Exception) {
+                _pendingLoginRequest.value = null
+                _loginError.value = ProjectLoginError.Failed(e.message ?: "Login failed")
+            }
+        }
+    }
+
+    /** Redirect the browser back to the Project with the authorization code. */
+    private fun openLoginRedirect(redirectUri: String, code: String, state: String?) {
+        val builder = Uri.parse(redirectUri).buildUpon().appendQueryParameter("code", code)
+        if (state != null) builder.appendQueryParameter("state", state)
+        val intent = Intent(Intent.ACTION_VIEW, builder.build()).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { applicationContext.startActivity(intent) }
+            .onFailure { AppLog.error("Login", "failed to open redirect: ${it.message}") }
     }
 
     // -----------------------------------------------------------------------

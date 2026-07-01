@@ -99,6 +99,8 @@ class MockAppCore(
             name = "Testbot",
             url = "http://localhost:3001",
             description = "Chat with an AI bot",
+            clientId = null,
+            official = false,
         )
     )
 

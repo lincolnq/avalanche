@@ -25,12 +25,14 @@
 		334E3786A6BC33EACAA8274F /* OfflineBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3B34B7A3FF40359D732B62 /* OfflineBanner.swift */; };
 		36C882B1EDF2B1EBE365A138 /* OutgoingImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23654A1ACEB9320C8ACA7672 /* OutgoingImage.swift */; };
 		38FF5DFE7DB6B24A1E288616 /* JoiningServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02F784B4794651EB68CB3128 /* JoiningServerView.swift */; };
+		3BCF248098A05247918767AB /* ProjectLoginRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FF699D4585B8CFA7ADD4366 /* ProjectLoginRequest.swift */; };
 		3C45CC65E3C39FE080399694 /* SecureEnclaveKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E414B6BFBC7FD68C41B63E /* SecureEnclaveKeyManager.swift */; };
 		3E096A5CEAF5136996B05DB3 /* app_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = DADF188CB0F720072C71A2DF /* app_core.swift */; };
 		3FE16A898C98E61D3C20CC04 /* ShareDestinationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40ACBCAC0299EE902FAA39F /* ShareDestinationView.swift */; };
 		40A41102CF36127A10602343 /* AddAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A516614278B12B45D3E876E6 /* AddAccountView.swift */; };
 		453C9CABA749A1A2D5191AC4 /* AppCoreProtocol+Defaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A8F652C3B8F59F3A47CB029 /* AppCoreProtocol+Defaults.swift */; };
 		48A8A165BADF9F4DCA4CFACC /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBE4CC68DB8F2F18844B2329 /* QRCodeView.swift */; };
+		51A99417320D700B279C11DF /* ProjectLoginConsentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8784E49582088484911EC99C /* ProjectLoginConsentView.swift */; };
 		5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */; };
 		5E9CE6A936CB3EE5A7D534D1 /* EditHistorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */; };
 		638610176DD56586489BAF89 /* ActnetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65A7BC7A36A4F6D36947106A /* ActnetApp.swift */; };
@@ -133,12 +135,14 @@
 		6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditHistorySheet.swift; sourceTree = "<group>"; };
 		6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailView.swift; sourceTree = "<group>"; };
 		6F233E23BDFE8CD9A1FA85D1 /* QRCodeCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeCameraView.swift; sourceTree = "<group>"; };
+		6FF699D4585B8CFA7ADD4366 /* ProjectLoginRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectLoginRequest.swift; sourceTree = "<group>"; };
 		7313225243535C7C945AD8D7 /* AccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsView.swift; sourceTree = "<group>"; };
 		74C7E3E24A76B89B6C7CAD44 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeMessageView.swift; sourceTree = "<group>"; };
 		7F73DF560719B0774C43444C /* RecipientTokenField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientTokenField.swift; sourceTree = "<group>"; };
 		7FEE393F3CBD5B0C5D48ACDC /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		81668B961AEA3548EB74341C /* IdentityDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityDetailView.swift; sourceTree = "<group>"; };
+		8784E49582088484911EC99C /* ProjectLoginConsentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectLoginConsentView.swift; sourceTree = "<group>"; };
 		898950D798C2C5F907A2D156 /* DisappearingMessagesPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisappearingMessagesPicker.swift; sourceTree = "<group>"; };
 		8A8F652C3B8F59F3A47CB029 /* AppCoreProtocol+Defaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoreProtocol+Defaults.swift"; sourceTree = "<group>"; };
 		8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryKeyBanner.swift; sourceTree = "<group>"; };
@@ -207,6 +211,7 @@
 				2D6AA10E40B490772D3A29A3 /* InviteToken.swift */,
 				A8B337C1C0A8BF5C7BDA6E41 /* Message.swift */,
 				B42EE451B555DFBE024236DB /* ProjectInfo.swift */,
+				6FF699D4585B8CFA7ADD4366 /* ProjectLoginRequest.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -320,6 +325,7 @@
 			isa = PBXGroup;
 			children = (
 				FDB23D99F22D6A488DD61F19 /* NetworkView.swift */,
+				8784E49582088484911EC99C /* ProjectLoginConsentView.swift */,
 				B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */,
 			);
 			path = Network;
@@ -554,6 +560,8 @@
 				8507FF41B757A3F39D78BA55 /* PasskeyExplainerView.swift in Sources */,
 				C239EC74DDDF816075F9D6C2 /* PasskeyManager.swift in Sources */,
 				32CE74DAA7C93CB87BEDAD15 /* ProjectInfo.swift in Sources */,
+				51A99417320D700B279C11DF /* ProjectLoginConsentView.swift in Sources */,
+				3BCF248098A05247918767AB /* ProjectLoginRequest.swift in Sources */,
 				766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */,
 				A17C829071A4C3E533A7D516 /* PushManager.swift in Sources */,
 				ABB54957015CF8BAA7F9AB29 /* QRCodeCameraView.swift in Sources */,
@@ -601,7 +609,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 404;
+				CURRENT_PROJECT_VERSION = 515;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -622,7 +630,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
 				RELAY_URL = "https://relay.theavalanche.net";
 				SDKROOT = iphoneos;
@@ -635,7 +643,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 404;
+				CURRENT_PROJECT_VERSION = 515;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -646,7 +654,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -777,7 +785,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 404;
+				CURRENT_PROJECT_VERSION = 515;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -788,7 +796,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -803,7 +811,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 404;
+				CURRENT_PROJECT_VERSION = 515;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -824,7 +832,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.1;
+				MARKETING_VERSION = 0.3.2;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
 				RELAY_URL = "https://relay.theavalanche.net";
 				SDKROOT = iphoneos;

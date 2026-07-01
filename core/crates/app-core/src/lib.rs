@@ -137,6 +137,12 @@ pub struct ProjectInfoFfi {
     pub name: String,
     pub url: String,
     pub description: String,
+    /// OAuth login client id (docs/25), if this Project supports login. Lets
+    /// the client resolve a login request's `client_id` to this Project's
+    /// name/official flag for the consent screen.
+    pub client_id: Option<String>,
+    /// Server-vouched official flag (docs/54), shown as the verified badge.
+    pub official: bool,
 }
 
 /// An end-to-end-encrypted attachment (docs/35-attachments.md).
@@ -2058,6 +2064,8 @@ impl AppCore {
                 name: p.name,
                 url: p.url,
                 description: p.description,
+                client_id: p.client_id,
+                official: p.official,
             }).collect())
         }).map_err(AppErrorFfi::from)
     }
@@ -2070,6 +2078,58 @@ impl AppCore {
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(resp.token)
         }).map_err(AppErrorFfi::from)
+    }
+
+    /// Project login, same-device front-end (docs/25). After the user consents
+    /// in-app, mint an OAuth authorization code bound to this account and the
+    /// PKCE challenge. The app then redirects the browser to
+    /// `redirect_uri?code=<returned>&state=...`. `code_challenge_method` is
+    /// normally `"S256"`.
+    pub fn oauth_issue_code(
+        &self,
+        client_id: String,
+        redirect_uri: String,
+        code_challenge: String,
+        code_challenge_method: String,
+        scope: Option<String>,
+    ) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let code = inner
+                .client
+                .oauth_issue_code(
+                    &client_id,
+                    &redirect_uri,
+                    &code_challenge,
+                    &code_challenge_method,
+                    scope.as_deref(),
+                )
+                .await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(code)
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
+    /// Project login, cross-device front-end (docs/25). After the user consents
+    /// in-app to a login started on another device, approve the pending
+    /// `user_code`. Binds this account to the device grant and mints the token
+    /// the polling Project collects. Returns the Project URL just signed in to.
+    pub fn oauth_approve_device(
+        &self,
+        user_code: String,
+        client_id: String,
+    ) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self.inner.lock().await;
+            let project_url = inner
+                .client
+                .oauth_approve_device(&user_code, &client_id)
+                .await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(project_url)
+        })
+        .map_err(AppErrorFfi::from)
     }
 
     /// Send a read receipt to a recipient for the given message timestamps.

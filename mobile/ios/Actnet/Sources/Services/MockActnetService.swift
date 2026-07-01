@@ -103,7 +103,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
     }
 
     func fetchProjects() throws -> [ProjectInfoFfi] {
-        [ProjectInfoFfi(name: "Testbot", url: "http://localhost:3001", description: "Chat with an AI bot")]
+        [ProjectInfoFfi(name: "Testbot", url: "http://localhost:3001", description: "Chat with an AI bot", clientId: nil, official: false)]
     }
 
     func requestProjectToken(projectUrl: String) throws -> String {

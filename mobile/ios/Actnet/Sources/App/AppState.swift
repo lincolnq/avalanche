@@ -158,6 +158,12 @@ final class AppState: ObservableObject {
         guard Self.isDeepLink(url) else { return }
 
         let pathComponents = url.pathComponents.filter { $0 != "/" }
+        // "Sign in with Avalanche" (docs/25): `/authorize?...` carries its params
+        // in the query string, so it's handled before the path-segment guard.
+        if pathComponents.first == "authorize" {
+            handleAuthorizeDeepLink(url)
+            return
+        }
         guard let action = pathComponents.first, pathComponents.count >= 2 else { return }
 
         switch action {
@@ -1699,7 +1705,7 @@ final class AppState: ObservableObject {
             let projects = try await Task.detached {
                 try core.fetchProjects()
             }.value
-            return projects.map { ProjectInfo(name: $0.name, url: $0.url, description: $0.description) }
+            return projects.map { ProjectInfo(name: $0.name, url: $0.url, description: $0.description, clientId: $0.clientId, official: $0.official) }
         } catch {
             print("Failed to fetch projects: \(error)")
             return []
@@ -1714,6 +1720,135 @@ final class AppState: ObservableObject {
         return try await Task.detached {
             try core.requestProjectToken(projectUrl: projectUrl)
         }.value
+    }
+
+    // MARK: - Project login ("Sign in with Avalanche", docs/25)
+
+    /// A parsed `authorize` deep link awaiting the user's consent. Presented as a
+    /// sheet by `RootView`.
+    @Published var pendingLoginRequest: ProjectLoginRequest?
+    /// A structured login failure (e.g. no account on the target server) the UI
+    /// surfaces and a Project/app can hook to onboarding.
+    @Published var loginError: ProjectLoginError?
+
+    /// Normalize a server URL for comparison (trailing slashes are cosmetic).
+    private func normalizedServer(_ s: String) -> String {
+        s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    /// Parse an `authorize` deep link and, if the user has an account on the
+    /// target homeserver, stage a consent request; otherwise surface the
+    /// structured no-account failure.
+    func handleAuthorizeDeepLink(_ url: URL) {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        let items = comps.queryItems ?? []
+        func q(_ name: String) -> String? { items.first(where: { $0.name == name })?.value }
+
+        guard let clientId = q("client_id"), let serverUrl = q("server_url") else {
+            print("[Login] authorize link missing client_id/server_url")
+            return
+        }
+
+        // The login authorizes with the user's account on the target homeserver.
+        guard let account = accounts.first(where: { acct in
+            acct.servers.contains(where: { normalizedServer($0.url.absoluteString) == normalizedServer(serverUrl) })
+        }) else {
+            print("[Login] no account on \(serverUrl)")
+            loginError = .noAccountOnServer(serverUrl: serverUrl)
+            return
+        }
+
+        let flow: ProjectLoginRequest.Flow
+        if let userCode = q("user_code") {
+            flow = .device(userCode: userCode)
+        } else if let redirectUri = q("redirect_uri"), let codeChallenge = q("code_challenge") {
+            flow = .authorizationCode(
+                redirectUri: redirectUri,
+                codeChallenge: codeChallenge,
+                codeChallengeMethod: q("code_challenge_method") ?? "S256",
+                state: q("state")
+            )
+        } else {
+            print("[Login] authorize link missing flow params")
+            return
+        }
+
+        let req = ProjectLoginRequest(
+            clientId: clientId,
+            serverUrl: serverUrl,
+            accountId: account.id,
+            scope: q("scope"),
+            flow: flow
+        )
+        pendingLoginRequest = req
+
+        // Resolve the Project's verified name/official flag from the homeserver
+        // (trustworthy) to populate the consent screen.
+        Task { await resolveLoginProjectMetadata(req.id, serverUrl: serverUrl, clientId: clientId) }
+    }
+
+    @MainActor
+    private func resolveLoginProjectMetadata(_ id: UUID, serverUrl: String, clientId: String) async {
+        let projects = await fetchProjects(serverUrl: serverUrl)
+        guard let match = projects.first(where: { $0.clientId == clientId }),
+              pendingLoginRequest?.id == id else { return }
+        pendingLoginRequest?.projectName = match.name
+        pendingLoginRequest?.projectUrl = match.url
+        pendingLoginRequest?.official = match.official
+    }
+
+    /// Approve a staged login: mint the code (same-device, then redirect the
+    /// browser) or approve the device grant (cross-device).
+    func approveLogin(_ req: ProjectLoginRequest) {
+        guard let core = cores[req.accountId] else {
+            loginError = .failed("No account for this login")
+            pendingLoginRequest = nil
+            return
+        }
+        Task {
+            do {
+                switch req.flow {
+                case .device(let userCode):
+                    _ = try await Task.detached {
+                        try core.oauthApproveDevice(userCode: userCode, clientId: req.clientId)
+                    }.value
+                    await MainActor.run { self.pendingLoginRequest = nil }
+                case .authorizationCode(let redirectUri, let codeChallenge, let codeChallengeMethod, let state):
+                    let code = try await Task.detached {
+                        try core.oauthIssueCode(
+                            clientId: req.clientId,
+                            redirectUri: redirectUri,
+                            codeChallenge: codeChallenge,
+                            codeChallengeMethod: codeChallengeMethod,
+                            scope: req.scope
+                        )
+                    }.value
+                    await MainActor.run {
+                        self.pendingLoginRequest = nil
+                        self.openLoginRedirect(redirectUri: redirectUri, code: code, state: state)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.pendingLoginRequest = nil
+                    self.loginError = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Dismiss a staged login without authorizing.
+    func cancelLogin() { pendingLoginRequest = nil }
+
+    /// Redirect the browser back to the Project with the authorization code
+    /// (same-device front-end).
+    private func openLoginRedirect(redirectUri: String, code: String, state: String?) {
+        guard var comps = URLComponents(string: redirectUri) else { return }
+        var items = comps.queryItems ?? []
+        items.append(URLQueryItem(name: "code", value: code))
+        if let state { items.append(URLQueryItem(name: "state", value: state)) }
+        comps.queryItems = items
+        if let url = comps.url { UIApplication.shared.open(url) }
     }
 
     // MARK: - Connection state + incoming events
