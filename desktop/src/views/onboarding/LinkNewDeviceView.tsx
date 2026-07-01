@@ -1,6 +1,7 @@
 import { createSignal, Match, onCleanup, Switch } from "solid-js";
 import { FiArrowLeft, FiCopy } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
+import QRCode from "../../components/QRCode";
 import "./LinkNewDeviceView.css";
 
 interface Props {
@@ -130,8 +131,10 @@ export default function LinkNewDeviceView(props: Props) {
           {(p) => (
             <>
               <div class="ld-subtitle">
-                On your other device: Settings → Link a device → Enter a code, then type this code:
+                On your phone: Settings → Link a device → Scan, and point it at this code. No
+                phone? On another device choose “Enter a code” and type the code below.
               </div>
+              <QRCode text={p().code} />
               <div class="ld-code">{p().code}</div>
               <button class="btn-secondary ld-copy" onClick={() => copyCode(p().code)}>
                 <FiCopy size={14} />Copy code

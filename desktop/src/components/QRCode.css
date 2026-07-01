@@ -1,0 +1,13 @@
+.qr-code {
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+  /* Fixed light backing lives in the SVG itself, so this stays scannable
+     regardless of the app theme. */
+}
+
+.qr-code svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
