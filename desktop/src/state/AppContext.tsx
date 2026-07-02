@@ -225,7 +225,6 @@ export function AppProvider(props: { children: JSX.Element }) {
     linkSendBundle,
   } = deviceLink;
 
-
   // ── Deep-link listener ────────────────────────────────────────────────────
   // Single consumer of `avalanche-deeplink` (emitted by the Rust deep-link
   // plugin, see src-tauri/src/lib.rs). OnboardingFlow's pendingInviteToken
@@ -235,8 +234,6 @@ export function AppProvider(props: { children: JSX.Element }) {
     .then((un) => { deeplinkUnlisten = un; })
     .catch(() => { /* Tauri event API unavailable (browser/test) */ });
   onCleanup(() => deeplinkUnlisten?.());
-
-
 
   const ctx: AppContextValue = {
     store,

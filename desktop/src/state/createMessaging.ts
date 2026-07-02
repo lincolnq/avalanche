@@ -12,7 +12,7 @@ import type {
   LinkPreviewMetaFfi,
 } from "../services/AvalancheService";
 import { messageFromFfi, buildStoredMessage } from "./helpers";
-import type { AppStore, SessionGuards } from "./types";
+import type { AppContextValue, AppStore, SessionGuards } from "./types";
 
 export interface MessagingDeps {
   store: AppStore;
@@ -25,49 +25,28 @@ export interface MessagingDeps {
 
 // Message timelines: load, optimistic send (DM/group/attachments), read state,
 // unread counts, and the Track A message actions (reactions, edit, delete,
-// retry) plus the attachment/link-preview service pass-throughs.
-export interface Messaging {
-  // Context surface
-  sendMessage: (
-    conversationId: string,
-    text: string,
-    recipientDid: string,
-    senderAccountId: string
-  ) => Promise<void>;
-  sendGroupMessage: (conversation: Conversation, text: string) => Promise<void>;
-  sendMessageWithAttachments: (
-    conversation: Conversation,
-    text: string,
-    attachments: AttachmentFfi[],
-    previews: LinkPreviewFfi[]
-  ) => Promise<void>;
-  uploadAttachment: (
-    accountId: string,
-    plaintext: number[],
-    contentType: string,
-    fileName: string | null,
-    width: number,
-    height: number,
-    durationMs: number,
-    thumbnail: number[],
-    flags: number
-  ) => Promise<AttachmentFfi>;
-  downloadAttachment: (accountId: string, attachment: AttachmentFfi) => Promise<number[]>;
-  fetchLinkPreview: (url: string) => Promise<LinkPreviewMetaFfi>;
-  openExternal: (url: string) => Promise<void>;
-  loadMessagesFromStore: (conversationId: string, accountId: string) => void;
-  markAllMessagesRead: (conversationId: string, accountId: string) => void;
-  unreadCount: (conversation: Conversation) => number;
-  reactionsFor: (conversation: Conversation, message: Message) => ReactionFfi[];
-  loadReactions: (conversationId: string) => void;
-  toggleReaction: (conversation: Conversation, message: Message, emoji: string) => void;
-  editMessage: (conversation: Conversation, message: Message, newBody: string) => void;
-  loadMessageRevisions: (
-    conversation: Conversation,
-    message: Message
-  ) => Promise<MessageRevisionFfi[]>;
-  deleteMessage: (conversation: Conversation, message: Message, forEveryone: boolean) => void;
-  retryMessage: (conversation: Conversation, message: Message) => Promise<void>;
+// retry) plus the attachment/link-preview service pass-throughs. Pick-typed —
+// see the note in createConversations.ts.
+export type Messaging = Pick<
+  AppContextValue,
+  | "sendMessage"
+  | "sendGroupMessage"
+  | "sendMessageWithAttachments"
+  | "uploadAttachment"
+  | "downloadAttachment"
+  | "fetchLinkPreview"
+  | "openExternal"
+  | "loadMessagesFromStore"
+  | "markAllMessagesRead"
+  | "unreadCount"
+  | "reactionsFor"
+  | "loadReactions"
+  | "toggleReaction"
+  | "editMessage"
+  | "loadMessageRevisions"
+  | "deleteMessage"
+  | "retryMessage"
+> & {
   // Internal API for the other state modules
   reloadMessagesIfLoaded: (cid: string) => void;
   clearReactionsForMessage: (
@@ -75,7 +54,7 @@ export interface Messaging {
     targetAuthor: string,
     targetSentAtMs: number
   ) => void;
-}
+};
 
 export function createMessaging(deps: MessagingDeps): Messaging {
   const {

@@ -2,7 +2,7 @@ import type { SetStoreFunction } from "solid-js/store";
 import type { Account, ServerInfo } from "../models";
 import { displayHost } from "../lib/format";
 import type { AvalancheService } from "../services/AvalancheService";
-import type { AppStore, PersistedAccount } from "./types";
+import type { AppContextValue, AppStore, PersistedAccount } from "./types";
 
 export interface DeviceLinkDeps {
   store: AppStore;
@@ -18,15 +18,16 @@ export interface DeviceLinkDeps {
 // (onboarding); existing-device side is per-account. deviceLinkComplete
 // finishes an account add through the same enterApp/persist contract as
 // createAccount (injected from createAccounts).
-export interface DeviceLink {
-  deviceLinkShowCode: () => Promise<string>;
-  deviceLinkEnterCode: (code: string) => Promise<void>;
-  deviceLinkComplete: () => Promise<void>;
-  deviceLinkCancel: () => Promise<void>;
-  linkShowCode: (accountId: string) => Promise<string>;
-  linkEnterCode: (accountId: string, code: string) => Promise<void>;
-  linkSendBundle: (accountId: string) => Promise<void>;
-}
+export type DeviceLink = Pick<
+  AppContextValue,
+  | "deviceLinkShowCode"
+  | "deviceLinkEnterCode"
+  | "deviceLinkComplete"
+  | "deviceLinkCancel"
+  | "linkShowCode"
+  | "linkEnterCode"
+  | "linkSendBundle"
+>;
 
 export function createDeviceLink(deps: DeviceLinkDeps): DeviceLink {
   const {

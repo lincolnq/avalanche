@@ -15,7 +15,7 @@ import type {
   IncomingEvent,
 } from "../services/AvalancheService";
 import { buildStoredMessage, deliveryRank } from "./helpers";
-import type { AppStore, SessionGuards } from "./types";
+import type { AppContextValue, AppStore, SessionGuards } from "./types";
 
 export interface EventLoopsDeps {
   store: AppStore;
@@ -40,13 +40,16 @@ export interface EventLoopsDeps {
 // connection state. Registers its own onCleanup(stopPolling) — the factory
 // must be called synchronously in the AppProvider body so Solid ownership is
 // correct (desktop/CLAUDE.md "TS owns the event loop").
-export interface EventLoops {
+export type EventLoops = Pick<
+  AppContextValue,
+  "aggregateConnectionState" | "reconnectNow"
+> & {
+  // Internal API for the other state modules (loop lifecycle is driven by
+  // enterApp / resetSession / removeAccountLocally in createAccounts)
   startPollingFor: (accountId: string) => void;
   stopPollingFor: (accountId: string) => void;
   stopPolling: () => void;
-  aggregateConnectionState: () => ConnectionState;
-  reconnectNow: () => void;
-}
+};
 
 export function createEventLoops(deps: EventLoopsDeps): EventLoops {
   const {

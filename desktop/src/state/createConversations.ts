@@ -13,7 +13,7 @@ import {
   decodeInviteToken,
   trimSlashes,
 } from "./helpers";
-import type { AppStore, SessionGuards } from "./types";
+import type { AppContextValue, AppStore, SessionGuards } from "./types";
 
 export interface ConversationsDeps {
   store: AppStore;
@@ -25,15 +25,19 @@ export interface ConversationsDeps {
 
 // Conversation-list building (merged inbox), the reactive display-name / is-bot
 // caches, DM/group conversation materialization, and deep-link routing.
-export interface Conversations {
-  // Context surface
-  loadConversationsFromStore: () => Promise<void>;
-  reloadConversations: () => Promise<void>;
-  findOrCreateDMConversation: (recipientDid: string, accountId: string) => Conversation;
-  displayName: (did: string, accountId: string) => string;
-  isBot: (did: string, accountId: string) => boolean;
-  isDeepLink: (raw: string) => boolean;
-  handleDeepLink: (raw: string) => void;
+// The Pick keys are this module's slice of the context surface — typing them
+// via Pick means a signature drift or dropped key errors here, at the factory,
+// not at a distant view's destructure.
+export type Conversations = Pick<
+  AppContextValue,
+  | "loadConversationsFromStore"
+  | "reloadConversations"
+  | "findOrCreateDMConversation"
+  | "displayName"
+  | "isBot"
+  | "isDeepLink"
+  | "handleDeepLink"
+> & {
   // Internal API for the other state modules
   accountIdForConversation: (conversationId: string) => string | null;
   getServerUrl: (accountId: string) => string;
@@ -44,7 +48,7 @@ export interface Conversations {
   ) => Conversation;
   cachedDisplayName: (did: string) => string | undefined;
   resetCaches: () => void;
-}
+};
 
 export function createConversations(deps: ConversationsDeps): Conversations {
   const { store, setStore, serviceFor, guards, setSelectedConversationId } = deps;

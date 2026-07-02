@@ -5,7 +5,7 @@ import type {
   JoinResultFfi,
   ContactRowFfi,
 } from "../services/AvalancheService";
-import type { AppStore, SessionGuards } from "./types";
+import type { AppContextValue, AppStore, SessionGuards } from "./types";
 
 export interface GroupsAndSafetyDeps {
   store: AppStore;
@@ -24,34 +24,21 @@ export interface GroupsAndSafetyDeps {
 
 // Track B (group create/join/leave) and Track D (message requests, blocking,
 // disappearing-message timers) — thin service calls plus conversation-list
-// refreshes.
-export interface GroupsAndSafety {
-  createGroupAndOpen: (
-    accountId: string,
-    title: string,
-    recipientDids: string[],
-    expirySeconds: number
-  ) => Promise<Conversation>;
-  joinViaLink: (
-    accountId: string,
-    masterKey: number[],
-    hostingServerUrl: string,
-    password: number[]
-  ) => Promise<JoinResultFfi>;
-  leaveGroup: (conversation: Conversation) => Promise<void>;
-  acceptRequest: (conversation: Conversation) => Promise<void>;
-  deleteRequest: (conversation: Conversation) => Promise<void>;
-  reportAndBlock: (conversation: Conversation, reason: string) => Promise<void>;
-  blockContact: (accountId: string, did: string) => Promise<void>;
-  unblockContact: (accountId: string, did: string) => Promise<void>;
-  listBlocked: () => Promise<Array<ContactRowFfi & { accountId: string }>>;
-  getConversationTimer: (accountId: string, conversationId: string) => Promise<number | null>;
-  setConversationTimer: (
-    accountId: string,
-    recipientDid: string,
-    expirySecs: number | null
-  ) => Promise<void>;
-}
+// refreshes. Pick-typed — see the note in createConversations.ts.
+export type GroupsAndSafety = Pick<
+  AppContextValue,
+  | "createGroupAndOpen"
+  | "joinViaLink"
+  | "leaveGroup"
+  | "acceptRequest"
+  | "deleteRequest"
+  | "reportAndBlock"
+  | "blockContact"
+  | "unblockContact"
+  | "listBlocked"
+  | "getConversationTimer"
+  | "setConversationTimer"
+>;
 
 export function createGroupsAndSafety(deps: GroupsAndSafetyDeps): GroupsAndSafety {
   const {

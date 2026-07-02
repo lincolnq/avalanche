@@ -3,7 +3,7 @@ import { load as loadStore } from "@tauri-apps/plugin-store";
 import type { Account, InviteInfo, ServerInfo } from "../models";
 import { displayHost } from "../lib/format";
 import type { Services } from "./createServices";
-import type { AppStore, PersistedAccount, SessionGuards } from "./types";
+import type { AppContextValue, AppStore, PersistedAccount, SessionGuards } from "./types";
 
 export interface AccountsDeps {
   store: AppStore;
@@ -22,38 +22,30 @@ export interface AccountsDeps {
 // Account lifecycle (create / restore / recover / join / logout / remove),
 // avalanche.json persistence, and the server-url / close-to-tray settings.
 // Every entry path funnels through `enterApp()` — never inline its steps.
-export interface Accounts {
-  // Context surface
-  createAccount: (
-    serverUrl: string,
-    serverName: string,
-    displayName: string,
-    inviteToken: string | null,
-    prfOutput: number[]
-  ) => Promise<void>;
-  restoreAccounts: () => Promise<void>;
-  logout: () => void;
-  setServerUrl: (url: string) => void;
-  setCloseToTray: (on: boolean) => void;
-  joinServer: (
-    serverUrl: string,
-    serverName: string,
-    existingAccountId: string
-  ) => Promise<void>;
-  setAccountDisplayName: (accountId: string, displayName: string) => Promise<void>;
-  leaveServer: (accountId: string) => Promise<void>;
-  deleteIdentity: (accountId: string) => Promise<void>;
-  hasRecovery: (accountId: string) => Promise<boolean>;
-  generateRecoveryPhrase: () => Promise<string>;
-  recoverFromPhrase: (phrase: string, serverUrl: string, displayName: string) => Promise<void>;
-  validateInvite: (token: string) => Promise<InviteInfo>;
-  startAddAccount: () => void;
-  cancelAddAccount: () => void;
+// Pick-typed — see the note in createConversations.ts.
+export type Accounts = Pick<
+  AppContextValue,
+  | "createAccount"
+  | "restoreAccounts"
+  | "logout"
+  | "setServerUrl"
+  | "setCloseToTray"
+  | "joinServer"
+  | "setAccountDisplayName"
+  | "leaveServer"
+  | "deleteIdentity"
+  | "hasRecovery"
+  | "generateRecoveryPhrase"
+  | "recoverFromPhrase"
+  | "validateInvite"
+  | "startAddAccount"
+  | "cancelAddAccount"
+> & {
   // Internal API for the other state modules (device linking completes an
   // account add through the same enterApp/persist contract as createAccount)
   enterApp: () => void;
   addPersistedAccount: (pa: PersistedAccount) => Promise<void>;
-}
+};
 
 export function createAccounts(deps: AccountsDeps): Accounts {
   const {
