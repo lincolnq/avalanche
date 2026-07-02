@@ -177,6 +177,16 @@ struct ActnetApp: App {
                     .onOpenURL { url in
                         appState.handleDeepLink(url)
                     }
+                    // Universal links tapped on a real device arrive as a
+                    // browsing-web NSUserActivity, which (with an app-delegate
+                    // adaptor present) is NOT delivered to onOpenURL.
+                    .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                        guard let url = activity.webpageURL else {
+                            AppLog.warn("DeepLink", "browsing-web activity with no webpageURL")
+                            return
+                        }
+                        appState.handleDeepLink(url)
+                    }
                     .onChange(of: scenePhase) { _, newPhase in
                         let active = (newPhase == .active)
                         appState.isAppActive = active

@@ -507,99 +507,114 @@ class AppViewModel(
      */
     fun restoreAccounts() {
         viewModelScope.launch {
-            val persisted = loadPersistedAccounts()
-            if (persisted.isEmpty()) return@launch
-
-            val dbKey = withContext(Dispatchers.IO) {
-                runCatching { KeystoreKeyManager.dbPassphrase(applicationContext) }.getOrNull()
-            }
-            if (dbKey == null) {
-                AppLog.error("restore", "Failed to retrieve DB encryption key, cannot restore accounts")
-                // We optimistically started on MAIN; with no usable accounts,
-                // fall back to the splash/onboarding flow.
-                _isOnboarding.value = _accounts.value.isEmpty()
-                return@launch
-            }
-
-            for (p in persisted) {
-                val dbFile = File(dbDir, p.dbFilename)
-                if (!dbFile.exists()) {
-                    AppLog.warn("restore", "DB file missing for ${p.did}, removing from persisted accounts")
-                    removePersistedAccount(p.did)
-                    continue
+            try {
+                restoreAccountsImpl()
+            } finally {
+                // Whatever way restore exits, unblock deep-link handling and
+                // replay an authorize link that arrived mid-restore (cold
+                // launch from a QR scan). Mirrors iOS's defer in restoreAccounts.
+                accountsRestored = true
+                pendingAuthorizeUri?.let {
+                    pendingAuthorizeUri = null
+                    handleAuthorizeDeepLink(it)
                 }
+            }
+        }
+    }
 
-                val serverInfos = p.servers.mapNotNull { s ->
-                    runCatching { ServerInfo(id = s.id, name = s.name, url = Uri.parse(s.url)) }.getOrNull()
+    private suspend fun restoreAccountsImpl() {
+        val persisted = loadPersistedAccounts()
+        if (persisted.isEmpty()) return
+
+        val dbKey = withContext(Dispatchers.IO) {
+            runCatching { KeystoreKeyManager.dbPassphrase(applicationContext) }.getOrNull()
+        }
+        if (dbKey == null) {
+            AppLog.error("restore", "Failed to retrieve DB encryption key, cannot restore accounts")
+            // We optimistically started on MAIN; with no usable accounts,
+            // fall back to the splash/onboarding flow.
+            _isOnboarding.value = _accounts.value.isEmpty()
+            return
+        }
+
+        for (p in persisted) {
+            val dbFile = File(dbDir, p.dbFilename)
+            if (!dbFile.exists()) {
+                AppLog.warn("restore", "DB file missing for ${p.did}, removing from persisted accounts")
+                removePersistedAccount(p.did)
+                continue
+            }
+
+            val serverInfos = p.servers.mapNotNull { s ->
+                runCatching { ServerInfo(id = s.id, name = s.name, url = Uri.parse(s.url)) }.getOrNull()
+            }
+            val account = Account(
+                id = p.did,
+                displayName = p.displayName,
+                avatarData = null,
+                servers = serverInfos,
+            )
+            _accounts.update { it + account }
+
+            val core = withContext(Dispatchers.IO) {
+                runCatching { _service.login(dbPath = dbFile.absolutePath, dbKey = dbKey) }.getOrNull()
+            }
+            if (core == null) {
+                AppLog.warn("restore", "Failed to authenticate account ${p.did} (will show offline)")
+                continue
+            }
+            // Key by the persisted DID we already trust — avoids a blocking
+            // FFI call (core.did()) on the main thread; it equals core.did()
+            // for this account anyway.
+            cores[p.did] = core
+
+            // Refresh display name from the local profile store — persisted name can be stale.
+            val coreName = withContext(Dispatchers.IO) {
+                runCatching { core.ownDisplayName() }.getOrElse { "" }
+            }
+            if (coreName.isNotEmpty() && coreName != p.displayName) {
+                _accounts.update { list ->
+                    list.map { if (it.id == p.did) it.copy(displayName = coreName) else it }
                 }
-                val account = Account(
-                    id = p.did,
-                    displayName = p.displayName,
-                    avatarData = null,
-                    servers = serverInfos,
+                persistAccount(
+                    PersistedAccount(
+                        did = p.did,
+                        displayName = coreName,
+                        dbFilename = p.dbFilename,
+                        servers = p.servers,
+                    )
                 )
-                _accounts.update { it + account }
-
-                val core = withContext(Dispatchers.IO) {
-                    runCatching { _service.login(dbPath = dbFile.absolutePath, dbKey = dbKey) }.getOrNull()
-                }
-                if (core == null) {
-                    AppLog.warn("restore", "Failed to authenticate account ${p.did} (will show offline)")
-                    continue
-                }
-                // Key by the persisted DID we already trust — avoids a blocking
-                // FFI call (core.did()) on the main thread; it equals core.did()
-                // for this account anyway.
-                cores[p.did] = core
-
-                // Refresh display name from the local profile store — persisted name can be stale.
-                val coreName = withContext(Dispatchers.IO) {
-                    runCatching { core.ownDisplayName() }.getOrElse { "" }
-                }
-                if (coreName.isNotEmpty() && coreName != p.displayName) {
-                    _accounts.update { list ->
-                        list.map { if (it.id == p.did) it.copy(displayName = coreName) else it }
-                    }
-                    persistAccount(
-                        PersistedAccount(
-                            did = p.did,
-                            displayName = coreName,
-                            dbFilename = p.dbFilename,
-                            servers = p.servers,
-                        )
-                    )
-                }
             }
+        }
 
-            if (_accounts.value.isNotEmpty()) {
-                _isOnboarding.value = false
+        if (_accounts.value.isNotEmpty()) {
+            _isOnboarding.value = false
 
-                if (_serviceMode.value == ServiceMode.MOCK) {
-                    for (account in _accounts.value) {
-                        val seeds = MockData.seedConversations(
-                            accountId = account.id,
-                            serverUrl = account.servers.firstOrNull()?.id ?: ""
-                        )
-                        _conversations.update { it + seeds }
-                    }
-                    _conversationsLoaded.value = true
-                } else {
-                    loadConversationsFromStore()
-                }
-
-                startMessagePolling()
-                if (_serviceMode.value != ServiceMode.MOCK) {
-                    PushManager.requestPermissionAndRegister(
-                        context = applicationContext,
-                        appViewModel = this@AppViewModel,
+            if (_serviceMode.value == ServiceMode.MOCK) {
+                for (account in _accounts.value) {
+                    val seeds = MockData.seedConversations(
+                        accountId = account.id,
+                        serverUrl = account.servers.firstOrNull()?.id ?: ""
                     )
+                    _conversations.update { it + seeds }
                 }
+                _conversationsLoaded.value = true
             } else {
-                // Persisted entries existed (so we started on MAIN) but none
-                // produced a usable account — e.g. their DB files were gone.
-                // Fall back to the splash/onboarding flow.
-                _isOnboarding.value = true
+                loadConversationsFromStore()
             }
+
+            startMessagePolling()
+            if (_serviceMode.value != ServiceMode.MOCK) {
+                PushManager.requestPermissionAndRegister(
+                    context = applicationContext,
+                    appViewModel = this@AppViewModel,
+                )
+            }
+        } else {
+            // Persisted entries existed (so we started on MAIN) but none
+            // produced a usable account — e.g. their DB files were gone.
+            // Fall back to the splash/onboarding flow.
+            _isOnboarding.value = true
         }
     }
 
@@ -2071,7 +2086,25 @@ class AppViewModel(
      * target homeserver, stage a consent request; otherwise surface the
      * structured no-account failure.
      */
+    /**
+     * An authorize link that arrived before [restoreAccounts] finished (cold
+     * launch from a QR scan). Replayed once restore completes, so the account
+     * lookup below doesn't race the async restore and misreport "no account
+     * on server". Mirrors iOS AppState.pendingAuthorizeURL.
+     */
+    private var pendingAuthorizeUri: Uri? = null
+
+    /** True once [restoreAccounts] has run to completion (accounts and cores populated). */
+    private var accountsRestored = false
+
     fun handleAuthorizeDeepLink(uri: Uri) {
+        // On a cold launch the link is delivered while accounts are still
+        // being restored — defer handling until restore completes.
+        if (!accountsRestored) {
+            AppLog.info("Login", "authorize link before restore completed, staging")
+            pendingAuthorizeUri = uri
+            return
+        }
         val clientId = uri.getQueryParameter("client_id")
         val serverUrl = uri.getQueryParameter("server_url")
         if (clientId == null || serverUrl == null) {

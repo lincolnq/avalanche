@@ -148,7 +148,7 @@ final class AppState: ObservableObject {
     /// - `https://go.theavalanche.net/conversation/<recipient_did>`
     /// - `https://go.theavalanche.net/i/<token>` (or legacy `/invite/<token>`)
     func handleDeepLink(_ url: URL) {
-        print("[DeepLink] handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
+        AppLog.info("DeepLink", "handleDeepLink: \(url), scheme=\(url.scheme ?? "nil"), host=\(url.host ?? "nil"), path=\(url.path)")
         // An image shared in from another app (docs/35): the share extension wrote
         // it to the App Group and opened this scheme. Pull it into the picker.
         if url.scheme == AppGroup.shareURLScheme {
@@ -170,17 +170,17 @@ final class AppState: ObservableObject {
         case "conversation":
             let did = pathComponents[1]
             guard !did.isEmpty, let accountId = accounts.first?.id else {
-                print("[DeepLink] failed: did='\(did)', accounts=\(accounts.count)")
+                AppLog.warn("DeepLink", "failed: did='\(did)', accounts=\(accounts.count)")
                 return
             }
-            print("[DeepLink] navigating to conversation with \(did)")
+            AppLog.info("DeepLink", "navigating to conversation with \(did)")
             let conv = findOrCreateDMConversation(recipientDid: did, accountId: accountId)
             selectedTab = .chats
             navigateToConversation = conv
 
         case "i", "invite":
             let token = pathComponents[1]
-            print("[DeepLink] handling invite token")
+            AppLog.info("DeepLink", "handling invite token")
             // Try to decode the token locally to check if we're already on the
             // server. Single-char wire keys: s=server_url, d=inviter_did.
             if let data = Data(base64URLEncoded: token),
@@ -189,7 +189,7 @@ final class AppState: ObservableObject {
                let inviterDid = payload["d"] as? String,
                let account = accounts.first(where: { $0.servers.contains(where: { $0.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == serverUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }) }) {
                 // Already registered on this server — skip to DM.
-                print("[DeepLink] already on server, opening DM with \(inviterDid)")
+                AppLog.info("DeepLink", "already on server, opening DM with \(inviterDid)")
                 let conv = findOrCreateDMConversation(recipientDid: inviterDid, accountId: account.id)
                 selectedTab = .chats
                 navigateToConversation = conv
@@ -199,7 +199,7 @@ final class AppState: ObservableObject {
             }
 
         default:
-            print("[DeepLink] unknown action: \(action)")
+            AppLog.warn("DeepLink", "unknown action: \(action)")
         }
     }
 
@@ -251,6 +251,15 @@ final class AppState: ObservableObject {
 
     /// Attempt to restore persisted accounts on launch.
     func restoreAccounts() async {
+        // Whatever way restore exits, unblock deep-link handling and replay an
+        // authorize link that arrived mid-restore (cold launch from a QR scan).
+        defer {
+            accountsRestored = true
+            if let url = pendingAuthorizeURL {
+                pendingAuthorizeURL = nil
+                handleAuthorizeDeepLink(url)
+            }
+        }
         let persisted = Self.loadPersistedAccounts()
         guard !persisted.isEmpty else { return }
 
@@ -1736,16 +1745,32 @@ final class AppState: ObservableObject {
         s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
+    /// An `authorize` link that arrived before `restoreAccounts()` finished
+    /// (cold launch from a QR scan). Replayed once restore completes, so the
+    /// account lookup below doesn't race the async restore and misreport
+    /// "no account on server".
+    private var pendingAuthorizeURL: URL?
+    /// True once `restoreAccounts()` has run to completion (accounts *and*
+    /// their cores populated).
+    private var accountsRestored = false
+
     /// Parse an `authorize` deep link and, if the user has an account on the
     /// target homeserver, stage a consent request; otherwise surface the
     /// structured no-account failure.
     func handleAuthorizeDeepLink(_ url: URL) {
+        // On a cold launch the link is delivered while accounts are still
+        // being restored — defer handling until restore completes.
+        guard accountsRestored else {
+            AppLog.info("Login", "authorize link before restore completed, staging")
+            pendingAuthorizeURL = url
+            return
+        }
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         let items = comps.queryItems ?? []
         func q(_ name: String) -> String? { items.first(where: { $0.name == name })?.value }
 
         guard let clientId = q("client_id"), let serverUrl = q("server_url") else {
-            print("[Login] authorize link missing client_id/server_url")
+            AppLog.warn("Login", "authorize link missing client_id/server_url")
             return
         }
 
@@ -1753,7 +1778,7 @@ final class AppState: ObservableObject {
         guard let account = accounts.first(where: { acct in
             acct.servers.contains(where: { normalizedServer($0.url.absoluteString) == normalizedServer(serverUrl) })
         }) else {
-            print("[Login] no account on \(serverUrl)")
+            AppLog.warn("Login", "no account on \(serverUrl)")
             loginError = .noAccountOnServer(serverUrl: serverUrl)
             return
         }
@@ -1769,7 +1794,7 @@ final class AppState: ObservableObject {
                 state: q("state")
             )
         } else {
-            print("[Login] authorize link missing flow params")
+            AppLog.warn("Login", "authorize link missing flow params")
             return
         }
 
