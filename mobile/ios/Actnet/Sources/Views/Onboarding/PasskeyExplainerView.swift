@@ -135,6 +135,10 @@ struct PasskeyExplainerView: View {
                     displayName: displayName,
                     inviteToken: inviteToken.token
                 )
+                // For the first account the isOnboarding flip tears this view
+                // down; when adding a second account it doesn't, so reset the
+                // spinner explicitly (the Accounts sheet handles dismissal).
+                isRegistering = false
 
                 if let redirect = inviteToken.postOnboardingRedirect,
                    let url = URL(string: redirect) {
@@ -164,7 +168,10 @@ struct PasskeyExplainerView: View {
                     inviteToken: inviteToken.token,
                     prfOutput: prfOutput
                 )
-                // createAccount sets isOnboarding = false, which navigates to MainTabView.
+                // createAccount sets isOnboarding = false, which navigates to MainTabView
+                // for the first account. When adding a second account that's a no-op, so
+                // reset the spinner explicitly (the Accounts sheet handles dismissal).
+                isRegistering = false
                 // If the invite has a post-onboarding redirect, follow it.
                 if let redirect = inviteToken.postOnboardingRedirect,
                    let url = URL(string: redirect) {

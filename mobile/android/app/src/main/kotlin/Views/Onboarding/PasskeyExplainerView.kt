@@ -51,6 +51,11 @@ import kotlinx.coroutines.launch
  * @param onHandleDeepLink  Called after account creation when the invite carries a
  *                          post-onboarding redirect URL. Caller converts the string to a
  *                          [Uri] and delegates to AppViewModel.handleDeepLink.
+ * @param onComplete  Called after account creation succeeds so the NavGraph can leave
+ *                    onboarding. Required for adding a *second* account: isOnboarding is
+ *                    already false, so the isOnboarding-driven navigation never fires and
+ *                    this view would otherwise stay mounted spinning forever. Mirrors
+ *                    RecoveryPhraseSetupView.onComplete.
  */
 @Composable
 fun PasskeyExplainerView(
@@ -59,6 +64,7 @@ fun PasskeyExplainerView(
     viewModel: AppViewModel,
     onNavigateToRecoveryPhraseSetup: (inviteToken: InviteToken, displayName: String) -> Unit = { _, _ -> },
     onHandleDeepLink: (url: String) -> Unit = {},
+    onComplete: () -> Unit = {},
 ) {
     var isRegistering by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -102,8 +108,12 @@ fun PasskeyExplainerView(
                     inviteToken = inviteToken.token,
                 )
                 // finalizePreparedAccount sets isOnboarding = false, which
-                // navigates to MainTabView.
+                // navigates to MainTabView for the first account. Adding a second
+                // account it's a no-op, so reset the spinner and leave onboarding
+                // explicitly via onComplete.
+                isRegistering = false
                 inviteToken.postOnboardingRedirect?.let { onHandleDeepLink(it) }
+                onComplete()
             } catch (e: PasskeyException.Cancelled) {
                 // User cancelled — don't show an error, just re-enable buttons.
                 isRegistering = false
@@ -130,8 +140,12 @@ fun PasskeyExplainerView(
                     inviteToken = inviteToken.token,
                     prfOutput = prfOutput,
                 )
-                // createAccount sets isOnboarding = false, which navigates to MainTabView.
+                // createAccount sets isOnboarding = false, which navigates to MainTabView
+                // for the first account. Adding a second account it's a no-op, so reset
+                // the spinner and leave onboarding explicitly via onComplete.
+                isRegistering = false
                 inviteToken.postOnboardingRedirect?.let { onHandleDeepLink(it) }
+                onComplete()
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Account creation failed"
                 isRegistering = false

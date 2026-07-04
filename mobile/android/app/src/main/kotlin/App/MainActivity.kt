@@ -409,6 +409,12 @@ fun AppNavGraph(
                     onHandleDeepLink = { url ->
                         runCatching { Uri.parse(url) }.getOrNull()?.let { appViewModel.handleDeepLink(it) }
                     },
+                    onComplete = {
+                        appViewModel.setPendingInvite(null)
+                        navController.navigate(Route.MAIN) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
                 )
             }
         }

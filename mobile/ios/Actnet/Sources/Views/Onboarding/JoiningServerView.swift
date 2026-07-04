@@ -63,6 +63,10 @@ struct JoiningServerView: View {
                     serverName: inviteToken.serverName,
                     existingAccountId: existingAccount.id
                 )
+                // Joining from Settings runs with isOnboarding already false, so
+                // nothing tears this view down — reset the spinner explicitly
+                // (the Accounts sheet handles dismissal via addAccountCompletedTick).
+                isJoining = false
             } catch {
                 errorMessage = error.localizedDescription
                 isJoining = false

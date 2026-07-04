@@ -97,6 +97,13 @@ struct AccountsView: View {
             .navigationDestination(isPresented: $showAddAccount) {
                 AddAccountView()
             }
+            // When an add-account / join flow completes, isOnboarding is already
+            // false (we're signed in), so the root view never swaps to tear down
+            // the pushed onboarding stack. Dismiss this whole sheet instead,
+            // landing the user back in Chats with the new account merged.
+            .onChange(of: appState.addAccountCompletedTick) { _, _ in
+                dismiss()
+            }
         }
     }
 

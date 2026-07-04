@@ -231,8 +231,11 @@ struct RecoveryPhraseSetupView: View {
                     inviteToken: inviteToken.token,
                     prfOutput: seed
                 )
-                // createAccount flips isOnboarding = false → MainTabView. Follow
-                // the invite's post-onboarding redirect if it carries one.
+                // createAccount flips isOnboarding = false → MainTabView for the
+                // first account. Adding a second account it's a no-op, so reset
+                // the spinner explicitly (the Accounts sheet handles dismissal).
+                isRegistering = false
+                // Follow the invite's post-onboarding redirect if it carries one.
                 if let redirect = inviteToken.postOnboardingRedirect,
                    let url = URL(string: redirect) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {

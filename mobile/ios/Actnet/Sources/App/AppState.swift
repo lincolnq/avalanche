@@ -30,6 +30,13 @@ private struct PersistedServer: Codable {
 final class AppState: ObservableObject {
     @Published var accounts: [Account] = []
     @Published var isOnboarding: Bool = true
+    /// Monotonic tick bumped whenever an add-account / join-server flow finishes.
+    /// When adding a *second* account `isOnboarding` is already false, so the
+    /// root view never swaps and the onboarding stack isn't torn down. The
+    /// Accounts sheet observes this counter to dismiss the flow on completion.
+    /// A counter (not a Bool) so it fires even though first-account onboarding
+    /// runs the same completion paths. (docs/53-multi-account-ux.md)
+    @Published var addAccountCompletedTick: Int = 0
     @Published var conversations: [Conversation] = []
 
     /// False until the first conversation load completes. Lets the chats list
@@ -677,6 +684,10 @@ final class AppState: ObservableObject {
         }
 
         isOnboarding = false
+        // Dismisses the add-account flow when this isn't the first account (see
+        // addAccountCompletedTick). Harmless during first-account onboarding —
+        // the Accounts sheet isn't mounted to observe it.
+        addAccountCompletedTick += 1
         startMessagePolling()
         Task { await PushManager.requestPermissionAndRegister(appState: self) }
     }
@@ -729,6 +740,9 @@ final class AppState: ObservableObject {
             )
         }
         isOnboarding = false
+        // See finishAccountRegistration: dismisses the join flow when joining
+        // from Settings (where isOnboarding is already false).
+        addAccountCompletedTick += 1
     }
 
     // MARK: - Account teardown (docs/53-multi-account-ux.md)
