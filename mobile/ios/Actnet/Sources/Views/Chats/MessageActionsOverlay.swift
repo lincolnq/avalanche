@@ -57,16 +57,25 @@ struct MessageActionsOverlay: View {
     /// chrome (scrim still up, hiding the copy), *then* fade the scrim out last —
     /// mirroring the entrance — and finally remove. Every dismiss path (backdrop
     /// tap, an emoji, an action) goes through here so the exit always animates.
-    private func dismiss() {
+    ///
+    /// `action` (react / edit / delete) runs only *after* the exit finishes:
+    /// applying it earlier would reflow the timeline (e.g. a new reaction adds
+    /// height) while the copy is still gliding back to the pre-action bounds, so
+    /// it would land on the old spot and snap. Deferring lets the copy return
+    /// onto the unchanged bubble, then the change appears as a normal layout.
+    private func dismiss(perform action: (() -> Void)? = nil) {
         withAnimation(.spring(response: Self.morph, dampingFraction: 0.9)) {
             expanded = false
         }
         // Start the scrim fade so it *finishes* with the glide (its last
-        // `scrimFade` overlaps the glide's tail), then remove.
+        // `scrimFade` overlaps the glide's tail), then apply + remove.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.morph - Self.scrimFade) {
             withAnimation(.easeOut(duration: Self.scrimFade)) { appeared = false }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.morph) { onDismiss() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.morph) {
+            action?()
+            onDismiss()
+        }
     }
 
     var body: some View {
@@ -151,8 +160,7 @@ struct MessageActionsOverlay: View {
             ForEach(EmojiData.quick, id: \.self) { emoji in
                 Button {
                     if myEmoji != emoji { EmojiRecents.record(emoji) }
-                    onToggleReaction(emoji)
-                    dismiss()
+                    dismiss { onToggleReaction(emoji) }
                 } label: {
                     Text(emoji)
                         .font(.system(size: 28))
@@ -183,23 +191,22 @@ struct MessageActionsOverlay: View {
     private var actionList: some View {
         VStack(spacing: 0) {
             if canEdit {
-                actionRow("Edit", "pencil") { onEdit(); dismiss() }
+                actionRow("Edit", "pencil") { dismiss { onEdit() } }
                 divider
             }
             if message.editCount > 0 {
-                actionRow("Edit History", "clock.arrow.circlepath") { onShowHistory(); dismiss() }
+                actionRow("Edit History", "clock.arrow.circlepath") { dismiss { onShowHistory() } }
                 divider
             }
             actionRow("Copy", "doc.on.doc") {
-                UIPasteboard.general.string = message.body
-                dismiss()
+                dismiss { UIPasteboard.general.string = message.body }
             }
             if isMe {
                 divider
-                actionRow("Delete for Everyone", "trash", destructive: true) { onDelete(true); dismiss() }
+                actionRow("Delete for Everyone", "trash", destructive: true) { dismiss { onDelete(true) } }
             }
             divider
-            actionRow("Delete for Me", "trash", destructive: true) { onDelete(false); dismiss() }
+            actionRow("Delete for Me", "trash", destructive: true) { dismiss { onDelete(false) } }
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.avPaper))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)

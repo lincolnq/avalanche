@@ -108,7 +108,12 @@ fun MessageActionsOverlay(
     val bubbleWidthDp = with(density) { sourceBounds.width.toDp() }
     val bubbleHeightDp = with(density) { sourceBounds.height.toDp() }
 
-    fun dismiss() {
+    // `action` (react / edit / delete) runs only *after* the exit finishes:
+    // applying it earlier would reflow the timeline (e.g. a new reaction adds
+    // height) while the copy is still gliding back to the pre-action bounds, so
+    // it would land on the old spot and snap. Deferring lets the copy return
+    // onto the unchanged bubble, then the change appears as a normal layout.
+    fun dismiss(action: (() -> Unit)? = null) {
         scope.launch {
             // Fade the scrim last, finishing with the glide (its tail overlaps).
             launch {
@@ -116,6 +121,7 @@ fun MessageActionsOverlay(
                 scrim.animateTo(0f, tween(120))
             }
             progress.animateTo(0f, spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow))
+            action?.invoke()
             onDismiss()
         }
     }
@@ -179,8 +185,7 @@ fun MessageActionsOverlay(
                             .background(if (myEmoji == emoji) colors.brand.copy(alpha = 0.25f) else Color.Transparent)
                             .clickable {
                                 if (myEmoji != emoji) EmojiRecents.record(context, emoji)
-                                onToggleReaction(emoji)
-                                dismiss()
+                                dismiss { onToggleReaction(emoji) }
                             },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -222,22 +227,21 @@ fun MessageActionsOverlay(
                     .width(240.dp),
             ) {
                 if (canEdit) {
-                    ActionRow("Edit", Icons.Filled.Edit) { onEdit(); dismiss() }
+                    ActionRow("Edit", Icons.Filled.Edit) { dismiss { onEdit() } }
                 }
                 if (message.editCount > 0) {
-                    ActionRow("Edit History", Icons.Filled.History) { onShowHistory(); dismiss() }
+                    ActionRow("Edit History", Icons.Filled.History) { dismiss { onShowHistory() } }
                 }
                 ActionRow("Copy", Icons.Filled.ContentCopy) {
-                    copyToClipboard(context, message.body)
-                    dismiss()
+                    dismiss { copyToClipboard(context, message.body) }
                 }
                 if (isMe) {
                     ActionRow("Delete for Everyone", Icons.Filled.Delete, destructive = true) {
-                        onDelete(true); dismiss()
+                        dismiss { onDelete(true) }
                     }
                 }
                 ActionRow("Delete for Me", Icons.Filled.Delete, destructive = true) {
-                    onDelete(false); dismiss()
+                    dismiss { onDelete(false) }
                 }
             }
         }
