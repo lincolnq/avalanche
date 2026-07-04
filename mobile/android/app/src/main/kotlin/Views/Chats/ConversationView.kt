@@ -128,6 +128,17 @@ fun ConversationView(
     val conversations by viewModel.conversations.collectAsState()
     val reactionsByConversation by viewModel.reactionsByConversation.collectAsState()
 
+    // Reactions on a message, read from the *observed* state above so Compose
+    // recomposes when they change. (viewModel.reactions() reads the flow's
+    // .value directly, which isn't a snapshot read — so an optimistic
+    // toggleReaction that touches only this flow would otherwise never
+    // recompose, and your own reaction wouldn't appear until some other state
+    // change forced a redraw.)
+    fun reactionsFor(m: Message) =
+        (reactionsByConversation[m.conversationId] ?: emptyList()).filter {
+            it.targetAuthor == m.senderAccountId && it.targetSentAtMs == m.sentAtMs
+        }
+
     // The live row from conversations so request/blocked state stays reactive
     // after an Accept / Block / Report action; falls back to the passed-in
     // value (e.g. previews) when not in the list.
@@ -555,7 +566,7 @@ fun ConversationView(
                         isBot = isBotSender(message),
                         senderName = senderName,
                         isLastInRun = isLastInRun,
-                        reactions = viewModel.reactions(message),
+                        reactions = reactionsFor(message),
                         myDid = conversation.accountId,
                         actionsEnabled = true,
                         onToggleReaction = { emoji ->
@@ -655,7 +666,7 @@ fun ConversationView(
                 senderName = target.senderName,
                 isLastInRun = target.isLastInRun,
                 sourceBounds = target.bounds,
-                reactions = viewModel.reactions(target.message),
+                reactions = reactionsFor(target.message),
                 myDid = conversation.accountId,
                 canEdit = canEdit(target.message),
                 onToggleReaction = { emoji ->
