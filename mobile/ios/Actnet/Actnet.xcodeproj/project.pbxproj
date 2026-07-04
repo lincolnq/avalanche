@@ -14,6 +14,7 @@
 		1626F0227BC811D82FDAE1E4 /* CutCornerRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24C15E1F4F21C7EF28ABF416 /* CutCornerRectangle.swift */; };
 		1730155BC6BF8EFB66BF49D1 /* AccountAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B344D75428AFD0B731E724 /* AccountAvatar.swift */; };
 		1978B11DD8685ACFA49F9E7A /* NotificationPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA8617C28764494BD378CE66 /* NotificationPresenter.swift */; };
+		1B8B0E7BA237E93517B407C4 /* EmojiData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12909ED788E69B8A5410A505 /* EmojiData.swift */; };
 		1D2BDEE0FB41FAED5BAB86A8 /* Hexagon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9289256BE2B6AF2378B1D78D /* Hexagon.swift */; };
 		1D538E2F9FC8D964B7923C3D /* InviteLinkEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A82BC1AF50974F0759EC90 /* InviteLinkEntryView.swift */; };
 		206951171CA6EE320DB6DC5D /* NameGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D15DEB5760B0263F833A50A /* NameGroupView.swift */; };
@@ -36,6 +37,7 @@
 		5E07B0FD87D07465DAB28703 /* RecoveryKeyBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */; };
 		5E9CE6A936CB3EE5A7D534D1 /* EditHistorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */; };
 		638610176DD56586489BAF89 /* ActnetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65A7BC7A36A4F6D36947106A /* ActnetApp.swift */; };
+		697D39C204F9DA1220F99D6F /* EmojiPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07FF102DB2365CD448FE2C29 /* EmojiPickerView.swift */; };
 		6C9898720C9563E270D15E23 /* RecoveryExplainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27783892A8D4D88BE570F79C /* RecoveryExplainerView.swift */; };
 		766032ADCE0724DBF99B68F5 /* ProjectWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6264C3F09805D88EB5983A6 /* ProjectWebView.swift */; };
 		784454627F0BB442850E2F3A /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93902C84CDE9256ABD4CC50 /* ContactAvatar.swift */; };
@@ -70,6 +72,7 @@
 		DCB3ED6719400E9479A29C98 /* ChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B3DC7CBE016789D232757D /* ChatsView.swift */; };
 		DD42A62234B9DF687F2AE7BB /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94C65A994903B9410FFAC5B3 /* AppState.swift */; };
 		DE9A7991ABFFACEA54D2762D /* RecoveryPhraseSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A034B0812F64EFB0BA5C36E6 /* RecoveryPhraseSetupView.swift */; };
+		E695DEAC60B5F5CD02999A53 /* MessageActionsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C96DE459D704EBFA65B307 /* MessageActionsOverlay.swift */; };
 		E74703FA755ACEF9C2B0DAA5 /* ComposeMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77499BEF2E32D27D96CCD2F1 /* ComposeMessageView.swift */; };
 		ED6FC7D997F37C6A0A85E0B9 /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B337C1C0A8BF5C7BDA6E41 /* Message.swift */; };
 		EF24D30DE8AE1125CB83DB84 /* AvalancheColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9630D7E7FE4B5EA6E04E6D /* AvalancheColors.swift */; };
@@ -107,6 +110,8 @@
 
 /* Begin PBXFileReference section */
 		02F784B4794651EB68CB3128 /* JoiningServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoiningServerView.swift; sourceTree = "<group>"; };
+		07FF102DB2365CD448FE2C29 /* EmojiPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerView.swift; sourceTree = "<group>"; };
+		12909ED788E69B8A5410A505 /* EmojiData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiData.swift; sourceTree = "<group>"; };
 		14AE2F220E680D0CE0A5810E /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		1AB2D93100F9BA3D2C8BBD22 /* IdentityPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityPickerView.swift; sourceTree = "<group>"; };
 		1BA1C532BF4A702D100E38DD /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
@@ -123,6 +128,7 @@
 		31F4B3D750152162A2A00C24 /* AppGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroup.swift; sourceTree = "<group>"; };
 		32115C1BD46227602D3C5A71 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		33A33BB9BDC1959B6580927C /* NewAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewAccountView.swift; sourceTree = "<group>"; };
+		43C96DE459D704EBFA65B307 /* MessageActionsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsOverlay.swift; sourceTree = "<group>"; };
 		4D15DEB5760B0263F833A50A /* NameGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NameGroupView.swift; sourceTree = "<group>"; };
 		59A82BC1AF50974F0759EC90 /* InviteLinkEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteLinkEntryView.swift; sourceTree = "<group>"; };
 		60B3DC7CBE016789D232757D /* ChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatsView.swift; sourceTree = "<group>"; };
@@ -271,7 +277,10 @@
 				C0BC2191A5A534D46806501B /* ConversationRow.swift */,
 				2C83A54ACCB386940D8E4689 /* ConversationView.swift */,
 				6C69AF8A0D806372AF28BDA9 /* EditHistorySheet.swift */,
+				12909ED788E69B8A5410A505 /* EmojiData.swift */,
+				07FF102DB2365CD448FE2C29 /* EmojiPickerView.swift */,
 				6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */,
+				43C96DE459D704EBFA65B307 /* MessageActionsOverlay.swift */,
 				1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */,
 				4D15DEB5760B0263F833A50A /* NameGroupView.swift */,
 				7F73DF560719B0774C43444C /* RecipientTokenField.swift */,
@@ -537,6 +546,8 @@
 				25BD1E1E253DCEBC39F160D4 /* DevServerActnetService.swift in Sources */,
 				BEFA545596A58A7537E2FC2F /* DisappearingMessagesPicker.swift in Sources */,
 				5E9CE6A936CB3EE5A7D534D1 /* EditHistorySheet.swift in Sources */,
+				1B8B0E7BA237E93517B407C4 /* EmojiData.swift in Sources */,
+				697D39C204F9DA1220F99D6F /* EmojiPickerView.swift in Sources */,
 				20F6033A948AC335C87AA56C /* GroupDetailView.swift in Sources */,
 				1D2BDEE0FB41FAED5BAB86A8 /* Hexagon.swift in Sources */,
 				CC462B8999850429242D1E9A /* IdentityDetailView.swift in Sources */,
@@ -549,6 +560,7 @@
 				1616C239BA7C0A5010AA5637 /* LogViewerView.swift in Sources */,
 				038F7CD243E857170660F8CB /* MainTabView.swift in Sources */,
 				ED6FC7D997F37C6A0A85E0B9 /* Message.swift in Sources */,
+				E695DEAC60B5F5CD02999A53 /* MessageActionsOverlay.swift in Sources */,
 				26EE636C4263EE4CDEFD7A2D /* MessageBubble.swift in Sources */,
 				F583E622D4499CAC0D0472FF /* MockActnetService.swift in Sources */,
 				206951171CA6EE320DB6DC5D /* NameGroupView.swift in Sources */,
@@ -609,7 +621,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 524;
+				CURRENT_PROJECT_VERSION = 540;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -643,7 +655,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 524;
+				CURRENT_PROJECT_VERSION = 540;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -785,7 +797,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 524;
+				CURRENT_PROJECT_VERSION = 540;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -811,7 +823,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 524;
+				CURRENT_PROJECT_VERSION = 540;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (

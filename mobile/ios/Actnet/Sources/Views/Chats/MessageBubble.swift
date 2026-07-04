@@ -21,55 +21,76 @@ struct MessageBubble: View {
     var isLastInRun: Bool = true
 
     // Reactions / editing / deletion (docs/33, docs/36). `actionsEnabled` gates
-    // the long-press menu to conversations where these ops are supported (DMs).
+    // the long-press overlay to conversations where these ops are supported.
     var reactions: [ReactionFfi] = []
     var myDid: String = ""
     var actionsEnabled: Bool = false
-    var canEdit: Bool = false
+    /// Tapping an existing reaction cluster toggles this account's reaction.
     var onToggleReaction: (String) -> Void = { _ in }
-    var onEdit: () -> Void = {}
-    var onDelete: (Bool) -> Void = { _ in }
-    var onShowHistory: () -> Void = {}
+    /// Long-press on the bubble — ConversationView raises the Signal-style
+    /// actions overlay (docs/33). Gated by `actionsEnabled` and `interactive`.
+    /// The `CGRect` is this bubble's content frame in global coords, so the
+    /// overlay can animate the message from where it sits into the center.
+    var onLongPress: (CGRect) -> Void = { _ in }
+    /// When false the bubble is a static copy (e.g. inside the actions overlay):
+    /// no long-press gesture is attached.
+    var interactive: Bool = true
+    /// When false the surrounding side `Spacer`s are dropped so the bubble sizes
+    /// to its content — used by the actions overlay, which positions the copy
+    /// itself. The content still honors `maxWidth` from the caller for identical
+    /// wrapping.
+    var showSideSpacers: Bool = true
     /// Loads decrypted bytes for an attachment (docs/35); injected by the
     /// conversation view so the bubble stays free of app-core access.
     var attachmentLoader: (AttachmentFfi) async -> Data? = { _ in nil }
 
-    /// Quick-reaction palette shown in the long-press menu.
-    private static let quickEmoji = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+    /// This bubble's content frame in global coords, tracked so a long-press can
+    /// hand the overlay a start position for the lift-to-center animation.
+    @State private var contentFrame: CGRect = .zero
 
     var body: some View {
-        HStack {
-            if isMe { Spacer(minLength: 60) }
+        if showSideSpacers {
+            HStack {
+                if isMe { Spacer(minLength: 60) }
+                contentStack
+                if !isMe { Spacer(minLength: 60) }
+            }
+        } else {
+            contentStack
+        }
+    }
 
-            VStack(alignment: isMe ? .trailing : .leading, spacing: 4) {
-                if let senderName, !isMe {
-                    Text(senderName)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(senderColor)
-                        .padding(.leading, 4)
-                }
-                if !message.attachments.isEmpty {
-                    ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, att in
-                        AttachmentView(attachment: att, loader: attachmentLoader)
-                    }
-                }
-                // The text bubble is omitted for an attachment-only message
-                // (empty body), so a photo doesn't get an empty grey bubble.
-                if !message.body.isEmpty || message.attachments.isEmpty || message.isDeleted {
-                    bubble
-                }
-                // Link-preview cards (docs/35) below the text bubble.
-                ForEach(Array(message.previews.enumerated()), id: \.offset) { _, preview in
-                    LinkPreviewCard(preview: preview, isMe: isMe, loader: attachmentLoader)
-                }
-                if !reactionClusters.isEmpty {
-                    reactionCluster
+    /// The message content (sender name, attachments, bubble, previews,
+    /// reactions) without the surrounding side spacers. Shared by the timeline
+    /// (wrapped in the HStack) and the actions overlay copy.
+    private var contentStack: some View {
+        VStack(alignment: isMe ? .trailing : .leading, spacing: 4) {
+            if let senderName, !isMe {
+                Text(senderName)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(senderColor)
+                    .padding(.leading, 4)
+            }
+            if !message.attachments.isEmpty {
+                ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, att in
+                    AttachmentView(attachment: att, loader: attachmentLoader)
                 }
             }
-
-            if !isMe { Spacer(minLength: 60) }
+            // The text bubble is omitted for an attachment-only message
+            // (empty body), so a photo doesn't get an empty grey bubble.
+            if !message.body.isEmpty || message.attachments.isEmpty || message.isDeleted {
+                bubble
+            }
+            // Link-preview cards (docs/35) below the text bubble.
+            ForEach(Array(message.previews.enumerated()), id: \.offset) { _, preview in
+                LinkPreviewCard(preview: preview, isMe: isMe, loader: attachmentLoader)
+            }
+            if !reactionClusters.isEmpty {
+                reactionCluster
+            }
         }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { contentFrame = $0 }
     }
 
     @ViewBuilder
@@ -92,8 +113,11 @@ struct MessageBubble: View {
                 .foregroundStyle(isMe ? Color.sand100 : Color.avInk)
                 .clipShape(bubbleShape)
                 .overlay(alignment: .bottomTrailing) { metadataOverlay }
-            if actionsEnabled {
-                content.contextMenu { menuItems }
+            if actionsEnabled && interactive {
+                content.onLongPressGesture(minimumDuration: 0.35) {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    onLongPress(contentFrame)
+                }
             } else {
                 content
             }
@@ -207,32 +231,6 @@ struct MessageBubble: View {
         case .delivered: return "checkmark.circle"
         case .read: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.circle"
-        }
-    }
-
-    @ViewBuilder
-    private var menuItems: some View {
-        ControlGroup {
-            ForEach(Self.quickEmoji, id: \.self) { emoji in
-                Button(emoji) { onToggleReaction(emoji) }
-            }
-        }
-        if canEdit {
-            Button { onEdit() } label: { Label("Edit", systemImage: "pencil") }
-        }
-        if message.editCount > 0 {
-            Button { onShowHistory() } label: { Label("Edit History", systemImage: "clock.arrow.circlepath") }
-        }
-        Button {
-            UIPasteboard.general.string = message.body
-        } label: { Label("Copy", systemImage: "doc.on.doc") }
-        if isMe {
-            Button(role: .destructive) { onDelete(true) } label: {
-                Label("Delete for Everyone", systemImage: "trash")
-            }
-        }
-        Button(role: .destructive) { onDelete(false) } label: {
-            Label("Delete for Me", systemImage: "trash")
         }
     }
 

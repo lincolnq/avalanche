@@ -47,6 +47,26 @@ struct ConversationView: View {
     /// Whether the clipboard currently holds an image, gating the paste button's
     /// visibility (docs/35). Refreshed on appear, app-active, and pasteboard change.
     @State private var canPasteImage = false
+    /// The message under the Signal-style long-press actions overlay (docs/33),
+    /// with its on-screen frame + resolved sender name so the overlay can lift
+    /// the exact bubble to center. Nil when no overlay is showing.
+    @State private var actionTarget: ActionTarget?
+    /// Whether the full emoji picker sheet is up (opened from the overlay's "+").
+    /// Keeps `actionTarget` alive underneath so the picked emoji has a target.
+    @State private var showEmojiPicker = false
+
+    /// A message plus the context the actions overlay needs to reproduce and
+    /// animate its bubble (docs/33).
+    private struct ActionTarget {
+        let message: Message
+        /// Source bubble content frame in global coords (animation start point).
+        let frame: CGRect
+        /// The name shown above this bubble in the timeline, or nil.
+        let senderName: String?
+        /// Whether the source bubble showed its timestamp/delivery line — the
+        /// overlay copy must match so its size/wrapping is identical.
+        let isLastInRun: Bool
+    }
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
@@ -122,15 +142,17 @@ struct ConversationView: View {
                                 reactions: appState.reactions(for: message),
                                 myDid: conversation.accountId,
                                 actionsEnabled: actionsEnabled,
-                                canEdit: canEdit(message),
                                 onToggleReaction: { emoji in
                                     appState.toggleReaction(message: message, emoji: emoji, conversation: conversation)
                                 },
-                                onEdit: { startEditing(message) },
-                                onDelete: { forEveryone in
-                                    appState.deleteMessage(message: message, forEveryone: forEveryone, conversation: conversation)
+                                onLongPress: { frame in
+                                    actionTarget = ActionTarget(
+                                        message: message,
+                                        frame: frame,
+                                        senderName: senderName(for: message, at: index),
+                                        isLastInRun: isLastInRun(at: index)
+                                    )
                                 },
-                                onShowHistory: { showHistory(message) },
                                 attachmentLoader: { att in
                                     await appState.attachmentData(att, accountId: conversation.accountId)
                                 }
@@ -202,6 +224,48 @@ struct ConversationView: View {
         }
         .sheet(item: $historyMessage) { msg in
             EditHistorySheet(current: msg, revisions: historyRevisions)
+        }
+        .overlay {
+            if let target = actionTarget {
+                let msg = target.message
+                MessageActionsOverlay(
+                    message: msg,
+                    isMe: msg.senderAccountId == conversation.accountId,
+                    isBot: isBotSender(msg),
+                    senderName: target.senderName,
+                    isLastInRun: target.isLastInRun,
+                    sourceFrame: target.frame,
+                    reactions: appState.reactions(for: msg),
+                    myDid: conversation.accountId,
+                    canEdit: canEdit(msg),
+                    onToggleReaction: { emoji in
+                        appState.toggleReaction(message: msg, emoji: emoji, conversation: conversation)
+                    },
+                    onMore: { showEmojiPicker = true },
+                    onEdit: { startEditing(msg) },
+                    onDelete: { forEveryone in
+                        appState.deleteMessage(message: msg, forEveryone: forEveryone, conversation: conversation)
+                    },
+                    onShowHistory: { showHistory(msg) },
+                    attachmentLoader: { att in
+                        await appState.attachmentData(att, accountId: conversation.accountId)
+                    },
+                    // The overlay plays its own exit animation, then calls this
+                    // to remove itself — no extra animation needed here.
+                    onDismiss: { actionTarget = nil }
+                )
+                .transition(.opacity)
+            }
+        }
+        .sheet(isPresented: $showEmojiPicker) {
+            EmojiPickerView { emoji in
+                if let target = actionTarget {
+                    appState.toggleReaction(message: target.message, emoji: emoji, conversation: conversation)
+                }
+                // Picked from the full picker: the sheet slides away over the
+                // overlay, so fade the overlay out rather than pop it.
+                withAnimation(.easeOut(duration: 0.25)) { actionTarget = nil }
+            }
         }
         .onAppear {
             appState.currentConversationId = conversation.id
