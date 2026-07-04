@@ -1,8 +1,5 @@
 package net.theavalanche.app
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,9 +21,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.outlined.CheckCircle as OutlinedCheckCircle
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,9 +36,12 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -68,8 +65,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
 
-private val quickEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
-
 /**
  * A single chat message bubble. Mirrors MessageBubble.swift.
  *
@@ -85,12 +80,16 @@ private val quickEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏"
  *                       the last of a run (iMessage-style).
  * @param reactions      List of reactions on this message.
  * @param myDid          The local user's DID, used to highlight own reactions.
- * @param actionsEnabled Whether long-press context menu is enabled (DMs only).
- * @param canEdit        Whether the Edit option is shown in the context menu.
- * @param onToggleReaction Callback when a reaction emoji is toggled.
- * @param onEdit         Callback when Edit is tapped.
- * @param onDelete       Callback when Delete is tapped; Boolean = deleteForEveryone.
- * @param onShowHistory  Callback when Edit History is tapped.
+ * @param actionsEnabled Whether long-press raises the actions overlay (docs/33).
+ * @param interactive    When false the bubble is a static copy (e.g. inside the
+ *                       actions overlay): no long-press gesture is attached.
+ * @param showSideSpacers When false the side spacers are dropped so the bubble
+ *                       sizes to its content — used by the actions overlay, which
+ *                       positions the copy itself.
+ * @param onToggleReaction Callback when a reaction cluster is tapped.
+ * @param onLongPress    Long-press on the bubble — ConversationView raises the
+ *                       Signal-style overlay. The Rect is this bubble's content
+ *                       bounds in window coords, so the overlay can animate it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -103,101 +102,100 @@ fun MessageBubble(
     reactions: List<ReactionFfi> = emptyList(),
     myDid: String = "",
     actionsEnabled: Boolean = false,
-    canEdit: Boolean = false,
+    interactive: Boolean = true,
+    showSideSpacers: Boolean = true,
     onToggleReaction: (String) -> Unit = {},
-    onEdit: () -> Unit = {},
-    onDelete: (Boolean) -> Unit = {},
-    onShowHistory: () -> Unit = {},
+    onLongPress: (Rect) -> Unit = {},
     /** Loads decrypted bytes for an attachment (docs/35); injected by the
      *  conversation screen so the bubble stays free of ViewModel access. */
     attachmentLoader: suspend (AttachmentFfi) -> ByteArray? = { null },
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
-    ) {
-        if (isMe) Spacer(modifier = Modifier.width(60.dp))
-
-        Column(
-            horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+    if (showSideSpacers) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
         ) {
-            // Sender name above the bubble (incoming group messages, first of a
-            // run). Per-sender color so a member keeps the same color.
-            if (senderName != null && !isMe) {
-                Text(
-                    text = senderName,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = senderColor(message.senderAccountId),
-                    modifier = Modifier.padding(start = 4.dp),
-                )
-            }
+            if (isMe) Spacer(modifier = Modifier.width(60.dp))
+            BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader)
+            if (!isMe) Spacer(modifier = Modifier.width(60.dp))
+        }
+    } else {
+        BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader)
+    }
+}
 
-            // Attachments (docs/35), rendered above the text bubble.
-            message.attachments.forEach { att ->
-                AttachmentView(attachment = att, loader = attachmentLoader)
-            }
+/**
+ * The message content (sender name, attachments, bubble, previews, reactions)
+ * without the surrounding side spacers. Shared by the timeline (wrapped in the
+ * Row) and the actions overlay copy. Tracks its own bounds so a long-press can
+ * hand the overlay a start position for the lift-to-center animation.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BubbleColumn(
+    message: Message,
+    isMe: Boolean,
+    isBot: Boolean,
+    senderName: String?,
+    isLastInRun: Boolean,
+    reactions: List<ReactionFfi>,
+    myDid: String,
+    actionsEnabled: Boolean,
+    interactive: Boolean,
+    onToggleReaction: (String) -> Unit,
+    onLongPress: (Rect) -> Unit,
+    attachmentLoader: suspend (AttachmentFfi) -> ByteArray?,
+) {
+    var contentBounds by remember { mutableStateOf(Rect.Zero) }
 
-            // Bubble — omitted for an attachment-only message (empty body) so a
-            // photo doesn't get an empty bubble below it.
-            if (message.body.isNotEmpty() || message.attachments.isEmpty() || message.isDeleted) {
-            Box {
-                BubbleContent(
-                    message = message,
-                    isMe = isMe,
-                    isBot = isBot,
-                    isLastInRun = isLastInRun,
-                    actionsEnabled = actionsEnabled,
-                    onLongClick = { if (actionsEnabled) menuExpanded = true },
-                )
-
-                if (actionsEnabled) {
-                    BubbleContextMenu(
-                        expanded = menuExpanded,
-                        message = message,
-                        isMe = isMe,
-                        canEdit = canEdit,
-                        onDismiss = { menuExpanded = false },
-                        onToggleReaction = { emoji ->
-                            menuExpanded = false
-                            onToggleReaction(emoji)
-                        },
-                        onEdit = {
-                            menuExpanded = false
-                            onEdit()
-                        },
-                        onDelete = { forEveryone ->
-                            menuExpanded = false
-                            onDelete(forEveryone)
-                        },
-                        onShowHistory = {
-                            menuExpanded = false
-                            onShowHistory()
-                        },
-                    )
-                }
-            }
-            }
-
-            // Link-preview cards (docs/35) below the text bubble.
-            message.previews.forEach { preview ->
-                LinkPreviewCard(preview = preview, isMe = isMe, loader = attachmentLoader)
-            }
-
-            // Reaction clusters
-            val clusters = reactionClusters(reactions, myDid)
-            if (clusters.isNotEmpty()) {
-                ReactionClusterRow(
-                    clusters = clusters,
-                    onToggleReaction = onToggleReaction,
-                )
-            }
+    Column(
+        horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.onGloballyPositioned { contentBounds = it.boundsInWindow() },
+    ) {
+        // Sender name above the bubble (incoming group messages, first of a
+        // run). Per-sender color so a member keeps the same color.
+        if (senderName != null && !isMe) {
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = senderColor(message.senderAccountId),
+                modifier = Modifier.padding(start = 4.dp),
+            )
         }
 
-        if (!isMe) Spacer(modifier = Modifier.width(60.dp))
+        // Attachments (docs/35), rendered above the text bubble.
+        message.attachments.forEach { att ->
+            AttachmentView(attachment = att, loader = attachmentLoader)
+        }
+
+        // Bubble — omitted for an attachment-only message (empty body) so a
+        // photo doesn't get an empty bubble below it.
+        if (message.body.isNotEmpty() || message.attachments.isEmpty() || message.isDeleted) {
+            BubbleContent(
+                message = message,
+                isMe = isMe,
+                isBot = isBot,
+                isLastInRun = isLastInRun,
+                actionsEnabled = actionsEnabled && interactive,
+                onLongClick = { if (actionsEnabled && interactive) onLongPress(contentBounds) },
+            )
+        }
+
+        // Link-preview cards (docs/35) below the text bubble.
+        message.previews.forEach { preview ->
+            LinkPreviewCard(preview = preview, isMe = isMe, loader = attachmentLoader)
+        }
+
+        // Reaction clusters
+        val clusters = reactionClusters(reactions, myDid)
+        if (clusters.isNotEmpty()) {
+            ReactionClusterRow(
+                clusters = clusters,
+                onToggleReaction = onToggleReaction,
+            )
+        }
     }
 }
 
@@ -436,80 +434,6 @@ private fun MessageMetadata(
     }
 }
 
-@Composable
-private fun BubbleContextMenu(
-    expanded: Boolean,
-    message: Message,
-    isMe: Boolean,
-    canEdit: Boolean,
-    onDismiss: () -> Unit,
-    onToggleReaction: (String) -> Unit,
-    onEdit: () -> Unit,
-    onDelete: (Boolean) -> Unit,
-    onShowHistory: () -> Unit,
-) {
-    val context = LocalContext.current
-
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-    ) {
-        // Quick-reaction palette row
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            quickEmoji.forEach { emoji ->
-                androidx.compose.material3.TextButton(
-                    onClick = { onToggleReaction(emoji) },
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Text(text = emoji, fontSize = 18.sp)
-                }
-            }
-        }
-
-        HorizontalDivider()
-
-        if (canEdit) {
-            DropdownMenuItem(
-                text = { Text("Edit") },
-                onClick = onEdit,
-            )
-        }
-
-        if (message.editCount > 0) {
-            DropdownMenuItem(
-                text = { Text("Edit History") },
-                onClick = onShowHistory,
-            )
-        }
-
-        DropdownMenuItem(
-            text = { Text("Copy") },
-            onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                clipboard?.setPrimaryClip(ClipData.newPlainText("message", message.body))
-                onDismiss()
-            },
-        )
-
-        HorizontalDivider()
-
-        if (isMe) {
-            DropdownMenuItem(
-                text = { Text("Delete for Everyone", color = LocalAvalancheColors.current.error) },
-                onClick = { onDelete(true) },
-            )
-        }
-
-        DropdownMenuItem(
-            text = { Text("Delete for Me", color = LocalAvalancheColors.current.error) },
-            onClick = { onDelete(false) },
-        )
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Reaction clusters
 // ---------------------------------------------------------------------------
@@ -680,7 +604,7 @@ private fun MessageBubblePreview() {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MessageBubble(message = incoming, isMe = false)
-            MessageBubble(message = outgoing, isMe = true, actionsEnabled = true, canEdit = true)
+            MessageBubble(message = outgoing, isMe = true, actionsEnabled = true)
             MessageBubble(message = deleted, isMe = false)
             MessageBubble(
                 message = incoming.copy(id = "4", body = "Bot message here", senderAccountId = "bot"),

@@ -71,6 +71,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.tooling.preview.Preview
@@ -101,6 +102,20 @@ import java.util.UUID
  *   GroupDetailView. Only called for group conversations.
  * @param onBack  Called to pop this screen off the back-stack.
  */
+/**
+ * A message plus the context the actions overlay needs to reproduce and animate
+ * its bubble (docs/33). Mirrors the iOS ConversationView.ActionTarget struct.
+ */
+private data class ChatActionTarget(
+    val message: Message,
+    /** Source bubble content bounds in window coords (animation start point). */
+    val bounds: Rect,
+    val senderName: String?,
+    val isLastInRun: Boolean,
+    val isMe: Boolean,
+    val isBot: Boolean,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationView(
@@ -150,6 +165,13 @@ fun ConversationView(
         stagedPreviewUrl = null
         dismissedPreviewUrl = null
     }
+
+    // The message under the Signal-style long-press actions overlay (docs/33),
+    // with its on-screen bounds + resolved context so the overlay can lift the
+    // exact bubble to center. Null when no overlay is showing.
+    var actionTarget by remember { mutableStateOf<ChatActionTarget?>(null) }
+    // Whether the full emoji picker sheet is up (opened from the overlay's "+").
+    var showEmojiPicker by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -426,6 +448,7 @@ fun ConversationView(
     // Group titles are a tappable avatar + name that open the group detail
     // screen (mirrors the iOS principal toolbar item); DMs show a plain title.
     val groupId = conversation.groupId
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -535,7 +558,6 @@ fun ConversationView(
                         reactions = viewModel.reactions(message),
                         myDid = conversation.accountId,
                         actionsEnabled = true,
-                        canEdit = canEdit(message),
                         onToggleReaction = { emoji ->
                             viewModel.toggleReaction(
                                 message = message,
@@ -543,15 +565,16 @@ fun ConversationView(
                                 conversation = conversation,
                             )
                         },
-                        onEdit = { startEditing(message) },
-                        onDelete = { forEveryone ->
-                            viewModel.deleteMessage(
+                        onLongPress = { bounds ->
+                            actionTarget = ChatActionTarget(
                                 message = message,
-                                forEveryone = forEveryone,
-                                conversation = conversation,
+                                bounds = bounds,
+                                senderName = senderName,
+                                isLastInRun = isLastInRun,
+                                isMe = isMe,
+                                isBot = isBotSender(message),
                             )
                         },
-                        onShowHistory = { showHistory(message) },
                         attachmentLoader = { att ->
                             viewModel.attachmentData(att, accountId = conversation.accountId)
                         },
@@ -620,6 +643,48 @@ fun ConversationView(
                 )
         }
     }
+    }
+
+        // Signal-style long-press actions overlay (docs/33), drawn above the
+        // whole screen so its scrim dims the app bar too.
+        actionTarget?.let { target ->
+            MessageActionsOverlay(
+                message = target.message,
+                isMe = target.isMe,
+                isBot = target.isBot,
+                senderName = target.senderName,
+                isLastInRun = target.isLastInRun,
+                sourceBounds = target.bounds,
+                reactions = viewModel.reactions(target.message),
+                myDid = conversation.accountId,
+                canEdit = canEdit(target.message),
+                onToggleReaction = { emoji ->
+                    viewModel.toggleReaction(message = target.message, emoji = emoji, conversation = conversation)
+                },
+                onMore = { showEmojiPicker = true },
+                onEdit = { startEditing(target.message) },
+                onDelete = { forEveryone ->
+                    viewModel.deleteMessage(message = target.message, forEveryone = forEveryone, conversation = conversation)
+                },
+                onShowHistory = { showHistory(target.message) },
+                attachmentLoader = { att -> viewModel.attachmentData(att, accountId = conversation.accountId) },
+                onDismiss = { actionTarget = null },
+            )
+        }
+    }
+
+    // Full emoji picker (docs/33), opened from the overlay's "+". Keeps
+    // actionTarget alive underneath so the picked emoji has a target.
+    if (showEmojiPicker) {
+        EmojiPickerSheet(
+            onDismiss = { showEmojiPicker = false },
+            onPick = { emoji ->
+                actionTarget?.let {
+                    viewModel.toggleReaction(message = it.message, emoji = emoji, conversation = conversation)
+                }
+                actionTarget = null
+            },
+        )
     }
 
     // Edit history sheet — shown as a full-screen dialog.
