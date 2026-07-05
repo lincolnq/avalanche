@@ -8,6 +8,7 @@ import {
 import { FiMoreHorizontal } from "solid-icons/fi";
 import { useApp } from "../state/AppContext";
 import type { Conversation, Message } from "../models";
+import type { AttachmentFfi } from "../bindings";
 import { DeliveryStatus } from "../models/Message";
 import { formatTime, linkify } from "../lib/format";
 import AttachmentView from "./AttachmentView";
@@ -25,6 +26,8 @@ interface Props {
   senderName?: string;
   onEdit: (message: Message) => void;
   onShowHistory: (message: Message) => void;
+  // Opens the fullscreen image viewer (docs/35) starting on the clicked image.
+  onImageClick: (attachment: AttachmentFfi) => void;
 }
 
 export default function MessageBubble(props: Props) {
@@ -95,6 +98,11 @@ export default function MessageBubble(props: Props) {
                     <AttachmentView
                       attachment={a}
                       accountId={props.conversation.accountId}
+                      onImageClick={
+                        a.contentType.startsWith("image/")
+                          ? () => props.onImageClick(a)
+                          : undefined
+                      }
                     />
                   )}
                 </For>

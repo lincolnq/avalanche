@@ -30,6 +30,9 @@ struct AttachmentView: View {
     let attachment: AttachmentFfi
     /// Downloads (or loads the cached) decrypted bytes for this attachment.
     let loader: (AttachmentFfi) async -> Data?
+    /// Tapping an image opens the fullscreen viewer (docs/35); nil disables tap
+    /// (e.g. the static bubble copy inside the actions overlay).
+    var onTap: (() -> Void)? = nil
 
     /// Decoded images, cached so `body` never re-decodes. `thumbImage` is the
     /// inline placeholder; `fullImage` replaces it once the blob downloads.
@@ -68,6 +71,8 @@ struct AttachmentView: View {
         }
         .frame(maxWidth: 240, maxHeight: 320)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(Rectangle())
+        .onTapGesture { onTap?() }
         .task(id: attachment.id) { await load() }
     }
 

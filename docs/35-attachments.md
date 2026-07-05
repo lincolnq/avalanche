@@ -145,6 +145,15 @@ Two complementary mechanisms so a chat scrolls instantly without pulling megabyt
 
 For PDFs/docs we render an icon + `file_name` + size; no thumbnail unless the sender's client rasterizes page one.
 
+### Fullscreen image viewer
+
+Tapping/clicking an image attachment opens a fullscreen viewer that pages through **every** image attachment in the conversation, in timeline order (message order, then attachment order within a message) — not just the tapped message's images. The viewer decodes the image at a higher cap than the inline bubble (~4096px on iOS, 2048px on Android) so zoom stays sharp, reusing the same download/decrypt loader + decode cache as the inline path. Per platform:
+
+- **iOS / Android** — pinch + double-tap to zoom, drag to pan when zoomed; swiping left/right pages **only while unzoomed** (once zoomed, the same drag pans). Swipe down (unzoomed) or a close button dismisses. iOS is a `TabView(.page)` over per-page zoomable `UIScrollView`s; Android is a `HorizontalPager` (`userScrollEnabled = !zoomed`) with a custom pointer-input gesture that yields horizontal drags to the pager when unzoomed and consumes vertical drags for dismiss.
+- **Desktop** — no touch: paging is the `←`/`→` keys + on-screen arrows, zoom is the mouse wheel / trackpad-pinch + double-click, pan is click-drag when zoomed, and Esc / close button / backdrop-click dismiss. The image `transform` is applied via the CSSOM (ref), not an inline style attribute, to satisfy the strict production CSP.
+
+This lives at the shared attachment-rendering layer (`AttachmentView` → `MessageBubble` → `ConversationView`), so it covers DMs and groups identically.
+
 ## Outgoing image processing (client-side, Signal-aligned)
 
 Before upload, the **client re-encodes every outgoing image** rather than shipping the original bytes — matching Signal's pipeline. One pass does three things:

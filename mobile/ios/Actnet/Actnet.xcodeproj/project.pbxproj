@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		02D3B5CB514E83F202FCF801 /* NewAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A33BB9BDC1959B6580927C /* NewAccountView.swift */; };
 		038F7CD243E857170660F8CB /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AE2F220E680D0CE0A5810E /* MainTabView.swift */; };
+		13EFDDD4D4EAF0011A5F39D2 /* ImageViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7143656F6857D58587F2936 /* ImageViewerView.swift */; };
 		13FCAE87ED7268E63190039B /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC5E72995147ED8AD25E532 /* QRScannerView.swift */; };
 		1616C239BA7C0A5010AA5637 /* LogViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C977CCCEBCC89682DA83AC6 /* LogViewerView.swift */; };
 		1626F0227BC811D82FDAE1E4 /* CutCornerRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24C15E1F4F21C7EF28ABF416 /* CutCornerRectangle.swift */; };
@@ -184,6 +185,7 @@
 		DADF188CB0F720072C71A2DF /* app_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = app_core.swift; path = ../Generated/app_core.swift; sourceTree = "<group>"; };
 		DD3B02F10A6C2E1DFFB655B9 /* PasskeyExplainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyExplainerView.swift; sourceTree = "<group>"; };
 		E5E1613DCC5CA3E0E49D097E /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		F7143656F6857D58587F2936 /* ImageViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageViewerView.swift; sourceTree = "<group>"; };
 		FDB23D99F22D6A488DD61F19 /* NetworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -280,6 +282,7 @@
 				12909ED788E69B8A5410A505 /* EmojiData.swift */,
 				07FF102DB2365CD448FE2C29 /* EmojiPickerView.swift */,
 				6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */,
+				F7143656F6857D58587F2936 /* ImageViewerView.swift */,
 				43C96DE459D704EBFA65B307 /* MessageActionsOverlay.swift */,
 				1EA623B7C828F045A2E6E5C4 /* MessageBubble.swift */,
 				4D15DEB5760B0263F833A50A /* NameGroupView.swift */,
@@ -552,6 +555,7 @@
 				1D2BDEE0FB41FAED5BAB86A8 /* Hexagon.swift in Sources */,
 				CC462B8999850429242D1E9A /* IdentityDetailView.swift in Sources */,
 				A58A9D263F1E4921F319B28F /* IdentityPickerView.swift in Sources */,
+				13EFDDD4D4EAF0011A5F39D2 /* ImageViewerView.swift in Sources */,
 				1D538E2F9FC8D964B7923C3D /* InviteLinkEntryView.swift in Sources */,
 				9A5A0F932631DA4A71A0A632 /* InviteToken.swift in Sources */,
 				38FF5DFE7DB6B24A1E288616 /* JoiningServerView.swift in Sources */,
@@ -621,7 +625,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 545;
+				CURRENT_PROJECT_VERSION = 546;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -655,7 +659,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 545;
+				CURRENT_PROJECT_VERSION = 546;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -797,7 +801,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 545;
+				CURRENT_PROJECT_VERSION = 546;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -823,7 +827,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 545;
+				CURRENT_PROJECT_VERSION = 546;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (

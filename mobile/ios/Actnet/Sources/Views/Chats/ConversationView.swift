@@ -54,6 +54,13 @@ struct ConversationView: View {
     /// Whether the full emoji picker sheet is up (opened from the overlay's "+").
     /// Keeps `actionTarget` alive underneath so the picked emoji has a target.
     @State private var showEmojiPicker = false
+    /// The image attachment tapped to open the fullscreen viewer (docs/35). The
+    /// viewer pages through every image in the conversation starting here.
+    @State private var imageViewerStart: ImageViewerStart?
+
+    /// Identifiable wrapper so `.fullScreenCover(item:)` can key on the tapped
+    /// image's attachment id.
+    private struct ImageViewerStart: Identifiable { let id: String }
 
     /// A message plus the context the actions overlay needs to reproduce and
     /// animate its bubble (docs/33).
@@ -70,6 +77,15 @@ struct ConversationView: View {
 
     private var messages: [Message] {
         appState.messagesByConversation[conversation.id] ?? []
+    }
+
+    /// Every image attachment in the conversation, in timeline order (message
+    /// order, then attachment order within a message) — the set the fullscreen
+    /// viewer pages through (docs/35).
+    private var conversationImages: [AttachmentFfi] {
+        messages
+            .flatMap(\.attachments)
+            .filter { $0.contentType.hasPrefix("image/") }
     }
 
     /// Reactions/editing/deletion ride the `ContentMessage` envelope, which now
@@ -155,6 +171,9 @@ struct ConversationView: View {
                                 },
                                 attachmentLoader: { att in
                                     await appState.attachmentData(att, accountId: conversation.accountId)
+                                },
+                                onImageTap: { att in
+                                    imageViewerStart = ImageViewerStart(id: att.id)
                                 }
                             )
                             .id(message.sentAtMs)
@@ -224,6 +243,14 @@ struct ConversationView: View {
         }
         .sheet(item: $historyMessage) { msg in
             EditHistorySheet(current: msg, revisions: historyRevisions)
+        }
+        .fullScreenCover(item: $imageViewerStart) { start in
+            ImageViewerView(
+                images: conversationImages,
+                startId: start.id,
+                loader: { att in await appState.attachmentData(att, accountId: conversation.accountId) }
+            )
+            .presentationBackground(.clear)
         }
         .overlay {
             if let target = actionTarget {

@@ -157,6 +157,10 @@ fun ConversationView(
     var historyMessage by remember { mutableStateOf<Message?>(null) }
     var historyRevisions by remember { mutableStateOf<List<MessageRevisionFfi>>(emptyList()) }
 
+    // The image attachment tapped to open the fullscreen viewer (docs/35); the
+    // viewer pages through every image in the conversation starting here.
+    var imageViewerStartId by remember { mutableStateOf<String?>(null) }
+
     // Whether we're still a member of this group (docs/53 §Leave). Non-members
     // keep the readable transcript but lose the composer. Always true for DMs.
     var isGroupMember by remember { mutableStateOf(true) }
@@ -589,6 +593,7 @@ fun ConversationView(
                         attachmentLoader = { att ->
                             viewModel.attachmentData(att, accountId = conversation.accountId)
                         },
+                        onImageClick = { att -> imageViewerStartId = att.id },
                     )
                 }
             }
@@ -710,6 +715,20 @@ fun ConversationView(
                 onDismiss = { historyMessage = null },
             )
         }
+    }
+
+    // Fullscreen image viewer (docs/35): pages through every image in the
+    // conversation in timeline order, starting from the tapped one.
+    imageViewerStartId?.let { startId ->
+        val conversationImages = messages
+            .flatMap { it.attachments }
+            .filter { it.contentType.startsWith("image/") }
+        ImageViewerDialog(
+            images = conversationImages,
+            startId = startId,
+            loader = { att -> viewModel.attachmentData(att, accountId = conversation.accountId) },
+            onDismiss = { imageViewerStartId = null },
+        )
     }
 }
 

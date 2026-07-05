@@ -43,6 +43,10 @@ struct MessageBubble: View {
     /// Loads decrypted bytes for an attachment (docs/35); injected by the
     /// conversation view so the bubble stays free of app-core access.
     var attachmentLoader: (AttachmentFfi) async -> Data? = { _ in nil }
+    /// Tapping an image attachment opens the fullscreen viewer (docs/35).
+    /// ConversationView supplies this; defaults to no-op for the static overlay
+    /// copy.
+    var onImageTap: (AttachmentFfi) -> Void = { _ in }
 
     /// This bubble's content frame in global coords, tracked so a long-press can
     /// hand the overlay a start position for the lift-to-center animation.
@@ -74,7 +78,11 @@ struct MessageBubble: View {
             }
             if !message.attachments.isEmpty {
                 ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, att in
-                    AttachmentView(attachment: att, loader: attachmentLoader)
+                    AttachmentView(
+                        attachment: att,
+                        loader: attachmentLoader,
+                        onTap: att.contentType.hasPrefix("image/") ? { onImageTap(att) } : nil
+                    )
                 }
             }
             // The text bubble is omitted for an attachment-only message

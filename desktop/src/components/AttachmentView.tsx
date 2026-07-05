@@ -9,6 +9,9 @@ interface Props {
   attachment: AttachmentFfi;
   // The owning conversation's account — attachments decrypt with its keys.
   accountId: string;
+  // Clicking an image opens the fullscreen viewer (docs/35); omitted for
+  // non-image attachments and the static contexts that don't want it.
+  onImageClick?: () => void;
 }
 
 function blobUrl(bytes: number[], contentType: string): string {
@@ -106,9 +109,13 @@ export default function AttachmentView(props: Props) {
     >
       <img
         class="attachment-image"
-        classList={{ "attachment-blurred": fullUrl() === null && thumbUrl() !== null }}
+        classList={{
+          "attachment-blurred": fullUrl() === null && thumbUrl() !== null,
+          "attachment-clickable": props.onImageClick !== undefined,
+        }}
         src={fullUrl() ?? thumbUrl() ?? ""}
         alt={props.attachment.fileName ?? "Image attachment"}
+        onClick={() => props.onImageClick?.()}
       />
     </Show>
   );

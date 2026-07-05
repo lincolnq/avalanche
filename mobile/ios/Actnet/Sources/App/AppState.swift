@@ -1144,12 +1144,22 @@ final class AppState: ObservableObject {
         if let path = att.localPath, let d = try? Data(contentsOf: URL(fileURLWithPath: path)) {
             return d
         }
+        let dir = FileManager.default
+            .urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("attachments", isDirectory: true)
+        // Read the on-disk blob keyed by attachment id before hitting the network.
+        // `download_attachment` in core ALWAYS re-fetches + decrypts (no local
+        // read), and the in-memory `att.localPath` stays nil for the session
+        // (nothing refreshes messagesByConversation after a download persists the
+        // path to the DB). Without this, every viewer open / inline scroll-back
+        // re-downloads the blob. This is the deterministic path we write below.
+        if !att.id.isEmpty {
+            let cached = dir.appendingPathComponent(att.id)
+            if let d = try? Data(contentsOf: cached) { return d }
+        }
         guard let core = cores[accountId] else { return nil }
         return try? await Task.detached {
             let data = try core.downloadAttachment(attachment: att)
-            let dir = FileManager.default
-                .urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("attachments", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let name = att.id.isEmpty ? UUID().uuidString : att.id
             let fileURL = dir.appendingPathComponent(name)

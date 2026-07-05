@@ -16,6 +16,7 @@ import { groupEventText } from "../../lib/groupEvents";
 import MessageBubble from "../../components/MessageBubble";
 import ComposeMessageView from "../../components/ComposeMessageView";
 import EditHistorySheet from "../../components/EditHistorySheet";
+import ImageViewerModal from "../../components/ImageViewerModal";
 import GroupDetailView from "../../components/GroupDetailView";
 import DisappearingMessagesPicker from "../../components/DisappearingMessagesPicker";
 import "./ConversationView.css";
@@ -43,6 +44,8 @@ export default function ConversationView(props: Props) {
 
   const [editingMessage, setEditingMessage] = createSignal<Message | null>(null);
   const [historyMessage, setHistoryMessage] = createSignal<Message | null>(null);
+  // The attachment id of the image tapped to open the fullscreen viewer (docs/35).
+  const [imageViewerStartId, setImageViewerStartId] = createSignal<string | null>(null);
   const [showGroupDetail, setShowGroupDetail] = createSignal(false);
   const [timerSecs, setTimerSecs] = createSignal(0);
   // Group membership, read from app-core's persistent store (survives refresh,
@@ -132,6 +135,14 @@ export default function ConversationView(props: Props) {
   // createMemo ensures the For list re-renders when the async store write lands.
   const messages = createMemo(() => store.messagesByConversation[props.conversation.id] ?? []);
 
+  // Every image attachment in the conversation, in timeline order (message
+  // order, then attachment order) — the set the fullscreen viewer pages through.
+  const conversationImages = createMemo(() =>
+    messages()
+      .flatMap((m) => m.attachments ?? [])
+      .filter((a) => a.contentType.startsWith("image/")),
+  );
+
   // Auto-scroll when message count changes (new messages arrive or are sent).
   createEffect(() => {
     messages().length; // track
@@ -192,6 +203,7 @@ export default function ConversationView(props: Props) {
                     senderName={displayName(msg.senderAccountId, props.conversation.accountId)}
                     onEdit={(m) => setEditingMessage(m)}
                     onShowHistory={(m) => setHistoryMessage(m)}
+                    onImageClick={(a) => setImageViewerStartId(a.id)}
                   />
                 }
               >
@@ -287,6 +299,16 @@ export default function ConversationView(props: Props) {
           conversation={props.conversation}
           onClose={() => setShowGroupDetail(false)}
         />
+      </Show>
+      <Show when={imageViewerStartId()}>
+        {(startId) => (
+          <ImageViewerModal
+            images={conversationImages()}
+            startId={startId()}
+            accountId={props.conversation.accountId}
+            onClose={() => setImageViewerStartId(null)}
+          />
+        )}
       </Show>
     </div>
   );

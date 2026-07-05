@@ -109,6 +109,9 @@ fun MessageBubble(
     /** Loads decrypted bytes for an attachment (docs/35); injected by the
      *  conversation screen so the bubble stays free of ViewModel access. */
     attachmentLoader: suspend (AttachmentFfi) -> ByteArray? = { null },
+    /** Tapping an image attachment opens the fullscreen viewer (docs/35).
+     *  Defaults to no-op (e.g. the static overlay copy). */
+    onImageClick: (AttachmentFfi) -> Unit = {},
 ) {
     if (showSideSpacers) {
         Row(
@@ -116,11 +119,11 @@ fun MessageBubble(
             horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
         ) {
             if (isMe) Spacer(modifier = Modifier.width(60.dp))
-            BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader)
+            BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick)
             if (!isMe) Spacer(modifier = Modifier.width(60.dp))
         }
     } else {
-        BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader)
+        BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick)
     }
 }
 
@@ -145,6 +148,7 @@ private fun BubbleColumn(
     onToggleReaction: (String) -> Unit,
     onLongPress: (Rect) -> Unit,
     attachmentLoader: suspend (AttachmentFfi) -> ByteArray?,
+    onImageClick: (AttachmentFfi) -> Unit = {},
 ) {
     var contentBounds by remember { mutableStateOf(Rect.Zero) }
 
@@ -167,7 +171,11 @@ private fun BubbleColumn(
 
         // Attachments (docs/35), rendered above the text bubble.
         message.attachments.forEach { att ->
-            AttachmentView(attachment = att, loader = attachmentLoader)
+            AttachmentView(
+                attachment = att,
+                loader = attachmentLoader,
+                onImageClick = if (att.contentType.startsWith("image/")) { { onImageClick(att) } } else null,
+            )
         }
 
         // Bubble — omitted for an attachment-only message (empty body) so a

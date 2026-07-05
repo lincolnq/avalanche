@@ -1423,11 +1423,24 @@ class AppViewModel(
             val f = java.io.File(path)
             if (f.exists()) return runCatching { f.readBytes() }.getOrNull()
         }
+        val dir = File(applicationContext.filesDir, "attachments")
+        // Read the on-disk blob keyed by attachment id before hitting the network.
+        // `downloadAttachment` in core ALWAYS re-fetches + decrypts (no local read),
+        // and the in-memory `attachment.localPath` stays null for the session
+        // (nothing refreshes messagesByConversation after a download persists the
+        // path). Without this, every viewer open / scroll-back re-downloads the
+        // blob. This is the deterministic path we write below.
+        if (attachment.id.isNotEmpty()) {
+            val cached = File(dir, attachment.id)
+            if (cached.exists()) {
+                runCatching { cached.readBytes() }.getOrNull()?.let { return it }
+            }
+        }
         val core = cores[accountId] ?: return null
         return withContext(Dispatchers.IO) {
             runCatching {
                 val data = core.downloadAttachment(attachment)
-                val dir = File(applicationContext.filesDir, "attachments").apply { mkdirs() }
+                dir.mkdirs()
                 val name = attachment.id.ifEmpty { UUID.randomUUID().toString() }
                 val file = File(dir, name)
                 file.writeBytes(data)

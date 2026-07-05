@@ -108,6 +108,17 @@ in the same session.** iOS is the reference — when behavior is ambiguous, chec
 the iOS source. See `mobile/CLAUDE.md` and `desktop/CLAUDE.md` for platform-specific
 workflows and per-platform checklists.
 
+**Bug-fix exception — fix and verify on the reporting platform first, then port.**
+When a bug is reported against a specific platform, land the fix on *that* platform
+and confirm with the maintainer that it's actually fixed **before** porting to the
+other two. Do not fan the fix out to all three up front: a fix built from reading
+the code may be wrong or incomplete, and porting an unverified fix multiplies the
+churn and can mask the real cause. Once the reporting platform is confirmed fixed,
+the same-session parity rule applies — port it (and mirror any equivalent latent
+bug) to the other platforms. This exception is only for fixes to an existing,
+already-shipped-on-all-platforms behavior; net-new features still land on all
+three in the same session.
+
 ## DM / Group Parity Rule
 
 **DMs and groups are two targets of the *same* conversation, not two features.

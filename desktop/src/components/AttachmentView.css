@@ -12,6 +12,11 @@
   filter: blur(8px);
 }
 
+/* Tappable image opens the fullscreen viewer (docs/35). */
+.attachment-clickable {
+  cursor: zoom-in;
+}
+
 .attachment-file {
   display: flex;
   align-items: center;

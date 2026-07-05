@@ -37,6 +37,7 @@ Status: ✅ done · 🚧 partial · ⬜ not started · n/a not applicable
 | Conversation list with unread counts | ✅ | ⬜ | ✅ | ⬜ |
 | Reactions / edit / delete | ✅ | ⬜ | ✅ | ⬜ |
 | Attachments + link previews | ✅ | ⬜ | ✅ | ⬜ |
+| Fullscreen image viewer (tap, zoom, page) | ✅ | ⬜ | ✅ | n/a |
 | Disappearing-message timers | ✅ | ⬜ | ✅ | ⬜ |
 | Clickable links (open in browser) | ✅ | ⬜ | ✅ | ⬜ |
 | Multi-device sync (linked devices) | ✅ | ⬜ | ✅ | n/a |

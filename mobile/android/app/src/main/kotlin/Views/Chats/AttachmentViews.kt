@@ -86,12 +86,13 @@ private val SCHEME_PREFIX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
 // Decode caps (longest edge, px) matching iOS: a photo shown in a ~240dp bubble
 // must not decode at full resolution. 960 for message images, 520 for the smaller
 // link-preview image (mirrors iOS `decodeDownsampledImage` maxPixel values).
-private const val MESSAGE_IMAGE_MAX_PIXEL = 960
+internal const val MESSAGE_IMAGE_MAX_PIXEL = 960
 private const val LINK_PREVIEW_MAX_PIXEL = 520
 
 // Image decode is CPU-heavy; cap concurrency to 2 so a fling's worth of decodes
 // can't saturate every core and starve the UI thread (gfxinfo "Slow UI thread").
-private val imageDecodeDispatcher = Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+// `internal` so the fullscreen viewer (ImageViewerDialog) shares the same pool.
+internal val imageDecodeDispatcher = Executors.newFixedThreadPool(2).asCoroutineDispatcher()
 
 /**
  * Decode [data] downsampled so its longest edge is at most ~[maxPixel] px, via
@@ -136,6 +137,8 @@ object MessageImageCache {
 fun AttachmentView(
     attachment: AttachmentFfi,
     loader: suspend (AttachmentFfi) -> ByteArray?,
+    /** Tapping an image opens the fullscreen viewer (docs/35); null disables tap. */
+    onImageClick: (() -> Unit)? = null,
 ) {
     val isImage = attachment.contentType.startsWith("image/")
 
@@ -210,7 +213,8 @@ fun AttachmentView(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .size(boxW, boxH)
-                    .clip(shape),
+                    .clip(shape)
+                    .then(if (onImageClick != null) Modifier.clickable { onImageClick() } else Modifier),
             )
         } else {
             // Reserve the same space before any bitmap is ready, so the row height
