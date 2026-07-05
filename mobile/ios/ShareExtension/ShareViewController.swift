@@ -40,21 +40,35 @@ class ShareViewController: UIViewController {
             return
         }
 
-        log.log("share ext: found image provider, loading UIImage")
-        // Load as a UIImage and re-encode to JPEG so the bytes are always a format
-        // the recipient can render (incoming shares may be HEIC/PNG/etc.) — matches
-        // the photo-picker / paste paths, which the app uploads as image/jpeg.
-        provider.loadObject(ofClass: UIImage.self) { [weak self] object, error in
+        // Copy the image bytes WITHOUT decoding them. Loading the image as a
+        // UIImage (and re-rendering it) allocates an uncompressed bitmap — a
+        // 24–48 MP iPhone photo is ~96–192 MB — which blows the share extension's
+        // ~120 MB memory ceiling and gets the process jetsam-killed before the
+        // completion handler even runs (docs/35). `loadDataRepresentation` just
+        // reads the already-encoded file bytes (a few MB). The main app decodes,
+        // resizes, and strips metadata on staging (`prepareImageForSending`),
+        // where there is a real memory budget.
+        //
+        // Prefer JPEG (Photos exports a compatible JPEG), then other common image
+        // encodings; the app re-encodes to JPEG regardless, so the content type is
+        // informational. `.image` is the last-resort catch-all.
+        let preferredTypes: [UTType] = [.jpeg, .png, .heic, .image]
+        let typeId = (preferredTypes.first {
+            provider.hasItemConformingToTypeIdentifier($0.identifier)
+        } ?? .image).identifier
+        let contentType = UTType(typeId)?.preferredMIMEType ?? "image/jpeg"
+
+        log.log("share ext: loading data representation for \(typeId, privacy: .public)")
+        provider.loadDataRepresentation(forTypeIdentifier: typeId) { [weak self] data, error in
             guard let self else { return }
             if let error {
-                self.log.error("share ext: loadObject failed: \(error.localizedDescription, privacy: .public)")
+                self.log.error("share ext: loadDataRepresentation failed: \(error.localizedDescription, privacy: .public)")
             }
-            if let image = object as? UIImage,
-               let data = image.preparedForSending() {
-                let ok = AppGroup.writePendingShare(data: data, contentType: "image/jpeg")
-                self.log.log("share ext: wrote pending share (\(data.count) bytes), success=\(ok)")
+            if let data {
+                let ok = AppGroup.writePendingShare(data: data, contentType: contentType)
+                self.log.log("share ext: wrote pending share (\(data.count) bytes, \(contentType, privacy: .public)), success=\(ok)")
             } else {
-                self.log.error("share ext: could not derive JPEG data from shared image")
+                self.log.error("share ext: no data for shared image")
             }
             DispatchQueue.main.async { self.openHostApp() }
         }

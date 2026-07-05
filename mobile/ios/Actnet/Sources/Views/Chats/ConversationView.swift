@@ -273,7 +273,16 @@ struct ConversationView: View {
             // composer for review before sending.
             if let data = appState.pendingStagedImage[conversation.id] {
                 appState.pendingStagedImage[conversation.id] = nil
-                stageImageData(data)
+                // The share extension hands off the original image bytes undecoded
+                // (docs/35) to stay under its memory limit, so resize + strip
+                // metadata here — off the main thread, matching the photo-picker
+                // path (`stagePickedPhoto`).
+                Task {
+                    let processed = await Task.detached(priority: .userInitiated) {
+                        prepareImageForSending(data)
+                    }.value
+                    stageImageData(processed)
+                }
             }
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
             appState.loadReactions(conversationId: conversation.id, accountId: conversation.accountId)
