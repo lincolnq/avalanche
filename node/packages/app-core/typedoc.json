@@ -1,7 +1,7 @@
 {
   "$schema": "https://typedoc.org/schema.json",
   "entryPoints": ["src/index.ts"],
-  "out": "docs",
+  "out": "../../../web/static/api",
   "name": "@actnet/app-core",
   "readme": "README.md",
   "includeVersion": true,

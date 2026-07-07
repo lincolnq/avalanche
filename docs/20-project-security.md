@@ -260,6 +260,16 @@ There is no separate "officialness" trust primitive. The ✓ **verified badge** 
 
 The identity tier is thus a *consequence* of the interaction model, not an independent toggle. Two archetypes fall out: **webview-only Projects** (compose helpers, read-only destinations, link landing pages), which can be pseudonymous, and **bot-bearing Projects**, which are always real-DID.
 
+### Sharing profile through the auth flow (future extension)
+
+Today a Project obtains a user's substrate profile (display name, avatar, bio) the same way any account does: the profile key rides on messages, so a Project learns it only through its bot — a DM the user sent it, or a group the bot is a member of (`52-contacts-and-profiles.md`). The `profile:read` scope above is the *permission* to decrypt what arrives that way; it is not a separate delivery channel.
+
+This leaves a gap for **webview-only / backend Projects that have no bot in the user's conversations** but need to render the user's real profile — e.g. a web forum you sign into with your Avalanche identity, where your posts should appear with your display name and avatar. Such a Project is real-DID by nature (a persistent identity across posts), so it is not a pseudonymous case; it simply has no message channel over which the profile key would otherwise arrive.
+
+The client is present in the project-token auth flow — it generates the token before opening the webview — so it can supply the profile key at that point.
+
+For **bot-bearing** Projects this extension adds little — their bot already receives the profile key over the message channel. It matters specifically for the webview/backend-only archetype.
+
 ## Threat: malicious bot behavior
 
 ### The problem
@@ -406,4 +416,5 @@ Items deferred:
 - Webview return-content via intercepted deeplink + sender-side fetch — **no JS bridge** (Stage 6); specced in `23-messaging-extensions.md`.
 - Per-(account, server, conversation) scoping and isolation of client-visible Project surfaces, and treating Project manifests as untrusted input (Stage 6, with multi-account); see *Threat: multiple homeservers and client-visible Project surfaces* above.
 - Token scoping enforcement on verify endpoint (v2).
+- Profile sharing for webview-only Projects — profile key or profile snapshot supplied via the auth flow, for backend Projects with no bot in the user's conversations; see *Sharing profile through the auth flow* above.
 - Guest access to remote Projects, incl. reduced client-visible surface and pseudonymous credentials (Stage 9).
