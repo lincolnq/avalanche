@@ -14,6 +14,50 @@ Use `Grep` only for non-symbol patterns (string literals, comments, macros the L
 
 Note: rust-analyzer may under-report until indexing finishes. Run `make check` first to warm it up before a large `findReferences` sweep. The LSP applies no edits — actual changes still go through Edit/Write.
 
+## Concurrency: never hold the `inner` lock across a network call
+
+`AppCore` wraps its mutable state in `Mutex<AppCoreInner>` (a tokio async mutex).
+That lock is **per-account** and serializes everything that takes it. The rule:
+
+> **Never hold `inner` across a network `.await`.** A homeserver that is slow or
+> unreachable can make a network call block for up to the connect/request timeout
+> (~15–30s, see `net::Client::new`). Anything else that needs `inner` — including,
+> historically, the reads that paint the UI — is stuck behind it for that whole
+> time. This is exactly the bug that made the app hang on launch when a second
+> account's server was offline (the reconnect task held `inner` across the lazy
+> auth handshake).
+
+Store `.await`s under the lock are fine — `store::DeviceStore` is a fast, local,
+self-serializing connection. It's **network** awaits that must stay off-lock.
+
+**The pattern** (see `connection.rs::try_connect_ws` for the canonical example):
+clone the handle you need out from under the guard, drop the guard, *then* do I/O.
+
+```rust
+let client = { let inner = core.inner.lock().await; inner.client.clone() };
+client.ensure_authenticated().await?;   // network, off-lock
+```
+
+**Lock-free handles.** `AppCore` exposes `store`, `client`, and `did` directly
+(cheap clones set in `AppCore::build`; `DeviceStore` shares one connection,
+`net::Client` shares auth + pool). Read-only and idempotent-write FFI paths use
+these and **must not** take `inner` at all — e.g. `load_conversations`,
+`cached_display_names`, `get_account_info`, `register_push_token`,
+`try_replenish`. When you add such a method, reach for `self.store` / `self.client`,
+not `self.inner.lock()`.
+
+**The deliberate exception** is the crypto send/group paths (`send_dm`,
+`send_to_target`, group sends, `accept_invite`, recovery) — methods on
+`AppCoreInner` in `messaging.rs` / `groups.rs`. They hold `inner` to serialize
+Double-Ratchet / Sender-Key state mutation, and a few still fetch prekey bundles
+or POST under the lock. That is a known, bounded carve-out, **not** a license to
+add more network under the lock: if you touch these, prefer lifting the network
+out (fetch → lock+encrypt → send) over adding a new in-lock fetch.
+
+**Review checkpoint.** Any new `inner.lock().await` scope that contains an
+`inner.client.<...>().await` (or calls a helper that hits the network while the
+guard is live) must be justified against this rule before merge.
+
 ## Adding a New Server Endpoint
 
 1. `/new-migration <name>` — create migration file (see `.claude/commands/new-migration.md`)
