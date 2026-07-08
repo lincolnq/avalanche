@@ -611,6 +611,13 @@ fun AppNavGraph(
                 accountId = accountId,
                 appViewModel = appViewModel,
                 onDismiss = { navController.popBackStack() },
+                onOpenConversation = { conv ->
+                    // Land on the DM; drop the group conversation + group-info
+                    // screens from the back stack (back returns to the chats list).
+                    navController.navigate(Route.conversation(conv.id)) {
+                        popUpTo(Route.MAIN)
+                    }
+                },
             )
         }
 
