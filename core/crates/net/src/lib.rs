@@ -52,6 +52,13 @@ struct AuthState {
 }
 
 /// HTTP client for a single homeserver.
+///
+/// Cheaply `Clone`: `http` (reqwest) is `Arc`-backed and shares its connection
+/// pool, and `auth` is behind an `Arc<Mutex>` so all clones share one token
+/// cache. This lets callers pull a `Client` out from under an outer lock and
+/// run network I/O off-lock without duplicating auth state (see
+/// `app-core::connection::try_connect_ws`).
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     server_url: String,
@@ -60,8 +67,9 @@ pub struct Client {
     ///
     /// We use `std::sync::Mutex` (not `tokio::sync::Mutex`) because we never
     /// hold the lock across an `await` — the double-check re-auth pattern
-    /// releases it during network I/O.
-    auth: Mutex<Option<AuthState>>,
+    /// releases it during network I/O. Wrapped in `Arc` so `Client` clones
+    /// share one token cache.
+    auth: Arc<Mutex<Option<AuthState>>>,
 }
 
 impl Client {
@@ -83,7 +91,7 @@ impl Client {
         Self {
             http,
             server_url: server_url.trim_end_matches('/').to_string(),
-            auth: Mutex::new(None),
+            auth: Arc::new(Mutex::new(None)),
         }
     }
 

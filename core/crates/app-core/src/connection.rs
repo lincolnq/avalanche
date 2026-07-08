@@ -122,25 +122,25 @@ async fn subscribe_group_pseudonyms(
 /// Open a fresh WebSocket connection. Triggers lazy challenge/response on
 /// the underlying `net::Client` if no token is present.
 async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppError> {
-    // Hold the lock just long enough to clone what we need, then release
-    // before doing network I/O. Avoids blocking parallel send_dm calls.
-    let url = {
+    // Clone the `Client` out from under the inner lock, then release the lock
+    // before any network I/O. This is load-bearing for cold-start latency: the
+    // lazy challenge/response in `ensure_authenticated` below can block for up
+    // to the connect timeout when the homeserver is unreachable, and holding
+    // `inner` across it would serialize every local store read (loading the
+    // conversation list, display names) behind an offline account — leaving the
+    // chats list spinning on launch. The clone is cheap (reqwest is Arc-backed;
+    // the token cache is shared via `Arc<Mutex>`), so the token obtained here is
+    // still visible to the original client and to concurrent `send_*` calls.
+    let client = {
         let inner = core.inner.lock().await;
-        inner.client.server_url().to_string()
+        inner.client.clone()
     };
 
-    // ensure_authenticated needs to call client.challenge/authenticate.
-    // It manages its own auth lock internally; we just hold the inner lock
-    // long enough to call into it. Inside ensure_authenticated, network
-    // I/O happens without holding inner's lock (because the auth mutex is
-    // separate — see net::Client).
-    let inner = core.inner.lock().await;
-    inner.client.ensure_authenticated().await?;
-    let token = inner
-        .client
+    let url = client.server_url().to_string();
+    client.ensure_authenticated().await?;
+    let token = client
         .token()
         .ok_or_else(|| AppError::Protocol("no session token after auth".into()))?;
-    drop(inner);
 
     let ws = net::ws::WsConnection::connect(
         &url,

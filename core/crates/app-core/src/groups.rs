@@ -2359,11 +2359,9 @@ impl AppCore {
         group_id: String,
     ) -> Result<GroupSummaryFfi, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let did = inner.did.clone();
-            let server_url = inner.client.server_url().to_string();
+            let server_url = self.client.server_url().to_string();
             let summary =
-                fetch_group_state(&inner.store, &inner.client, &server_url, &did, &group_id)
+                fetch_group_state(&self.store, &self.client, &server_url, &self.did, &group_id)
                     .await?;
             Ok::<_, AppError>(summary_to_ffi(summary))
         })
@@ -2378,8 +2376,7 @@ impl AppCore {
         group_id: String,
     ) -> Result<Option<GroupSummaryFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let summary = cached_group_state(&inner.store, &group_id).await?;
+            let summary = cached_group_state(&self.store, &group_id).await?;
             Ok::<_, AppError>(summary.map(summary_to_ffi))
         })
         .map_err(AppErrorFfi::from)
@@ -2394,8 +2391,7 @@ impl AppCore {
     /// `fetch_group_state` to inspect roles.
     pub fn list_groups(&self) -> Result<Vec<String>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let rows = inner.store.list_groups().await.map_err(AppError::from)?;
+            let rows = self.store.list_groups().await.map_err(AppError::from)?;
             Ok::<_, AppError>(rows.into_iter().map(|g| g.group_id).collect())
         })
         .map_err(AppErrorFfi::from)
