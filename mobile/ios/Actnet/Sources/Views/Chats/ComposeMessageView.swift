@@ -85,6 +85,24 @@ struct ComposeMessageView: View {
         }
     }
 
+    /// The active identity's own display name — the "Note to Self" match target.
+    private var selfName: String {
+        guard let id = activeAccountId else { return "" }
+        return accounts.first(where: { $0.id == id })?.displayName ?? ""
+    }
+
+    /// Whether to surface the "Note to Self" shortcut (a DM with your own
+    /// identity — docs/04 §5.5, like Signal): when self isn't already a
+    /// recipient and the query is empty or matches self (name, DID, or label).
+    private var showNoteToSelf: Bool {
+        guard let id = activeAccountId, !chips.contains(where: { $0.did == id }) else { return false }
+        let q = trimmedQuery.lowercased()
+        guard !q.isEmpty else { return true }
+        return "note to self".contains(q)
+            || selfName.lowercased().contains(q)
+            || id.lowercased().contains(q)
+    }
+
     /// New Group button label: "New Empty Group" with no recipients, otherwise
     /// "New Group (N)" filled with the recipient count.
     private var newGroupTitle: String {
@@ -213,6 +231,19 @@ struct ComposeMessageView: View {
                     }
                 }
             }
+            if showNoteToSelf {
+                Button {
+                    addChip(did: activeAccountId ?? "", displayName: "Note to Self")
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bookmark.circle.fill")
+                            .font(.title2)
+                            .frame(width: 32, height: 32)
+                            .foregroundStyle(Color.avBrand)
+                        Text("Note to Self").foregroundStyle(.primary)
+                    }
+                }
+            }
             if !peopleResults.isEmpty {
                 Section("People") {
                     ForEach(peopleResults, id: \.did) { c in
@@ -227,7 +258,7 @@ struct ComposeMessageView: View {
                     }
                 }
             }
-            if peopleResults.isEmpty && otherResults.isEmpty && !queryLooksLikeDid {
+            if peopleResults.isEmpty && otherResults.isEmpty && !queryLooksLikeDid && !showNoteToSelf {
                 Text("No more contacts to add.")
                     .foregroundStyle(.secondary)
                     .font(.footnote)

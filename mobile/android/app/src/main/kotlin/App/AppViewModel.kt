@@ -1723,7 +1723,14 @@ class AppViewModel(
                     continue
                 }
                 val recipientDid = recipientDidFromConversationId(s.conversationId, accountId)
-                val title = recipientDid?.let { displayNameCache[it] } ?: recipientDid ?: s.conversationId
+                // A DM addressed to your own identity is a note-to-self
+                // (docs/04 §5.5); your own DID is never in the name cache, so
+                // special-case it here and at creation below.
+                val title = if (recipientDid == accountId) {
+                    "Note to Self"
+                } else {
+                    recipientDid?.let { displayNameCache[it] } ?: recipientDid ?: s.conversationId
+                }
                 newConvs.add(
                     Conversation(
                         id = s.conversationId,
@@ -1895,7 +1902,11 @@ class AppViewModel(
 
         val serverUrl = _accounts.value.firstOrNull { it.id == accountId }?.servers?.firstOrNull()?.id ?: ""
         val convId = "dm-$accountId-$recipientDid"
-        val title = displayName(did = recipientDid, accountId = accountId)
+        val title = if (recipientDid == accountId) {
+            "Note to Self"
+        } else {
+            displayName(did = recipientDid, accountId = accountId)
+        }
         val conv = Conversation(
             id = convId,
             title = title,

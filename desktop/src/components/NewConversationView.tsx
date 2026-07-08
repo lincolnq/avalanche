@@ -73,6 +73,11 @@ export default function NewConversationView(props: Props) {
   const availableContacts = (): ContactRowFfi[] =>
     contacts().filter((c) => !chips().includes(c.did));
 
+  // Surface the "Note to Self" shortcut (a DM with your own identity --
+  // docs/04 §5.5, like Signal) while self isn't already a recipient.
+  const showNoteToSelf = (): boolean =>
+    accountId() !== "" && !chips().includes(accountId());
+
   const canMessage = (): boolean => chips().length === 1;
   const canGroup = (): boolean => chips().length >= 1;
 
@@ -128,16 +133,30 @@ export default function NewConversationView(props: Props) {
               chips={chips()}
               onAdd={addChip}
               onRemove={removeChip}
-              displayName={(did) => app.displayName(did, accountId())}
+              displayName={(did) =>
+                did === accountId()
+                  ? "Note to Self"
+                  : app.displayName(did, accountId())
+              }
               placeholder="Type a name or DID"
             />
           </div>
 
           <div class="newconv-contacts scrollbar-thin">
+            <Show when={showNoteToSelf()}>
+              <button
+                class="newconv-contact"
+                onClick={() => addChip(accountId())}
+              >
+                <span class="newconv-contact-name">Note to Self</span>
+              </button>
+            </Show>
             <Show
               when={availableContacts().length > 0}
               fallback={
-                <div class="newconv-empty">No more contacts to add.</div>
+                <Show when={!showNoteToSelf()}>
+                  <div class="newconv-empty">No more contacts to add.</div>
+                </Show>
               }
             >
               <For each={availableContacts()}>

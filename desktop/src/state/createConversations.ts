@@ -187,9 +187,14 @@ export function createConversations(deps: ConversationsDeps): Conversations {
         const recipientDid = !isGroup
           ? recipientDidFromConvId(s.conversationId, accountId) ?? undefined
           : undefined;
+        // A DM addressed to your own identity is a note-to-self (docs/04 §5.5);
+        // your own DID is never in the name cache, so special-case it here and
+        // at creation below.
         const title = isGroup
           ? s.groupTitle ?? "Group"
-          : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
+          : recipientDid === accountId
+            ? "Note to Self"
+            : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
 
         // Caption-less attachment messages have an empty body — preview them as
         // "Photo"/"Attachment" using the summary's attachment content type (iOS
@@ -269,7 +274,11 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     const serverUrl = getServerUrl(accountId);
     const convId = `dm-${accountId}-${recipientDid}`;
     // Trigger async fetch; title updates reactively when the cache populates.
-    const title = displayName(recipientDid, accountId);
+    // A DM to your own identity is a note-to-self (docs/04 §5.5).
+    const title =
+      recipientDid === accountId
+        ? "Note to Self"
+        : displayName(recipientDid, accountId);
     const conv: Conversation = {
       id: convId,
       title,

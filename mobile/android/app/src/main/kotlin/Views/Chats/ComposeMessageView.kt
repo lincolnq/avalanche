@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -169,6 +170,23 @@ fun ComposeMessageView(
         }
     }
 
+    // The active identity's own display name — the "Note to Self" match target.
+    val selfName: String = run {
+        val id = activeAccountId ?: return@run ""
+        accounts.firstOrNull { it.id == id }?.displayName ?: ""
+    }
+
+    // Whether to surface the "Note to Self" shortcut (a DM with your own
+    // identity — docs/04 §5.5, like Signal): when self isn't already a recipient
+    // and the query is empty or matches self (name, DID, or label).
+    val showNoteToSelf: Boolean = run {
+        val id = activeAccountId ?: return@run false
+        if (chips.any { it.did == id }) return@run false
+        val q = trimmedQuery.lowercase()
+        if (q.isEmpty()) return@run true
+        "note to self".contains(q) || selfName.lowercase().contains(q) || id.lowercase().contains(q)
+    }
+
     val newGroupTitle: String = if (chips.isEmpty()) "New Empty Group" else "New Group (${chips.count()})"
 
     // Load contacts when the active account changes
@@ -295,6 +313,30 @@ fun ComposeMessageView(
                     }
                 }
 
+                // Note to Self shortcut
+                if (showNoteToSelf) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    addChip(did = activeAccountId ?: "", displayName = "Note to Self")
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Filled.Bookmark,
+                                contentDescription = null,
+                                tint = LocalAvalancheColors.current.brand,
+                                modifier = Modifier.size(32.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text("Note to Self", maxLines = 1)
+                        }
+                    }
+                }
+
                 // People section
                 if (peopleResults.isNotEmpty()) {
                     item {
@@ -334,7 +376,7 @@ fun ComposeMessageView(
                 }
 
                 // Empty state
-                if (peopleResults.isEmpty() && otherResults.isEmpty() && !queryLooksLikeDid) {
+                if (peopleResults.isEmpty() && otherResults.isEmpty() && !queryLooksLikeDid && !showNoteToSelf) {
                     item {
                         Text(
                             "No more contacts to add.",

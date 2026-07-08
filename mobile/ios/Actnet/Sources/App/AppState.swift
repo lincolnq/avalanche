@@ -1442,7 +1442,12 @@ final class AppState: ObservableObject {
                     continue
                 }
                 let recipientDid = Self.recipientDid(from: s.conversationId, accountId: accountId)
-                let title = recipientDid.flatMap { displayNameCache[$0] } ?? recipientDid ?? s.conversationId
+                // A DM addressed to your own identity is a note-to-self
+                // (docs/04 §5.5); your own DID is never in the name cache, so
+                // special-case it here and at creation below.
+                let title = recipientDid == accountId
+                    ? "Note to Self"
+                    : (recipientDid.flatMap { displayNameCache[$0] } ?? recipientDid ?? s.conversationId)
                 newConvs.append(Conversation(
                     id: s.conversationId,
                     title: title,
@@ -1571,7 +1576,9 @@ final class AppState: ObservableObject {
         }
         let serverUrl = accounts.first(where: { $0.id == accountId })?.servers.first?.id ?? ""
         let convId = "dm-\(accountId)-\(recipientDid)"
-        let title = displayName(for: recipientDid, accountId: accountId)
+        let title = recipientDid == accountId
+            ? "Note to Self"
+            : displayName(for: recipientDid, accountId: accountId)
         let conv = Conversation(
             id: convId,
             title: title,
