@@ -35,7 +35,11 @@ pub(crate) async fn replenish_if_low(core: &AppCore) {
 }
 
 async fn try_replenish(core: &AppCore) -> Result<(), AppError> {
-    let inner = core.inner.lock().await;
+    // Lock-free: reads the prekey status and store through the lock-free
+    // handles. `allocate_prekey_ids` hands out a distinct monotonic range per
+    // call, so a concurrent double-replenish just over-provisions a few keys
+    // (harmless) — no need to hold `inner` across the two network calls.
+    let inner = core;
     let status = inner.client.prekey_status().await?;
 
     if status.one_time_remaining < LOW_THRESHOLD {

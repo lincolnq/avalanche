@@ -210,6 +210,36 @@ impl SenderGate {
     }
 }
 
+impl AppCore {
+    /// Whether a name fetch for `did` is allowed right now, per the persisted
+    /// per-outcome throttle (docs/52 §"Client-side rate limiting"). `None`
+    /// (never attempted) → fetch. Otherwise honor the skip window for the last
+    /// outcome. Errors reading the throttle fail open (allow the fetch).
+    ///
+    /// On `AppCore` (not `AppCoreInner`) and reading only the lock-free `store`
+    /// handle, so the throttled name-resolution paths never take the `inner`
+    /// lock — a slow/offline `get_profile` can't wall off the crypto lock.
+    pub(crate) async fn should_fetch_name(&self, did: &str) -> bool {
+        match self.store.load_fetch_state(did).await {
+            Ok(Some((last_attempt, code))) => {
+                let window = FetchOutcome::from_code(code).skip_window_ms();
+                Timestamp::now().as_millis() - last_attempt.as_millis() >= window
+            }
+            Ok(None) => true,
+            Err(_) => true,
+        }
+    }
+
+    /// Record the outcome of a name fetch for `did` so the throttle (and the
+    /// negative cache for failures) survives launches. Best-effort.
+    pub(crate) async fn record_fetch(&self, did: &str, outcome: FetchOutcome) {
+        let _ = self
+            .store
+            .record_fetch_attempt(did, outcome.code(), Timestamp::now())
+            .await;
+    }
+}
+
 impl AppCoreInner {
     /// Process an inbound `profile_key` from a ContentMessage. If non-empty
     /// and different from any cached key, fetch the sender's encrypted blob,
@@ -250,30 +280,6 @@ impl AppCoreInner {
                 profile_key: profile_key.to_vec(),
                 fetched_at: Timestamp::now(),
             })
-            .await;
-    }
-
-    /// Whether a name fetch for `did` is allowed right now, per the persisted
-    /// per-outcome throttle (docs/52 §"Client-side rate limiting"). `None`
-    /// (never attempted) → fetch. Otherwise honor the skip window for the last
-    /// outcome. Errors reading the throttle fail open (allow the fetch).
-    pub(crate) async fn should_fetch_name(&self, did: &str) -> bool {
-        match self.store.load_fetch_state(did).await {
-            Ok(Some((last_attempt, code))) => {
-                let window = FetchOutcome::from_code(code).skip_window_ms();
-                Timestamp::now().as_millis() - last_attempt.as_millis() >= window
-            }
-            Ok(None) => true,
-            Err(_) => true,
-        }
-    }
-
-    /// Record the outcome of a name fetch for `did` so the throttle (and the
-    /// negative cache for failures) survives launches. Best-effort.
-    pub(crate) async fn record_fetch(&self, did: &str, outcome: FetchOutcome) {
-        let _ = self
-            .store
-            .record_fetch_attempt(did, outcome.code(), Timestamp::now())
             .await;
     }
 

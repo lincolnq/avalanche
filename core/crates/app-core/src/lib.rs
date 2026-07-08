@@ -1028,6 +1028,25 @@ async fn reconcile_group(
 #[derive(uniffi::Object)]
 pub struct AppCore {
     pub(crate) inner: Mutex<AppCoreInner>,
+    /// Lock-free handle to the device store, cloned from `inner` at build time.
+    /// `DeviceStore` is `Clone` and shares one serialized connection, so reads
+    /// through this handle see the same data as writes made under `inner` — but
+    /// they never wait on the `inner` lock. Read-only and idempotent-write FFI
+    /// paths use this so that a network call holding `inner` (e.g. the reconnect
+    /// task's lazy auth) can never block the UI. Crypto paths that must
+    /// serialize ratchet / sender-key mutation still go through `inner` (see
+    /// `messaging.rs`); this handle is not a license to skip that lock.
+    pub(crate) store: store::DeviceStore,
+    /// Lock-free handle to the homeserver client, cloned from `inner`. `Client`
+    /// clones share their auth state and connection pool, so a session token
+    /// obtained through any clone is visible through all of them. Non-crypto
+    /// network calls (project/oauth, profile, prekey top-up, push, reports) use
+    /// this off-lock instead of reaching through `inner.client`.
+    pub(crate) client: net::Client,
+    /// This account's DID. Immutable for the lifetime of the `AppCore` (a new
+    /// login/recovery builds a new instance), so it's held lock-free rather than
+    /// reached through `inner` on every read.
+    pub(crate) did: String,
     /// Canonical connection-state observable. The reconnect task publishes;
     /// each waiter calls `state_tx.subscribe()` to get its own receiver.
     pub(crate) state_tx: tokio::sync::watch::Sender<ConnectionState>,
@@ -1144,8 +1163,17 @@ impl AppCore {
         let (state_tx, _) = tokio::sync::watch::channel(ConnectionState::Disconnected);
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (admin_event_tx, admin_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Clone the lock-free handles before `inner` is moved into the Mutex.
+        // Both share their underlying resource (one serialized DB connection;
+        // one auth/connection-pool), so these stay consistent with `inner`.
+        let store = inner.store.clone();
+        let client = inner.client.clone();
+        let did = inner.did.clone();
         Self {
             inner: Mutex::new(inner),
+            store,
+            client,
+            did,
             state_tx,
             event_tx,
             event_rx: Mutex::new(event_rx),
@@ -2057,8 +2085,7 @@ impl AppCore {
     /// Fetch the list of Projects installed on the homeserver.
     pub fn fetch_projects(&self) -> Result<Vec<ProjectInfoFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let projects = inner.client.fetch_projects().await
+            let projects = self.client.fetch_projects().await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(projects.into_iter().map(|p| ProjectInfoFfi {
                 name: p.name,
@@ -2073,8 +2100,7 @@ impl AppCore {
     /// Request a Project token for opening a Project webview.
     pub fn request_project_token(&self, project_url: String) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let resp = inner.client.request_project_token(&project_url).await
+            let resp = self.client.request_project_token(&project_url).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(resp.token)
         }).map_err(AppErrorFfi::from)
@@ -2094,8 +2120,7 @@ impl AppCore {
         scope: Option<String>,
     ) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let code = inner
+            let code = self
                 .client
                 .oauth_issue_code(
                     &client_id,
@@ -2121,8 +2146,7 @@ impl AppCore {
         client_id: String,
     ) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let project_url = inner
+            let project_url = self
                 .client
                 .oauth_approve_device(&user_code, &client_id)
                 .await
@@ -2318,7 +2342,7 @@ impl AppCore {
     /// target message and by emoji.
     pub fn load_reactions(&self, conversation_id: String) -> Result<Vec<ReactionFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             let rows = inner.store.load_reactions(&conversation_id).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(rows.into_iter().map(|r| ReactionFfi {
@@ -2542,7 +2566,7 @@ impl AppCore {
     pub fn delete_expired_messages(&self) -> Result<Vec<String>, AppErrorFfi> {
         ffi_runtime()
             .block_on(async {
-                let inner = self.inner.lock().await;
+                let inner = self; // store write only; store serializes its own writes
                 inner
                     .store
                     .delete_expired_messages(Timestamp::now())
@@ -2555,7 +2579,7 @@ impl AppCore {
     /// Load messages for a conversation from local history.
     pub fn load_messages(&self, conversation_id: String) -> Result<Vec<StoredMessageFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             let msgs = inner.store.load_messages(&conversation_id, Timestamp::now()).await
                 .map_err(AppError::from)?;
             // Load all attachments for the conversation in one query, then group
@@ -2601,7 +2625,9 @@ impl AppCore {
     /// directly from this — no parallel persistence in UserDefaults.
     pub fn load_conversations(&self) -> Result<Vec<ConversationSummaryFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            // Read-only: goes through the lock-free `store`/`did` handles so the
+            // chat list never waits on a network op holding `inner`.
+            let inner = self;
             let rows = inner.store.load_conversations(Timestamp::now(), &inner.did).await
                 .map_err(AppError::from)?;
             // Resolve all group titles from locally-persisted state in a single
@@ -2669,7 +2695,7 @@ impl AppCore {
     /// in SQLCipher and isn't carried in iOS UserDefaults.
     pub fn load_last_message(&self, conversation_id: String) -> Result<Option<StoredMessageFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             let msg = inner.store.load_last_message(&conversation_id, Timestamp::now()).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(msg.map(stored_to_ffi))
@@ -2680,7 +2706,7 @@ impl AppCore {
     /// Returns the number of messages newly marked.
     pub fn mark_messages_read(&self, conversation_id: String, up_to_sent_at_ms: i64) -> Result<u64, AppErrorFfi> {
         let count = ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // store write only; store serializes its own writes
             inner.store.mark_messages_read(
                 &conversation_id,
                 Timestamp(up_to_sent_at_ms),
@@ -2698,7 +2724,7 @@ impl AppCore {
     /// Count unread messages in a conversation.
     pub fn unread_count(&self, conversation_id: String) -> Result<u64, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             inner.store.unread_count(&conversation_id, &inner.did).await
                 .map_err(AppError::from)
         }).map_err(AppErrorFfi::from)
@@ -2709,7 +2735,10 @@ impl AppCore {
     /// Call from a background thread — this blocks until complete.
     pub fn get_account_info(&self, did: String) -> Result<AccountInfoFfi, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            // Lock-free: throttle + fetch + cache write-through go through the
+            // `store`/`client` handles. Concurrent duplicate fetches just
+            // re-hit the server; the cache is last-write-wins.
+            let inner = self;
 
             // Map a cached account record to the FFI shape.
             let from_cache = |c: store::profiles::AccountInfoCache| AccountInfoFfi {
@@ -2794,7 +2823,9 @@ impl AppCore {
         environment: String,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            // Lock-free: store + client only. Idempotent (relay/server treat
+            // re-register as INSERT OR REPLACE) and effectively single-caller.
+            let inner = self;
             let existing = inner.store.load_push_state().await.map_err(AppError::Store)?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2854,7 +2885,7 @@ impl AppCore {
     /// no push state is registered.
     pub fn unregister_push_token(&self, relay_url: String) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // lock-free: store + client only, best-effort teardown
             let Some(state) = inner.store.load_push_state().await.map_err(AppError::Store)? else {
                 return Ok::<_, AppError>(());
             };
@@ -2884,12 +2915,11 @@ impl AppCore {
             }
             let (_, key) = recovery::derive_recovery_keys_from_prf(&prf_output);
 
-            let inner = self.inner.lock().await;
-            let identity = inner.store.load_identity().await?
+            let identity = self.store.load_identity().await?
                 .ok_or(AppError::NoAccount)?;
-            let own_profile = inner.store.load_own_profile().await?;
-            let groups = recovery::collect_group_blob_entries(&inner.store).await?;
-            let storage_key = inner.store.load_storage_key().await?;
+            let own_profile = self.store.load_own_profile().await?;
+            let groups = recovery::collect_group_blob_entries(&self.store).await?;
+            let storage_key = self.store.load_storage_key().await?;
 
             let plaintext = recovery::build_recovery_blob(
                 &identity.serialize(),
@@ -2900,7 +2930,7 @@ impl AppCore {
                 storage_key.as_ref().map(|k| k.as_slice()).unwrap_or(&[]),
             );
             let blob = recovery::encrypt_recovery_blob(&plaintext, &key)?;
-            inner.client.update_recovery_blob(&blob).await?;
+            self.client.update_recovery_blob(&blob).await?;
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
     }
@@ -2909,8 +2939,7 @@ impl AppCore {
     /// Empty string if no profile has been set yet.
     pub fn own_display_name(&self) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let name = inner.store.load_own_profile().await
+            let name = self.store.load_own_profile().await
                 .map_err(AppError::from)?
                 .map(|p| p.display_name)
                 .unwrap_or_default();
@@ -2923,8 +2952,7 @@ impl AppCore {
     /// immediately on success.
     pub fn set_display_name(&self, display_name: String) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let own = inner.store.load_own_profile().await
+            let own = self.store.load_own_profile().await
                 .map_err(AppError::from)?
                 .ok_or_else(|| AppError::Protocol("no own profile (account not yet set up)".into()))?;
             if own.profile_key.len() != profile::PROFILE_KEY_LEN {
@@ -2936,8 +2964,8 @@ impl AppCore {
                 &profile::ProfilePlaintext { display_name: display_name.clone() },
                 &key,
             )?;
-            inner.client.put_profile(&blob).await?;
-            inner.store.update_own_display_name(&display_name).await
+            self.client.put_profile(&blob).await?;
+            self.store.update_own_display_name(&display_name).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)
@@ -2947,8 +2975,7 @@ impl AppCore {
     /// no profile has been cached yet (the UI should fall back to the DID).
     pub fn contact_display_name(&self, did: String) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let name = inner.store.load_contact_profile(&did).await
+            let name = self.store.load_contact_profile(&did).await
                 .map_err(AppError::from)?
                 .map(|p| p.display_name)
                 .unwrap_or_default();
@@ -2970,7 +2997,7 @@ impl AppCore {
         dids: Vec<String>,
     ) -> Result<std::collections::HashMap<String, String>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             let mut out = std::collections::HashMap::with_capacity(dids.len());
             for did in dids {
                 let mut name = inner
@@ -3007,7 +3034,8 @@ impl AppCore {
     /// Returns true if the cached display name was updated.
     pub fn refresh_contact_profile(&self, did: String) -> Result<bool, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            // Lock-free: same rationale as get_account_info.
+            let inner = self;
             let cached = inner.store.load_contact_profile(&did).await
                 .map_err(AppError::from)?;
             let cached = match cached {
@@ -3065,7 +3093,7 @@ impl AppCore {
     /// the rest under "Other".
     pub fn list_contacts(&self) -> Result<Vec<ContactRowFfi>, AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
+            let inner = self; // read-only: lock-free store handle
             let rows = inner.store.list_contacts().await.map_err(AppError::from)?;
             let own_did = inner.did.clone();
             let mut out = Vec::with_capacity(rows.len());
@@ -3263,10 +3291,9 @@ impl AppCore {
     /// Call from a background thread — this blocks on the network call.
     pub fn report_and_block(&self, did: String, reason: String) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            inner.client.report_abuse(&did, &reason).await.map_err(AppError::from)?;
-            inner.store.set_blocked(&did, true).await.map_err(AppError::from)?;
-            inner.store.set_pending_request(&did, false).await.map_err(AppError::from)?;
+            self.client.report_abuse(&did, &reason).await.map_err(AppError::from)?;
+            self.store.set_blocked(&did, true).await.map_err(AppError::from)?;
+            self.store.set_pending_request(&did, false).await.map_err(AppError::from)?;
             Ok::<_, AppError>(())
         })
         .map_err(AppErrorFfi::from)
@@ -3275,8 +3302,7 @@ impl AppCore {
     /// Check whether this account has a recovery blob set up (has rotation key in store).
     pub fn has_recovery(&self) -> bool {
         ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            inner.store.load_rotation_key().await
+            self.store.load_rotation_key().await
                 .map(|k| k.is_some())
                 .unwrap_or(false)
         })
