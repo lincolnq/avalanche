@@ -527,6 +527,40 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    // ── Admin (bot tooling) ──────────────────────────────────────────────
+
+    /// Issue an arbitrary authenticated request and return the response body as
+    /// a string. This is the generic escape hatch bot tooling uses to reach
+    /// `/v1/admin/*` endpoints that have no dedicated typed client method —
+    /// e.g. adminbot's `/install-project`. `method` is an HTTP verb ("GET",
+    /// "POST", …); `body` is sent as a JSON request body when `Some` (the
+    /// caller passes an already-serialized JSON string). Non-2xx responses map
+    /// to `NetError::Server(status, body)` so the server's error message
+    /// reaches the caller unchanged (e.g. "project slug already exists").
+    pub async fn admin_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<String, NetError> {
+        let method = reqwest::Method::from_bytes(method.as_bytes())
+            .map_err(|_| NetError::Server(0, format!("invalid HTTP method: {method}")))?;
+        let resp = self
+            .send_authed(method, path, |b| match &body {
+                Some(json) => b
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(json.clone()),
+                None => b,
+            })
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), text));
+        }
+        Ok(text)
+    }
+
     // ── Project login / OAuth (docs/25) ──────────────────────────────────
 
     /// Mint an OAuth authorization code after the user consents on this device

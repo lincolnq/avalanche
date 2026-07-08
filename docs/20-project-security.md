@@ -254,6 +254,30 @@ There is no separate "officialness" trust primitive. The ✓ **verified badge** 
 - `surface:emoji` — contribute custom emoji / reaction assets.
 - `message:context-on-action` — receive a specific message as context when the user invokes a long-press action. Per-invocation; the tap is the disclosure.
 
+### The manifest document
+
+The manifest is the artifact the admin's tooling reads at install time to learn what a Project *is* and what it's requesting — so the operator **authorizes** rather than retypes it (`22-adminbot.md`, `/install-project`). It is a small JSON document the Project supplies:
+
+```json
+{
+  "slug": "beagle",
+  "name": "Beagle",
+  "description": "Posts a beagle fact on request.",
+  "url": "https://beagle.example.org",
+  "permissions": ["subscribe.account_joined"]
+}
+```
+
+- `slug` — the Project's stable identifier on this homeserver, 2–64 chars of `[a-z0-9-]`. It *is* the Project's identity: bot accounts link to it and a setup/bootstrap token names it (`24-vetted-onboarding-project.md`). Declared, not derived from the name, so two like-named Projects can't collide.
+- `name` — human-facing display name (1–100 chars).
+- `description` — optional one-line summary, shown to the admin at install.
+- `url` — optional; the Project's web origin, for a webview Project. Omitted for a headless bot.
+- `permissions` — the scopes/capabilities it requests: the scope ids above and/or the server capabilities in `22-adminbot.md` (`subscribe.account_joined`, …). **Default-deny** — the admin approves which to grant; anything unlisted is never granted. The manifest declares a *request*, not authority; the grant is the admin's act, recorded server-side.
+
+The manifest is **untrusted input** (Project-authored): sanitize and length-limit its strings, homoglyph-guard the name, and attribute every resulting surface to its `(server, Project)` — exactly as for the client-visible manifests under *multiple homeservers* above.
+
+Delivery today is **out-of-band**: the operator pastes the manifest (or a URL) into adminbot's `/install-project` flow. A future iteration serves it at a well-known Project URL the tooling fetches directly — the schema is identical either way.
+
 ### Identity is derived from the scope set, not chosen freely
 
 `identity:pseudonymous` is only meaningful for a Project that touches the user **solely through the token/webview channel**. If the project communicates with the user via a bot, the Project will learn their identity.

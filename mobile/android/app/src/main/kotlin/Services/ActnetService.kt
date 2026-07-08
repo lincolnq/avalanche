@@ -280,6 +280,8 @@ interface AppCoreProtocol {
 
     @Throws(AppErrorFfi::class) fun fetchProjects(): List<ProjectInfoFfi>
     @Throws(AppErrorFfi::class) fun requestProjectToken(projectUrl: String): String
+    // Bot-tooling escape hatch (adminbot `/install-project`); no Android UI calls it.
+    @Throws(AppErrorFfi::class) fun adminRequest(method: String, path: String, bodyJson: String): String
     @Throws(AppErrorFfi::class) fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String
     @Throws(AppErrorFfi::class) fun oauthApproveDevice(userCode: String, clientId: String): String
 
@@ -457,6 +459,8 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
 
     override fun fetchProjects(): List<ProjectInfoFfi> = core.fetchProjects()
     override fun requestProjectToken(projectUrl: String): String = core.requestProjectToken(projectUrl)
+    override fun adminRequest(method: String, path: String, bodyJson: String): String =
+        core.adminRequest(method, path, bodyJson)
     override fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String =
         core.oauthIssueCode(clientId, redirectUri, codeChallenge, codeChallengeMethod, scope)
     override fun oauthApproveDevice(userCode: String, clientId: String): String =
@@ -671,6 +675,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
 
     override fun fetchProjects(): List<ProjectInfoFfi> = emptyList()
     override fun requestProjectToken(projectUrl: String): String = ""
+    override fun adminRequest(method: String, path: String, bodyJson: String): String = ""
     override fun oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?): String = ""
     override fun oauthApproveDevice(userCode: String, clientId: String): String = ""
     override fun registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) {}

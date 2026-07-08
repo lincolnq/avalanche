@@ -95,6 +95,8 @@ extension AppCoreProtocol {
 
     func fetchProjects() throws -> [ProjectInfoFfi] { [] }
     func requestProjectToken(projectUrl: String) throws -> String { "" }
+    // Bot-tooling escape hatch (adminbot `/install-project`); no iOS UI calls it.
+    func adminRequest(method: String, path: String, bodyJson: String) throws -> String { "" }
     func oauthIssueCode(clientId: String, redirectUri: String, codeChallenge: String, codeChallengeMethod: String, scope: String?) throws -> String { "" }
     func oauthApproveDevice(userCode: String, clientId: String) throws -> String { "" }
     func registerPushToken(deviceToken: String, platform: String, relayUrl: String, environment: String) throws {}

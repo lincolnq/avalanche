@@ -107,6 +107,8 @@ class MockAppCore(
     override fun requestProjectToken(projectUrl: String): String =
         "mock-project-token-${UUID.randomUUID().toString().take(8)}"
 
+    override fun adminRequest(method: String, path: String, bodyJson: String): String = "{}"
+
     // -----------------------------------------------------------------------
     // Push (no-op)
     // -----------------------------------------------------------------------
