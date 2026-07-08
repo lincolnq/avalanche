@@ -625,7 +625,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 558;
+				CURRENT_PROJECT_VERSION = 559;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -645,9 +645,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.3;
+				MARKETING_VERSION = 0.3.4;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
-				RELAY_URL = "https://relay.theavalanche.net";
+				RELAY_URL = "${RELAY_URL}";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -658,7 +658,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 558;
+				CURRENT_PROJECT_VERSION = 559;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -669,7 +669,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.3;
+				MARKETING_VERSION = 0.3.4;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -800,7 +800,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 558;
+				CURRENT_PROJECT_VERSION = 559;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -811,7 +811,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.3;
+				MARKETING_VERSION = 0.3.4;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -826,7 +826,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 558;
+				CURRENT_PROJECT_VERSION = 559;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -846,9 +846,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.3;
+				MARKETING_VERSION = 0.3.4;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
-				RELAY_URL = "https://relay.theavalanche.net";
+				RELAY_URL = "${RELAY_URL}";
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
