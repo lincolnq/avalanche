@@ -75,40 +75,47 @@ struct GroupDetailView: View {
                     }
                     Section("Members (\(s.members.count))") {
                         ForEach(orderedMembers(s.members), id: \.encryptedMemberId) { member in
-                            HStack(spacing: 10) {
-                                ContactAvatar(name: memberName(member), isBot: isBot(member), size: 32)
-                                Text(memberName(member))
-                                    .lineLimit(1)
-                                Spacer()
-                                if member.role == 1 {
-                                    Text("Admin").font(.caption2)
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Color.accentColor.opacity(0.15))
-                                        .clipShape(Capsule())
+                            // Tapping a member row opens a menu: message them
+                            // (note-to-self for your own row), plus admin
+                            // promote/demote for anyone but yourself.
+                            Menu {
+                                Button {
+                                    openDm(member)
+                                } label: {
+                                    Label(dmLabel(member), systemImage: "bubble.left")
                                 }
-                                // Admins get a visible per-member menu to
-                                // promote/demote anyone but themselves.
                                 if amAdmin && member.did != accountId {
-                                    Menu {
-                                        if member.role == 1 {
-                                            Button {
-                                                changeRole(member, toAdmin: false)
-                                            } label: {
-                                                Label("Remove admin", systemImage: "person.badge.minus")
-                                            }
-                                        } else {
-                                            Button {
-                                                changeRole(member, toAdmin: true)
-                                            } label: {
-                                                Label("Make admin", systemImage: "person.badge.shield.checkmark")
-                                            }
+                                    if member.role == 1 {
+                                        Button {
+                                            changeRole(member, toAdmin: false)
+                                        } label: {
+                                            Label("Remove admin", systemImage: "person.badge.minus")
                                         }
-                                    } label: {
-                                        Image(systemName: "ellipsis.circle")
-                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Button {
+                                            changeRole(member, toAdmin: true)
+                                        } label: {
+                                            Label("Make admin", systemImage: "person.badge.shield.checkmark")
+                                        }
                                     }
                                 }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    ContactAvatar(name: memberName(member), isBot: isBot(member), size: 32)
+                                    Text(memberName(member))
+                                        .lineLimit(1)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if member.role == 1 {
+                                        Text("Admin").font(.caption2)
+                                            .padding(.horizontal, 6).padding(.vertical, 2)
+                                            .background(Color.accentColor.opacity(0.15))
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                                .contentShape(Rectangle())
                             }
+                            .tint(.primary)
                         }
                     }
                     if !s.pendingInvites.isEmpty {
@@ -190,6 +197,22 @@ struct GroupDetailView: View {
         member.did == accountId
             ? "You"
             : appState.resolvedName(for: member.did, accountId: accountId)
+    }
+
+    /// Menu label for the "message this member" action. A DM to your own
+    /// identity is a note-to-self (docs/04 §5.5), like Signal.
+    private func dmLabel(_ member: GroupMemberFfi) -> String {
+        member.did == accountId
+            ? "Note to self"
+            : "Message \(appState.resolvedName(for: member.did, accountId: accountId))"
+    }
+
+    /// Open (or create) the DM with a group member and navigate to it. Resets
+    /// the chats nav stack to the DM, popping this group-info screen.
+    private func openDm(_ member: GroupMemberFfi) {
+        let conv = appState.findOrCreateDMConversation(recipientDid: member.did, accountId: accountId)
+        appState.selectedTab = .chats
+        appState.navigateToConversation = conv
     }
 
     /// Whether a member is a bot, for the hexagon avatar frame

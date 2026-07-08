@@ -37,6 +37,8 @@ export default function GroupDetailView(props: Props) {
   const [loading, setLoading] = createSignal(true);
   const [renaming, setRenaming] = createSignal(false);
   const [renameText, setRenameText] = createSignal("");
+  // Which member's row menu is open, keyed by encryptedMemberId (null = none).
+  const [menuMemberId, setMenuMemberId] = createSignal<string | null>(null);
 
   // groupId is required; a conversation without one shouldn't open this modal,
   // but guard so the rest of the component can treat it as a definite string.
@@ -117,6 +119,17 @@ export default function GroupDetailView(props: Props) {
     }
     // Reload either way: reverts the picker to the server's value on failure.
     await reload();
+  }
+
+  // Open (or create) the DM with a group member and switch to it. A DM to your
+  // own identity is a note-to-self (docs/04 §5.5), like Signal. The modal
+  // auto-closes when ConversationView reacts to the conversation change, but
+  // close explicitly too so it dismisses even when the DM is already selected.
+  function openDm(member: GroupMemberFfi) {
+    setMenuMemberId(null);
+    const conv = app.findOrCreateDMConversation(member.did, accountId());
+    app.selectConversation(conv.id);
+    props.onClose();
   }
 
   async function changeRole(member: GroupMemberFfi, newRole: number) {
@@ -263,39 +276,73 @@ export default function GroupDetailView(props: Props) {
                     </div>
                     <For each={orderedMembers(s().members)}>
                       {(member) => (
-                        <div class="groupdetail-member">
-                          <span class="groupdetail-member-name">
-                            {memberName(member)}
-                          </span>
-                          <Show when={member.role === ROLE_ADMIN}>
-                            <span class="groupdetail-badge">Admin</span>
-                          </Show>
-                          <span class="groupdetail-spacer" />
-                          <Show
-                            when={amAdmin() && member.did !== accountId()}
+                        <div class="groupdetail-member-wrap">
+                          {/* Tapping a member opens a menu: message them
+                              (note-to-self for your own row), plus admin
+                              promote/demote for anyone but yourself. */}
+                          <button
+                            class="groupdetail-member"
+                            onClick={() =>
+                              setMenuMemberId(member.encryptedMemberId)
+                            }
                           >
-                            <Show
-                              when={member.role === ROLE_ADMIN}
-                              fallback={
-                                <button
-                                  class="groupdetail-link-btn"
-                                  onClick={() =>
-                                    void changeRole(member, ROLE_ADMIN)
-                                  }
-                                >
-                                  Make admin
-                                </button>
-                              }
-                            >
+                            <span class="groupdetail-member-name">
+                              {memberName(member)}
+                            </span>
+                            <Show when={member.role === ROLE_ADMIN}>
+                              <span class="groupdetail-badge">Admin</span>
+                            </Show>
+                            <span class="groupdetail-spacer" />
+                          </button>
+                          <Show
+                            when={
+                              menuMemberId() === member.encryptedMemberId
+                            }
+                          >
+                            <div
+                              class="groupdetail-menu-backdrop"
+                              onClick={() => setMenuMemberId(null)}
+                            />
+                            <div class="groupdetail-menu">
                               <button
-                                class="groupdetail-link-btn"
-                                onClick={() =>
-                                  void changeRole(member, ROLE_MEMBER)
+                                class="groupdetail-menu-item"
+                                onClick={() => openDm(member)}
+                              >
+                                {member.did === accountId()
+                                  ? "Note to self"
+                                  : `Message ${memberName(member)}`}
+                              </button>
+                              <Show
+                                when={
+                                  amAdmin() && member.did !== accountId()
                                 }
                               >
-                                Remove admin
-                              </button>
-                            </Show>
+                                <Show
+                                  when={member.role === ROLE_ADMIN}
+                                  fallback={
+                                    <button
+                                      class="groupdetail-menu-item"
+                                      onClick={() => {
+                                        setMenuMemberId(null);
+                                        void changeRole(member, ROLE_ADMIN);
+                                      }}
+                                    >
+                                      Make admin
+                                    </button>
+                                  }
+                                >
+                                  <button
+                                    class="groupdetail-menu-item"
+                                    onClick={() => {
+                                      setMenuMemberId(null);
+                                      void changeRole(member, ROLE_MEMBER);
+                                    }}
+                                  >
+                                    Remove admin
+                                  </button>
+                                </Show>
+                              </Show>
+                            </div>
                           </Show>
                         </div>
                       )}

@@ -1,6 +1,7 @@
 package net.theavalanche.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +67,7 @@ fun GroupDetailView(
     accountId: String,
     appViewModel: AppViewModel,
     onDismiss: () -> Unit = {},
+    onOpenConversation: (Conversation) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
 
@@ -92,6 +93,16 @@ fun GroupDetailView(
     fun memberName(member: GroupMemberFfi): String =
         if (member.did == accountId) "You"
         else appViewModel.resolvedName(did = member.did, accountId = accountId)
+
+    // Open (or create) the DM with a group member and navigate to it. A DM to
+    // your own identity is a note-to-self (docs/04 §5.5), like Signal.
+    fun openDm(member: GroupMemberFfi) {
+        val conv = appViewModel.findOrCreateDMConversation(
+            recipientDid = member.did,
+            accountId = accountId,
+        )
+        onOpenConversation(conv)
+    }
 
     fun isBot(member: GroupMemberFfi): Boolean =
         member.did != accountId && appViewModel.isBot(did = member.did, accountId = accountId)
@@ -373,6 +384,7 @@ fun GroupDetailView(
                                 role = member.role,
                                 isSelf = member.did == accountId,
                                 amAdmin = amAdmin,
+                                onOpenDm = { openDm(member) },
                                 onMakeAdmin = { changeRole(member, toAdmin = true) },
                                 onRemoveAdmin = { changeRole(member, toAdmin = false) },
                             )
@@ -523,68 +535,72 @@ private fun MemberRow(
     role: Short,
     isSelf: Boolean,
     amAdmin: Boolean,
+    onOpenDm: () -> Unit,
     onMakeAdmin: () -> Unit,
     onRemoveAdmin: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        ContactAvatar(name = name, isBot = isBot, size = 32.dp)
-        Text(
-            text = name,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-        )
-        // Admin badge
-        if (role == 1.toShort()) {
+    // Tapping the row opens a menu: message them (note-to-self for your own
+    // row), plus admin promote/demote for anyone but yourself.
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { menuExpanded = true }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ContactAvatar(name = name, isBot = isBot, size = 32.dp)
             Text(
-                text = "Admin",
-                style = MaterialTheme.typography.labelSmall,
-                color = LocalAvalancheColors.current.brand,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(LocalAvalancheColors.current.brand.copy(alpha = 0.15f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
             )
+            // Admin badge
+            if (role == 1.toShort()) {
+                Text(
+                    text = "Admin",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = LocalAvalancheColors.current.brand,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(LocalAvalancheColors.current.brand.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
-        // Per-member admin menu — visible only to admins and not for self
-        if (amAdmin && !isSelf) {
-            Box {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Member options",
-                        tint = LocalAvalancheColors.current.muted,
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (isSelf) "Note to self" else "Message $name") },
+                onClick = {
+                    menuExpanded = false
+                    onOpenDm()
+                },
+            )
+            // Admins can promote/demote anyone but themselves.
+            if (amAdmin && !isSelf) {
+                if (role == 1.toShort()) {
+                    DropdownMenuItem(
+                        text = { Text("Remove admin") },
+                        onClick = {
+                            menuExpanded = false
+                            onRemoveAdmin()
+                        },
                     )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    if (role == 1.toShort()) {
-                        DropdownMenuItem(
-                            text = { Text("Remove admin") },
-                            onClick = {
-                                menuExpanded = false
-                                onRemoveAdmin()
-                            },
-                        )
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text("Make admin") },
-                            onClick = {
-                                menuExpanded = false
-                                onMakeAdmin()
-                            },
-                        )
-                    }
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("Make admin") },
+                        onClick = {
+                            menuExpanded = false
+                            onMakeAdmin()
+                        },
+                    )
                 }
             }
         }
