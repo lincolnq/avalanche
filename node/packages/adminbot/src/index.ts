@@ -29,6 +29,7 @@ import {
   AppCore,
   initLogging,
   type AdminEvent,
+  type DecryptedMessage,
   type GroupSummary,
   type IncomingEvent,
   type SendTarget,
@@ -221,12 +222,22 @@ async function handleMessage(
   const inAdminsGroup = msg.groupId === groupId;
   const isDm = msg.groupId == null;
   if (!inAdminsGroup && !isDm) return;
+
+  // An in-progress interview (e.g. /install-project) runs in a DM and consumes
+  // that sender's subsequent DM lines as answers, not commands.
+  if (isDm && installInterviews.has(msg.senderDid)) {
+    await handleInstallReply(core, env, msg.senderDid, msg.body.trim());
+    return;
+  }
+
   await handleCommand(
     core,
     env,
+    groupId,
     inAdminsGroup ? { kind: "group", groupId } : { kind: "dm", recipientDid: msg.senderDid },
     msg.senderDid,
     msg.body.trim(),
+    msg.sentAt,
   );
 }
 
@@ -492,15 +503,397 @@ async function runCheckCommand(core: AppCore, env: Env, channel: SendTarget): Pr
   await core.send(channel, msg);
 }
 
-async function handleCommand(
+// True iff `senderDid` is a current member of the #admins group. Privileged
+// commands gate on this — the server trusts adminbot's session unconditionally
+// (the superuser pin), so authorization for privileged chat commands must be
+// enforced here, by checking the E2E #admins membership adminbot can decrypt.
+// Fetches fresh group state so a just-removed admin can't keep issuing commands.
+async function requireAdminsMember(
+  core: AppCore,
+  adminsGroupId: string,
+  senderDid: string,
+): Promise<boolean> {
+  try {
+    const summary = await core.fetchGroupState(adminsGroupId);
+    return summary.members.some((m) => m.did === senderDid);
+  } catch (e) {
+    console.error(`adminbot: #admins membership check failed: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+// ── /install-project interview ──────────────────────────────────────────────
+//
+// Installing a project is initiation + authorization, not data entry (see the
+// bot-tool-ux skill). The project describes itself in a small manifest — its
+// codename, name, and the permissions it wants. The operator hands over that
+// manifest (pasted, or a URL adminbot fetches) and authorizes which permissions
+// to grant; adminbot creates the project, grants them, and returns a one-time
+// setup code for the project's bot.
+//
+// adminbot reacts 👀 on the trigger while the DM interview runs, then ✅ on
+// success or ❌ on failure/cancel/timeout. State is in-memory and per-sender; a
+// restart drops it (the operator re-runs). The manifest shape here mirrors the
+// future well-known-URL manifest contract (docs TODO).
+
+const REACT_WORKING = "👀";
+const REACT_DONE = "✅";
+const REACT_FAILED = "❌";
+
+// Abandon an interview after this much operator inactivity.
+const INTERVIEW_IDLE_MS = 10 * 60 * 1000;
+
+// Plain-language descriptions for the permissions a manifest can request. The
+// confirm step shows these, never the raw capability ids.
+const PERMISSION_LABELS: Record<string, string> = {
+  "subscribe.account_joined": "be told when someone new joins the server",
+  "subscribe.account_left": "be told when someone leaves the server",
+  "registration.gatekeeper": "control who is allowed to register",
+};
+const permissionLabel = (id: string): string => PERMISSION_LABELS[id] ?? id;
+
+// A project's self-description. Mirrors the future well-known-URL manifest.
+interface ProjectManifest {
+  slug: string;
+  name: string;
+  description?: string;
+  url?: string;
+  permissions: string[];
+}
+
+type InstallStep = "manifest" | "confirm";
+
+interface InstallInterview {
+  step: InstallStep;
+  manifest?: ProjectManifest; // set once a valid manifest is provided
+  // The trigger message + where it lives, so we can react on it. `sentAt` is its
+  // wire identity; null when we have no timestamp to target (reactions skipped).
+  react: { target: SendTarget; author: string; sentAt: DecryptedMessage["sentAt"] } | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+// Keyed by the interviewee's DID — one interview at a time per admin.
+const installInterviews = new Map<string, InstallInterview>();
+
+// Set adminbot's reaction on the trigger message (a fresh emoji from the same
+// reactor replaces the prior one, docs/33). No-op without a timestamp to target;
+// failures are logged, never fatal.
+async function setInterviewReaction(
+  core: AppCore,
+  react: InstallInterview["react"],
+  emoji: string,
+): Promise<void> {
+  if (!react || !react.sentAt) return;
+  try {
+    await core.sendReaction(react.target, react.author, react.sentAt, emoji, false);
+  } catch (e) {
+    console.error(`adminbot: reaction failed: ${(e as Error).message}`);
+  }
+}
+
+// Clear the idle timer (if any) and forget the interview.
+function endInterview(senderDid: string): void {
+  const iv = installInterviews.get(senderDid);
+  if (iv?.timer) clearTimeout(iv.timer);
+  installInterviews.delete(senderDid);
+}
+
+// (Re)arm the idle timeout after each interaction. On expiry: drop the state,
+// mark the trigger failed, and tell the operator they can re-run.
+function armIdleTimeout(core: AppCore, senderDid: string): void {
+  const iv = installInterviews.get(senderDid);
+  if (!iv) return;
+  if (iv.timer) clearTimeout(iv.timer);
+  const timer = setTimeout(() => {
+    const stale = installInterviews.get(senderDid);
+    installInterviews.delete(senderDid);
+    if (stale) void setInterviewReaction(core, stale.react, REACT_FAILED);
+    void core
+      .sendDm(senderDid, "Timed out — nothing was installed. Run /install-project to start over.")
+      .catch(() => {});
+  }, INTERVIEW_IDLE_MS);
+  timer.unref?.();
+  iv.timer = timer;
+}
+
+// Parse a pasted manifest, or fetch one from a URL. Throws an Error with a
+// plain-language message on any problem.
+async function loadManifest(input: string): Promise<ProjectManifest> {
+  let raw: string;
+  if (/^https?:\/\//.test(input)) {
+    const resp = await fetch(input).catch((e) => {
+      throw new Error(`couldn't reach that address (${(e as Error).message}).`);
+    });
+    if (!resp.ok) throw new Error(`that address returned HTTP ${resp.status}.`);
+    raw = await resp.text();
+  } else {
+    raw = input;
+  }
+
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    throw new Error("that isn't a web address or valid manifest JSON.");
+  }
+  if (typeof obj !== "object" || obj === null) {
+    throw new Error("the manifest must be a JSON object.");
+  }
+  const m = obj as Record<string, unknown>;
+
+  if (typeof m.slug !== "string" || !/^[a-z0-9-]{2,64}$/.test(m.slug)) {
+    throw new Error('the manifest needs a "slug" of 2–64 lowercase letters, numbers, or dashes.');
+  }
+  if (typeof m.name !== "string" || m.name.length === 0 || m.name.length > 100) {
+    throw new Error('the manifest needs a "name" (1–100 characters).');
+  }
+  const url = typeof m.url === "string" ? m.url : undefined;
+  if (url !== undefined && !/^https?:\/\//.test(url)) {
+    throw new Error('the manifest\'s "url" must start with http:// or https://.');
+  }
+  let permissions: string[] = [];
+  if (Array.isArray(m.permissions)) {
+    if (!m.permissions.every((p): p is string => typeof p === "string")) {
+      throw new Error('"permissions" must be a list of text values.');
+    }
+    permissions = m.permissions;
+  } else if (m.permissions !== undefined) {
+    throw new Error('"permissions" must be a list of text values.');
+  }
+  return {
+    slug: m.slug,
+    name: m.name,
+    description: typeof m.description === "string" ? m.description : undefined,
+    url,
+    permissions,
+  };
+}
+
+// The confirm prompt: what the project is + the permissions it requests,
+// numbered, in plain language.
+function confirmPrompt(m: ProjectManifest): string {
+  const lines = [`${m.name} wants to be installed.`];
+  if (m.description) lines.push(m.description);
+  if (m.permissions.length === 0) {
+    lines.push("", "It isn't requesting any special permissions.", "", "Reply `yes` to install, or /cancel.");
+  } else {
+    lines.push("", "It's asking permission to:");
+    m.permissions.forEach((p, i) => lines.push(`  ${i + 1}. ${permissionLabel(p)}`));
+    lines.push(
+      "",
+      'Reply `yes` to grant all, a list of numbers (e.g. "1") to grant some,',
+      "`none` to grant nothing, or /cancel.",
+    );
+  }
+  return lines.join("\n");
+}
+
+// Start the interview: react 👀 on the trigger and DM for the manifest. The
+// trigger may be in #admins or a DM; either way the Q&A runs in a DM (the
+// reaction is the in-channel "on it — check your DMs" signal).
+async function startInstallInterview(
+  core: AppCore,
+  senderDid: string,
+  channel: SendTarget,
+  triggerSentAt: DecryptedMessage["sentAt"],
+): Promise<void> {
+  const react = { target: channel, author: senderDid, sentAt: triggerSentAt };
+  installInterviews.set(senderDid, { step: "manifest", react, timer: null });
+  await setInterviewReaction(core, react, REACT_WORKING);
+  await core.sendDm(
+    senderDid,
+    "Let's install a project. Paste its manifest, or the web address I can fetch it from. (Reply /cancel anytime.)",
+  );
+  armIdleTimeout(core, senderDid);
+}
+
+// Consume one DM line as the answer to the current interview step.
+async function handleInstallReply(
   core: AppCore,
   env: Env,
-  channel: SendTarget,
   senderDid: string,
   body: string,
 ): Promise<void> {
+  const iv = installInterviews.get(senderDid);
+  if (!iv) return;
+
+  if (body.trim().toLowerCase() === "/cancel") {
+    endInterview(senderDid);
+    await setInterviewReaction(core, iv.react, REACT_FAILED);
+    await core.sendDm(senderDid, "Install cancelled.");
+    return;
+  }
+
+  if (iv.step === "manifest") {
+    let manifest: ProjectManifest;
+    try {
+      manifest = await loadManifest(body.trim());
+    } catch (e) {
+      await core.sendDm(senderDid, `I couldn't read that — ${(e as Error).message} Try again, or /cancel.`);
+      armIdleTimeout(core, senderDid);
+      return;
+    }
+    // registration.gatekeeper needs a signing key this flow can't supply; drop
+    // it from the request with a note (docs/24).
+    const gated = manifest.permissions.includes("registration.gatekeeper");
+    manifest.permissions = manifest.permissions.filter((p) => p !== "registration.gatekeeper");
+    iv.manifest = manifest;
+    iv.step = "confirm";
+    if (gated) {
+      await core.sendDm(
+        senderDid,
+        "Note: this project asks to control who can register — I can't grant that here (it needs a signing key), so I'll leave it out.",
+      );
+    }
+    await core.sendDm(senderDid, confirmPrompt(manifest));
+    armIdleTimeout(core, senderDid);
+    return;
+  }
+
+  // step === "confirm": authorize which requested permissions to grant.
+  const manifest = iv.manifest!;
+  const reply = body.trim().toLowerCase();
+  let grant: string[];
+  if (reply === "yes" || reply === "y") {
+    grant = manifest.permissions;
+  } else if (reply === "none" || reply === "no") {
+    grant = [];
+  } else {
+    const picked: string[] = [];
+    for (const tok of body.trim().split(/[\s,]+/).filter((s) => s.length > 0)) {
+      const i = Number(tok);
+      if (!Number.isInteger(i) || i < 1 || i > manifest.permissions.length) {
+        await core.sendDm(senderDid, "Reply `yes`, `none`, a list of numbers, or /cancel.");
+        armIdleTimeout(core, senderDid);
+        return;
+      }
+      picked.push(manifest.permissions[i - 1]);
+    }
+    grant = picked;
+  }
+
+  endInterview(senderDid);
+  const result = await performInstall(core, env, manifest, grant);
+  await core.sendDm(senderDid, result.lines.join("\n"));
+  await setInterviewReaction(core, iv.react, result.ok ? REACT_DONE : REACT_FAILED);
+}
+
+// Create the project, grant the approved permissions, and mint the setup code.
+// A pre-existing slug (409) is non-fatal — still (re)grant + re-issue the code.
+async function performInstall(
+  core: AppCore,
+  env: Env,
+  manifest: ProjectManifest,
+  grant: string[],
+): Promise<{ ok: boolean; lines: string[] }> {
+  const { slug, name, url } = manifest;
+  const lines: string[] = [];
+  try {
+    await core.adminRequest(
+      "POST",
+      "/v1/admin/projects",
+      JSON.stringify({ slug, name, url: url ?? null, bot_dids: [] }),
+    );
+    lines.push(`Installed "${name}" (codename ${slug}).`);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes("409")) {
+      lines.push(`"${name}" (codename ${slug}) already existed — updated it.`);
+    } else {
+      return { ok: false, lines: [`Install failed: ${msg}`] };
+    }
+  }
+
+  const granted: string[] = [];
+  const failures: string[] = [];
+  for (const cap of grant) {
+    try {
+      await core.adminRequest(
+        "POST",
+        "/v1/admin/capabilities",
+        JSON.stringify({ project_slug: slug, capability: cap }),
+      );
+      granted.push(cap);
+    } catch (e) {
+      failures.push(`${permissionLabel(cap)} (${(e as Error).message})`);
+    }
+  }
+  if (granted.length) lines.push(`Granted: ${granted.map(permissionLabel).join(", ")}.`);
+  if (failures.length) lines.push(`Couldn't grant: ${failures.join("; ")}.`);
+
+  if (env.sharedSecret) {
+    const token = AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, slug);
+    lines.push(
+      "",
+      "Setup code for the project's bot (sensitive — don't share; rotate",
+      "REGISTRATION_SHARED_SECRET to revoke). Paste it into the bot's config as its",
+      "invite token and it'll sign up and link to this project automatically:",
+      token,
+    );
+  } else {
+    lines.push(
+      "",
+      "No setup secret is configured here, so I can't issue a setup code. On a",
+      "closed-registration server, set REGISTRATION_SHARED_SECRET; on an open server",
+      "the bot can sign up without one but won't auto-link to this project.",
+    );
+  }
+  return { ok: true, lines };
+}
+
+// `/list-projects` — list installed Projects and their capabilities.
+async function runListProjects(core: AppCore, channel: SendTarget): Promise<void> {
+  let raw: string;
+  try {
+    raw = await core.adminRequest("GET", "/v1/admin/projects", "");
+  } catch (e) {
+    await core.send(channel, `list failed: ${(e as Error).message}`);
+    return;
+  }
+  interface ProjectView {
+    slug: string;
+    name: string;
+    url: string | null;
+    has_signing_key: boolean;
+    capabilities: string[];
+    bot_dids: string[];
+    superuser: boolean;
+  }
+  let projects: ProjectView[];
+  try {
+    projects = (JSON.parse(raw) as { projects: ProjectView[] }).projects;
+  } catch {
+    await core.send(channel, `list failed: unexpected server response.`);
+    return;
+  }
+  if (projects.length === 0) {
+    await core.send(channel, "No projects installed.");
+    return;
+  }
+  const lines = [`Installed projects (${projects.length}):`];
+  for (const p of projects) {
+    const tags = [
+      p.superuser ? "superuser" : null,
+      p.capabilities.length > 0 ? `caps: ${p.capabilities.join(", ")}` : "no caps",
+      `bots: ${p.bot_dids.length}`,
+    ].filter(Boolean);
+    lines.push(`• ${p.name} (${p.slug})${p.url ? ` — ${p.url}` : ""} | ${tags.join(" | ")}`);
+  }
+  await core.send(channel, lines.join("\n"));
+}
+
+async function handleCommand(
+  core: AppCore,
+  env: Env,
+  adminsGroupId: string,
+  channel: SendTarget,
+  senderDid: string,
+  body: string,
+  triggerSentAt: DecryptedMessage["sentAt"],
+): Promise<void> {
   if (!body.startsWith("/")) return;
-  const [cmd] = body.split(/\s+/, 1);
+  const tokens = body.split(/\s+/);
+  const cmd = tokens[0];
   switch (cmd) {
     case "/whoami":
       await core.send(channel, `${senderDid} (admin)`);
@@ -511,15 +904,32 @@ async function handleCommand(
     case "/check":
       await runCheckCommand(core, env, channel);
       break;
+    case "/install-project":
+      if (!(await requireAdminsMember(core, adminsGroupId, senderDid))) {
+        await core.send(channel, "Only #admins members can install projects.");
+        break;
+      }
+      // Parameters are gathered via a DM interview, not the command line.
+      await startInstallInterview(core, senderDid, channel, triggerSentAt);
+      break;
+    case "/list-projects":
+      if (!(await requireAdminsMember(core, adminsGroupId, senderDid))) {
+        await core.send(channel, "Only #admins members can list projects.");
+        break;
+      }
+      await runListProjects(core, channel);
+      break;
     case "/help":
       await core.send(
         channel,
         [
           "Available commands:",
-          "  /whoami    echo your DID",
-          "  /audit     get status of all groups",
-          "  /check     check now for a newer Avalanche release",
-          "  /help      show this help",
+          "  /whoami           echo your DID",
+          "  /audit            get status of all groups",
+          "  /check            check now for a newer Avalanche release",
+          "  /install-project  install a Project — I'll DM you to paste its manifest (admins only)",
+          "  /list-projects    list installed Projects (admins only)",
+          "  /help             show this help",
         ].join("\n"),
       );
       break;

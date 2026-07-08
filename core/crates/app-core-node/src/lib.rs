@@ -1201,6 +1201,23 @@ impl AppCore {
             .map_err(to_napi)
     }
 
+    /// Generic authenticated request to an arbitrary homeserver path (bot
+    /// tooling escape hatch for `/v1/admin/*`). Returns the raw response body;
+    /// `bodyJson` empty means no body.
+    #[napi]
+    pub async fn admin_request(
+        &self,
+        method: String,
+        path: String,
+        body_json: String,
+    ) -> napi::Result<String> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.admin_request(method, path, body_json))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
     /// Project login, same-device front-end (docs/25): mint an OAuth
     /// authorization code post-consent.
     #[napi]

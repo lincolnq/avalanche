@@ -1371,6 +1371,26 @@ export class AppCore {
   }
 
   /**
+   * Issue an authenticated request to an arbitrary homeserver path and return
+   * the raw response body.
+   *
+   * This is the generic escape hatch bot tooling uses to reach admin endpoints
+   * (`/v1/admin/*`) that have no dedicated method — e.g. adminbot's
+   * `/install-project`. The request is authenticated as this account, so
+   * `/v1/admin/*` succeeds only when the account is the pinned adminbot.
+   * A non-2xx response rejects with an `Error` whose message carries the
+   * server's status and body.
+   *
+   * @param method HTTP verb, e.g. `"GET"` or `"POST"`.
+   * @param path Server path beginning with `/`, e.g. `"/v1/admin/projects"`.
+   * @param bodyJson JSON string sent as the request body, or `""` for no body.
+   * @category Projects
+   */
+  async adminRequest(method: string, path: string, bodyJson = ""): Promise<string> {
+    return await this._native.adminRequest(method, path, bodyJson);
+  }
+
+  /**
    * Project login ("Sign in with Avalanche"), same-device front-end (docs/25).
    * After the user consents in-app, mint an OAuth authorization code bound to
    * this account and the PKCE challenge. Redirect the browser to

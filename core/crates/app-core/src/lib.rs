@@ -821,9 +821,12 @@ pub enum IncomingEvent {
 /// can grow without breaking the consumer-facing `IncomingEvent` enum.
 #[derive(Debug, Clone)]
 pub enum AdminEvent {
-    /// A new account just registered on this homeserver. Only delivered to
-    /// bot accounts whose authed DID matches the server's pinned
-    /// `ADMINBOT_DID` — for any other session the channel stays empty.
+    /// A new account just registered on this homeserver. Delivered to any bot
+    /// session whose account holds the `subscribe.account_joined` capability
+    /// (the pinned adminbot Project gets it via the superuser short-circuit);
+    /// other sessions never receive it. Gated server-side at WS connect
+    /// (`server/src/routes/websocket.rs`), so external Projects granted the
+    /// capability get these live too, not just adminbot.
     AccountJoined { did: String, joined_at_ms: i64 },
 }
 
@@ -2103,6 +2106,31 @@ impl AppCore {
             let resp = self.client.request_project_token(&project_url).await
                 .map_err(AppError::from)?;
             Ok::<_, AppError>(resp.token)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Issue an authenticated request to an arbitrary homeserver path and return
+    /// the raw response body.
+    ///
+    /// This is the generic escape hatch bot tooling uses to reach admin
+    /// endpoints (`/v1/admin/*`) that have no dedicated FFI method — e.g.
+    /// adminbot's `/install-project` and `/list-projects`. The request is
+    /// authenticated as this account (so `/v1/admin/*` succeeds only when the
+    /// account is the pinned adminbot). `method` is an HTTP verb ("GET",
+    /// "POST", …); `body_json` is a JSON string sent as the request body, or
+    /// empty for no body. Non-2xx responses surface as a `Net` error whose
+    /// message carries the server's status and body.
+    pub fn admin_request(
+        &self,
+        method: String,
+        path: String,
+        body_json: String,
+    ) -> Result<String, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let body = if body_json.is_empty() { None } else { Some(body_json) };
+            let resp = self.client.admin_request(&method, &path, body).await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(resp)
         }).map_err(AppErrorFfi::from)
     }
 
