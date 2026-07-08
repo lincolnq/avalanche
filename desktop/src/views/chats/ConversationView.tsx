@@ -2,7 +2,6 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  onMount,
   For,
   Show,
   Switch,
@@ -128,10 +127,6 @@ export default function ConversationView(props: Props) {
     markAllMessagesRead(props.conversation.id, props.conversation.accountId);
   });
 
-  onMount(() => {
-    messagesEnd?.scrollIntoView();
-  });
-
   // createMemo ensures the For list re-renders when the async store write lands.
   const messages = createMemo(() => store.messagesByConversation[props.conversation.id] ?? []);
 
@@ -143,10 +138,20 @@ export default function ConversationView(props: Props) {
       .filter((a) => a.contentType.startsWith("image/")),
   );
 
-  // Auto-scroll when message count changes (new messages arrive or are sent).
+  // Scroll the timeline to the bottom when messages change. On first paint and
+  // when switching into a different conversation we jump instantly (no scroll
+  // animation) to the target position; once a conversation is already open, new
+  // messages arriving/sent animate smoothly into view. Tracking both the
+  // conversation id and the message count means the effect re-runs on switch
+  // and on the async initial load, and the id comparison tells the two apart.
+  let scrolledConvId: string | undefined;
   createEffect(() => {
-    messages().length; // track
-    messagesEnd?.scrollIntoView({ behavior: "smooth" });
+    const convId = props.conversation.id;
+    const count = messages().length; // track — re-run when messages load/arrive
+    if (count === 0) return; // nothing to anchor to yet
+    const jump = scrolledConvId !== convId;
+    scrolledConvId = convId;
+    messagesEnd?.scrollIntoView({ behavior: jump ? "auto" : "smooth" });
   });
 
   function changeTimer(secs: number) {
