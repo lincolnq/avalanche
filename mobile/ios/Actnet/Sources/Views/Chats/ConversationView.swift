@@ -388,7 +388,7 @@ struct ConversationView: View {
             if editingMessage == nil {
                 PhotosPicker(selection: $photoItem, matching: .images) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.title2)
+                        .font(.title)
                         .foregroundStyle(Color.avBrand)
                 }
                 // Paste an image from the clipboard (docs/35) — shown only when the
@@ -405,12 +405,18 @@ struct ConversationView: View {
             TextField(editingMessage == nil ? "Message" : "Edit message", text: $messageText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
+                // A rounded "pill" surrounding the text lifts it off the page.
+                // Native Liquid Glass on iOS 26+, a card fill + gentle shadow on
+                // earlier versions (see composerPillBackground).
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .composerPillBackground()
 
             Button {
                 if editingMessage != nil { applyEdit() } else { send() }
             } label: {
                 Image(systemName: editingMessage != nil ? "checkmark.circle.fill" : "arrow.up.circle.fill")
-                    .font(.title2)
+                    .font(.title)
             }
             .disabled(!canSend)
         }
@@ -852,5 +858,25 @@ struct GroupSystemEventRow: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .accessibilityAddTraits(.isStaticText)
+    }
+}
+
+private extension View {
+    /// Background for the message-composer input pill. On iOS 26+ this is the
+    /// native Liquid Glass material (`glassEffect`), which adapts to light/dark
+    /// and the content behind it. On iOS 18–25, where Liquid Glass isn't
+    /// available, it falls back to a solid `avCard` fill with a gentle drop
+    /// shadow so the pill still lifts off the page.
+    @ViewBuilder
+    func composerPillBackground() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        } else {
+            self.background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.avCard)
+                    .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+            )
+        }
     }
 }

@@ -333,7 +333,7 @@ export default function ComposeMessageView(props: Props) {
             disabled={sending() || uploading()}
             onClick={() => fileInputRef?.click()}
           >
-            <TbOutlinePaperclip size={20} />
+            <TbOutlinePaperclip size={24} />
           </button>
           <input
             ref={fileInputRef}
@@ -369,7 +369,7 @@ export default function ComposeMessageView(props: Props) {
           )}
         </div>
         <button class="send-btn" disabled={!canSend() || sending() || uploading()} onClick={handleSend}>
-          <FiArrowUp size={20} />
+          <FiArrowUp size={24} />
         </button>
       </div>
     </div>

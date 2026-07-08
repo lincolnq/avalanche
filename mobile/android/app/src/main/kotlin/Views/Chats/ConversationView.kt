@@ -13,6 +13,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -861,6 +862,7 @@ private fun Composer(
                         imageVector = Icons.Filled.AddCircle,
                         contentDescription = "Attach",
                         tint = LocalAvalancheColors.current.brand,
+                        modifier = Modifier.size(28.dp),
                     )
                 }
                 // Paste an image from the clipboard (docs/35) — shown only when the
@@ -883,7 +885,9 @@ private fun Composer(
                 onValueChange = onMessageTextChange,
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(max = 120.dp),
+                    .heightIn(max = 120.dp)
+                    // Gentle drop shadow so the pill lifts off the page.
+                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(24.dp)),
                 placeholder = {
                     Text(
                         text = if (editingMessage == null) "Message" else "Edit message",
@@ -915,7 +919,7 @@ private fun Composer(
                 enabled = canSend,
                 modifier = Modifier
                     .padding(bottom = 4.dp)
-                    .size(40.dp)
+                    .size(44.dp)
                     .background(
                         color = if (canSend) LocalAvalancheColors.current.brand else LocalAvalancheColors.current.divider,
                         shape = CircleShape,
@@ -925,6 +929,7 @@ private fun Composer(
                     imageVector = if (editingMessage != null) Icons.Filled.Check else Icons.Filled.ArrowUpward,
                     contentDescription = if (editingMessage != null) "Apply edit" else "Send",
                     tint = LocalAvalancheColors.current.paper,
+                    modifier = Modifier.size(26.dp),
                 )
             }
         }

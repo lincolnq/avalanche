@@ -41,8 +41,8 @@
 /* ── Attachment button + hidden file input ─────────────────────────────── */
 
 .compose-attach-btn {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   background: none;
   color: var(--color-text-secondary);
@@ -139,7 +139,8 @@
   padding: 6px 12px;            /* 12px H inset, 6px V inset */
   border-radius: 18px;          /* pill shape */
   border: 1px solid transparent;/* invisible at rest */
-  background: rgba(107, 62, 80, 0.05); /* slightly elevated surface */
+  background: var(--color-surface); /* lighter than page bg in light mode */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); /* gentle lift off the page */
   color: var(--color-text);
   font-family: inherit;
   font-size: 14px;
@@ -157,7 +158,6 @@
 }
 .compose-input:focus {
   border-color: var(--color-accent);
-  background: rgba(107, 62, 80, 0.08);
 }
 .compose-input::placeholder {
   color: var(--color-text-secondary);
@@ -204,8 +204,8 @@
 /* ── Send button ───────────────────────────────────────────────────────── */
 
 .send-btn {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   background: none;             /* no background at rest */
   color: var(--color-accent);   /* accent icon fill */
