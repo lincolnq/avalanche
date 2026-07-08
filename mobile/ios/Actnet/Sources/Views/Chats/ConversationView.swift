@@ -184,6 +184,9 @@ struct ConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition($scrollPosition)
+            // Swipe down on the thread to interactively "catch" and drag the
+            // keyboard away with your finger (iMessage-style).
+            .scrollDismissesKeyboard(.interactively)
             .onScrollTargetVisibilityChange(idType: Int64.self) { visibleIDs in
                 guard scenePhase == .active, let threshold = visibleIDs.last else { return }
                 appState.markMessagesReadUpTo(
