@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -180,40 +181,54 @@ fun ConversationRow(
 }
 
 /**
- * Mirrors SwiftUI's `Text(date, style: .relative)` — returns a short human-
- * readable relative label ("just now", "5m", "2h", "Mon", "Jan 3", etc.).
+ * Chat-list timestamp label (shared format across iOS/Android/Desktop). Uses
+ * calendar-day boundaries, not elapsed hours, so a late-yesterday message reads
+ * as a weekday rather than a time:
+ *   <1m -> "now", <1h -> "5m", same day -> "3:43 PM", <1wk -> "Tue",
+ *   older -> locale-ordered short date.
+ * The in-conversation message view uses a different format (out of scope here).
  */
 private fun relativeTimeLabel(date: Date): String {
     val nowMs = System.currentTimeMillis()
     val diffMs = nowMs - date.time
     val diffMin = TimeUnit.MILLISECONDS.toMinutes(diffMs)
-    val diffHr = TimeUnit.MILLISECONDS.toHours(diffMs)
-    val diffDays = TimeUnit.MILLISECONDS.toDays(diffMs)
 
     return when {
-        diffMin < 1 -> "just now"
+        diffMin < 1 -> "now"
         diffMin < 60 -> "${diffMin}m"
-        diffHr < 24 -> "${diffHr}h"
-        diffDays < 7 -> {
-            // Day of week abbreviation
+        isSameDay(date.time, nowMs) -> {
+            // Locale short time, e.g. "3:43 PM"
+            DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(date)
+        }
+        calendarDaysBetween(date.time, nowMs) < 7 -> {
+            // Day-of-week abbreviation, e.g. "Tue"
             SimpleDateFormat("EEE", Locale.getDefault()).format(date)
         }
-        isCurrentYear(date) -> {
-            // e.g. "Jan 3"
-            SimpleDateFormat("MMM d", Locale.getDefault()).format(date)
-        }
         else -> {
-            // e.g. "1/3/23"
-            SimpleDateFormat("M/d/yy", Locale.getDefault()).format(date)
+            // Locale short date (locale-ordered day/month), e.g. "1/3/26"
+            DateFormat.getDateInstance(DateFormat.SHORT, Locale.getDefault()).format(date)
         }
     }
 }
 
-private fun isCurrentYear(date: Date): Boolean {
-    val cal = Calendar.getInstance()
-    val nowYear = cal.get(Calendar.YEAR)
-    cal.time = date
-    return cal.get(Calendar.YEAR) == nowYear
+/** True if the two epoch-ms instants fall on the same local calendar day. */
+private fun isSameDay(aMs: Long, bMs: Long): Boolean {
+    val a = Calendar.getInstance().apply { timeInMillis = aMs }
+    val b = Calendar.getInstance().apply { timeInMillis = bMs }
+    return a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
+        a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+}
+
+/** Whole local calendar days from `earlierMs` (midnight) to `laterMs` (midnight). */
+private fun calendarDaysBetween(earlierMs: Long, laterMs: Long): Long {
+    fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = ms
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    return TimeUnit.MILLISECONDS.toDays(startOfDay(laterMs) - startOfDay(earlierMs))
 }
 
 // ---------------------------------------------------------------------------

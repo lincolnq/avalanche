@@ -87,7 +87,7 @@ struct ConversationRow: View {
                     Spacer()
 
                     if let date = conversation.lastMessageDate {
-                        Text(date, style: .relative)
+                        Text(Self.chatListTimestamp(date))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -137,5 +137,33 @@ struct ConversationRow: View {
 
     private var showAccountIndicator: Bool {
         appState.accounts.count > 1
+    }
+
+    /// Chat-list timestamp label (shared format across iOS/Android/Desktop). Uses
+    /// calendar-day boundaries, not elapsed hours, so a late-yesterday message
+    /// reads as a weekday rather than a time:
+    ///   <1m -> "now", <1h -> "5m", same day -> "3:43 PM", <1wk -> "Tue",
+    ///   older -> locale-ordered short date.
+    /// The in-conversation message view uses a different format (out of scope here).
+    static func chatListTimestamp(_ date: Date, now: Date = Date()) -> String {
+        let elapsed = now.timeIntervalSince(date)
+        if elapsed < 60 { return "now" }
+        if elapsed < 3600 { return "\(Int(elapsed / 60))m" }
+
+        let cal = Calendar.current
+        if cal.isDate(date, inSameDayAs: now) {
+            // Locale short time, e.g. "3:43 PM".
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        // Within the last 7 calendar days -> short weekday ("Tue"). A weekday
+        // label is ambiguous at exactly 7 days, so day 7+ falls through to a date.
+        let days = cal.dateComponents(
+            [.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)
+        ).day ?? 0
+        if days < 7 {
+            return date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        // Older -> locale short date (locale-ordered day/month).
+        return date.formatted(date: .numeric, time: .omitted)
     }
 }

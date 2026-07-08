@@ -51,20 +51,35 @@ export function formatTime(ms: number): string {
 }
 
 /**
- * Formats a unix-ms timestamp as a relative string for the conversation list.
- * < 60s → "Just now", < 60m → "{m}m", < 24h → "{h}h", < 48h → "Yesterday",
- * else locale date string.
+ * Formats a unix-ms timestamp for the conversation list (shared format across
+ * iOS/Android/Desktop). Uses calendar-day boundaries, not elapsed hours, so a
+ * late-yesterday message reads as a weekday rather than a time:
+ *   < 1m → "now", < 1h → "{m}m", same day → "3:43 PM", < 1wk → "Tue",
+ *   older → locale-ordered short date.
+ * The in-conversation message view uses a different format (out of scope here).
  */
 export function formatRelative(ms: number): string {
-  const diff = Date.now() - ms;
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return "Just now";
-  const mins = Math.floor(secs / 60);
+  const now = Date.now();
+  const diff = now - ms;
+  if (diff < 60_000) return "now";
+  const mins = Math.floor(diff / 60_000);
   if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  if (hours < 48) return "Yesterday";
-  return new Date(ms).toLocaleDateString();
+
+  const date = new Date(ms);
+  const nowDate = new Date(now);
+  // Same local calendar day → locale short time ("3:43 PM").
+  if (date.toDateString() === nowDate.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  // Within the last 7 calendar days → short weekday ("Tue"). A weekday label is
+  // ambiguous at exactly 7 days, so day 7+ falls through to a dated string.
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(nowDate) - startOfDay(date)) / 86_400_000);
+  if (dayDiff < 7) return date.toLocaleDateString([], { weekday: "short" });
+
+  // Older → locale short date (locale-ordered day/month).
+  return date.toLocaleDateString();
 }
 
 /**

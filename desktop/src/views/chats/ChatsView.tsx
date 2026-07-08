@@ -20,6 +20,15 @@ export default function ChatsView() {
     store.conversations.reduce((sum, c) => sum + unreadCount(c), 0)
   );
 
+  // Sort by recency at render (parity with iOS/Android), not just at store-load:
+  // rows appended by findOrCreateDM/GroupConversation and in-place title updates
+  // don't re-sort the store, so the render must own the ordering.
+  const sortedConversations = createMemo(() =>
+    [...store.conversations].sort(
+      (a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
+    )
+  );
+
   return (
     <div class="chats-split">
       <div class="chats-list-panel">
@@ -43,7 +52,7 @@ export default function ChatsView() {
         <OfflineBanner />
         <div class="conversation-list scrollbar-thin">
           <For
-            each={store.conversations}
+            each={sortedConversations()}
             fallback={
               <div class="empty-state">
                 No conversations yet. Join a server to get started.
