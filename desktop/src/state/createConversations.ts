@@ -47,6 +47,11 @@ export type Conversations = Pick<
     accountId: string
   ) => Conversation;
   cachedDisplayName: (did: string) => string | undefined;
+  resolveIncomingSender: (
+    did: string,
+    accountId: string,
+    profileKey: number[] | null
+  ) => Promise<void>;
   resetCaches: () => void;
 };
 
@@ -325,6 +330,40 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     return conv;
   }
 
+  // Two-step display-name resolve shared by the lazy getter (displayName) and
+  // the inbound-message path (resolveIncomingSender): the encrypted contact
+  // profile first (where human display names live), then the public account
+  // record via getAccountInfo so bots — whose names are plaintext server-side,
+  // e.g. did:local:adminbot — resolve too. Caches the result (even empty, to
+  // stop refetch loops) and updates any matching DM title. Mirrors iOS
+  // resolveDisplayName (AppState.swift).
+  async function fetchAndResolveName(did: string, accountId: string): Promise<void> {
+    const svc = serviceFor(accountId);
+    let resolved = "";
+    try {
+      resolved = await svc.contactDisplayName(did);
+      if (!resolved) {
+        const info = await svc.getAccountInfo(did);
+        resolved = info.displayName ?? "";
+        // Cache the is-bot flag we just fetched so the avatar resolves to a
+        // hexagon without a second getAccountInfo round-trip.
+        setIsBotCache(did, info.isBot);
+      }
+    } catch (e: unknown) {
+      console.warn("resolveName failed:", did, e);
+    }
+    // Always cache — even empty strings — to prevent infinite refetch. Only
+    // update conversation titles when a non-empty name arrives.
+    setDisplayNameCache(did, resolved);
+    if (resolved) {
+      store.conversations.forEach((c, i) => {
+        if (c.recipientDid === did && c.title === did) {
+          setStore("conversations", i, "title", resolved);
+        }
+      });
+    }
+  }
+
   function displayName(did: string, accountId: string): string {
     const own = store.accounts.find((a) => a.id === did);
     if (own) return own.displayName;
@@ -335,28 +374,44 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     // Guard against duplicate in-flight fetches for the same DID.
     if (!displayNamePending.has(did)) {
       displayNamePending.add(did);
-      void serviceFor(accountId)
-        .contactDisplayName(did)
-        .then((name) => {
-          // Always cache — even empty strings — to prevent infinite refetch.
-          // Only update conversation titles when a non-empty name arrives.
-          setDisplayNameCache(did, name);
-          if (name) {
-            store.conversations.forEach((c, i) => {
-              if (c.recipientDid === did && c.title === did) {
-                setStore("conversations", i, "title", name);
-              }
-            });
-          }
-        })
-        .catch((e: unknown) => {
-          console.warn("contactDisplayName failed:", did, e);
-        })
-        .finally(() => {
-          displayNamePending.delete(did);
-        });
+      void fetchAndResolveName(did, accountId).finally(() =>
+        displayNamePending.delete(did)
+      );
     }
     return did;
+  }
+
+  // Resolve an inbound DM sender's display name so the conversation shows a real
+  // name, not the raw DID. If a profile key rode on the message, fetch + cache
+  // the sender's encrypted profile FIRST — human names live there, and calling
+  // the resolver before the profile is cached would poison displayNameCache with
+  // an empty string (both lookups miss) and the guard would then block a
+  // re-resolve. Bots carry no profile key and resolve via getAccountInfo inside
+  // the shared resolver. No-op once a non-empty name is cached (so we don't
+  // refetch a profile on every inbound message). Mirrors iOS inbound handling
+  // (AppState.swift fetchAndCacheProfile + resolveDisplayName).
+  async function resolveIncomingSender(
+    did: string,
+    accountId: string,
+    profileKey: number[] | null
+  ): Promise<void> {
+    if (store.accounts.some((a) => a.id === did)) return; // own identity
+    if (displayNameCache[did]) return; // already resolved to a real name
+    if (profileKey) {
+      await serviceFor(accountId)
+        .fetchAndCacheProfile(did, new Uint8Array(profileKey))
+        .catch((e: unknown) =>
+          console.warn("fetchAndCacheProfile (incoming) failed:", did, e)
+        );
+    }
+    // Resolve directly via the shared resolver (not the guarded getter) so a
+    // prior empty-cache entry is overwritten now that the profile is present.
+    if (!displayNamePending.has(did)) {
+      displayNamePending.add(did);
+      await fetchAndResolveName(did, accountId).finally(() =>
+        displayNamePending.delete(did)
+      );
+    }
   }
 
   // Reactive is-bot lookup (docs/54 bot presentation). Returns the cached value
@@ -457,6 +512,7 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     getServerUrl,
     findOrCreateGroupConversation,
     cachedDisplayName,
+    resolveIncomingSender,
     resetCaches,
   };
 }

@@ -26,6 +26,15 @@ export interface EventLoopsDeps {
   reloadConversations: () => Promise<void>;
   getServerUrl: (accountId: string) => string;
   cachedDisplayName: (did: string) => string | undefined;
+  // Resolve an inbound DM sender's display name (fetching their encrypted
+  // profile first if a key rode on the message, falling back to getAccountInfo
+  // for bots) and update the conversation title when it lands — so a DM from a
+  // new sender (e.g. adminbot) shows a real name, not the raw DID.
+  resolveIncomingSender: (
+    did: string,
+    accountId: string,
+    profileKey: number[] | null
+  ) => Promise<void>;
   reloadMessagesIfLoaded: (cid: string) => void;
   clearReactionsForMessage: (
     conversationId: string,
@@ -61,6 +70,7 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
     reloadConversations,
     getServerUrl,
     cachedDisplayName,
+    resolveIncomingSender,
     reloadMessagesIfLoaded,
     clearReactionsForMessage,
     selectedConversationId,
@@ -126,7 +136,17 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
   // NotificationPresenter.present). Suppressed when the user is already viewing
   // this conversation in a focused window; shown otherwise (window unfocused, or
   // focused on a different conversation). Permission is requested on first use.
-  async function maybeNotify(conversationId: string, senderDid: string, body: string) {
+  // `senderResolved` is the in-flight display-name resolution for this sender:
+  // if the sender isn't named yet we wait on it so the alert shows a real name
+  // (or "Unknown"), never the raw DID — mirrors iOS, which defers an unknown
+  // sender's notification until resolution completes. A known sender notifies
+  // immediately without waiting.
+  async function maybeNotify(
+    conversationId: string,
+    senderDid: string,
+    body: string,
+    senderResolved: Promise<void>
+  ) {
     const text = body.trim();
     if (!text) return;
     try {
@@ -135,7 +155,12 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === "granted";
       if (!granted) return;
-      const title = cachedDisplayName(senderDid) || senderDid;
+      let name = cachedDisplayName(senderDid);
+      if (!name) {
+        await senderResolved;
+        name = cachedDisplayName(senderDid);
+      }
+      const title = name || "Unknown";
       const preview = text.length > 120 ? text.slice(0, 120) + "…" : text;
       sendNotification({ title, body: preview });
     } catch (e) {
@@ -315,9 +340,6 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
         setStore("conversations", ci, "unreadCount", (n) => (n ?? 0) + 1);
       }
     }
-    // Fire a native notification for the inbound message (suppressed when the
-    // user is already viewing this conversation in a focused window).
-    void maybeNotify(conversationId, m.senderDid, body);
     // Persist the incoming message. app-core does NOT persist messages on the
     // receive path (the client owns local history), so without this every
     // received message is lost on app restart/refresh while sent messages
@@ -369,7 +391,10 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
       const serverUrl = getServerUrl(accountId);
       const newConv: Conversation = {
         id: conversationId,
-        title: isGroup ? "Group" : m.senderDid,
+        // Non-fetching name read for the initial title; the async
+        // resolveIncomingSender below fetches + fills in the real name (updating
+        // this row's title) so we don't leave the raw DID showing.
+        title: isGroup ? "Group" : cachedDisplayName(m.senderDid) || m.senderDid,
         accountId,
         serverUrl,
         recipientDid: isGroup ? undefined : m.senderDid,
@@ -393,6 +418,21 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
           });
       }
     }
+
+    // Resolve the DM sender's display name so the conversation shows a real name
+    // instead of the raw DID — fetches the sender's encrypted profile if a key
+    // rode on the message (human names), falling back to getAccountInfo for bots
+    // (e.g. adminbot). No-op for groups and for already-resolved senders.
+    // Mirrors iOS inbound-message profile handling (AppState.swift).
+    const senderResolved = m.groupId
+      ? Promise.resolve()
+      : resolveIncomingSender(m.senderDid, accountId, m.profileKey);
+
+    // Fire the native notification, sharing the single resolve above: an unknown
+    // sender's alert waits for it so we show a real name (or "Unknown"), never
+    // the raw DID; a known sender notifies immediately. (Suppressed when the
+    // user is already viewing this conversation in a focused window.)
+    void maybeNotify(conversationId, m.senderDid, body, senderResolved);
   }
 
   // Apply a batch of delivery-status receipts (iOS `applyDeliveryStatusUpdates`).

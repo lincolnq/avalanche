@@ -86,6 +86,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     getServerUrl,
     findOrCreateGroupConversation,
     cachedDisplayName,
+    resolveIncomingSender,
     resetCaches,
   } = conversations;
 
@@ -157,6 +158,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     reloadConversations,
     getServerUrl,
     cachedDisplayName,
+    resolveIncomingSender,
     reloadMessagesIfLoaded,
     clearReactionsForMessage,
     selectedConversationId,
