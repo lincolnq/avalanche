@@ -24,6 +24,7 @@ This doc gives the boundary as a few rules and a deliberately small set of surfa
 | Giphy / sticker / GIF search              | **Project**         | "+" menu → webview             | Entry point opens a webview that returns a GIF you send                                     |
 | Cardstack / swipe survey                  | **Project**         | magic link → webview           | Bot posts a magic link → webview; the bot posts results back                                |
 | "Create task from this", "Translate this" | **Project**         | message long-press → webview   | Entry point opens a webview with the message as context                                     |
+| "Flag this member", "Assign to team"      | **Project**         | participant long-press → webview | Entry point opens a webview with the target member as context (bot-gated)                  |
 | Action Day map + markers                  | **Project**         | Network tab → webview          | Destination Project; builds on the core location primitive                                  |
 
 
@@ -51,12 +52,13 @@ It really comes down to one primitive, plus rich text. (And one anti-surface, li
 
 Everything interactive is "open a Project's webview, with context and a scoped token." There are two ways a webview opens: a **registered entry point** and a **magic link**.
 
-A Project registers **entry points** — `{ id, label, icon, scope }` — that core surfaces in one of two places:
+A Project registers **entry points** — `{ id, label, icon, scope }` — that core surfaces in one of three places:
 
 - the composer **"+" menu** (`surface.compose`),
 - the **message long-press menu** (`message.context-on-action`) — the entry point receives that message as context, an explicit, per-message disclosure to the Project, consent-gated by the tap.
+- the **participant long-press menu** (`participant.context-on-action`) — long-pressing a group member surfaces the Project's entries for *that member*; invoking one opens the webview with the target member's DID as context. Groups only (a DM has no participant list). Unlike the "+" menu, this is **bot-membership-gated**: it appears only where the Project's bot is already a visible member of the group, so the tap discloses the invoking user's *intent* to act on a member, not a new membership fact — the bot already holds the roster (see `20-project-security.md`, *Client surfaces*).
 
-A **magic link** is the third path, and it is *not* a registered entry point: it's a Project-issued, self-authenticating link that opens the Project's webview wherever it's tapped — including from inside a message (e.g. a bot posts "Priorities deck — tap to rank 12 items"). The link carries no credential; the clicking device injects a Project-scoped identity token at tap time, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule). Because the client recognizes it by URL against that allowlist rather than by a registered id, *anyone* can share a magic link — it isn't restricted to the owning bot or to conversations the bot is a member of. It is typically dressed with a rich-text label (a link span) for presentation. See `20-project-security.md`, *Project permissions* (`identity.magic-links`).
+A **magic link** is a separate path, and it is *not* a registered entry point: it's a Project-issued, self-authenticating link that opens the Project's webview wherever it's tapped — including from inside a message (e.g. a bot posts "Priorities deck — tap to rank 12 items"). The link carries no credential; the clicking device injects a Project-scoped identity token at tap time, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule). Because the client recognizes it by URL against that allowlist rather than by a registered id, *anyone* can share a magic link — it isn't restricted to the owning bot or to conversations the bot is a member of. It is typically dressed with a rich-text label (a link span) for presentation. See `20-project-security.md`, *Project permissions* (`identity.magic-links`).
 
 Slash commands are **not** one of these — they don't invoke anything client-side. They're a separate, lighter thing (next).
 
@@ -119,6 +121,8 @@ Everything interactive beyond a poll vote is either content the user sends as a 
 **Bot-formatted announcement** — an adminbot posts a message with **rich-text ranges** (API 3): bold headers, links, emphasis. No new surface; just formatting on a normal bot message.
 
 **Message actions ("create task", "translate")** — a Project entry point in the long-press menu; the selected message is disclosed to the Project (by opening its webview with that message as context) on the explicit tap.
+
+**Participant actions ("flag this member", "assign to team")** — a Project entry point in the *participant* long-press menu (groups only). Long-pressing a member surfaces the Project's entries for that member; tapping one opens the Project's webview with the target member's DID as context (a moderation bot's flag-with-reason dialog, a directory's "add to team" picker). It reuses the one primitive — entry point → webview-with-context — so there's no new client→Project channel and no in-feed widget; a lightweight "flag" is just a tiny confirm webview whose backend + bot then act. The one wrinkle over message actions: the context is a *third party's* DID + group membership, so this surface is **bot-membership-gated** (the bot is already a member and holds the roster; §3.9 stays intact) rather than the per-account scope a bot-free compose helper gets. Role-gating (moderation entries are admin-only) is enforced Project-side via the bot's own view of the actor's role, not by core.
 
 **Slash commands** — a bot's command-manifest typeahead (API 4). Typing `/` reminds you what the conversation's bot(s) understand; picking one *sends a normal message* the bot interprets. Not an entry point, opens nothing — just message-authoring help. A one-line `/ban @user spam` is the whole interaction, which is why it suits adminbot's advanced controls.
 

@@ -450,7 +450,8 @@ system if ever added.
 
 **Scopes (`20`):** identity (`pseudonymous` default / `real-did` / `magic-links` / `profile.read`),
 messaging reach (`dm.initiate`, `dm.bypass-request`, `invites.auto-accept` — same-server only), client
-surfaces (`surface.compose`/`slash-commands`/`emoji`, `message.context-on-action`). **Identity tier is
+surfaces (`surface.compose`/`slash-commands`/`emoji`, `message.context-on-action`,
+`participant.context-on-action`). **Identity tier is
 derived from the interaction model, not freely chosen:** any bot-bearing Project learns the real DID through
 the messaging channel, so `pseudonymous` is only coherent for webview-only Projects. **"Officialness" is NOT
 a trust primitive** — it decomposes into a same-server `official` flag (the ✓ badge, on the bot's account
@@ -474,7 +475,11 @@ E2E); push real interactivity into an explicit full-screen webview.
 - **Split:** rich text (BodyRanges — bot-authored first), custom emoji packs, slash commands (a slash
   command is just a `TextMessage` a member-bot interprets — no wire change, autocomplete is a reminder).
 - **Project (webview):** Giphy/stickers (return content via `attach` deeplink, sender-fetched, never auto-
-  sent), cardstack survey (magic link → webview → bot posts result), message actions.
+  sent), cardstack survey (magic link → webview → bot posts result), message actions
+  (`message.context-on-action`), **participant actions** (`participant.context-on-action` — member
+  long-press → webview with target DID as context, e.g. "flag this member"; groups only, **bot-membership-
+  gated** so the tap discloses only the actor's intent, not a new membership fact — §3.9 intact; a bot-free
+  webview-only Project is ineligible).
 - **Explicitly NOT built:** inline interactive cards / in-feed form controls (redundant phishing-prone middle
   layer once a webview exists). Lightweight in-feed actions = reactions/replies a bot observes.
 - **Magic links:** Project-issued self-authenticating links; the *clicking* device mints a scoped token at
