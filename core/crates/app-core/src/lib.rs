@@ -2113,9 +2113,9 @@ impl AppCore {
     /// the raw response body.
     ///
     /// This is the generic escape hatch bot tooling uses to reach admin
-    /// endpoints (`/v1/admin/*`) that have no dedicated FFI method — e.g.
+    /// endpoints (under `/v1/admin/`) that have no dedicated FFI method — e.g.
     /// adminbot's `/install-project` and `/list-projects`. The request is
-    /// authenticated as this account (so `/v1/admin/*` succeeds only when the
+    /// authenticated as this account (so an `/v1/admin/` request succeeds only when the
     /// account is the pinned adminbot). `method` is an HTTP verb ("GET",
     /// "POST", …); `body_json` is a JSON string sent as the request body, or
     /// empty for no body. Non-2xx responses surface as a `Net` error whose
