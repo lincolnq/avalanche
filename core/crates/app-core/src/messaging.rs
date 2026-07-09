@@ -1534,6 +1534,11 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                         );
                     }
                     drop(inner);
+                    // Ensure the live receive loop re-subscribes to the new
+                    // group's pseudonym even if the direct subscribe in
+                    // `complete_join_group` was skipped (WS not connected at
+                    // that instant) or raced the one-shot connect-time subscribe.
+                    core.groups_changed.notify_one();
                     let _ = core.event_tx.send(IncomingEvent::GroupInvite {
                         group_id,
                         hosting_server_url: ctx.hosting_server_url.clone(),

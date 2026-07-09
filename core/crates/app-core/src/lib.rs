@@ -1020,6 +1020,10 @@ async fn reconcile_group(
                 .await;
         }
     }
+    drop(inner);
+    // Nudge the live receive loop to re-subscribe now (the direct subscribe
+    // above is skipped when the WS wasn't connected at reconcile time).
+    core.groups_changed.notify_one();
     Ok(())
 }
 
@@ -1099,6 +1103,15 @@ pub struct AppCore {
     /// connection — passed in as its `probe_notify`). Fired by `reconnect_now`
     /// and by `set_app_active(true)` on a foreground transition.
     pub(crate) reconnect_notify: Arc<tokio::sync::Notify>,
+    /// Poke source for re-subscribing the live WS to our group push pseudonyms.
+    /// Fired whenever the set of groups we belong to changes on an *already
+    /// open* connection (join / accept / create / reconcile). The receive loop
+    /// (`connection::run_receive_loop`) waits on it and re-sends the full
+    /// pseudonym set. Without this, a group joined mid-connection is only
+    /// subscribed at the next full reconnect — so its fan-outs (e.g. adminbot
+    /// replies in `#admins`) never arrive until then. A no-op while
+    /// disconnected: the connect-time subscribe is the backstop.
+    pub(crate) groups_changed: Arc<tokio::sync::Notify>,
     /// Whether the app is foreground-active. Gates the periodic keepalive in
     /// `net`'s reader (foreground-only, for battery). Defaults `true` so headless
     /// bots — which never call `set_app_active` — keep their keepalive running.
@@ -1195,6 +1208,7 @@ impl AppCore {
             expire_notify: Arc::new(tokio::sync::Notify::new()),
             expire_reaper_task: std::sync::Mutex::new(None),
             reconnect_notify: Arc::new(tokio::sync::Notify::new()),
+            groups_changed: Arc::new(tokio::sync::Notify::new()),
             app_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             link_state: std::sync::Mutex::new(None),
         }
@@ -4721,6 +4735,8 @@ impl AppCore {
                 created.group_id
             );
         }
+        drop(inner);
+        self.groups_changed.notify_one();
         Ok(created)
     }
 
@@ -4875,6 +4891,8 @@ impl AppCore {
             tracing::warn!("[groups] resubscribe group pseudonyms after accept_invite failed: {e}");
         }
         inner.refresh_recovery_blob_best_effort().await;
+        drop(inner);
+        self.groups_changed.notify_one();
         Ok(())
     }
 

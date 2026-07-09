@@ -2340,6 +2340,8 @@ impl AppCore {
             let _ = seed_own_sender_key(&mut inner.store, &did, device_id, &mk).await?;
             // Sync server-side blob so a future recovery can rejoin this group.
             inner.refresh_recovery_blob_best_effort().await;
+            drop(inner);
+            self.groups_changed.notify_one();
             Ok::<_, AppError>(CreatedGroupFfi {
                 group_id: created.group_id,
                 master_key: created.master_key,
@@ -2507,6 +2509,8 @@ impl AppCore {
             inner
                 .complete_join_group(ws.as_ref(), &hosting_server_url, &group_id)
                 .await?;
+            drop(inner);
+            self.groups_changed.notify_one();
             Ok::<_, AppError>(())
         })
         .map_err(AppErrorFfi::from)

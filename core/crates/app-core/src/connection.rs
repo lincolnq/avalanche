@@ -177,6 +177,17 @@ async fn try_connect_ws(core: &AppCore) -> Result<net::ws::WsConnection, AppErro
 async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
     loop {
         tokio::select! {
+            // A group was joined/left/reconciled on this live connection. Re-send
+            // the full pseudonym set so the new group starts receiving fan-outs
+            // immediately, without waiting for the next reconnect. The connect-time
+            // subscribe only runs once, over the groups that existed at connect;
+            // this arm keeps the subscription in sync as the group set changes.
+            _ = core.groups_changed.notified() => {
+                let store = { core.inner.lock().await.store.clone() };
+                if let Err(e) = subscribe_all_group_pseudonyms(&store, Some(ws)).await {
+                    tracing::warn!("[ws] re-subscribe on group change failed: {e}");
+                }
+            }
             delivery = ws.next_message() => {
                 let delivery = match delivery {
                     Ok(Some(d)) => d,
