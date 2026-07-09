@@ -64,7 +64,7 @@ pub enum WsPush {
         kyber_remaining: i64,
     },
     /// A new account just registered on this server. Pushed to every
-    /// connected bot session that holds the `subscribe.account_joined`
+    /// connected bot session that holds the `accounts.read`
     /// capability (see [`AppState::account_joined_subscribers`]).
     AccountJoined {
         did: String,
@@ -102,7 +102,7 @@ pub struct AppState {
     /// sign per-message `SenderCertificate`s in the sealed-sender group
     /// flow. Trust root pubkey is published via `/v1/groups/server-params`.
     pub sender_cert_chain: Arc<SenderCertChain>,
-    /// Connected bot sessions that hold the `subscribe.account_joined`
+    /// Connected bot sessions that hold the `accounts.read`
     /// capability: internal device PK -> sender channel. Populated by the WS
     /// handler at connect time after resolving the account's capabilities
     /// (the pinned adminbot Project's bots get it via the superuser

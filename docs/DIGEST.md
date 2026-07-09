@@ -448,13 +448,13 @@ params in, intercepted deeplinks out (`theavalanche://compose/attach?url=`, `...
 SQLCipher DB/keys/conversations. Origin-isolated per Project. A JS bridge would need a scoped-permission
 system if ever added.
 
-**Scopes (`20`):** identity (`pseudonymous` default / `real-did` / `magic-links` / `profile:read`),
-messaging reach (`dm:initiate`, `dm:bypass-request`, `invites:auto-accept` — same-server only), client
-surfaces (`surface:compose`/`slash-commands`/`emoji`, `message:context-on-action`). **Identity tier is
+**Scopes (`20`):** identity (`pseudonymous` default / `real-did` / `magic-links` / `profile.read`),
+messaging reach (`dm.initiate`, `dm.bypass-request`, `invites.auto-accept` — same-server only), client
+surfaces (`surface.compose`/`slash-commands`/`emoji`, `message.context-on-action`). **Identity tier is
 derived from the interaction model, not freely chosen:** any bot-bearing Project learns the real DID through
 the messaging channel, so `pseudonymous` is only coherent for webview-only Projects. **"Officialness" is NOT
 a trust primitive** — it decomposes into a same-server `official` flag (the ✓ badge, on the bot's account
-record) + the `invites:auto-accept` scope; no signing, no attestation (earlier signed-attestation drafts
+record) + the `invites.auto-accept` scope; no signing, no attestation (earlier signed-attestation drafts
 all rejected as overengineered).
 
 **Multi-account compounds Project trust (`20`):** client renders Project surfaces from multiple trust domains
@@ -493,8 +493,9 @@ E2E); push real interactivity into an explicit full-screen webview.
   moderate — seizure-sensitive, lives in encrypted `#admins`). Rule: *the threat decides the home.*
   **Headless, outbound-only** (no web UI, no inbound surface) → location-independent, hard to seize (no
   public routing pointer; only holds off-box). **Coordination is data-carried, never bot-to-bot RPC**
-  (`AccountJoinedEvent` push + catch-up + invite-token routing tags). Future caps: `subscribe.account_joined/
-  left`, `registration.gatekeeper`. **Rejected:** bot-to-bot RPC/service mesh (liveness fragility), per-admin
+  (`AccountJoinedEvent` push + catch-up + invite-token routing tags). Server-enforced caps (dot namespace,
+  catalog in `20`): `accounts.read` (roster snapshot + account join/leave feeds), `registration.gatekeeper`.
+  **Rejected:** bot-to-bot RPC/service mesh (liveness fragility), per-admin
   server-verified credentials (would leak admin roster, eroding the property `#admins` protects).
 - **Vetted onboarding / gatekeeper** (📐, `24`) — gates account creation behind human vetting. Shaped oddly
   because the applicant has **no DID until the end**: front half runs out-of-band (email/SMS invite). Needs

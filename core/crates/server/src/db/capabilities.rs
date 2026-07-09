@@ -1,8 +1,11 @@
-//! Project capability grants (docs/22 §Project-capabilities).
+//! Project capability grants (docs/20 §Project permissions).
 //!
 //! Capabilities are named, server-enforced permissions attached to a Project
-//! (not directly to a bot account). The only grantor is adminbot; `granted_by`
-//! records its DID for later cross-referencing with the #admins chat thread.
+//! (not directly to a bot account). They share the single dot-separated
+//! permission namespace documented in docs/20 (the client-honored scopes in the
+//! same doc are the other half of it). The only grantor is adminbot;
+//! `granted_by` records its DID for later cross-referencing with the #admins
+//! chat thread.
 //!
 //! Authority resolution for a *bot account* runs account -> Project ->
 //! capability, with one exception: a bot in the pinned adminbot Project is a
@@ -16,10 +19,13 @@ use crate::config::ADMINBOT_PROJECT_SLUG;
 /// Known capability strings. Grants are validated against this set so a typo
 /// can't create a permanently-dangling permission.
 pub const REGISTRATION_GATEKEEPER: &str = "registration.gatekeeper";
-pub const SUBSCRIBE_ACCOUNT_JOINED: &str = "subscribe.account_joined";
+/// Read the server's account roster (`GET /v1/admin/accounts`) and receive the
+/// account join/leave feeds (WS push + `GET /v1/admin/events`). One view
+/// permission over "who is on this server"; see docs/20.
+pub const ACCOUNTS_READ: &str = "accounts.read";
 
 pub fn is_known_capability(cap: &str) -> bool {
-    matches!(cap, REGISTRATION_GATEKEEPER | SUBSCRIBE_ACCOUNT_JOINED)
+    matches!(cap, REGISTRATION_GATEKEEPER | ACCOUNTS_READ)
 }
 
 /// Grant a capability to a Project. Idempotent (no error on re-grant).

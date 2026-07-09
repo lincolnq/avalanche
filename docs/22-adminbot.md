@@ -61,7 +61,7 @@ Three consequences worth noting:
 
 - **A bot-to-bot RPC / service mesh, with discovery.** Tempting for "bots offering services to bots" (a signing bot, a directory bot, an "add-to-channel" service). Rejected: it makes *anybody depend on any other bot* being live — exactly the fragility we want to avoid. Everything we needed turned out to be expressible as data-carried coordination (signed tokens + server events + catch-up). If a genuinely *synchronous, interactive* bot-to-bot need ever appears, model it as one Project calling another's ordinary HTTP API (with its own auth) — a new, explicit trust edge — not an ambient mesh. A discovery layer (registry / directory bot) is deferred with it.
 - **The gatekeeper asking adminbot to add a user to channels (imperative RPC).** See `24-vetted-onboarding-project.md`. Rejected in favor of the invite token carrying routing *tags* that adminbot maps to channels declaratively; a self-routing gatekeeper reads the same `AccountJoinedEvent` instead of calling adminbot. No cross-bot call.
-- **Officialness as anything more than a flag + a scope.** Earlier drafts made it a bespoke trust primitive with a signed, periodically re-issued official-bot attestation (first signed by adminbot, then by the server). All rejected: officialness decomposes into a same-server `official` flag (the ✓ badge, read from the bot's account record) and the `invites:auto-accept` scope — both plain server records: no signing, no attestation, no recurring signer, no separate "declare official" channel (it's set at install through the normal grant flow). The full treatment lives in `20-project-security.md`.
+- **Officialness as anything more than a flag + a scope.** Earlier drafts made it a bespoke trust primitive with a signed, periodically re-issued official-bot attestation (first signed by adminbot, then by the server). All rejected: officialness decomposes into a same-server `official` flag (the ✓ badge, read from the bot's account record) and the `invites.auto-accept` scope — both plain server records: no signing, no attestation, no recurring signer, no separate "declare official" channel (it's set at install through the normal grant flow). The full treatment lives in `20-project-security.md`.
 - **Per-admin server-verified credentials instead of the pinned delegate.** An alternative bridge: give each admin a signed credential the server checks per request, so admins call privileged endpoints directly (no adminbot). Rejected for the base design: the server would then see *which admin DID* acted on each privileged call, accumulating a partial roster over time and eroding the seizure property `#admins` protects — plus per-admin credential provisioning. The pinned delegate keeps the roster fully invisible (the server only ever sees adminbot act).
 
 ---
@@ -107,34 +107,24 @@ This is the easy system for bringing a Project online — and it's the concrete 
 1. An admin posts `/install-project <name> <url>` in `#admins`.
 2. Adminbot verifies the sender is a current `#admins` member (it decrypts the roster).
 3. Adminbot registers the Project's bot account and records the install via its superuser endpoint (`POST /v1/admin/projects`), which creates the bot-account row and returns its DID.
-4. Adminbot grants the capabilities the Project's manifest declares — one `POST /v1/admin/capabilities` per scope. **Default-deny:** only the declared, admin-approved scopes are granted. High-privilege grants (`registration.gatekeeper`, `subscribe.account_joined`) gate on a reaction confirmation in `#admins`.
+4. Adminbot grants the capabilities the Project's manifest declares — one `POST /v1/admin/capabilities` per permission. **Default-deny:** only the declared, admin-approved permissions are granted. High-privilege grants (`registration.gatekeeper`, `accounts.read`) gate on a reaction confirmation in `#admins`.
 5. Adminbot posts a summary back to `#admins` — what was installed, which scopes were granted — so the decision is legible and auditable.
 
 ### Project capabilities
 
-A Project is installed by registering a bot account and granting it some set of **capabilities** — explicit, named permissions that gate access to server-side facilities most accounts cannot touch. Capabilities are the *operator authority* made concrete, and they live server-side because the bot is the constrained party (see *The model*: "access to the server's own resources → server-enforced capability").
+The full catalog of Project permissions — both the client-honored *scopes* and the server-enforced *capabilities* (`accounts.read`, `registration.gatekeeper`) — lives in `20-project-security.md` §Project permissions, which is the single home for what a Project may request and how each is enforced. This doc covers only adminbot's role in *granting* them.
 
-Initial capability set (extensible as Projects need more):
-
-| Capability | What it grants |
-| --- | --- |
-| `subscribe.account_joined` | Receive a notification each time a new account registers on this server (see "Join event API"). |
-| `subscribe.account_left` | Receive a notification when an account is deleted from this server. |
-| `registration.gatekeeper` | Construct invite tokens the server accepts under closed registration. Held by any number of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. See `24-vetted-onboarding-project.md`. |
-
-Capabilities are **per-bot**, stored server-side in `project_capabilities (account_id, capability, granted_at, granted_by)`. The `granted_by` is always adminbot's DID — these endpoints only accept adminbot as caller — but the record is kept so we can later distinguish "which human admin's chat command authorized this" by cross-referencing the `#admins` thread.
-
-A bot without `subscribe.account_joined` cannot learn about new users by any server-mediated mechanism. Adminbot itself is granted `subscribe.account_joined` (so it can act on new users) plus the implicit `superuser` pin. No other bot ever gets superuser.
+The capabilities are the *operator authority* made concrete and are enforced server-side because the bot is the constrained party. Adminbot is the sole grantor (`granted_by` records its DID for later `#admins` cross-referencing), and grants are validated against a known set. Adminbot itself holds `accounts.read` (so it can act on new users) plus the implicit `superuser` pin, which subsumes every capability. No other bot ever gets superuser.
 
 ### Join event API (push + catch-up)
 
-The `subscribe.account_joined` capability lets a bot's account receive a server-side event each time a new account registers. The bot is responsible for inviting users to channels (using the normal `POST /v1/groups/{id}/changes` endpoint with `invite_members`) — the server never invites on a bot's behalf.
+The `accounts.read` capability lets a bot's account receive a server-side event each time a new account registers. The bot is responsible for inviting users to channels (using the normal `POST /v1/groups/{id}/changes` endpoint with `invite_members`) — the server never invites on a bot's behalf.
 
 A long-lived authenticated stream on the bot's session. WebSocket is the existing transport for the bot's normal traffic; we extend `actnet.ws.WsFrame` with a new event-push variant:
 
 ```proto
 // Server → bot: a new account registered on this server. Sent only to
-// bots whose account has the `subscribe.account_joined` capability.
+// bots whose account has the `accounts.read` capability.
 message AccountJoinedEvent {
   string did                = 1;
   string display_name       = 2;
@@ -164,7 +154,7 @@ Each event carries a server-side monotonic `event_id`. The bot persists the high
 GET /v1/admin/accounts?after=<did>
 ```
 
-Returns `{ "accounts": [{ did, display_name?, is_bot, created_at_ms }], "next": <did|null> }`, ordered by DID and paginated on it: pass the `next` value from one page as `after` for the following page (`next` is null on the last page). Gated on the **same** `subscribe.account_joined` capability — a snapshot is no more powerful than replaying every `account_joined` event from the beginning (strictly, it is slightly *less*: it carries no `invite_token`), so it does not warrant a separate capability. `is_bot` is returned so the consumer can filter bots out of a human-facing list.
+Returns `{ "accounts": [{ did, display_name?, is_bot, created_at_ms }], "next": <did|null> }`, ordered by DID and paginated on it: pass the `next` value from one page as `after` for the following page (`next` is null on the last page). Gated on the **same** `accounts.read` capability — a snapshot is no more powerful than replaying every `account_joined` event from the beginning (strictly, it is slightly *less*: it carries no `invite_token`), so it does not warrant a separate capability. `is_bot` is returned so the consumer can filter bots out of a human-facing list.
 
 **Privacy posture.** The server already knows every account that registers (it ran the registration). Disclosing that to a bot the operator has explicitly installed adds no new leak. The bot is a privileged participant of the same trust domain as the server operator.
 
@@ -247,7 +237,7 @@ The Server Console — adminbot's chat-command interface — is structurally jus
 
 The group title `#admins @ {server_hostname}` is a reserved string on each server, but the server has no way to enforce uniqueness because group state is encrypted. Protections:
 
-- The legitimate `#admins` is created by adminbot, which carries the `official` flag and the `invites:auto-accept` scope; the badge and auto-accept apply only to such operator-blessed bots.
+- The legitimate `#admins` is created by adminbot, which carries the `official` flag and the `invites.auto-accept` scope; the badge and auto-accept apply only to such operator-blessed bots.
 - Long-term, an **official-groups** registry: the server marks a group's server-visible id as the canonical `#admins`, surfaced to clients the same way as the bot `official` flag — a plain server record, no signing (same-server only, like the badge). The open part is how the client reliably maps the encrypted group it's in to that record; defer until the threat is concrete.
 
 ### Leave/rejoin flow
@@ -255,7 +245,7 @@ The group title `#admins @ {server_hostname}` is a reserved string on each serve
 A human can leave `#admins` like any other group, via `remove_members(self)`. After the leave applies, adminbot:
 
 1. DMs the leaver: "You've left the admins group. If this was a mistake, reply with `/rejoin` and I'll add you back." Includes a deep link.
-2. On `/rejoin`, adminbot issues a fresh `invite_members`. Client auto-accepts (adminbot holds `invites:auto-accept`), user is back.
+2. On `/rejoin`, adminbot issues a fresh `invite_members`. Client auto-accepts (adminbot holds `invites.auto-accept`), user is back.
 
 No special handling for "last admin leaves" — same DM is sent. If they ignore it, the server's `#admins` ends up empty until someone acts on the rejoin link. Operator-shell recovery remains the fallback for adminbot being permanently unreachable.
 
@@ -304,7 +294,7 @@ A `/pause` mechanism (freeze adminbot's capabilities without uninstalling) helps
 | `DELETE /v1/admin/official/{account_id}` | adminbot only | Clear officialness. |
 | `GET /v1/server/build` | any authenticated session | Current server commit / version / build time. |
 | `GET /v1/admin/events?since=<id>&kind=...` | bot session w/ capability | Paginated catch-up for missed events. |
-| `GET /v1/admin/accounts?after=<did>` | bot session w/ `subscribe.account_joined` | Snapshot of the account roster (DID-paginated). |
+| `GET /v1/admin/accounts?after=<did>` | bot session w/ `accounts.read` | Snapshot of the account roster (DID-paginated). |
 
 Officialness is a plain `official` flag set via `POST/DELETE /v1/admin/official/*` — no signing endpoint, no attestation (see `20-project-security.md`).
 
@@ -312,7 +302,7 @@ New WebSocket frame variants (`ws.proto`):
 
 | Variant | Direction | Purpose |
 | --- | --- | --- |
-| `AccountJoinedEvent` | server → bot | Push for `subscribe.account_joined`. |
+| `AccountJoinedEvent` | server → bot | Push for `accounts.read`. |
 | `ServerBuildEvent` | server → bot | Push on server (re)start. |
 
 New DB tables / columns:
@@ -333,11 +323,11 @@ New DB tables / columns:
 
 2. **`did:local:` resolution.** `docs/02-todos-deferred.md` mentions the concept but doesn't define a DID document shape or resolution path. Probably resolved by "the homeserver's accounts table is the DID document for `did:local:{this-host}:*`" — simplest possible thing. Confirm when `did:local:` lands as a real feature.
 
-3. **Cross-server officialness (deferred).** Officialness is now a same-server `official` flag plus the `invites:auto-accept` scope, with no signing (see `20-project-security.md`). If a future federated/guest scenario ever needs a *cross-server-verifiable* badge or auto-accept, that's where a signed projection would re-enter — deferred with federation, not needed now.
+3. **Cross-server officialness (deferred).** Officialness is now a same-server `official` flag plus the `invites.auto-accept` scope, with no signing (see `20-project-security.md`). If a future federated/guest scenario ever needs a *cross-server-verifiable* badge or auto-accept, that's where a signed projection would re-enter — deferred with federation, not needed now.
 
 4. **Default-mute discoverability.** A user auto-joined into 8 muted channels may never look at them. Channel discovery + "you have unread mentions" surfaces in the Chats tab will mostly handle this, but worth checking once the UX is in users' hands.
 
-5. **Server-event privacy disclosure.** A compromised bot with `subscribe.account_joined` gets a real-time roster of everyone who joins this server, including timing. The threat model accepts this (the operator authorized the bot; the server already had the data). Worth a one-line acknowledgment in `docs/00-design.md` "Trust model" when this lands.
+5. **Server-event privacy disclosure.** A compromised bot with `accounts.read` gets a real-time roster of everyone who joins this server, including timing. The threat model accepts this (the operator authorized the bot; the server already had the data). Worth a one-line acknowledgment in `docs/00-design.md` "Trust model" when this lands.
 
 6. **Recovery from `#admins` ghosting.** If every admin leaves and nobody acts on adminbot's rejoin DMs, the server is frozen. The current answer is "operator shell." Worth thinking about whether a backup recovery DID (dormant, operator-pinned, promotable out-of-band) is worth the complexity. Defer.
 

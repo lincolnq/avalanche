@@ -68,9 +68,9 @@ thing by what it means to the user, and explain the minimum.
 
 - **Translate internal names.** `slug` → "codename". `capability`/`scope` →
   "permissions". `token` → "setup code".
-- **Offer plain choices, not raw identifiers.** Ask "Should this bot be told when
-  someone new joins the server? (yes/no)" instead of listing
-  `subscribe.account_joined`.
+- **Offer plain choices, not raw identifiers.** Ask "Should this bot be able to
+  see who's on the server? (yes/no)" instead of listing
+  `accounts.read`.
 - **One short parenthetical for format, only when it prevents a mistake**
   (`(lowercase, no spaces)`) — never a spec dump.
 

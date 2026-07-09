@@ -236,7 +236,7 @@ async fn register(
         db::sessions::create(&mut conn, &token, device_pk, state.config.token_lifetime_secs)
             .await?;
 
-    // Announce the new account to bots holding `subscribe.account_joined`.
+    // Announce the new account to bots holding `accounts.read`.
     // Two paths: (1) a durable append to `server_events` so a disconnected bot
     // can catch up via `GET /v1/admin/events`; (2) a best-effort live fan-out
     // to every currently-subscribed session. The event carries the raw invite

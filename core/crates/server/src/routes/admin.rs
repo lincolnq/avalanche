@@ -6,7 +6,7 @@
 //! Projects, grants capabilities, and registers gatekeeper signing keys.
 //!
 //! The catch-up endpoint `GET /v1/admin/events` is the one exception: it is
-//! open to any bot session holding `subscribe.account_joined` (not only
+//! open to any bot session holding `accounts.read` (not only
 //! adminbot), so a self-routing gatekeeper can recover missed join events.
 
 use axum::{
@@ -333,7 +333,7 @@ async fn require_capability(
 }
 
 /// Paginated catch-up for missed server events. Open to any bot session holding
-/// `subscribe.account_joined` (resolved via its Project), so a self-routing
+/// `accounts.read` (resolved via its Project), so a self-routing
 /// gatekeeper — not only adminbot — can recover join events it missed offline.
 async fn get_events(
     State(state): State<AppState>,
@@ -341,7 +341,7 @@ async fn get_events(
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<Value>, ServerError> {
     let mut conn = state.db.acquire().await?;
-    require_capability(&mut conn, auth.device_pk, db::capabilities::SUBSCRIBE_ACCOUNT_JOINED)
+    require_capability(&mut conn, auth.device_pk, db::capabilities::ACCOUNTS_READ)
         .await?;
 
     let kind = q
@@ -382,7 +382,7 @@ struct AccountView {
 }
 
 /// Snapshot of the server's account roster, for Projects that display things
-/// like attendee lists. Gated on the same `subscribe.account_joined` capability
+/// like attendee lists. Gated on the same `accounts.read` capability
 /// as the catch-up feed — a full snapshot is no more powerful than replaying
 /// every `account_joined` event from the beginning. Paginated by DID: pass the
 /// `next` value from one response as `after` to fetch the next page; `next` is
@@ -393,7 +393,7 @@ async fn get_accounts(
     Query(q): Query<AccountsQuery>,
 ) -> Result<Json<Value>, ServerError> {
     let mut conn = state.db.acquire().await?;
-    require_capability(&mut conn, auth.device_pk, db::capabilities::SUBSCRIBE_ACCOUNT_JOINED)
+    require_capability(&mut conn, auth.device_pk, db::capabilities::ACCOUNTS_READ)
         .await?;
 
     const LIMIT: i64 = 500;

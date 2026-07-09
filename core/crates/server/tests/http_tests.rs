@@ -1367,7 +1367,7 @@ async fn account_joined_catch_up() {
     assert_eq!(status, StatusCode::CREATED);
     let new_did = body["did"].as_str().unwrap().to_string();
 
-    // The superuser (subscribe.account_joined via the pin) can read it.
+    // The superuser (accounts.read via the pin) can read it.
     let (status, body) = admin_req(
         &app,
         "GET",
@@ -1403,7 +1403,7 @@ async fn admin_list_accounts() {
     assert_eq!(status, StatusCode::CREATED);
     let new_did = body["did"].as_str().unwrap().to_string();
 
-    // The superuser (subscribe.account_joined via the pin) can read the roster.
+    // The superuser (accounts.read via the pin) can read the roster.
     let (status, body) =
         admin_req(&app, "GET", "/v1/admin/accounts", &admin_token, None).await;
     assert_eq!(status, StatusCode::OK);

@@ -81,7 +81,7 @@ async fn ws_upgrade(
         .ok_or(ServerError::Unauthorized)?;
 
     // Resolve the device's account once at upgrade time and check whether it
-    // holds `subscribe.account_joined` (the pinned adminbot Project's bots get
+    // holds `accounts.read` (the pinned adminbot Project's bots get
     // it via the superuser short-circuit). If so, this session receives
     // `AccountJoinedEvent` pushes for as long as it's connected.
     let account_id: Option<i64> = sqlx::query_scalar(
@@ -96,7 +96,7 @@ async fn ws_upgrade(
             db::capabilities::account_has_capability(
                 &mut conn,
                 aid,
-                db::capabilities::SUBSCRIBE_ACCOUNT_JOINED,
+                db::capabilities::ACCOUNTS_READ,
             )
             .await?
         }

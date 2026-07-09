@@ -53,10 +53,10 @@ Everything interactive is "open a Project's webview, with context and a scoped t
 
 A Project registers **entry points** — `{ id, label, icon, scope }` — that core surfaces in one of two places:
 
-- the composer **"+" menu** (`surface:compose`),
-- the **message long-press menu** (`message:context-on-action`) — the entry point receives that message as context, an explicit, per-message disclosure to the Project, consent-gated by the tap.
+- the composer **"+" menu** (`surface.compose`),
+- the **message long-press menu** (`message.context-on-action`) — the entry point receives that message as context, an explicit, per-message disclosure to the Project, consent-gated by the tap.
 
-A **magic link** is the third path, and it is *not* a registered entry point: it's a Project-issued, self-authenticating link that opens the Project's webview wherever it's tapped — including from inside a message (e.g. a bot posts "Priorities deck — tap to rank 12 items"). The link carries no credential; the clicking device injects a Project-scoped identity token at tap time, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule). Because the client recognizes it by URL against that allowlist rather than by a registered id, *anyone* can share a magic link — it isn't restricted to the owning bot or to conversations the bot is a member of. It is typically dressed with a rich-text label (a link span) for presentation. See `20-project-security.md`, *Project permissions* (`identity:magic-links`).
+A **magic link** is the third path, and it is *not* a registered entry point: it's a Project-issued, self-authenticating link that opens the Project's webview wherever it's tapped — including from inside a message (e.g. a bot posts "Priorities deck — tap to rank 12 items"). The link carries no credential; the clicking device injects a Project-scoped identity token at tap time, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule). Because the client recognizes it by URL against that allowlist rather than by a registered id, *anyone* can share a magic link — it isn't restricted to the owning bot or to conversations the bot is a member of. It is typically dressed with a rich-text label (a link span) for presentation. See `20-project-security.md`, *Project permissions* (`identity.magic-links`).
 
 Slash commands are **not** one of these — they don't invoke anything client-side. They're a separate, lighter thing (next).
 
@@ -133,7 +133,7 @@ Everything interactive beyond a poll vote is either content the user sends as a 
 ## Open questions / decisions
 
 1. **Full-screen webview surface spec.** The webview surface is arguably bigger than this doc — the inbound launch-param/scoped-token format, the outbound deeplink vocabulary (`attach`, `close`, …), the sender-side fetch guard (allowlist/size/SSRF), isolation guarantees, content packaging (remote-loaded vs. signed bundle), and App Store constraints need their own pass, likely a dedicated `2x` doc, with a security review alongside `20-project-security.md`. (Note: no JS bridge — I/O is URL params in, deeplinks out.)
-2. **New Project scopes & threat model** — entry-point registration, webview launch, return-content, and "post a result back" are new scopes with their own risks: command-name squatting, webview phishing, result-spam. An initial scope set (incl. `identity:magic-links`) is now drafted in `20-project-security.md`, *Project permissions (admin-granted scopes)*; the threat-model pass against it still needs to happen before committing.
+2. **New Project scopes & threat model** — entry-point registration, webview launch, return-content, and "post a result back" are new scopes with their own risks: command-name squatting, webview phishing, result-spam. An initial scope set (incl. `identity.magic-links`) is now drafted in `20-project-security.md`, *Project permissions (admin-granted scopes)*; the threat-model pass against it still needs to happen before committing.
 3. **Rich text scope** — inline ranges (bold/italic/strike/monospace/spoiler) ship first, Signal-shaped. Decide whether bot content ever needs *block-level* structure (lists, headings, quotes, code blocks) and, if so, how to add it without it becoming a layout/junk-drawer vector.
 4. **Poll details** — single vs multi-select, closing a poll, anonymity (note: client-tallied votes are inherently visible to members; a secret ballot would need a trusted aggregator, i.e. a Project, leaving the DM/offline/E2E sweet spot). Spec with the poll built-in.
 

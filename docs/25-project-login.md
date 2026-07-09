@@ -25,8 +25,8 @@ standing" beyond account existence (there is no suspension/ban concept on the
 server today), roles, group-membership claims, pseudonymous/anonymous
 disclosure, and offline (signed-credential) verification. The default and only
 disclosure tier here is the **real DID**, because the common integration is a
-bot that must DM the user and add them to groups (`20` scopes `dm:initiate`,
-`invites:auto-accept`).
+bot that must DM the user and add them to groups (`20` scopes `dm.initiate`,
+`invites.auto-accept`).
 
 ## Trust model
 
