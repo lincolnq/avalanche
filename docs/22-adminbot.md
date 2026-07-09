@@ -158,6 +158,14 @@ GET /v1/admin/events?since=<event_id>&kind=account_joined
 
 Each event carries a server-side monotonic `event_id`. The bot persists the highest id it has processed; on (re)connect it requests the tail. The server retains events for a configurable window (default 30 days); older events are dropped. This catch-up is what makes routing *deferred, not lost*, when adminbot is down.
 
+**Roster snapshot.** The event feed above is incremental and only reaches back as far as the retention window, so a bot that needs the *current* full list of accounts — e.g. a Project displaying an attendee list — fetches a snapshot:
+
+```
+GET /v1/admin/accounts?after=<did>
+```
+
+Returns `{ "accounts": [{ did, display_name?, is_bot, created_at_ms }], "next": <did|null> }`, ordered by DID and paginated on it: pass the `next` value from one page as `after` for the following page (`next` is null on the last page). Gated on the **same** `subscribe.account_joined` capability — a snapshot is no more powerful than replaying every `account_joined` event from the beginning (strictly, it is slightly *less*: it carries no `invite_token`), so it does not warrant a separate capability. `is_bot` is returned so the consumer can filter bots out of a human-facing list.
+
 **Privacy posture.** The server already knows every account that registers (it ran the registration). Disclosing that to a bot the operator has explicitly installed adds no new leak. The bot is a privileged participant of the same trust domain as the server operator.
 
 ### Default notifications on accept
@@ -296,6 +304,7 @@ A `/pause` mechanism (freeze adminbot's capabilities without uninstalling) helps
 | `DELETE /v1/admin/official/{account_id}` | adminbot only | Clear officialness. |
 | `GET /v1/server/build` | any authenticated session | Current server commit / version / build time. |
 | `GET /v1/admin/events?since=<id>&kind=...` | bot session w/ capability | Paginated catch-up for missed events. |
+| `GET /v1/admin/accounts?after=<did>` | bot session w/ `subscribe.account_joined` | Snapshot of the account roster (DID-paginated). |
 
 Officialness is a plain `official` flag set via `POST/DELETE /v1/admin/official/*` — no signing endpoint, no attestation (see `20-project-security.md`).
 

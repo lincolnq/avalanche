@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
             delete(revoke_capability),
         )
         .route("/v1/admin/events", get(get_events))
+        .route("/v1/admin/accounts", get(get_accounts))
 }
 
 async fn ping(_auth: AuthAdminbot) -> Json<Value> {
@@ -305,6 +306,32 @@ struct EventView {
     joined_at_ms: i64,
 }
 
+/// Resolve the caller's account from its device session and require that it
+/// holds `capability` (via its Project, or the adminbot superuser pin). Returns
+/// the account id. `Unauthorized` if the device can't be resolved to an
+/// account; `Forbidden` if the capability is missing.
+async fn require_capability(
+    conn: &mut sqlx::PgConnection,
+    device_pk: i64,
+    capability: &str,
+) -> Result<i64, ServerError> {
+    let account_id: i64 = sqlx::query_scalar(
+        "SELECT a.id FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
+    )
+    .bind(device_pk)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(ServerError::Db)?
+    .ok_or(ServerError::Unauthorized)?;
+
+    if !db::capabilities::account_has_capability(conn, account_id, capability).await? {
+        return Err(ServerError::Forbidden(format!(
+            "{capability} capability required"
+        )));
+    }
+    Ok(account_id)
+}
+
 /// Paginated catch-up for missed server events. Open to any bot session holding
 /// `subscribe.account_joined` (resolved via its Project), so a self-routing
 /// gatekeeper — not only adminbot — can recover join events it missed offline.
@@ -314,28 +341,8 @@ async fn get_events(
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<Value>, ServerError> {
     let mut conn = state.db.acquire().await?;
-
-    // Resolve the caller's account and check the capability.
-    let account_id: i64 = sqlx::query_scalar(
-        "SELECT a.id FROM devices d JOIN accounts a ON d.account_id = a.id WHERE d.id = $1",
-    )
-    .bind(auth.device_pk)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(ServerError::Db)?
-    .ok_or(ServerError::Unauthorized)?;
-
-    if !db::capabilities::account_has_capability(
-        &mut conn,
-        account_id,
-        db::capabilities::SUBSCRIBE_ACCOUNT_JOINED,
-    )
-    .await?
-    {
-        return Err(ServerError::Forbidden(
-            "subscribe.account_joined capability required".into(),
-        ));
-    }
+    require_capability(&mut conn, auth.device_pk, db::capabilities::SUBSCRIBE_ACCOUNT_JOINED)
+        .await?;
 
     let kind = q
         .kind
@@ -354,4 +361,56 @@ async fn get_events(
         })
         .collect();
     Ok(Json(json!({ "events": views })))
+}
+
+// ---- Account roster --------------------------------------------------------
+
+#[derive(Deserialize)]
+struct AccountsQuery {
+    /// Pagination cursor: the last DID returned by the previous page. Omit for
+    /// the first page.
+    after: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AccountView {
+    did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    is_bot: bool,
+    created_at_ms: i64,
+}
+
+/// Snapshot of the server's account roster, for Projects that display things
+/// like attendee lists. Gated on the same `subscribe.account_joined` capability
+/// as the catch-up feed — a full snapshot is no more powerful than replaying
+/// every `account_joined` event from the beginning. Paginated by DID: pass the
+/// `next` value from one response as `after` to fetch the next page; `next` is
+/// null on the final page.
+async fn get_accounts(
+    State(state): State<AppState>,
+    auth: AuthDevice,
+    Query(q): Query<AccountsQuery>,
+) -> Result<Json<Value>, ServerError> {
+    let mut conn = state.db.acquire().await?;
+    require_capability(&mut conn, auth.device_pk, db::capabilities::SUBSCRIBE_ACCOUNT_JOINED)
+        .await?;
+
+    const LIMIT: i64 = 500;
+    let accounts = db::accounts::list_accounts(&mut conn, q.after.as_deref(), LIMIT).await?;
+    // Another page may exist only if this one filled the limit; the cursor is
+    // the last DID returned.
+    let next = (accounts.len() as i64 == LIMIT)
+        .then(|| accounts.last().map(|a| a.did.clone()))
+        .flatten();
+    let views: Vec<AccountView> = accounts
+        .into_iter()
+        .map(|a| AccountView {
+            did: a.did,
+            display_name: a.display_name,
+            is_bot: a.is_bot,
+            created_at_ms: a.created_at_ms,
+        })
+        .collect();
+    Ok(Json(json!({ "accounts": views, "next": next })))
 }
