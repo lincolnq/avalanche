@@ -2315,24 +2315,18 @@ impl AppCore {
                 expiry_seconds,
             )
             .await?;
-            // Subscribe to the new group's push pseudonym so reply messages
-            // (e.g. from invitees) get pushed live without a fetch poll.
-            if let (Some(ws), Some(pseudonym)) = (
-                ws.as_ref(),
-                inner
-                    .store
-                    .load_group(&created.group_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|g| g.group_push_pseudonym),
-            ) {
-                if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
-                    tracing::warn!(
-                        "[groups] subscribe to new group pseudonym for {} failed: {e}",
-                        created.group_id
-                    );
-                }
+            // Subscribe so reply messages (e.g. from invitees) get pushed live
+            // without a fetch poll. Re-send the *full* pseudonym set: the
+            // server's `SubscribeGroupPseudonyms` is REPLACE semantics, so a
+            // single-pseudonym frame would unsubscribe every other group (see
+            // `connection::subscribe_all_group_pseudonyms`).
+            if let Err(e) =
+                crate::connection::subscribe_all_group_pseudonyms(&inner.store, ws.as_ref()).await
+            {
+                tracing::warn!(
+                    "[groups] resubscribe group pseudonyms after creating {} failed: {e}",
+                    created.group_id
+                );
             }
             // Seed our own sender key for this group locally. No other
             // members exist yet, so there's no SKDM to ship — the

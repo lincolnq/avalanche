@@ -432,25 +432,17 @@ impl AppCoreInner {
         .await?;
         groups::accept_invite(&self.store, &self.client, &did, group_id_b64).await?;
 
-        // `accept_invite` registered a fresh `group_push_pseudonym`. Tell
-        // the server to push future fan-outs for it on this WS so we
-        // don't have to poll `fetch_group_messages` to see new messages.
-        // Best-effort: a missing WS or send error is non-fatal — the
-        // reconnect-time subscription handles steady-state.
-        if let (Some(ws), Some(pseudonym)) = (
-            ws,
-            self.store
-                .load_group(group_id_b64)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|g| g.group_push_pseudonym),
-        ) {
-            if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
-                tracing::warn!(
-                    "[groups] subscribe to new group pseudonym for {group_id_b64} failed: {e}"
-                );
-            }
+        // `accept_invite` registered a fresh `group_push_pseudonym`. Re-send
+        // the *full* pseudonym set on this WS so the server pushes future
+        // fan-outs for every group we belong to (the frame is REPLACE
+        // semantics — subscribing just this one would drop the others; see
+        // `connection::subscribe_all_group_pseudonyms`). Best-effort: a missing
+        // WS or send error is non-fatal — the reconnect-time subscription
+        // handles steady-state.
+        if let Err(e) = crate::connection::subscribe_all_group_pseudonyms(&self.store, ws).await {
+            tracing::warn!(
+                "[groups] resubscribe group pseudonyms after joining {group_id_b64} failed: {e}"
+            );
         }
 
         let mk = groups::master_key_for(&self.store, group_id_b64).await?;

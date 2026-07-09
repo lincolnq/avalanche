@@ -276,6 +276,16 @@ pub fn run() {
             use tauri::Emitter;
             use tauri_plugin_deep_link::DeepLinkExt;
 
+            // Route the Rust core's `tracing` output to stderr so app-core /
+            // net / store / crypto diagnostics are visible in the dev console.
+            // Parity with iOS, which calls `initLogging` on launch
+            // (ActnetApp.swift). Honor `RUST_LOG` if set, else a sane default
+            // that surfaces app-core detail (group send/receive bootstrap).
+            let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+                "app_core=debug,net=info,store=info,crypto=info".to_owned()
+            });
+            app_core::init_logging(log_filter);
+
             // Forward every opened deep link to the frontend as `avalanche-deeplink`
             // (the raw URL string). AppContext owns parsing/routing — see its
             // handleDeepLink (conversation/<did>, i/<token>). Fires for cold launch

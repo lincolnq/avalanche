@@ -166,6 +166,89 @@ async fn group_send_arrives_via_ws_push() {
     );
 }
 
+/// Joining a *second* group must not silently unsubscribe the *first* one.
+///
+/// The server's `SubscribeGroupPseudonyms` frame is REPLACE semantics — it
+/// installs the frame's list as the socket's entire subscription set. So a
+/// join path that subscribes with only the newly-joined pseudonym drops every
+/// other group's subscription, and those groups go dark (no WS push) until the
+/// next full reconnect. Regression guard: after Bob joins two groups on one
+/// live connection, a send into the *first* group must still reach him via WS
+/// push. Fails against the old single-pseudonym subscribe; passes once every
+/// join re-sends the full set (`connection::subscribe_all_group_pseudonyms`).
+#[tokio::test]
+async fn second_group_join_does_not_clobber_first_subscription() {
+    let url = server_url();
+
+    let alice = live_account(&url).await;
+    let bob = live_account(&url).await;
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    // Group A: create, invite Bob, wait for his auto-accept.
+    let group_a = alice.create_group_async("grp-a", "", 0).await.unwrap();
+    alice
+        .invite_member_async(&group_a.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    wait_for_event(
+        &bob,
+        |ev| matches!(ev, IncomingEvent::GroupInvite { group_id, .. } if group_id == &group_a.group_id),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("bob should join group A");
+
+    // Group B: create, invite Bob, wait for his auto-accept. With the old
+    // single-pseudonym subscribe, *this* join replaces Bob's subscription set
+    // with just B's pseudonym — silently unsubscribing group A.
+    let group_b = alice.create_group_async("grp-b", "", 0).await.unwrap();
+    alice
+        .invite_member_async(&group_b.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    wait_for_event(
+        &bob,
+        |ev| matches!(ev, IncomingEvent::GroupInvite { group_id, .. } if group_id == &group_b.group_id),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("bob should join group B");
+
+    // Alice refreshes A's state so Bob is a full member, then sends into A.
+    alice
+        .fetch_group_state_async(&group_a.group_id)
+        .await
+        .unwrap();
+    let payload = b"still subscribed to group A?";
+    alice
+        .send_group_message_async(&group_a.group_id, payload)
+        .await
+        .unwrap();
+
+    // Bob must still receive group A's message via WS push — no
+    // `fetch_group_messages`. Broken if joining B unsubscribed A.
+    let group_a_id = group_a.group_id.clone();
+    let got = wait_for_event(
+        &bob,
+        |ev| match ev {
+            IncomingEvent::Message { msg } => {
+                msg.sender_did == alice_did
+                    && msg.group_id.as_deref() == Some(group_a_id.as_str())
+                    && msg.plaintext == payload
+            }
+            _ => false,
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "bob should still receive group A's message after joining group B \
+         (joining B must not clobber A's WS subscription)"
+    );
+}
+
 /// A group reaction (docs/33) rides the new group `ContentMessage` envelope,
 /// fans out over WS push, and is decoded + applied on the receiver — proving
 /// the wrapped-envelope group path end-to-end (not just the raw-text fallback).

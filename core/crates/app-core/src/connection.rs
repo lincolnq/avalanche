@@ -103,11 +103,29 @@ async fn subscribe_group_pseudonyms(
     core: &AppCore,
     ws: &net::ws::WsConnection,
 ) -> Result<(), AppError> {
-    let groups = {
-        let inner = core.inner.lock().await;
-        inner.store.list_groups().await?
+    let store = { core.inner.lock().await.store.clone() };
+    subscribe_all_group_pseudonyms(&store, Some(ws)).await
+}
+
+/// Subscribe the live WS to the *full* set of group push pseudonyms we hold
+/// locally. The server treats `SubscribeGroupPseudonyms` as a REPLACE of the
+/// socket's entire subscription set (`routes/websocket.rs`) — it installs the
+/// frame's list and drops anything absent. So every code path that registers a
+/// new group pseudonym (join / accept / create / reconcile) must re-send the
+/// *complete* set through here: sending only the newly-joined pseudonym would
+/// silently unsubscribe every other group, so their fan-outs stop arriving
+/// until the next full reconnect. A no-op if `ws` is `None` (the connect-time
+/// call in `reconnect_loop` is the backstop) or we hold no pseudonyms.
+pub(crate) async fn subscribe_all_group_pseudonyms(
+    store: &store::DeviceStore,
+    ws: Option<&net::ws::WsConnection>,
+) -> Result<(), AppError> {
+    let Some(ws) = ws else {
+        return Ok(());
     };
-    let pseudonyms: Vec<Vec<u8>> = groups
+    let pseudonyms: Vec<Vec<u8>> = store
+        .list_groups()
+        .await?
         .into_iter()
         .filter_map(|g| g.group_push_pseudonym)
         .collect();

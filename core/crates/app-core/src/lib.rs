@@ -949,7 +949,9 @@ async fn reconcile_group(
     // 3. Register a fresh push pseudonym. The old pseudonym only existed
     //    in the previous device's local store, and the server still
     //    fans-out to it — we want fan-outs to land here instead.
-    let new_pseudonym = groups::rotate_group_pseudonym(
+    //    `rotate_group_pseudonym` persists it locally, so the full-set
+    //    subscribe below picks it up.
+    groups::rotate_group_pseudonym(
         &inner.store,
         &inner.client,
         &inner.did.clone(),
@@ -958,11 +960,15 @@ async fn reconcile_group(
     .await?;
 
     // 4. Subscribe immediately so live group sends reach us without
-    //    waiting for the next WS reconnect.
-    if let Some(ws) = ws.as_ref() {
-        if let Err(e) = ws.subscribe_group_pseudonyms(vec![new_pseudonym]) {
-            tracing::warn!("[recovery] subscribe to restored pseudonym failed: {e}");
-        }
+    //    waiting for the next WS reconnect. Re-send the *full* pseudonym set,
+    //    not just the one we just rotated: the server's
+    //    `SubscribeGroupPseudonyms` is REPLACE semantics, so a single-pseudonym
+    //    frame would unsubscribe every other group (see
+    //    `connection::subscribe_all_group_pseudonyms`).
+    if let Err(e) =
+        connection::subscribe_all_group_pseudonyms(&inner.store, ws.as_ref()).await
+    {
+        tracing::warn!("[recovery] resubscribe group pseudonyms after reconcile failed: {e}");
     }
 
     // 5. Re-seed Sender Key + redistribute to every existing member. The
@@ -4704,23 +4710,16 @@ impl AppCore {
         // recovered device can rejoin without help from another member.
         inner.refresh_recovery_blob_best_effort().await;
         // Subscribe to the founder's group_push_pseudonym so replies from
-        // invitees push live. Mirrors the FFI `create_group` wiring.
-        if let (Some(ws), Some(pseudonym)) = (
-            ws.as_ref(),
-            inner
-                .store
-                .load_group(&created.group_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|g| g.group_push_pseudonym),
-        ) {
-            if let Err(e) = ws.subscribe_group_pseudonyms(vec![pseudonym]) {
-                tracing::warn!(
-                    "[groups] subscribe to new group pseudonym for {} failed: {e}",
-                    created.group_id
-                );
-            }
+        // invitees push live. Re-send the full set (REPLACE semantics — see
+        // `connection::subscribe_all_group_pseudonyms`). Mirrors the FFI
+        // `create_group` wiring.
+        if let Err(e) =
+            connection::subscribe_all_group_pseudonyms(&inner.store, ws.as_ref()).await
+        {
+            tracing::warn!(
+                "[groups] resubscribe group pseudonyms after creating {} failed: {e}",
+                created.group_id
+            );
         }
         Ok(created)
     }
@@ -4823,6 +4822,7 @@ impl AppCore {
     /// own Sender Key and broadcasts the SKDM as a DM to every other
     /// member listed in our cached group state.
     pub async fn accept_invite_async(&self, group_id: &str) -> Result<(), AppError> {
+        let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
         let did = inner.did.clone();
         let device_id = inner.device_id;
@@ -4864,6 +4864,15 @@ impl AppCore {
                 .store
                 .mark_sender_key_shared_devices(group_id, &rdid, &device_ids)
                 .await;
+        }
+        // Re-send the full pseudonym set so this newly-joined group starts
+        // receiving live without waiting for a reconnect — and without
+        // clobbering other groups' subscriptions (REPLACE semantics; see
+        // `connection::subscribe_all_group_pseudonyms`).
+        if let Err(e) =
+            connection::subscribe_all_group_pseudonyms(&inner.store, ws.as_ref()).await
+        {
+            tracing::warn!("[groups] resubscribe group pseudonyms after accept_invite failed: {e}");
         }
         inner.refresh_recovery_blob_best_effort().await;
         Ok(())
