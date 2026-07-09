@@ -190,7 +190,7 @@ avatar or name does:
 - **Editing/deletion (`36`)** — the bot envelope (no edit cap, 30-day window, no
   retained history) keys off the self-declared `account_kind`. This doc is where
   that "is this a bot" question is answered.
-- **Auto-accept of bot invites (`20`/`22`)** — the `invites:auto-accept` scope (a
+- **Auto-accept of bot invites (`20`/`22`)** — the `invites.auto-accept` scope (a
   same-server, client-honored grant), typically held by official bots; the ✓ tier
   here surfaces the same server-vouched officialness visually. A self-identified
   (tier 2) bot without that scope gets the normal accept/decline UX, not

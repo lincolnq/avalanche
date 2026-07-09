@@ -32,6 +32,48 @@ pub async fn create(
     Ok(row.get("id"))
 }
 
+/// A lightweight account row for the admin roster (docs/22 join-event API).
+/// `created_at_ms` is epoch milliseconds, matching the `joined_at_ms`
+/// convention used elsewhere in the admin API. The internal bigint id is
+/// deliberately omitted — it is never exposed in the API.
+pub struct AccountSummary {
+    pub did: String,
+    pub display_name: Option<String>,
+    pub is_bot: bool,
+    pub created_at_ms: i64,
+}
+
+/// List accounts ordered by DID, for the admin roster endpoint. Paginates on
+/// DID (not the internal id, which the API never exposes): pass the last DID
+/// returned as `after` to fetch the next page. Oldest-DID-first, capped at
+/// `limit`.
+pub async fn list_accounts(
+    conn: &mut PgConnection,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<AccountSummary>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT did, display_name, is_bot, \
+                (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS created_at_ms \
+         FROM accounts \
+         WHERE ($1::TEXT IS NULL OR did > $1) \
+         ORDER BY did ASC LIMIT $2",
+    )
+    .bind(after)
+    .bind(limit)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AccountSummary {
+            did: r.get("did"),
+            display_name: r.get("display_name"),
+            is_bot: r.get("is_bot"),
+            created_at_ms: r.get("created_at_ms"),
+        })
+        .collect())
+}
+
 /// Look up an account by DID.
 pub async fn find_by_did(conn: &mut PgConnection, did: &str) -> Result<Option<Account>, sqlx::Error> {
     let row = sqlx::query("SELECT id, did, display_name, is_bot, recovery_blob FROM accounts WHERE did = $1")

@@ -1148,17 +1148,17 @@ async fn capabilities_grant_check_revoke() {
     let bot = server::db::accounts::create(&mut *tx, "did:local:capbot1", None, true).await.unwrap();
     projects::link_bot(&mut *tx, p, bot).await.unwrap();
 
-    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::ACCOUNTS_READ).await.unwrap());
 
-    capabilities::grant(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED, "did:local:admin").await.unwrap();
+    capabilities::grant(&mut *tx, p, capabilities::ACCOUNTS_READ, "did:local:admin").await.unwrap();
     // Idempotent re-grant.
-    capabilities::grant(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED, "did:local:admin").await.unwrap();
-    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
-    assert_eq!(capabilities::list(&mut *tx, p).await.unwrap(), vec![capabilities::SUBSCRIBE_ACCOUNT_JOINED.to_string()]);
+    capabilities::grant(&mut *tx, p, capabilities::ACCOUNTS_READ, "did:local:admin").await.unwrap();
+    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::ACCOUNTS_READ).await.unwrap());
+    assert_eq!(capabilities::list(&mut *tx, p).await.unwrap(), vec![capabilities::ACCOUNTS_READ.to_string()]);
 
-    assert!(capabilities::revoke(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
-    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
-    assert!(!capabilities::revoke(&mut *tx, p, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(capabilities::revoke(&mut *tx, p, capabilities::ACCOUNTS_READ).await.unwrap());
+    assert!(!capabilities::account_has_capability(&mut *tx, bot, capabilities::ACCOUNTS_READ).await.unwrap());
+    assert!(!capabilities::revoke(&mut *tx, p, capabilities::ACCOUNTS_READ).await.unwrap());
 }
 
 #[tokio::test]
@@ -1171,7 +1171,7 @@ async fn adminbot_superuser_short_circuit() {
     projects::link_bot(&mut *tx, pid, bot).await.unwrap();
 
     // No capability rows granted, yet the adminbot Project's bot holds all.
-    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::SUBSCRIBE_ACCOUNT_JOINED).await.unwrap());
+    assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::ACCOUNTS_READ).await.unwrap());
     assert!(capabilities::account_has_capability(&mut *tx, bot, capabilities::REGISTRATION_GATEKEEPER).await.unwrap());
 }
 

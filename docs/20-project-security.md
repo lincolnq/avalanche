@@ -214,7 +214,7 @@ The genuinely Project-facing surfaces, and what each newly exposes:
 | Surface (see `23`) | New disclosure / trust | Mitigation |
 |---|---|---|
 | **Entry points** (`+` menu, message long-press) | A registered entry point is an attributed label that could phish ("Verify your account"); a message-action discloses *that one message* to the Project | Entries visibly attributed to their Project; admin vetting; message-action disclosure is per-message, consent-gated by the tap (signpost on first use per Project) |
-| **Magic links** (self-authenticating Project links, shareable in messages) | Tapping silently mints and hands the clicker's identity token to the Project; a sender-chosen, per-share context turns a shared link into a who-clicked / social-graph beacon | The link carries no credential — the clicking device mints a Project-scoped token at tap time, and **only for Projects on the clicker's own vetted allowlist** (no open-redirect: a non-vetted URL gets no token); first-use-per-Project signpost; identity tier (`identity:magic-links` + pseudonymous default) bounds what's disclosed |
+| **Magic links** (self-authenticating Project links, shareable in messages) | Tapping silently mints and hands the clicker's identity token to the Project; a sender-chosen, per-share context turns a shared link into a who-clicked / social-graph beacon | The link carries no credential — the clicking device mints a Project-scoped token at tap time, and **only for Projects on the clicker's own vetted allowlist** (no open-redirect: a non-vetted URL gets no token); first-use-per-Project signpost; identity tier (`identity.magic-links` + pseudonymous default) bounds what's disclosed |
 | **Webview I/O** (URL params in, deeplinks out) | The return-content deeplink makes the client fetch a webview-chosen URL (SSRF/privacy) and proposes a message/attachment the user then sends | **No bridge** = no native API surface; the fetch is https-only, size-capped, origin-allowlisted (sender-side, like on-device unfurl); return-content is **proposed, never sent silently**; conversation posts go through the bot server-side. Inbound params never carry E2E data |
 | **Slash-command manifest** | A bot advertises commands; autocomplete text is Project-supplied (mild phishing via misleading descriptions) | No bridge and no new wire format — a slash command is a plain message the bot reads (it's a member; expected). Attributed to the bot; manifest vetted by the admin |
 | **Custom emoji / reaction asset pack** | Project-supplied images in the reaction picker (offensive content; remote-load tracking; oversized assets) | Fetched/cached like attachments (no per-render remote load), size-capped, admin-vetted |
@@ -232,27 +232,44 @@ Several capabilities that *look* like permissions are consented in-band by the u
 
 ### The scopes
 
+All permission ids share one **dot-separated `namespace.action` namespace** — the scopes below and the server-enforced capabilities further down are drawn from the same space, so a manifest's `permissions` array is homogeneous. (Do not introduce a second separator; an earlier draft split them with `:` vs `.`, which made two very similar-looking things gratuitously inconsistent.)
+
 **Identity — who the Project learns you are**
 
-- `identity:pseudonymous` — the homeserver constructs a per-(user, Project) pseudonymous token instead of revealing the real DID. The default. Only meaningful for some Projects — see *Identity is derived from the scope set* below.
-- `identity:real-did` — the Project receives the user's real, global DID. For Projects that must tie a user to their contacts (e.g. an attendee directory).
-- `identity:magic-links` — the client will construct an identifying token when a link to this Project is tapped from anywhere in the app (inside a message, not just the Network-tab launcher). This makes a Project-issued link self-authenticating wherever it's pasted. The shared link itself carries no credential; the clicking device injects a Project-scoped token when clicked, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule: a launcher may only open its owning Project). Combines with the identity tier above.
-- `profile:read` — the Project's bot receives profile keys to decrypt users' substrate profiles (display name, avatar, bio); see `52-contacts-and-profiles.md`.
+- `identity.pseudonymous` — the homeserver constructs a per-(user, Project) pseudonymous token instead of revealing the real DID. The default. Only meaningful for some Projects — see *Identity is derived from the scope set* below.
+- `identity.real-did` — the Project receives the user's real, global DID. For Projects that must tie a user to their contacts (e.g. an attendee directory).
+- `identity.magic-links` — the client will construct an identifying token when a link to this Project is tapped from anywhere in the app (inside a message, not just the Network-tab launcher). This makes a Project-issued link self-authenticating wherever it's pasted. The shared link itself carries no credential; the clicking device injects a Project-scoped token when clicked, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule: a launcher may only open its owning Project). Combines with the identity tier above.
+- `profile.read` — the Project's bot receives profile keys to decrypt users' substrate profiles (display name, avatar, bio); see `52-contacts-and-profiles.md`.
 
 **Messaging reach — how the Project's bots can contact you**
 
-- `dm:initiate` — a bot may send unsolicited DMs. Already rate-limited like any account and lands in the recipient's message-request gate.
-- `dm:bypass-request` — DM without hitting the message-request gate. Escalated: skips the user's spam filter.
-- `invites:auto-accept` — the client auto-accepts group invites from this bot without prompting the user (with an "Added by <bot> · Leave group" indicator for legibility). Client-honored and sensitive — it silently adds the user to a group — so admin-granted with care. **Same-server only:** a federated guest never auto-accepts invites from a server it doesn't have an account on; there it's a manual accept. This is what the old "officialness" concept gated; it is now an ordinary scope.
+- `dm.initiate` — a bot may send unsolicited DMs. Already rate-limited like any account and lands in the recipient's message-request gate.
+- `dm.bypass-request` — DM without hitting the message-request gate. Escalated: skips the user's spam filter.
+- `invites.auto-accept` — the client auto-accepts group invites from this bot without prompting the user (with an "Added by <bot> · Leave group" indicator for legibility). Client-honored and sensitive — it silently adds the user to a group — so admin-granted with care. **Same-server only:** a federated guest never auto-accepts invites from a server it doesn't have an account on; there it's a manual accept. This is what the old "officialness" concept gated; it is now an ordinary scope.
 
 There is no separate "officialness" trust primitive. The ✓ **verified badge** a client shows next to a Project's bot is a *presentation flag*, not a scope: the bot's public account record (`get_account_info` → `account_info_cache`, `52-contacts-and-profiles.md`) carries an `official` bit set when the operator installs the Project, and the client renders the badge wherever it already draws the bot. The trust is the trust chain — you believe your own homeserver over its authenticated connection — so no signature is involved, and (like the scope above) it is meaningful same-server only.
 
 **Client surfaces — what the Project may render in the app** (treated as untrusted input; see *multiple homeservers* above)
 
-- `surface:compose` — register a `+`-menu entry that opens the Project's webview as a compose helper.
-- `surface:slash-commands` — advertise a command manifest for `/` autocomplete.
-- `surface:emoji` — contribute custom emoji / reaction assets.
-- `message:context-on-action` — receive a specific message as context when the user invokes a long-press action. Per-invocation; the tap is the disclosure.
+- `surface.compose` — register a `+`-menu entry that opens the Project's webview as a compose helper.
+- `surface.slash-commands` — advertise a command manifest for `/` autocomplete.
+- `surface.emoji` — contribute custom emoji / reaction assets.
+- `message.context-on-action` — receive a specific message as context when the user invokes a long-press action. Per-invocation; the tap is the disclosure.
+
+### Server-enforced capabilities
+
+The scopes above are **client-honored** — the app decides whether to render a surface, auto-accept an invite, mint an identity token. A second group of permissions gate the **server's own facilities** — things most accounts cannot touch — and so are enforced by the homeserver, not the client. These are the *operator authority* made concrete (see *The model* above: "access to the server's own resources → server-enforced capability").
+
+They live in the same dot-separated namespace and are requested in the same manifest `permissions` array; the only difference is where the check runs.
+
+| Capability | What it grants |
+| --- | --- |
+| `accounts.read` | Read the server's account roster (`GET /v1/admin/accounts`, DID-paginated) and receive the account join/leave feeds — live over the WebSocket (`AccountJoinedEvent`) and via the catch-up endpoint `GET /v1/admin/events`. One view permission over "who is on this server," for a Project that displays e.g. an attendee list or routes new members into channels. See `22-adminbot.md` §Join event API. |
+| `registration.gatekeeper` | Construct invite tokens the server accepts under closed registration. Held by any number of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. See `24-vetted-onboarding-project.md`. |
+
+Unlike client-honored scopes, server-enforced capabilities are validated against a **known set** (a typo can't create a dangling permission) and stored server-side in `project_capabilities (project_id, capability, granted_at, granted_by)`. `granted_by` is always adminbot's DID — the grant endpoints accept only adminbot — but the record is kept so a later audit can cross-reference which human admin's `#admins` chat command authorized it. Authority resolves per bot account: *account → Project → capability*, except a bot in the pinned adminbot Project is a superuser and implicitly holds every capability (see `22-adminbot.md`). A bot without `accounts.read` cannot learn who is on the server by any server-mediated mechanism.
+
+**Privacy posture.** The server already knows every account it registered, so disclosing the roster to a bot the operator explicitly installed adds no new leak — the bot is a privileged participant of the same trust domain as the operator. There is deliberately no group linkage in any of this (the join feed and roster carry account identity only), preserving the §3.9 membership-opacity discipline. A compromised `accounts.read` bot gets a real-time roster of everyone who joins, including timing; the threat model accepts this.
 
 ### The manifest document
 
@@ -264,7 +281,7 @@ The manifest is the artifact the admin's tooling reads at install time to learn 
   "name": "Beagle",
   "description": "Posts a beagle fact on request.",
   "url": "https://beagle.example.org",
-  "permissions": ["subscribe.account_joined"]
+  "permissions": ["accounts.read"]
 }
 ```
 
@@ -272,7 +289,7 @@ The manifest is the artifact the admin's tooling reads at install time to learn 
 - `name` — human-facing display name (1–100 chars).
 - `description` — optional one-line summary, shown to the admin at install.
 - `url` — optional; the Project's web origin, for a webview Project. Omitted for a headless bot.
-- `permissions` — the scopes/capabilities it requests: the scope ids above and/or the server capabilities in `22-adminbot.md` (`subscribe.account_joined`, …). **Default-deny** — the admin approves which to grant; anything unlisted is never granted. The manifest declares a *request*, not authority; the grant is the admin's act, recorded server-side.
+- `permissions` — the permission ids it requests, drawn from the single dot-separated namespace above: any of the client-honored *scopes* and/or the *server-enforced capabilities* (`accounts.read`, `registration.gatekeeper`). **Default-deny** — the admin approves which to grant; anything unlisted is never granted. The manifest declares a *request*, not authority; the grant is the admin's act, recorded server-side.
 
 The manifest is **untrusted input** (Project-authored): sanitize and length-limit its strings, homoglyph-guard the name, and attribute every resulting surface to its `(server, Project)` — exactly as for the client-visible manifests under *multiple homeservers* above.
 
@@ -280,13 +297,13 @@ Delivery today is **out-of-band**: the operator pastes the manifest (or a URL) i
 
 ### Identity is derived from the scope set, not chosen freely
 
-`identity:pseudonymous` is only meaningful for a Project that touches the user **solely through the token/webview channel**. If the project communicates with the user via a bot, the Project will learn their identity.
+`identity.pseudonymous` is only meaningful for a Project that touches the user **solely through the token/webview channel**. If the project communicates with the user via a bot, the Project will learn their identity.
 
 The identity tier is thus a *consequence* of the interaction model, not an independent toggle. Two archetypes fall out: **webview-only Projects** (compose helpers, read-only destinations, link landing pages), which can be pseudonymous, and **bot-bearing Projects**, which are always real-DID.
 
 ### Sharing profile through the auth flow (future extension)
 
-Today a Project obtains a user's substrate profile (display name, avatar, bio) the same way any account does: the profile key rides on messages, so a Project learns it only through its bot — a DM the user sent it, or a group the bot is a member of (`52-contacts-and-profiles.md`). The `profile:read` scope above is the *permission* to decrypt what arrives that way; it is not a separate delivery channel.
+Today a Project obtains a user's substrate profile (display name, avatar, bio) the same way any account does: the profile key rides on messages, so a Project learns it only through its bot — a DM the user sent it, or a group the bot is a member of (`52-contacts-and-profiles.md`). The `profile.read` scope above is the *permission* to decrypt what arrives that way; it is not a separate delivery channel.
 
 This leaves a gap for **webview-only / backend Projects that have no bot in the user's conversations** but need to render the user's real profile — e.g. a web forum you sign into with your Avalanche identity, where your posts should appear with your display name and avatar. Such a Project is real-DID by nature (a persistent identity across posts), so it is not a pseudonymous case; it simply has no message channel over which the profile key would otherwise arrive.
 
@@ -390,17 +407,17 @@ Everything downstream follows from one question: **does your Project talk to use
 - **Webview-only** (compose helpers, read-only dashboards, link landing pages) — no bot is a member of any conversation. These can stay pseudonymous.
 - **Bot-bearing** — a bot sends/receives messages or sits in a group. The bot necessarily learns the real DID through the messaging channel, so identity is effectively `real-did` no matter what you request (see *Identity is derived from the scope set*).
 
-RSVP is bot-bearing (the tally bot posts into a group), so it's a real-DID Project. Decide this before anything else — it makes `identity:pseudonymous` incoherent for you, and you shouldn't claim it.
+RSVP is bot-bearing (the tally bot posts into a group), so it's a real-DID Project. Decide this before anything else — it makes `identity.pseudonymous` incoherent for you, and you shouldn't claim it.
 
 ### 2. Choose the minimum scopes
 
 Default-deny: request only what a concrete feature needs, and be ready to justify each to the admin who installs you. For RSVP:
 
-- `identity:real-did` — to attribute each RSVP to its author.
-- `identity:magic-links` — so the organizer's pasted "RSVP here" link self-authenticates the tapper without a separate login.
-- `profile:read` — to show attendee display names in the tally. (Prefer a **Project-owned profile field** — `52-contacts-and-profiles.md` — if all you need is a name you collect yourself; that avoids holding the all-or-nothing substrate profile key.)
+- `identity.real-did` — to attribute each RSVP to its author.
+- `identity.magic-links` — so the organizer's pasted "RSVP here" link self-authenticates the tapper without a separate login.
+- `profile.read` — to show attendee display names in the tally. (Prefer a **Project-owned profile field** — `52-contacts-and-profiles.md` — if all you need is a name you collect yourself; that avoids holding the all-or-nothing substrate profile key.)
 
-What RSVP does **not** need: `dm:bypass-request` (it has no reason to skip the spam gate), `surface:slash-commands`, `surface:emoji`. Leave them out. (The bot posting the tally into the group is handled by an admin/organizer adding the bot as a visible member — that's group membership, not a manifest scope.)
+What RSVP does **not** need: `dm.bypass-request` (it has no reason to skip the spam gate), `surface.slash-commands`, `surface.emoji`. Leave them out. (The bot posting the tally into the group is handled by an admin/organizer adding the bot as a visible member — that's group membership, not a manifest scope.)
 
 ### 3. Handle identity and auth
 

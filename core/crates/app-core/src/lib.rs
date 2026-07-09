@@ -822,7 +822,7 @@ pub enum IncomingEvent {
 #[derive(Debug, Clone)]
 pub enum AdminEvent {
     /// A new account just registered on this homeserver. Delivered to any bot
-    /// session whose account holds the `subscribe.account_joined` capability
+    /// session whose account holds the `accounts.read` capability
     /// (the pinned adminbot Project gets it via the superuser short-circuit);
     /// other sessions never receive it. Gated server-side at WS connect
     /// (`server/src/routes/websocket.rs`), so external Projects granted the

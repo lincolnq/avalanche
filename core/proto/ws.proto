@@ -146,7 +146,7 @@ message AccountJoinedEvent {
   // The raw invite token the account registered with, if any. Lets a bot
   // route based on which invite flow / gatekeeper the user came through
   // (issuer stamp + routing tags inside the token). Absent for direct
-  // registrations. Pushed only to bots holding `subscribe.account_joined`.
+  // registrations. Pushed only to bots holding `accounts.read`.
   optional string invite_token = 3;
   reserved 4 to 10;
 }

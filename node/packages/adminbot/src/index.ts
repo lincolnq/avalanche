@@ -546,8 +546,7 @@ const INTERVIEW_IDLE_MS = 10 * 60 * 1000;
 // Plain-language descriptions for the permissions a manifest can request. The
 // confirm step shows these, never the raw capability ids.
 const PERMISSION_LABELS: Record<string, string> = {
-  "subscribe.account_joined": "be told when someone new joins the server",
-  "subscribe.account_left": "be told when someone leaves the server",
+  "accounts.read": "see the list of accounts on the server, and be told as people join or leave",
   "registration.gatekeeper": "control who is allowed to register",
 };
 const permissionLabel = (id: string): string => PERMISSION_LABELS[id] ?? id;

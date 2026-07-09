@@ -45,7 +45,7 @@ Two consequences drive the whole design:
 
 - **Closed registration.** The homeserver runs in a mode where `POST /v1/accounts` is refused unless it carries an `invite_token` that validates against an installed **gatekeeper**. Today registration is open (`51-invite-tokens.md:67`); closing it is the load-bearing server change this Project depends on. It must **fail closed**: if no gatekeeper vouches for the token, registration is rejected, never waved through.
 - **Many gatekeepers, not one.** `registration.gatekeeper` is a per-Project capability that *any number* of Projects may hold — different invite flows (human vetting, regional signup, event registration) are different gatekeepers, each minting its own tokens. A registration succeeds if its token validates against **any** installed gatekeeper. So every token names its **issuer** (which gatekeeper minted it), and the server validates the signature against that issuer's pinned key.
-- **Gatekeeper designation.** Granting `registration.gatekeeper` (via adminbot, like `subscribe.account_joined` — `22-adminbot.md:147-162`) registers that Project's token-signing public key with the server. The server keeps a set of `issuer → signing key` and verifies each token locally against its claimed issuer (preferred: no per-registration round-trip); delegating to the issuer's `GET /v1/invites/<token>` (`51-invite-tokens.md:29`) is the alternative. Multiple issuers make the pinned-key approach the natural fit.
+- **Gatekeeper designation.** Granting `registration.gatekeeper` (via adminbot, like `accounts.read` — `20-project-security.md` §Server-enforced capabilities) registers that Project's token-signing public key with the server. The server keeps a set of `issuer → signing key` and verifies each token locally against its claimed issuer (preferred: no per-registration round-trip); delegating to the issuer's `GET /v1/invites/<token>` (`51-invite-tokens.md:29`) is the alternative. Multiple issuers make the pinned-key approach the natural fit.
 - **The token is the hand-off.** Admission (*who may register*) and routing (*which channels they land in*) stay separate, and the **token carries the bridge between them**: its issuer stamp plus a routing payload the gatekeeper controls. Post-join routing is resolved from that token — see *Post-join hand-off* below — with no live call between bots.
 
 ## Components
@@ -66,7 +66,7 @@ Because it's the one open endpoint, it's the main abuse surface:
 
 A regular action-bound E2E group whose membership *is* the set of approvers, exactly like adminbot's `#admins` (`22-adminbot.md:6-8`). The server can't read the membership, so it has **no opinion on who may approve** — the bot mediates, because it's a member and can decrypt the roster.
 
-The bot posts each new application as a message containing a **low-PII summary plus a magic link** to the full application. The full detail lives in the webview, not the message body — so applicant PII isn't sprayed across group history and backups. (`identity:magic-links` + a webview behind a project token; see `23-messaging-extensions.md`.)
+The bot posts each new application as a message containing a **low-PII summary plus a magic link** to the full application. The full detail lives in the webview, not the message body — so applicant PII isn't sprayed across group history and backups. (`identity.magic-links` + a webview behind a project token; see `23-messaging-extensions.md`.)
 
 ### 3. Review and decision
 
@@ -93,10 +93,10 @@ The applicant taps the invite and the app runs the normal invite flow (`51-invit
 
 Once the account exists, the new member must land in the right channels — and *which* channels depends on **which gatekeeper approved them**. The hand-off rides the token plus adminbot's existing join-event fan-out, so no bot has to command another.
 
-`AccountJoinedEvent` already delivers the registering token — including its issuer stamp and routing payload — to **any** bot holding `subscribe.account_joined` (`22-adminbot.md:173-199`). Whichever bot *owns the relevant channels* acts on it:
+`AccountJoinedEvent` already delivers the registering token — including its issuer stamp and routing payload — to **any** bot holding `accounts.read` (`22-adminbot.md` §Join event API). Whichever bot *owns the relevant channels* acts on it:
 
 - **(a) Central routing (default).** adminbot reads the token, branches on the issuer + routing tags, and invites the member into the shared org channels via its existing rule config (`22-adminbot.md:413-432`). The gatekeeper expresses *intent* (tags); adminbot resolves intent → channels. Gatekeepers need no group membership and no channel knowledge. Best when channel routing is an org-wide admin policy.
-- **(c) Self-routing gatekeeper.** A gatekeeper that owns its own channels *also* holds `subscribe.account_joined`, recognizes its own issuer stamp on the event, and invites the member into the channels it administers directly. It needs admin membership in those channels (a bot can only invite to groups it's in — `22-adminbot.md:82`). Best when a flow is an autonomous sub-Project with its own channels.
+- **(c) Self-routing gatekeeper.** A gatekeeper that owns its own channels *also* holds `accounts.read`, recognizes its own issuer stamp on the event, and invites the member into the channels it administers directly. It needs admin membership in those channels (a bot can only invite to groups it's in — `22-adminbot.md:82`). Best when a flow is an autonomous sub-Project with its own channels.
 
 Both reuse the same primitive — the join event carrying the token — so they compose: adminbot handles the shared channels, a self-routing gatekeeper handles its own, each keyed off the issuer.
 
@@ -105,11 +105,11 @@ What we deliberately *don't* build is **(b) a gatekeeper → adminbot command** 
 ## Scopes and permissions (against `20-project-security.md`)
 
 - **Identity: `real-did`.** Bot-bearing toward approvers (the bot is a member of `#approvals`), so pseudonymous is incoherent — identity is real-DID per *Identity is derived from the scope set*. (Applicants have no DID until the very end, so there's nothing to pseudonymize there anyway.)
-- **`identity:magic-links`** — the "review this application" link the bot posts is a magic link into the Project webview.
-- **New privileged capability: `registration.gatekeeper`** — the authority to mint tokens the server accepts under closed registration. Held by *any number* of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. In the same family as `subscribe.account_joined` (`22-adminbot.md:147-162`). This is the genuinely new server-side hook this Project introduces.
-- **`subscribe.account_joined`** — needed only by a *self-routing* gatekeeper (option (c) in *Post-join hand-off*) that invites its own members; central-routing gatekeepers leave routing to adminbot and don't need it.
+- **`identity.magic-links`** — the "review this application" link the bot posts is a magic link into the Project webview.
+- **New privileged capability: `registration.gatekeeper`** — the authority to mint tokens the server accepts under closed registration. Held by *any number* of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. In the same family as `accounts.read` (`20-project-security.md` §Server-enforced capabilities). This is the genuinely new server-side hook this Project introduces.
+- **`accounts.read`** — needed only by a *self-routing* gatekeeper (option (c) in *Post-join hand-off*) that invites its own members; central-routing gatekeepers leave routing to adminbot and don't need it.
 - The bot's membership in `#approvals` is arranged by an admin adding it (group membership, not a manifest scope, per the `20` model).
-- `profile:read` optional (to show approver names); not essential. `dm:initiate` not required for v1.
+- `profile.read` optional (to show approver names); not essential. `dm.initiate` not required for v1.
 
 ## Security considerations
 
@@ -147,6 +147,6 @@ What we deliberately *don't* build is **(b) a gatekeeper → adminbot command** 
 - Approvers hold normal accounts, so webview/project-token auth and the visible-bot group model apply to the review side.
 - Adminbot owns post-join channel routing (`22-adminbot.md` Future), so the vetting Project doesn't.
 - The bot's `#approvals` membership is arranged by an admin, consistent with the `20` model where bot group membership isn't a manifest scope.
-- `registration.gatekeeper` is a new capability not present in the current capability set (`22-adminbot.md:147-162` lists only `subscribe.account_joined` / `subscribe.account_left`).
+- `registration.gatekeeper` is part of the server-enforced capability set alongside `accounts.read` (`20-project-security.md` §Server-enforced capabilities); it is the server-side hook this Project relies on.
 </content>
 </invoke>

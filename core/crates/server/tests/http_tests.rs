@@ -1367,7 +1367,7 @@ async fn account_joined_catch_up() {
     assert_eq!(status, StatusCode::CREATED);
     let new_did = body["did"].as_str().unwrap().to_string();
 
-    // The superuser (subscribe.account_joined via the pin) can read it.
+    // The superuser (accounts.read via the pin) can read it.
     let (status, body) = admin_req(
         &app,
         "GET",
@@ -1389,6 +1389,57 @@ async fn account_joined_catch_up() {
     let plain_token = body["session_token"].as_str().unwrap().to_string();
     let (status, _) =
         admin_req(&app, "GET", "/v1/admin/events", &plain_token, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_list_accounts() {
+    let _guard = GATEKEEPER_LOCK.lock().await;
+    let (app, _admin_did, admin_token) =
+        setup_adminbot(server::config::RegistrationMode::Open).await;
+
+    // Register a fresh account; it must show up in the roster snapshot.
+    let (status, body) = register_bot(&app, None).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let new_did = body["did"].as_str().unwrap().to_string();
+
+    // The superuser (accounts.read via the pin) can read the roster.
+    let (status, body) =
+        admin_req(&app, "GET", "/v1/admin/accounts", &admin_token, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let accounts = body["accounts"].as_array().unwrap();
+    let row = accounts
+        .iter()
+        .find(|a| a["did"] == new_did)
+        .expect("roster must include the freshly-registered account");
+    assert_eq!(row["is_bot"], serde_json::json!(true));
+    assert!(row["created_at_ms"].as_i64().unwrap() > 0);
+
+    // Paginating with `after=<new_did>` excludes that DID (strictly greater).
+    let (status, body) = admin_req(
+        &app,
+        "GET",
+        &format!("/v1/admin/accounts?after={new_did}"),
+        &admin_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["did"].as_str().unwrap() > new_did.as_str()),
+        "after cursor must return only DIDs strictly greater"
+    );
+
+    // A bot without the capability is forbidden.
+    let (status, body) = register_bot(&app, None).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let plain_token = body["session_token"].as_str().unwrap().to_string();
+    let (status, _) =
+        admin_req(&app, "GET", "/v1/admin/accounts", &plain_token, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
