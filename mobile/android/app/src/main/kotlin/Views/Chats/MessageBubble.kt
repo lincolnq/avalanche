@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.ReactionFfi
+import uniffi.app_core.SharedContactFfi
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -112,6 +113,16 @@ fun MessageBubble(
     /** Tapping an image attachment opens the fullscreen viewer (docs/35).
      *  Defaults to no-op (e.g. the static overlay copy). */
     onImageClick: (AttachmentFfi) -> Unit = {},
+    /** Tapping "Save" on a shared contact card (docs/35); the conversation screen
+     *  wires this to AppViewModel.saveSharedContact. No-op by default. */
+    onSaveContact: (SharedContactFfi) -> Unit = {},
+    /** Contact-card menu actions (docs/35): open a DM with the person, and copy
+     *  the card to re-share it. The conversation screen wires these. */
+    onMessageContact: (SharedContactFfi) -> Unit = {},
+    onCopyContact: (SharedContactFfi) -> Unit = {},
+    /** DIDs already curated in the contact book, so a shared contact card shows
+     *  "Saved" rather than an active Save button (docs/35). */
+    savedContactDids: Set<String> = emptySet(),
 ) {
     if (showSideSpacers) {
         Row(
@@ -119,11 +130,11 @@ fun MessageBubble(
             horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
         ) {
             if (isMe) Spacer(modifier = Modifier.width(60.dp))
-            BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick)
+            BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick, onSaveContact, onMessageContact, onCopyContact, savedContactDids)
             if (!isMe) Spacer(modifier = Modifier.width(60.dp))
         }
     } else {
-        BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick)
+        BubbleColumn(message, isMe, isBot, senderName, isLastInRun, reactions, myDid, actionsEnabled, interactive, onToggleReaction, onLongPress, attachmentLoader, onImageClick, onSaveContact, onMessageContact, onCopyContact, savedContactDids)
     }
 }
 
@@ -149,6 +160,10 @@ private fun BubbleColumn(
     onLongPress: (Rect) -> Unit,
     attachmentLoader: suspend (AttachmentFfi) -> ByteArray?,
     onImageClick: (AttachmentFfi) -> Unit = {},
+    onSaveContact: (SharedContactFfi) -> Unit = {},
+    onMessageContact: (SharedContactFfi) -> Unit = {},
+    onCopyContact: (SharedContactFfi) -> Unit = {},
+    savedContactDids: Set<String> = emptySet(),
 ) {
     var contentBounds by remember { mutableStateOf(Rect.Zero) }
 
@@ -178,9 +193,12 @@ private fun BubbleColumn(
             )
         }
 
-        // Bubble — omitted for an attachment-only message (empty body) so a
-        // photo doesn't get an empty bubble below it.
-        if (message.body.isNotEmpty() || message.attachments.isEmpty() || message.isDeleted) {
+        // Bubble — omitted for an attachment- or contact-only message (empty
+        // body) so a photo/contact card doesn't get an empty bubble below it.
+        if (message.body.isNotEmpty() ||
+            (message.attachments.isEmpty() && message.contacts.isEmpty()) ||
+            message.isDeleted
+        ) {
             BubbleContent(
                 message = message,
                 isMe = isMe,
@@ -194,6 +212,18 @@ private fun BubbleColumn(
         // Link-preview cards (docs/35) below the text bubble.
         message.previews.forEach { preview ->
             LinkPreviewCard(preview = preview, isMe = isMe, loader = attachmentLoader)
+        }
+
+        // Shared contact cards (docs/35) below the text bubble.
+        message.contacts.forEach { contact ->
+            SharedContactCard(
+                contact = contact,
+                isMe = isMe,
+                alreadySaved = savedContactDids.contains(contact.did),
+                onSave = { onSaveContact(contact) },
+                onMessage = { onMessageContact(contact) },
+                onCopy = { onCopyContact(contact) },
+            )
         }
 
         // Reaction clusters

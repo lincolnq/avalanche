@@ -1,4 +1,5 @@
 import { DeliveryStatus } from "../models/Message";
+import type { LastMessagePreviewFfi } from "../bindings";
 
 /**
  * Returns up to 2 uppercase initials from a display name.
@@ -189,6 +190,59 @@ export function firstUrl(body: string): string | null {
  */
 export function attachmentPlaceholder(contentType: string | null | undefined): string {
   return contentType?.startsWith("image/") ? "Photo" : "Attachment";
+}
+
+/**
+ * Derive the chat-list content descriptor (docs/35) from a message's non-text
+ * content: a shared contact wins, then an image attachment (photo), any other
+ * attachment (file), else plain text (`null`). Mirrors the core's own
+ * `load_conversations` computation for the live/optimistic + incoming paths.
+ */
+export function lastMessagePreviewOf(
+  hasContact: boolean,
+  firstAttachmentContentType: string | null | undefined
+): LastMessagePreviewFfi | null {
+  if (hasContact) return "contact";
+  if (!firstAttachmentContentType) return null;
+  return firstAttachmentContentType.startsWith("image/") ? "photo" : "file";
+}
+
+/**
+ * Chat-list preview decoration for a message's non-text content (docs/35): the
+ * icon and the noun to show when there's no caption. `null` for plain text. Add
+ * a branch per new `LastMessagePreviewFfi` variant; that's the only client-side
+ * change a new content type needs.
+ */
+export function lastMessagePreviewDecoration(
+  preview: LastMessagePreviewFfi | null | undefined
+): { icon: string; noun: string } | null {
+  switch (preview) {
+    case "photo":
+      return { icon: "📷", noun: "Photo" };
+    case "file":
+      return { icon: "📎", noun: "Attachment" };
+    case "contact":
+      return { icon: "👤", noun: "Contact" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Compose the chat-list preview text (docs/35) from a content descriptor and the
+ * message body: "📷 caption" when there's a caption, "📷 Photo" when the body is
+ * empty, or just the body for plain text. `undefined` for an empty plain-text
+ * message. Mirrors iOS ConversationRow's compose logic.
+ */
+export function composeLastMessagePreview(
+  preview: LastMessagePreviewFfi | null | undefined,
+  body: string
+): string | undefined {
+  const deco = lastMessagePreviewDecoration(preview);
+  if (deco) {
+    return body.trim().length === 0 ? `${deco.icon} ${deco.noun}` : `${deco.icon} ${body}`;
+  }
+  return body.trim().length > 0 ? body : undefined;
 }
 
 /**

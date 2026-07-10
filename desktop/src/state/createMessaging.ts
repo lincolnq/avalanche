@@ -1,7 +1,7 @@
 import type { SetStoreFunction } from "solid-js/store";
 import type { Conversation } from "../models";
 import { DeliveryStatus, type Message } from "../models/Message";
-import { attachmentPlaceholder } from "../lib/format";
+import { composeLastMessagePreview, lastMessagePreviewOf } from "../lib/format";
 import type {
   ReactionFfi,
   MessageRevisionFfi,
@@ -9,6 +9,7 @@ import type {
   AttachmentFfi,
   LinkPreviewFfi,
   LinkPreviewMetaFfi,
+  SharedContactFfi,
 } from "../services/AvalancheService";
 import { messageFromFfi, buildStoredMessage } from "./helpers";
 import type { Services } from "./createServices";
@@ -112,7 +113,8 @@ export function createMessaging(deps: MessagingDeps): Messaging {
     transportFn: (sentAtMs: number) => Promise<void>,
     errorMessage: string,
     attachments?: AttachmentFfi[],
-    previews?: LinkPreviewFfi[]
+    previews?: LinkPreviewFfi[],
+    contacts?: SharedContactFfi[]
   ) {
     const messageId = crypto.randomUUID();
     const sentAtMs = Date.now();
@@ -134,6 +136,7 @@ export function createMessaging(deps: MessagingDeps): Messaging {
       expireTimerSecs,
       attachments,
       previews,
+      contacts,
     };
 
     setStore("messagesByConversation", conversationId, (prev) => [
@@ -143,11 +146,12 @@ export function createMessaging(deps: MessagingDeps): Messaging {
 
     // Update conversation preview. Clear any stale group system-event fields so
     // ConversationRow renders this new message, not a prior "X joined" line.
-    // Attachment-only sends (empty body) preview as "Photo"/"Attachment" (iOS parity).
-    const previewText =
-      text.trim().length > 0
-        ? text
-        : attachmentPlaceholder(attachments?.[0]?.contentType);
+    // Compose the content decoration (📷/📎/👤) with the body (docs/35), so a
+    // caption-less send previews "📷 Photo" / "👤 Contact" (iOS parity).
+    const previewText = composeLastMessagePreview(
+      lastMessagePreviewOf((contacts?.length ?? 0) > 0, attachments?.[0]?.contentType),
+      text
+    );
     const convIdx = store.conversations.findIndex((c) => c.id === conversationId);
     if (convIdx >= 0) {
       setStore("conversations", convIdx, "lastMessage", previewText);
@@ -173,6 +177,7 @@ export function createMessaging(deps: MessagingDeps): Messaging {
           expireTimerSecs,
           attachments,
           previews,
+          contacts,
         })
       );
 
@@ -255,7 +260,8 @@ export function createMessaging(deps: MessagingDeps): Messaging {
     conversation: Conversation,
     text: string,
     attachments: AttachmentFfi[],
-    previews: LinkPreviewFfi[]
+    previews: LinkPreviewFfi[],
+    contacts: SharedContactFfi[] = []
   ) {
     const target = messageTargetFor(conversation);
     const svc = serviceFor(conversation.accountId);
@@ -269,10 +275,11 @@ export function createMessaging(deps: MessagingDeps): Messaging {
       conversation.accountId,
       timer,
       (sentAtMs) =>
-        svc.sendMessageWithAttachments(target, text, attachments, previews, sentAtMs),
+        svc.sendMessageWithAttachments(target, text, attachments, previews, contacts, sentAtMs),
       "Send failed",
       attachments,
-      previews
+      previews,
+      contacts
     );
   }
 

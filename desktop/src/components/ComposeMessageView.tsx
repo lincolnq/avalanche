@@ -1,12 +1,14 @@
 import { createSignal, createEffect, on, onMount, onCleanup, For, Show } from "solid-js";
 import { FiChevronUp, FiChevronDown, FiArrowUp, FiX } from "solid-icons/fi";
-import { TbOutlinePaperclip, TbOutlineFile } from "solid-icons/tb";
+import { TbOutlinePaperclip, TbOutlineFile, TbOutlineUserPlus } from "solid-icons/tb";
 import { useApp } from "../state/AppContext";
 import type { Conversation, Message } from "../models";
-import type { AttachmentFfi, LinkPreviewFfi } from "../bindings";
+import type { AttachmentFfi, LinkPreviewFfi, SharedContactFfi } from "../bindings";
 import { firstUrl } from "../lib/format";
 import { makeImageThumbnail } from "../lib/image";
+import { copiedContact } from "../lib/contactClipboard";
 import LinkPreviewCard from "./LinkPreviewCard";
+import SharedContactCard from "./SharedContactCard";
 import "./ComposeMessageView.css";
 
 interface Props {
@@ -41,6 +43,9 @@ export default function ComposeMessageView(props: Props) {
   // URLs (for the chip thumbnails), kept in lockstep by index.
   const [stagedAttachments, setStagedAttachments] = createSignal<AttachmentFfi[]>([]);
   const [stagedPreview, setStagedPreview] = createSignal<LinkPreviewFfi | null>(null);
+  // A staged shared contact card (docs/35), pasted from a "Copy contact" action,
+  // shown as a chip until you send or remove it.
+  const [stagedContact, setStagedContact] = createSignal<SharedContactFfi | null>(null);
   // Tracked outside reactive state — staging dedupe, exactly like iOS.
   let stagedPreviewUrl: string | null = null;
   let dismissedPreviewUrl: string | null = null;
@@ -164,6 +169,7 @@ export default function ComposeMessageView(props: Props) {
     dismissedPreviewUrl = null;
     setStagedPreview(null);
     setStagedAttachments([]);
+    setStagedContact(null);
   }
 
   async function onFilePicked(e: Event & { currentTarget: HTMLInputElement }) {
@@ -235,7 +241,10 @@ export default function ComposeMessageView(props: Props) {
 
   function canSend(): boolean {
     return (
-      !!draft().trim() || stagedAttachments().length > 0 || stagedPreview() !== null
+      !!draft().trim() ||
+      stagedAttachments().length > 0 ||
+      stagedPreview() !== null ||
+      stagedContact() !== null
     );
   }
 
@@ -258,19 +267,21 @@ export default function ComposeMessageView(props: Props) {
 
     const attachments = stagedAttachments();
     const preview = stagedPreview();
-    const hasExtras = attachments.length > 0 || preview !== null;
+    const contact = stagedContact();
+    const hasExtras = attachments.length > 0 || preview !== null || contact !== null;
     if (!text && !hasExtras) return;
     if (!props.conversation.isGroup && !props.conversation.recipientDid) return;
 
     setDraft("");
     const previews = preview ? [preview] : [];
+    const contacts = contact ? [contact] : [];
     clearStaging();
     setSending(true);
     setExpanded(false);
     setTimeout(() => resizeTextarea(), 0);
     try {
       if (hasExtras) {
-        await sendMessageWithAttachments(props.conversation, text, attachments, previews);
+        await sendMessageWithAttachments(props.conversation, text, attachments, previews, contacts);
       } else if (props.conversation.isGroup) {
         await sendGroupMessage(props.conversation, text);
       } else {
@@ -314,7 +325,7 @@ export default function ComposeMessageView(props: Props) {
         </div>
       </Show>
 
-      <Show when={stagedAttachments().length > 0 || stagedPreview()}>
+      <Show when={stagedAttachments().length > 0 || stagedPreview() || stagedContact()}>
         <div class="compose-staging">
           <For each={stagedAttachments()}>
             {(att, i) => <StagedAttachmentChip attachment={att} onRemove={() => removeStagedAttachment(i())} />}
@@ -325,6 +336,17 @@ export default function ComposeMessageView(props: Props) {
                 preview={p()}
                 accountId={props.conversation.accountId}
                 onDismiss={dismissPreview}
+              />
+            )}
+          </Show>
+          <Show when={stagedContact()}>
+            {(c) => (
+              <SharedContactCard
+                contact={c()}
+                accountId={props.conversation.accountId}
+                mine={true}
+                staged={true}
+                onDismiss={() => setStagedContact(null)}
               />
             )}
           </Show>
@@ -348,6 +370,19 @@ export default function ComposeMessageView(props: Props) {
             accept="image/*"
             onChange={onFilePicked}
           />
+          {/* Paste a copied contact card (docs/35) — shown when the in-app
+              contact clipboard holds one and none is staged yet. */}
+          <Show when={copiedContact() && !stagedContact()}>
+            <button
+              class="compose-attach-btn"
+              aria-label="Paste contact"
+              title="Paste contact"
+              disabled={sending() || uploading()}
+              onClick={() => setStagedContact(copiedContact())}
+            >
+              <TbOutlineUserPlus size={24} />
+            </button>
+          </Show>
         </Show>
         <div class="compose-input-wrap" classList={{ expanded: expanded() }}>
           <textarea

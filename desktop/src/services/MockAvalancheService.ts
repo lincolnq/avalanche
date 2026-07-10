@@ -20,6 +20,7 @@ import type {
   LinkPreviewFfi,
   LinkPreviewMetaFfi,
   MessageTarget,
+  SharedContactFfi,
 } from "./AvalancheService";
 
 const MOCK_SERVER_URL = "https://mock.avalancheapp.net";
@@ -55,8 +56,9 @@ export function seedConversations(
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
-      lastMessageAttachmentContentType: null,
+      lastMessagePreview: null,
       unreadCount: 0,
       isRequest: false,
       isBlocked: false,
@@ -81,8 +83,9 @@ export function seedConversations(
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
-      lastMessageAttachmentContentType: null,
+      lastMessagePreview: null,
       unreadCount: 0,
       isRequest: false,
       isBlocked: false,
@@ -91,7 +94,7 @@ export function seedConversations(
       conversationId: `group-mockgroup3`,
       groupTitle: "Empty Group",
       lastMessage: null,
-      lastMessageAttachmentContentType: null,
+      lastMessagePreview: null,
       unreadCount: 0,
       isRequest: false,
       isBlocked: false,
@@ -116,8 +119,9 @@ export function seedConversations(
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
-      lastMessageAttachmentContentType: null,
+      lastMessagePreview: null,
       unreadCount: 0,
       isRequest: false,
       isBlocked: false,
@@ -147,6 +151,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
       {
         id: "msg-g1-1",
@@ -165,6 +170,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
       {
         id: "msg-g1-2",
@@ -183,6 +189,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
       {
         id: "msg-g1-3",
@@ -201,6 +208,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
     ];
   }
@@ -223,6 +231,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
     ];
   }
@@ -245,6 +254,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
       {
         id: "msg-dm-1",
@@ -263,6 +273,7 @@ function seedMessages(conversationId: string, accountId: string): StoredMessageF
         expireAtMs: null,
         attachments: [],
         previews: [],
+        contacts: [],
       },
     ];
   }
@@ -303,6 +314,7 @@ export class MockAvalancheService implements AvalancheService {
           isRequest: false,
           attachments: [],
           previews: [],
+          contacts: [],
         },
       });
     }, 1000);
@@ -497,6 +509,7 @@ export class MockAvalancheService implements AvalancheService {
   async refreshContactProfile(_did: string): Promise<boolean> { return false; }
   async listContacts(): Promise<ContactRowFfi[]> { return []; }
   async touchContact(_did: string, _curated: boolean): Promise<void> {}
+  async saveSharedContact(_did: string, _name: string): Promise<void> {}
   async fetchAndCacheProfile(_did: string, _profileKey: Uint8Array): Promise<void> {}
   async primeContactProfile(
     _did: string,
@@ -672,6 +685,7 @@ export class MockAvalancheService implements AvalancheService {
     body: string,
     attachments: AttachmentFfi[],
     previews: LinkPreviewFfi[],
+    contacts: SharedContactFfi[],
     _sentAtMs: number
   ): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
@@ -698,6 +712,7 @@ export class MockAvalancheService implements AvalancheService {
           isRequest: false,
           attachments,
           previews,
+          contacts,
         },
       });
     }, 1000);

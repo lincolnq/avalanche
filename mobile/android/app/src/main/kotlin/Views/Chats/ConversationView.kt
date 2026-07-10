@@ -85,6 +85,7 @@ import kotlinx.coroutines.withContext
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
 import uniffi.app_core.MessageRevisionFfi
+import uniffi.app_core.SharedContactFfi
 import java.util.UUID
 
 // ---------------------------------------------------------------------------
@@ -174,12 +175,20 @@ fun ConversationView(
     var stagedPreview by remember { mutableStateOf<LinkPreviewFfi?>(null) }
     var stagedPreviewUrl by remember { mutableStateOf<String?>(null) }
     var dismissedPreviewUrl by remember { mutableStateOf<String?>(null) }
+    // A staged shared contact card (docs/35), pasted from a "Copy contact"
+    // action, shown as a chip in the composer until you send or remove it.
+    var stagedContact by remember { mutableStateOf<SharedContactFfi?>(null) }
+    // DIDs already curated in the contact book (docs/35): a received contact card
+    // shows "Saved" for these, and an active Save button otherwise. Loaded on
+    // appear and updated optimistically when the user taps Save.
+    var savedContactDids by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     fun clearStaged() {
         stagedImageData = null
         stagedPreview = null
         stagedPreviewUrl = null
         dismissedPreviewUrl = null
+        stagedContact = null
     }
 
     // The message under the Signal-style long-press actions overlay (docs/33),
@@ -272,12 +281,21 @@ fun ConversationView(
     // user copied) and on primary-clip change. Mirrors iOS's paste button.
     val clipboard = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     var canPasteImage by remember { mutableStateOf(false) }
+    // Whether the clipboard holds a copied contact card, gating the paste button.
+    var canPasteContact by remember { mutableStateOf(false) }
     fun refreshPasteAvailability() {
         canPasteImage = clipboard.primaryClipDescription?.let { desc ->
             (0 until desc.mimeTypeCount).any { desc.getMimeType(it).startsWith("image/") }
         } ?: false
+        canPasteContact = ContactClipboard.hasContact(clipboard)
     }
-    fun pasteImage() {
+    // Stage the current clipboard content in the composer (docs/35). A copied
+    // contact card takes priority over an image. Mirrors iOS pasteFromClipboard.
+    fun pasteFromClipboard() {
+        ContactClipboard.read(clipboard)?.let {
+            stagedContact = it
+            return
+        }
         val clip = clipboard.primaryClip ?: return
         if (clip.itemCount == 0) return
         val uri = clip.getItemAt(0).uri ?: return
@@ -334,7 +352,8 @@ fun ConversationView(
         val text = messageText
         val image = stagedImageData
         val preview = stagedPreview
-        if (text.trim().isEmpty() && image == null && preview == null) return
+        val contact = stagedContact
+        if (text.trim().isEmpty() && image == null && preview == null && contact == null) return
         messageText = ""
         clearStaged()
         errorMessage = null
@@ -350,6 +369,7 @@ fun ConversationView(
             sentAtMs = nowMs,
             readAtMs = nowMs,  // outgoing = immediately read
             deliveryStatus = DeliveryStatus.SENDING,
+            contacts = contact?.let { listOf(it) } ?: emptyList(),
         )
         // Insert into the UI immediately so the send feels instant (mirrors iOS).
         // addOptimisticMessage also bumps the chat-list row (incl. the staged
@@ -375,6 +395,7 @@ fun ConversationView(
                     text = text,
                     imageData = image,
                     preview = preview,
+                    contact = contact,
                     messageId = messageId,
                     sentAtMs = nowMs,
                 )
@@ -402,6 +423,12 @@ fun ConversationView(
             conversationId = conversation.id,
             accountId = conversation.accountId,
         )
+        // Load already-curated contact DIDs (docs/35) so a received contact card
+        // renders "Saved" for people already in the book, Save otherwise.
+        savedContactDids = viewModel.listContacts(conversation.accountId)
+            .filter { it.isCurated }
+            .map { it.did }
+            .toSet()
 
         // Re-fetch the contact's encrypted profile and update cached display name.
         conversation.recipientDid?.let { did ->
@@ -595,6 +622,27 @@ fun ConversationView(
                             viewModel.attachmentData(att, accountId = conversation.accountId)
                         },
                         onImageClick = { att -> imageViewerStartId = att.id },
+                        onSaveContact = { contact ->
+                            // Optimistically mark curated so the card flips to
+                            // "Saved" immediately, then persist.
+                            savedContactDids = savedContactDids + contact.did
+                            scope.launch {
+                                viewModel.saveSharedContact(contact, accountId = conversation.accountId)
+                            }
+                        },
+                        onMessageContact = { contact ->
+                            // Open (or create) the DM with this person and navigate
+                            // to it, matching the group member menu.
+                            val conv = viewModel.findOrCreateDMConversation(
+                                recipientDid = contact.did,
+                                accountId = conversation.accountId,
+                            )
+                            viewModel.setNavigateToConversation(conv)
+                        },
+                        onCopyContact = { contact ->
+                            ContactClipboard.write(context, contact.did, contact.name)
+                        },
+                        savedContactDids = savedContactDids,
                     )
                 }
             }
@@ -640,6 +688,7 @@ fun ConversationView(
                     editingMessage = editingMessage,
                     stagedImageData = stagedImageData,
                     stagedPreview = stagedPreview,
+                    stagedContact = stagedContact,
                     previewLoader = { att -> viewModel.attachmentData(att, conversation.accountId) },
                     onRemoveImage = { stagedImageData = null },
                     onRemovePreview = {
@@ -647,6 +696,7 @@ fun ConversationView(
                         stagedPreview = null
                         stagedPreviewUrl = null
                     },
+                    onRemoveContact = { stagedContact = null },
                     onSend = { sendMessage() },
                     onApplyEdit = { applyEdit() },
                     onCancelEdit = { cancelEdit() },
@@ -655,8 +705,8 @@ fun ConversationView(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    canPasteImage = canPasteImage,
-                    onPaste = { pasteImage() },
+                    canPaste = canPasteImage || canPasteContact,
+                    onPaste = { pasteFromClipboard() },
                 )
         }
     }
@@ -767,14 +817,16 @@ private fun Composer(
     editingMessage: Message?,
     stagedImageData: ByteArray? = null,
     stagedPreview: LinkPreviewFfi? = null,
+    stagedContact: SharedContactFfi? = null,
     previewLoader: suspend (AttachmentFfi) -> ByteArray? = { null },
     onRemoveImage: () -> Unit = {},
     onRemovePreview: () -> Unit = {},
+    onRemoveContact: () -> Unit = {},
     onSend: () -> Unit,
     onApplyEdit: () -> Unit,
     onCancelEdit: () -> Unit,
     onAttach: () -> Unit = {},
-    canPasteImage: Boolean = false,
+    canPaste: Boolean = false,
     onPaste: () -> Unit = {},
 ) {
     Column {
@@ -810,9 +862,9 @@ private fun Composer(
             }
         }
 
-        // Staging strip (docs/35): pending image and/or link-preview card, each
-        // removable with an x. Hidden while editing.
-        if (editingMessage == null && (stagedImageData != null || stagedPreview != null)) {
+        // Staging strip (docs/35): pending image, link-preview, and/or contact
+        // card, each removable with an x. Hidden while editing.
+        if (editingMessage == null && (stagedImageData != null || stagedPreview != null || stagedContact != null)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -843,10 +895,17 @@ private fun Composer(
                         StagedRemoveButton(onClick = onRemovePreview, modifier = Modifier.align(Alignment.TopEnd))
                     }
                 }
+                if (stagedContact != null) {
+                    Box {
+                        SharedContactCard(contact = stagedContact, isMe = true)
+                        StagedRemoveButton(onClick = onRemoveContact, modifier = Modifier.align(Alignment.TopEnd))
+                    }
+                }
             }
         }
 
-        val canSend = messageText.trim().isNotEmpty() || stagedImageData != null || stagedPreview != null
+        val canSend = messageText.trim().isNotEmpty() || stagedImageData != null ||
+            stagedPreview != null || stagedContact != null
 
         Row(
             modifier = Modifier
@@ -865,13 +924,13 @@ private fun Composer(
                         modifier = Modifier.size(28.dp),
                     )
                 }
-                // Paste an image from the clipboard (docs/35) — shown only when the
-                // clipboard holds an image.
-                if (canPasteImage) {
+                // Paste from the clipboard (docs/35) — shown when it holds an
+                // image or a copied contact card.
+                if (canPaste) {
                     IconButton(onClick = onPaste) {
                         Icon(
                             imageVector = Icons.Filled.ContentPaste,
-                            contentDescription = "Paste image",
+                            contentDescription = "Paste",
                             tint = LocalAvalancheColors.current.brand,
                         )
                     }

@@ -4,6 +4,7 @@ import org.json.JSONObject
 import java.util.Date
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
+import uniffi.app_core.SharedContactFfi
 import uniffi.app_core.GroupEventKind
 
 // `GroupEventKind` is the UniFFI-generated enum (from Generated/uniffi/app_core/app_core.kt).
@@ -87,6 +88,9 @@ data class Message(
     var attachments: List<AttachmentFfi> = emptyList(),
     /// Link-preview cards on this message (docs/35); empty for plain text.
     var previews: List<LinkPreviewFfi> = emptyList(),
+    /// Shared contact cards on this message (docs/35); empty for plain text.
+    /// Rendered as a tappable card with a "Save contact" action.
+    var contacts: List<SharedContactFfi> = emptyList(),
 ) {
     val sentAt: Date get() = Date(sentAtMs)
 

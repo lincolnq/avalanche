@@ -4,6 +4,7 @@ import uniffi.app_core.AccountInfoFfi
 import uniffi.app_core.AppCore
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
+import uniffi.app_core.SharedContactFfi
 import uniffi.app_core.AppErrorFfi
 import uniffi.app_core.ConnectionState
 import uniffi.app_core.ContactRowFfi
@@ -178,6 +179,10 @@ interface AppCoreProtocol {
     @Throws(AppErrorFfi::class) fun primeContactProfile(did: String, displayName: String, profileKey: ByteArray)
     @Throws(AppErrorFfi::class) fun listContacts(): List<ContactRowFfi>
     @Throws(AppErrorFfi::class) fun touchContact(did: String, curated: Boolean)
+    /** Save a received shared contact card (docs/35): curate the DID and record
+     *  the shared name as the local nickname. The real profile arrives on first
+     *  contact via the DID. */
+    @Throws(AppErrorFfi::class) fun saveSharedContact(did: String, name: String)
 
     // -----------------------------------------------------------------------
     // Abuse handling (docs/12-abuse-handling.md)
@@ -223,7 +228,7 @@ interface AppCoreProtocol {
 
     @Throws(AppErrorFfi::class) fun sendDm(recipientDid: String, plaintext: ByteArray, sentAtMs: Long)
     @Throws(AppErrorFfi::class) fun sendMessage(target: MessageTarget, plaintext: ByteArray, sentAtMs: Long)
-    @Throws(AppErrorFfi::class) fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, sentAtMs: Long)
+    @Throws(AppErrorFfi::class) fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, contacts: List<SharedContactFfi>, sentAtMs: Long)
     @Throws(AppErrorFfi::class) fun uploadAttachment(plaintext: ByteArray, contentType: String, fileName: String?, width: Int, height: Int, durationMs: Int, thumbnail: ByteArray, flags: Int): AttachmentFfi
     @Throws(AppErrorFfi::class) fun downloadAttachment(attachment: AttachmentFfi): ByteArray
     @Throws(AppErrorFfi::class) fun setAttachmentDownloaded(attachmentId: String, localPath: String)
@@ -381,6 +386,7 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
         core.primeContactProfile(did, displayName, profileKey)
     override fun listContacts(): List<ContactRowFfi> = core.listContacts()
     override fun touchContact(did: String, curated: Boolean) = core.touchContact(did, curated)
+    override fun saveSharedContact(did: String, name: String) = core.saveSharedContact(did, name)
 
     override fun blockContact(did: String) = core.blockContact(did)
     override fun unblockContact(did: String) = core.unblockContact(did)
@@ -410,8 +416,8 @@ class LiveAppCoreProtocol(private val core: AppCore) : AppCoreProtocol {
         core.sendDm(recipientDid, plaintext, sentAtMs)
     override fun sendMessage(target: MessageTarget, plaintext: ByteArray, sentAtMs: Long) =
         core.sendMessage(target, plaintext, sentAtMs)
-    override fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, sentAtMs: Long) =
-        core.sendMessageWithAttachments(target, body, attachments, previews, sentAtMs)
+    override fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, contacts: List<SharedContactFfi>, sentAtMs: Long) =
+        core.sendMessageWithAttachments(target, body, attachments, previews, contacts, sentAtMs)
     override fun uploadAttachment(plaintext: ByteArray, contentType: String, fileName: String?, width: Int, height: Int, durationMs: Int, thumbnail: ByteArray, flags: Int): AttachmentFfi =
         core.uploadAttachment(plaintext, contentType, fileName, width, height, durationMs, thumbnail, flags)
     override fun downloadAttachment(attachment: AttachmentFfi): ByteArray =
@@ -608,6 +614,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
     override fun primeContactProfile(did: String, displayName: String, profileKey: ByteArray) {}
     override fun listContacts(): List<ContactRowFfi> = emptyList()
     override fun touchContact(did: String, curated: Boolean) {}
+    override fun saveSharedContact(did: String, name: String) {}
 
     override fun blockContact(did: String) {}
     override fun unblockContact(did: String) {}
@@ -633,7 +640,7 @@ open class MockAppCoreProtocol : AppCoreProtocol {
 
     override fun sendDm(recipientDid: String, plaintext: ByteArray, sentAtMs: Long) {}
     override fun sendMessage(target: MessageTarget, plaintext: ByteArray, sentAtMs: Long) {}
-    override fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, sentAtMs: Long) {}
+    override fun sendMessageWithAttachments(target: MessageTarget, body: String, attachments: List<AttachmentFfi>, previews: List<LinkPreviewFfi>, contacts: List<SharedContactFfi>, sentAtMs: Long) {}
     override fun uploadAttachment(plaintext: ByteArray, contentType: String, fileName: String?, width: Int, height: Int, durationMs: Int, thumbnail: ByteArray, flags: Int): AttachmentFfi =
         AttachmentFfi(id = "", url = "", contentType = contentType, key = ByteArray(0), digest = ByteArray(0), sizeBytes = plaintext.size.toLong(), fileName = fileName, width = width, height = height, durationMs = durationMs, blurhash = null, thumbnail = thumbnail, caption = null, flags = flags, localPath = null, downloadedAtMs = null)
     override fun downloadAttachment(attachment: AttachmentFfi): ByteArray = ByteArray(0)

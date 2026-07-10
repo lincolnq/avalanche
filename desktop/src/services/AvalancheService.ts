@@ -28,12 +28,14 @@ export type {
   IncomingEvent,
   InviteInfo,
   JoinResultFfi,
+  LastMessagePreviewFfi,
   LinkPreviewFfi,
   LinkPreviewMetaFfi,
   MessageRevisionFfi,
   MessageTarget,
   ProjectInfoFfi,
   ReactionFfi,
+  SharedContactFfi,
   StoredMessageFfi,
 } from "../bindings";
 
@@ -89,6 +91,7 @@ export interface AvalancheService {
     body: string,
     attachments: import("../bindings").AttachmentFfi[],
     previews: import("../bindings").LinkPreviewFfi[],
+    contacts: import("../bindings").SharedContactFfi[],
     sentAtMs: number
   ): Promise<void>;
   nextEvents(): Promise<import("../bindings").IncomingEvent[]>;
@@ -118,6 +121,9 @@ export interface AvalancheService {
   refreshContactProfile(did: string): Promise<boolean>;
   listContacts(): Promise<import("../bindings").ContactRowFfi[]>;
   touchContact(did: string, curated: boolean): Promise<void>;
+  // Save a received shared contact card (docs/35): curate the DID + record the
+  // shared name as the local nickname. Real profile arrives on first contact.
+  saveSharedContact(did: string, name: string): Promise<void>;
   fetchAndCacheProfile(did: string, profileKey: Uint8Array): Promise<void>;
   primeContactProfile(did: string, displayName: string, profileKey: Uint8Array): Promise<void>;
   blockContact(did: string): Promise<void>;

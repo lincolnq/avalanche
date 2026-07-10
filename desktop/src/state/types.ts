@@ -11,6 +11,7 @@ import type {
   AttachmentFfi,
   LinkPreviewFfi,
   LinkPreviewMetaFfi,
+  SharedContactFfi,
 } from "../services/AvalancheService";
 
 // ── Persisted account shape (stored in tauri-plugin-store) ────────────────────
@@ -111,8 +112,15 @@ export interface AppContextValue {
     conversation: Conversation,
     text: string,
     attachments: AttachmentFfi[],
-    previews: LinkPreviewFfi[]
+    previews: LinkPreviewFfi[],
+    contacts?: SharedContactFfi[]
   ) => Promise<void>;
+  // Save a received shared contact card (docs/35): curate the DID + record the
+  // shared name locally, and warm the in-memory name cache.
+  saveSharedContact: (accountId: string, did: string, name: string) => Promise<void>;
+  // Curated/interacted contacts for an account (docs/35): drives the "Saved"
+  // state on a received contact card.
+  listContacts: (accountId: string) => Promise<ContactRowFfi[]>;
   uploadAttachment: (
     accountId: string,
     plaintext: number[],

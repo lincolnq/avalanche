@@ -200,6 +200,10 @@ export class DevServerAvalancheService implements AvalancheService {
     await ok(commands.touchContact(this.accountId, did, curated));
   }
 
+  async saveSharedContact(did: string, name: string): Promise<void> {
+    await ok(commands.saveSharedContact(this.accountId, did, name));
+  }
+
   async fetchAndCacheProfile(did: string, profileKey: Uint8Array): Promise<void> {
     await ok(commands.fetchAndCacheProfile(this.accountId, did, Array.from(profileKey)));
   }
@@ -448,9 +452,10 @@ export class DevServerAvalancheService implements AvalancheService {
     body: string,
     attachments: import("../bindings").AttachmentFfi[],
     previews: import("../bindings").LinkPreviewFfi[],
+    contacts: import("../bindings").SharedContactFfi[],
     sentAtMs: number,
   ): Promise<void> {
-    await ok(commands.sendMessageWithAttachments(this.accountId, target, body, attachments, previews, sentAtMs));
+    await ok(commands.sendMessageWithAttachments(this.accountId, target, body, attachments, previews, contacts, sentAtMs));
   }
 
   async openExternal(url: string): Promise<void> {

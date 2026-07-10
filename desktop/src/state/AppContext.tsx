@@ -88,6 +88,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     cachedDisplayName,
     resolveIncomingSender,
     resetCaches,
+    listContacts,
+    saveSharedContact,
   } = conversations;
 
   // Message timelines, optimistic send, read state, and message actions (see
@@ -254,6 +256,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     sendMessage,
     sendGroupMessage,
     sendMessageWithAttachments,
+    saveSharedContact,
+    listContacts,
     uploadAttachment,
     downloadAttachment,
     fetchLinkPreview,

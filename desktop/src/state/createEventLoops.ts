@@ -7,7 +7,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import type { Conversation } from "../models";
-import { attachmentPlaceholder } from "../lib/format";
+import { composeLastMessagePreview, lastMessagePreviewOf } from "../lib/format";
 import { DeliveryStatus, type Message } from "../models/Message";
 import type {
   ConnectionState,
@@ -319,17 +319,19 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
       expireTimerSecs: m.expireTimerSecs,
       attachments: m.attachments,
       previews: m.previews,
+      contacts: m.contacts,
     };
     setStore("messagesByConversation", conversationId, (prev) => [
       ...(prev ?? []),
       msg,
     ]);
-    // Chat-list preview: real text, else "Photo"/"Attachment" for an
-    // attachment-only message (iOS parity).
+    // Chat-list preview: compose the content decoration (📷/📎/👤) with the body
+    // (docs/35), so a caption-less message previews "📷 Photo" / "👤 Contact".
     const previewSource =
-      body.trim().length > 0
-        ? body
-        : attachmentPlaceholder(m.attachments[0]?.contentType);
+      composeLastMessagePreview(
+        lastMessagePreviewOf(m.contacts.length > 0, m.attachments[0]?.contentType),
+        body
+      ) ?? "";
     const previewText =
       previewSource.length > 100 ? previewSource.slice(0, 100) + "…" : previewSource;
     // Seed/bump the unread badge for conversations whose transcript isn't loaded
@@ -359,6 +361,7 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
           expireTimerSecs: m.expireTimerSecs,
           attachments: m.attachments,
           previews: m.previews,
+          contacts: m.contacts,
         })
       )
       .catch((err: unknown) => {

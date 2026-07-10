@@ -38,8 +38,13 @@ fun ContactAvatar(
     isBot: Boolean = false,
     size: Dp,
     modifier: Modifier = Modifier,
+    // Accent used for the placeholder fill + initial. Defaults to the brand
+    // plum, which reads on paper/incoming backgrounds. Callers placing the
+    // avatar on a dark/plum surface (e.g. a sent contact card) pass a light
+    // tint like `AvalancheColors.Sand100` so the initial doesn't vanish.
+    tint: Color = LocalAvalancheColors.current.brand,
 ) {
-    val color = LocalAvalancheColors.current.brand
+    val color = tint
     val shape = if (isBot) HexagonShape else CircleShape
 
     val bitmap = remember(imageData) {

@@ -6,6 +6,7 @@ import {
   type ConversationSummaryFfi,
   type AttachmentFfi,
   type LinkPreviewFfi,
+  type SharedContactFfi,
 } from "../services/AvalancheService";
 import { MockAvalancheService } from "../services/MockAvalancheService";
 import { DevServerAvalancheService } from "../services/DevServerAvalancheService";
@@ -43,6 +44,7 @@ export function messageFromFfi(m: StoredMessageFfi): Message {
     expireAtMs: m.expireAtMs ?? undefined,
     attachments: m.attachments,
     previews: m.previews,
+    contacts: m.contacts,
   };
 }
 
@@ -67,6 +69,7 @@ export function buildStoredMessage(opts: {
   expireTimerSecs: number;
   attachments?: AttachmentFfi[];
   previews?: LinkPreviewFfi[];
+  contacts?: SharedContactFfi[];
 }): StoredMessageFfi {
   return {
     id: opts.id,
@@ -85,6 +88,7 @@ export function buildStoredMessage(opts: {
     expireAtMs: null,
     attachments: opts.attachments ?? [],
     previews: opts.previews ?? [],
+    contacts: opts.contacts ?? [],
   };
 }
 
