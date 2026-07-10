@@ -3,6 +3,7 @@ import { FiMoreHorizontal } from "solid-icons/fi";
 import { useApp } from "../state/AppContext";
 import type { SharedContactFfi } from "../bindings";
 import ContactAvatar from "./ContactAvatar";
+import FloatingMenu from "./FloatingMenu";
 import { copyContact } from "../lib/contactClipboard";
 import "./SharedContactCard.css";
 
@@ -27,6 +28,7 @@ interface Props {
 export default function SharedContactCard(props: Props) {
   const app = useApp();
   const [menuOpen, setMenuOpen] = createSignal(false);
+  const [menuPos, setMenuPos] = createSignal({ x: 0, y: 0 });
   // Driven by the real contact book: a DID already curated shows "Saved".
   const [saved, setSaved] = createSignal(false);
   const displayName = () => props.contact.name.trim() || props.contact.did.slice(-8);
@@ -101,21 +103,26 @@ export default function SharedContactCard(props: Props) {
         <button
           class="shared-contact-menu-btn"
           aria-label="Contact actions"
-          onClick={() => setMenuOpen(true)}
+          onClick={(e) => {
+            setMenuPos({ x: e.clientX, y: e.clientY });
+            setMenuOpen(true);
+          }}
         >
           <FiMoreHorizontal size={14} />
         </button>
-        <Show when={menuOpen()}>
-          <div class="context-menu-backdrop" onClick={() => setMenuOpen(false)} />
-          <div class="context-menu" classList={{ mine: props.mine }}>
-            <button class="ctx-item" onClick={message}>
-              Message {displayName()}
-            </button>
-            <button class="ctx-item" onClick={copy}>
-              Copy contact
-            </button>
-          </div>
-        </Show>
+        <FloatingMenu
+          open={menuOpen()}
+          x={menuPos().x}
+          y={menuPos().y}
+          onClose={() => setMenuOpen(false)}
+        >
+          <button class="ctx-item" onClick={message}>
+            Message {displayName()}
+          </button>
+          <button class="ctx-item" onClick={copy}>
+            Copy contact
+          </button>
+        </FloatingMenu>
       </Show>
     </div>
   );

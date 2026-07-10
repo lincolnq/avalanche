@@ -14,6 +14,7 @@ import { formatTime, linkify } from "../lib/format";
 import AttachmentView from "./AttachmentView";
 import LinkPreviewCard from "./LinkPreviewCard";
 import SharedContactCard from "./SharedContactCard";
+import FloatingMenu from "./FloatingMenu";
 import "./MessageBubble.css";
 
 const DELIVERY_ICON_SIZE = 14;
@@ -34,6 +35,7 @@ interface Props {
 export default function MessageBubble(props: Props) {
   const app = useApp();
   const [menuOpen, setMenuOpen] = createSignal(false);
+  const [menuPos, setMenuPos] = createSignal({ x: 0, y: 0 });
   const deleted = () => props.message.isDeleted;
   const myDid = () => props.conversation.accountId;
   const canEdit = () => props.mine && !deleted();
@@ -67,6 +69,7 @@ export default function MessageBubble(props: Props) {
 
   function openMenu(e: MouseEvent) {
     e.preventDefault();
+    setMenuPos({ x: e.clientX, y: e.clientY });
     if (!deleted()) setMenuOpen(true);
   }
   const closeMenu = () => setMenuOpen(false);
@@ -159,59 +162,56 @@ export default function MessageBubble(props: Props) {
             <button
               class="bubble-menu-btn"
               aria-label="Message actions"
-              onClick={() => setMenuOpen(true)}
+              onClick={openMenu}
             >
               <FiMoreHorizontal size={14} />
             </button>
           </>
         )}
-        <Show when={menuOpen()}>
-          <div class="context-menu-backdrop" onClick={closeMenu} />
-          <div class="context-menu" classList={{ mine: props.mine }}>
-            <div class="ctx-emoji-row">
-              <For each={QUICK_EMOJI}>
-                {(e) => (
-                  <button class="ctx-emoji" onClick={() => react(e)}>
-                    {e}
-                  </button>
-                )}
-              </For>
-            </div>
-            <Show when={canEdit()}>
-              <button
-                class="ctx-item"
-                onClick={() => {
-                  props.onEdit(props.message);
-                  closeMenu();
-                }}
-              >
-                Edit
-              </button>
-            </Show>
-            <Show when={props.message.editCount > 0}>
-              <button
-                class="ctx-item"
-                onClick={() => {
-                  props.onShowHistory(props.message);
-                  closeMenu();
-                }}
-              >
-                Edit History
-              </button>
-            </Show>
-            <button class="ctx-item" onClick={copy}>
-              Copy
-            </button>
-            <Show when={props.mine}>
-              <button class="ctx-item danger" onClick={() => del(true)}>
-                Delete for Everyone
-              </button>
-            </Show>
-            <button class="ctx-item danger" onClick={() => del(false)}>
-              Delete for Me
-            </button>
+        <FloatingMenu open={menuOpen()} x={menuPos().x} y={menuPos().y} onClose={closeMenu}>
+          <div class="ctx-emoji-row">
+            <For each={QUICK_EMOJI}>
+              {(e) => (
+                <button class="ctx-emoji" onClick={() => react(e)}>
+                  {e}
+                </button>
+              )}
+            </For>
           </div>
-        </Show>
+          <Show when={canEdit()}>
+            <button
+              class="ctx-item"
+              onClick={() => {
+                props.onEdit(props.message);
+                closeMenu();
+              }}
+            >
+              Edit
+            </button>
+          </Show>
+          <Show when={props.message.editCount > 0}>
+            <button
+              class="ctx-item"
+              onClick={() => {
+                props.onShowHistory(props.message);
+                closeMenu();
+              }}
+            >
+              Edit History
+            </button>
+          </Show>
+          <button class="ctx-item" onClick={copy}>
+            Copy
+          </button>
+          <Show when={props.mine}>
+            <button class="ctx-item danger" onClick={() => del(true)}>
+              Delete for Everyone
+            </button>
+          </Show>
+          <button class="ctx-item danger" onClick={() => del(false)}>
+            Delete for Me
+          </button>
+        </FloatingMenu>
       </div>
       <Show when={clusters().length > 0}>
         <div class="reaction-row">
