@@ -18,6 +18,7 @@
 		1B8B0E7BA237E93517B407C4 /* EmojiData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12909ED788E69B8A5410A505 /* EmojiData.swift */; };
 		1D2BDEE0FB41FAED5BAB86A8 /* Hexagon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9289256BE2B6AF2378B1D78D /* Hexagon.swift */; };
 		1D538E2F9FC8D964B7923C3D /* InviteLinkEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A82BC1AF50974F0759EC90 /* InviteLinkEntryView.swift */; };
+		1F5A7E11A49E7FA2ABD41F91 /* SharedContactCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC9C63AAF2E6A04676DA23B /* SharedContactCard.swift */; };
 		206951171CA6EE320DB6DC5D /* NameGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D15DEB5760B0263F833A50A /* NameGroupView.swift */; };
 		20F6033A948AC335C87AA56C /* GroupDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CBDD6DD18CF753D1B3E75B6 /* GroupDetailView.swift */; };
 		25BD1E1E253DCEBC39F160D4 /* DevServerActnetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 661A952A0D325A00D0F054E9 /* DevServerActnetService.swift */; };
@@ -130,6 +131,7 @@
 		32115C1BD46227602D3C5A71 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		33A33BB9BDC1959B6580927C /* NewAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewAccountView.swift; sourceTree = "<group>"; };
 		43C96DE459D704EBFA65B307 /* MessageActionsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsOverlay.swift; sourceTree = "<group>"; };
+		4AC9C63AAF2E6A04676DA23B /* SharedContactCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedContactCard.swift; sourceTree = "<group>"; };
 		4D15DEB5760B0263F833A50A /* NameGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NameGroupView.swift; sourceTree = "<group>"; };
 		59A82BC1AF50974F0759EC90 /* InviteLinkEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteLinkEntryView.swift; sourceTree = "<group>"; };
 		60B3DC7CBE016789D232757D /* ChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatsView.swift; sourceTree = "<group>"; };
@@ -288,6 +290,7 @@
 				4D15DEB5760B0263F833A50A /* NameGroupView.swift */,
 				7F73DF560719B0774C43444C /* RecipientTokenField.swift */,
 				8CE6D8359E844CDAC7396157 /* RecoveryKeyBanner.swift */,
+				4AC9C63AAF2E6A04676DA23B /* SharedContactCard.swift */,
 				A40ACBCAC0299EE902FAA39F /* ShareDestinationView.swift */,
 			);
 			path = Chats;
@@ -592,6 +595,7 @@
 				3C45CC65E3C39FE080399694 /* SecureEnclaveKeyManager.swift in Sources */,
 				D3716E6E29A1BEF9424F3F79 /* ServerDetailView.swift in Sources */,
 				3FE16A898C98E61D3C20CC04 /* ShareDestinationView.swift in Sources */,
+				1F5A7E11A49E7FA2ABD41F91 /* SharedContactCard.swift in Sources */,
 				D207CDF5562018B203A934E6 /* SplashView.swift in Sources */,
 				3E096A5CEAF5136996B05DB3 /* app_core.swift in Sources */,
 			);
@@ -625,7 +629,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 559;
+				CURRENT_PROJECT_VERSION = 575;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -645,9 +649,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.4;
+				MARKETING_VERSION = 0.3.5;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
-				RELAY_URL = "${RELAY_URL}";
+				RELAY_URL = "https://relay.theavalanche.net";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -658,7 +662,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 559;
+				CURRENT_PROJECT_VERSION = 575;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -669,7 +673,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.4;
+				MARKETING_VERSION = 0.3.5;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -800,7 +804,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ../ShareExtension/ShareExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 559;
+				CURRENT_PROJECT_VERSION = 575;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -811,7 +815,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.4;
+				MARKETING_VERSION = 0.3.5;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app.ShareExtension;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
@@ -826,7 +830,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Actnet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 559;
+				CURRENT_PROJECT_VERSION = 575;
 				DEVELOPMENT_TEAM = 7FVK3RR3TV;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -846,9 +850,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.4;
+				MARKETING_VERSION = 0.3.5;
 				PRODUCT_BUNDLE_IDENTIFIER = net.theavalanche.app;
-				RELAY_URL = "${RELAY_URL}";
+				RELAY_URL = "https://relay.theavalanche.net";
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;

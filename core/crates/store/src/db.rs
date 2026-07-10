@@ -197,6 +197,10 @@ impl IdentityStore {
                     "INTEGER NOT NULL DEFAULT 0",
                 )?;
                 add_column_if_missing(conn, "message_history", "expire_at", "INTEGER")?;
+                // docs/35 shared contact cards (inline JSON, not a table).
+                add_column_if_missing(conn, "message_history", "shared_contacts", "TEXT")?;
+                // docs/52 local contact nickname ("name as I know them").
+                add_column_if_missing(conn, "contacts", "nickname", "TEXT")?;
                 Ok(())
             })
             .await

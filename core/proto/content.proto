@@ -57,8 +57,26 @@ message TextMessage {
   // the URL. Anti-spoofing: a client renders a preview only if its `url`
   // actually occurs in `body`.
   repeated LinkPreview preview = 3;
+  // Shared contact cards (docs/35). A card is a person's DID plus the name the
+  // sender knows them by — structured, inline metadata (like `preview`), NOT the
+  // blob-upload attachment path: the payload is tiny, immutable, and must render
+  // without a network fetch. Deliberately carries NO profile_key — sharing that
+  // would let a third party decrypt the subject's profile without consent; the
+  // recipient learns the real profile on first contact via the DID (X3DH needs
+  // only the DID). "Copy contact → paste → send", recipient saves to their book.
+  repeated SharedContact contact = 4;
   // Future: mentions, reply_to, formatting.
-  reserved 4 to 10;
+  reserved 5 to 10;
+}
+
+// A contact card shared inside a message (docs/35). Structured and inline —
+// see `TextMessage.contact`. Intentionally minimal: identity (`did`) plus the
+// human-readable name the sender knows them by (their profile display name, or
+// the sender's own nickname for them). No profile_key by design.
+message SharedContact {
+  string did  = 1;   // the shared person's DID
+  string name = 2;   // name-as-the-sender-knows-them (display-only)
+  reserved 3 to 10;  // future: organization, avatar AttachmentPointer, etc.
 }
 
 // A rich preview card for a URL in `TextMessage.body` (docs/35 "Link previews").

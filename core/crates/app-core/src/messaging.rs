@@ -402,6 +402,7 @@ impl AppCoreInner {
             // Populated when `process_decrypted` unwraps the inner text body.
             attachments: Vec::new(),
             previews: Vec::new(),
+            contacts: Vec::new(),
         })
     }
 
@@ -1141,6 +1142,8 @@ impl AppCoreInner {
                             let attachments: Vec<crate::AttachmentFfi> =
                                 text.attachments.into_iter().map(crate::pointer_to_ffi).collect();
                             let previews = crate::anti_spoof_previews(text.preview, &body);
+                            let contacts: Vec<crate::SharedContactFfi> =
+                                text.contact.into_iter().map(crate::shared_contact_to_ffi).collect();
                             let sent_at = if content.timestamp_ms > 0 {
                                 Some(content.timestamp_ms as i64)
                             } else {
@@ -1187,6 +1190,7 @@ impl AppCoreInner {
                                 is_request,
                                 attachments,
                                 previews,
+                                contacts,
                                 ..raw
                             });
                         }
@@ -1373,6 +1377,7 @@ impl AppCoreInner {
             // `receive_messages`.
             attachments: Vec::new(),
             previews: Vec::new(),
+            contacts: Vec::new(),
         })
     }
 }
@@ -1439,6 +1444,8 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             let attachments: Vec<crate::AttachmentFfi> =
                 text.attachments.into_iter().map(crate::pointer_to_ffi).collect();
             let previews = crate::anti_spoof_previews(text.preview, &body);
+            let contacts: Vec<crate::SharedContactFfi> =
+                text.contact.into_iter().map(crate::shared_contact_to_ffi).collect();
             let sent_at = if msg.timestamp_ms > 0 {
                 Some(msg.timestamp_ms as i64)
             } else {
@@ -1496,6 +1503,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                 is_request,
                 attachments,
                 previews,
+                contacts,
                 ..decrypted
             };
             let _ = core.event_tx.send(IncomingEvent::Message { msg: out });
@@ -1755,6 +1763,20 @@ pub(crate) async fn apply_sync_sent(
                     .map(|(i, p)| crate::ffi_to_link_preview_row(&msg_id, i as i64, p))
                     .collect();
                 let _ = store.save_link_previews(&msg_id, &rows).await;
+            }
+            // Mirror shared contact cards inline (docs/35) so my own devices
+            // render the card I sent from another device.
+            if saved {
+                let json = crate::shared_contacts_to_json(
+                    &text
+                        .contact
+                        .into_iter()
+                        .map(crate::shared_contact_to_ffi)
+                        .collect::<Vec<_>>(),
+                );
+                if json.is_some() {
+                    let _ = store.save_shared_contacts(&msg_id, json).await;
+                }
             }
             saved
         }

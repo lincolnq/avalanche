@@ -137,7 +137,10 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
         return snapshot.compactMap { (convId, msgs) -> ConversationSummaryFfi? in
             guard let last = msgs.max(by: { $0.sentAtMs < $1.sentAtMs }) else { return nil }
             let unread = UInt64(msgs.filter { $0.readAtMs == nil }.count)
-            return ConversationSummaryFfi(conversationId: convId, groupTitle: nil, lastMessage: last, lastMessageAttachmentContentType: last.attachments.first?.contentType, isRequest: false, isBlocked: false, unreadCount: unread)
+            let preview: LastMessagePreviewFfi? = !last.contacts.isEmpty
+                ? .contact
+                : last.attachments.first.map { $0.contentType.hasPrefix("image/") ? .photo : .file }
+            return ConversationSummaryFfi(conversationId: convId, groupTitle: nil, lastMessage: last, lastMessagePreview: preview, isRequest: false, isBlocked: false, unreadCount: unread)
         }
         .sorted { ($0.lastMessage?.sentAtMs ?? 0) > ($1.lastMessage?.sentAtMs ?? 0) }
     }
@@ -165,7 +168,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
                 expireTimerSecs: msgs[i].expireTimerSecs,
                 expireAtMs: msgs[i].expireAtMs,
                 attachments: msgs[i].attachments,
-                previews: msgs[i].previews
+                previews: msgs[i].previews,
+                contacts: msgs[i].contacts
             )
             count += 1
         }
@@ -293,7 +297,8 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             profileKey: nil,
             isRequest: false,
             attachments: [],
-            previews: []
+            previews: [],
+            contacts: []
         )
         nextMessageId += 1
         pendingMessages.append(msg)

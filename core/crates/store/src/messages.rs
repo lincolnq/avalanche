@@ -194,6 +194,52 @@ impl IdentityStore {
             .map_err(StoreError::Db)
     }
 
+    /// Persist (or clear) the shared contact cards on a message (docs/35).
+    /// `json` is the serialized `[{did,name}]` array, or `None` to clear.
+    /// Stored inline on the `message_history` row — the payload is tiny and
+    /// immutable, so it drops automatically when the row is deleted (no
+    /// separate table / cleanup). The row must already exist (saved first).
+    pub async fn save_shared_contacts(
+        &self,
+        message_id: &str,
+        json: Option<String>,
+    ) -> Result<(), StoreError> {
+        let id = message_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "UPDATE message_history SET shared_contacts = ?2 WHERE id = ?1",
+                    rusqlite::params![id, json],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load the shared-contact JSON for every message in a conversation that
+    /// carries one, as `(message_id, json)` pairs (docs/35). The caller parses
+    /// and groups by id, mirroring `load_attachments_for_conversation`.
+    pub async fn load_shared_contacts_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let conv = conversation_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, shared_contacts FROM message_history
+                     WHERE conversation_id = ?1 AND shared_contacts IS NOT NULL",
+                )?;
+                let rows = stmt.query_map([&conv], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// Load messages for a conversation, ordered by sent_at ascending.
     pub async fn load_messages(
         &self,
@@ -287,12 +333,13 @@ impl IdentityStore {
                 //    Tie-break on `id` (monotonic rowid) for a deterministic pick.
                 let mut stmt = conn.prepare(
                     "SELECT conversation_id, id, sender_did, body, sent_at,
-                            edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at, attach_ct
+                            edited_at, read_at, delivery_status, edit_count, deleted_at, kind, metadata, expire_timer_secs, expire_at, attach_ct, has_contact
                      FROM (
                          SELECT m.conversation_id, m.id, m.sender_did, m.body, m.sent_at,
                                 m.edited_at, m.read_at, m.delivery_status, m.edit_count, m.deleted_at, m.kind, m.metadata, m.expire_timer_secs, m.expire_at,
                                 (SELECT a.content_type FROM message_attachments a
                                  WHERE a.message_id = m.id ORDER BY a.ordinal ASC LIMIT 1) AS attach_ct,
+                                (m.shared_contacts IS NOT NULL) AS has_contact,
                                 ROW_NUMBER() OVER (
                                     PARTITION BY m.conversation_id
                                     ORDER BY m.sent_at DESC, m.id DESC
@@ -307,10 +354,24 @@ impl IdentityStore {
                     .query_map([now_ms], |row| {
                         let conversation_id: String = row.get(0)?;
                         let unread_count = unread_by_conv.get(&conversation_id).copied().unwrap_or(0);
+                        // One preview descriptor from the cheap signals: a shared
+                        // contact (row column) wins, else an attachment's MIME
+                        // (subquery) splits photo vs generic file.
+                        let attach_ct: Option<String> = row.get(14)?;
+                        let has_contact: bool = row.get(15)?;
+                        let last_message_preview = if has_contact {
+                            Some(LastMessagePreview::Contact)
+                        } else {
+                            attach_ct.map(|ct| if ct.starts_with("image/") {
+                                LastMessagePreview::Photo
+                            } else {
+                                LastMessagePreview::File
+                            })
+                        };
                         Ok(ConversationSummary {
                             conversation_id,
                             unread_count,
-                            last_message_attachment_content_type: row.get::<_, Option<String>>(14)?,
+                            last_message_preview,
                             last_message: Some(HistoryMessage {
                                 id: row.get(1)?,
                                 conversation_id: row.get(0)?,
@@ -352,7 +413,7 @@ impl IdentityStore {
                         unread_count: unread_by_conv.get(&cid).copied().unwrap_or(0),
                         conversation_id: cid,
                         last_message: None,
-                        last_message_attachment_content_type: None,
+                        last_message_preview: None,
                     })
                     .collect();
 
@@ -676,7 +737,7 @@ impl IdentityStore {
                 // below). `deleted_at IS NULL` keeps it idempotent.
                 conn.execute(
                     "UPDATE message_history
-                     SET body = '', edited_at = NULL, deleted_at = ?1
+                     SET body = '', edited_at = NULL, deleted_at = ?1, shared_contacts = NULL
                      WHERE conversation_id = ?2 AND sender_did = ?3 AND sent_at = ?4
                        AND deleted_at IS NULL",
                     rusqlite::params![deleted, conv, author, sent],
@@ -897,18 +958,34 @@ impl IdentityStore {
 pub struct ConversationSummary {
     pub conversation_id: String,
     pub last_message: Option<HistoryMessage>,
-    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
-    /// the last message has no attachments (or there is no last message). Lets
-    /// the chat list render a type-aware preview (an image type previews as
-    /// "Photo", anything else as "Attachment") for a caption-less attachment
-    /// (whose `body` is empty) without loading the attachment blobs.
-    pub last_message_attachment_content_type: Option<String>,
+    /// What non-text content `last_message` carries, for the chat-list preview
+    /// (docs/35): `None` = plain text (show the body). One descriptor covers
+    /// every content type — the client maps each kind to an icon + noun and
+    /// composes it with the body ("📷 caption", or "📷 Photo" when the body is
+    /// empty). Add a variant per new content type; never another summary field.
+    /// Computed cheaply here (the attachment MIME via subquery, the contact flag
+    /// from the row column) so the blobs/cards themselves are not loaded.
+    pub last_message_preview: Option<LastMessagePreview>,
     /// Number of unread inbound messages in this conversation: rows with
     /// `read_at IS NULL` whose `sender_did` is not our own, excluding expired
     /// messages. The chat list renders this directly as the unread badge, so it
     /// reflects the persisted truth for every conversation — not just the ones
     /// currently loaded into the UI's in-memory message cache.
     pub unread_count: u64,
+}
+
+/// The kind of non-text content a message carries, for the chat-list preview
+/// (docs/35). Deliberately a single small enum rather than one boolean/field per
+/// content type: adding a new type (poll, voice note, location, …) is one
+/// variant here + one label case in the client, with no new plumbing across the
+/// store/FFI/client layers. The client owns the icon + localized noun; this only
+/// names the category. System/metadata events are NOT here — they ride the
+/// `kind`/`metadata` path because they need client-side DID→name resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastMessagePreview {
+    Photo,
+    File,
+    Contact,
 }
 
 /// A decrypted message stored in the local history.

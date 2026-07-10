@@ -30,6 +30,7 @@ extension AppCoreProtocol {
     func primeContactProfile(did: String, displayName: String, profileKey: Data) throws {}
     func listContacts() throws -> [ContactRowFfi] { [] }
     func touchContact(did: String, curated: Bool) throws {}
+    func saveSharedContact(did: String, name: String) throws {}
 
     // MARK: - Abuse handling (docs/12-abuse-handling.md)
 
@@ -65,7 +66,7 @@ extension AppCoreProtocol {
 
     func sendDm(recipientDid: String, plaintext: Data, sentAtMs: Int64) throws {}
     func sendMessage(target: MessageTarget, plaintext: Data, sentAtMs: Int64) throws {}
-    func sendMessageWithAttachments(target: MessageTarget, body: String, attachments: [AttachmentFfi], previews: [LinkPreviewFfi], sentAtMs: Int64) throws {}
+    func sendMessageWithAttachments(target: MessageTarget, body: String, attachments: [AttachmentFfi], previews: [LinkPreviewFfi], contacts: [SharedContactFfi], sentAtMs: Int64) throws {}
     func uploadAttachment(plaintext: Data, contentType: String, fileName: String?, width: Int32, height: Int32, durationMs: Int32, thumbnail: Data, flags: Int32) throws -> AttachmentFfi {
         AttachmentFfi(id: "", url: "", contentType: contentType, key: Data(), digest: Data(), sizeBytes: Int64(plaintext.count), fileName: fileName, width: width, height: height, durationMs: durationMs, blurhash: nil, thumbnail: thumbnail, caption: nil, flags: flags, localPath: nil, downloadedAtMs: nil)
     }

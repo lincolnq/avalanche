@@ -20,6 +20,10 @@ pub struct ContactRow {
     pub last_interaction_at: Timestamp,
     pub is_blocked: bool,
     pub has_pending_request: bool,
+    /// Local alias — the name the user knows this contact by (docs/52). Set
+    /// when saving a shared contact card or renaming a contact; preferred over
+    /// the profile display name for rendering. `None` when unset.
+    pub nickname: Option<String>,
 }
 
 impl IdentityStore {
@@ -69,6 +73,31 @@ impl IdentityStore {
                      VALUES (?1, ?2)
                      ON CONFLICT(did) DO UPDATE SET is_blocked = excluded.is_blocked",
                     rusqlite::params![did_s, b],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Set (or clear) the local nickname for a contact — "the name I know them
+    /// by" (docs/52) — creating a bare row if missing. Used when saving a shared
+    /// contact card (the sender's name for the person) or renaming a contact.
+    /// Independent of `is_curated`/`is_blocked`/sync, so a synced-contact apply
+    /// never clobbers it. Pass `None` to clear.
+    pub async fn set_contact_nickname(
+        &self,
+        did: &str,
+        nickname: Option<String>,
+    ) -> Result<(), StoreError> {
+        let did_s = did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO contacts (did, nickname)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(did) DO UPDATE SET nickname = excluded.nickname",
+                    rusqlite::params![did_s, nickname],
                 )?;
                 Ok(())
             })
@@ -136,7 +165,7 @@ impl IdentityStore {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request
+                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request, nickname
                      FROM contacts WHERE did = ?1",
                     rusqlite::params![did_q],
                     row_to_contact,
@@ -168,7 +197,7 @@ impl IdentityStore {
         self.conn
             .call(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request
+                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request, nickname
                      FROM contacts
                      ORDER BY last_interaction_at DESC, did ASC",
                 )?;
@@ -185,7 +214,7 @@ impl IdentityStore {
         self.conn
             .call(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request
+                    "SELECT did, is_curated, last_interaction_at, is_blocked, has_pending_request, nickname
                      FROM contacts
                      WHERE is_blocked = 1
                      ORDER BY last_interaction_at DESC, did ASC",
@@ -205,5 +234,6 @@ fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContactRow> {
         last_interaction_at: Timestamp(row.get::<_, i64>(2)?),
         is_blocked: row.get::<_, i64>(3)? != 0,
         has_pending_request: row.get::<_, i64>(4)? != 0,
+        nickname: row.get::<_, Option<String>>(5)?,
     })
 }

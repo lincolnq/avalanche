@@ -1012,3 +1012,67 @@ async fn disappearing_messages_expire_lifecycle() {
     assert!(!ids.contains(&"in".into()), "read incoming expired");
     assert!(ids.contains(&"perm".into()), "no-timer message still present");
 }
+
+#[tokio::test]
+async fn shared_contacts_round_trip_and_tombstone_clears() {
+    use store::messages::HistoryMessage;
+    use types::Timestamp;
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    // A message carrying a shared contact card (docs/35).
+    store
+        .save_message(&HistoryMessage {
+            id: "m1".into(),
+            conversation_id: "convA".into(),
+            sender_did: "did:plc:bob".into(),
+            body: "here's alice".into(),
+            sent_at: Timestamp(1000),
+            edited_at: None,
+            read_at: None,
+            delivery_status: 1,
+            edit_count: 0,
+            deleted_at: None,
+            kind: 0,
+            metadata: None,
+            expire_timer_secs: 0,
+            expire_at: None,
+        })
+        .await
+        .unwrap();
+    let json = r#"[{"did":"did:plc:alice","name":"Alice"}]"#.to_string();
+    store.save_shared_contacts("m1", Some(json.clone())).await.unwrap();
+
+    let loaded = store.load_shared_contacts_for_conversation("convA").await.unwrap();
+    assert_eq!(loaded, vec![("m1".to_string(), json)]);
+
+    // A FOR_EVERYONE tombstone drops the card along with the body.
+    store
+        .tombstone_message("convA", "did:plc:bob", Timestamp(1000), Timestamp(2000))
+        .await
+        .unwrap();
+    let after = store.load_shared_contacts_for_conversation("convA").await.unwrap();
+    assert!(after.is_empty(), "tombstone clears shared_contacts");
+}
+
+#[tokio::test]
+async fn contact_nickname_set_and_load() {
+    use types::Timestamp;
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    // Saving a shared contact curates the DID and sets the local nickname.
+    store.touch_contact("did:plc:alice", true, Timestamp(1)).await.unwrap();
+    store
+        .set_contact_nickname("did:plc:alice", Some("Alice (canvass)".into()))
+        .await
+        .unwrap();
+
+    let row = store.load_contact("did:plc:alice").await.unwrap().unwrap();
+    assert!(row.is_curated);
+    assert_eq!(row.nickname.as_deref(), Some("Alice (canvass)"));
+
+    // Clearing the nickname leaves the row (and curation) intact.
+    store.set_contact_nickname("did:plc:alice", None).await.unwrap();
+    let row = store.load_contact("did:plc:alice").await.unwrap().unwrap();
+    assert!(row.is_curated);
+    assert_eq!(row.nickname, None);
+}
