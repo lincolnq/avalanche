@@ -117,6 +117,12 @@ pub fn init_logging(filter: String) {
             .with_writer(paranoid_android::AndroidLogMakeWriter::new("Actnet".to_owned()))
             .with_ansi(false)
             .with_target(true)
+            // Never let a failed log write panic: tracing's internal-error path
+            // (on by default via `fmt()`) uses `eprintln!`, which `panic!`s if
+            // stderr is unwritable. iOS invalidates stderr after a long
+            // background, so this masked the real send error as
+            // "failed printing to stderr (os error 5)".
+            .log_internal_errors(false)
             .try_init();
     }
     #[cfg(not(target_os = "android"))]
@@ -126,6 +132,12 @@ pub fn init_logging(filter: String) {
             .with_writer(std::io::stderr)
             .with_ansi(false)
             .with_target(true)
+            // Never let a failed log write panic: tracing's internal-error path
+            // (on by default via `fmt()`) uses `eprintln!`, which `panic!`s if
+            // stderr is unwritable. iOS invalidates stderr after a long
+            // background, so this masked the real send error as
+            // "failed printing to stderr (os error 5)".
+            .log_internal_errors(false)
             .try_init();
     }
 }
