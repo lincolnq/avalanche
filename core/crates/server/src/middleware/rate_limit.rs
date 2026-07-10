@@ -7,6 +7,12 @@ pub const ACTION_FETCH_BUNDLE: &str = "fetch_bundle";
 pub const ACTION_UPDATE_RECOVERY: &str = "update_recovery";
 pub const ACTION_UPDATE_PROFILE: &str = "update_profile";
 pub const ACTION_ATTACHMENT_ALLOCATE: &str = "attachment_allocate";
+// Avatar blob uploads (docs/55), per account — covers both the personal avatar
+// (`PUT /v1/profile/avatar`) and group avatars (`PUT /v1/groups/avatar/{id}`).
+// Overwrite-in-place, so this bounds how often a user re-uploads, not storage.
+pub const ACTION_AVATAR_UPLOAD: &str = "avatar_upload";
+pub const LIMIT_AVATAR_UPLOAD: i32 = 60;
+pub const WINDOW_AVATAR_UPLOAD: i64 = 3600;
 pub const ACTION_ABUSE_REPORT: &str = "abuse_report";
 
 /// Attachment allocation request-rate limit (docs/35). The bytes-per-hour cap

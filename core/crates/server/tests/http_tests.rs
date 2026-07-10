@@ -1995,3 +1995,201 @@ async fn oauth_token_unsupported_grant_type() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(resp).await["error"], "unsupported_grant_type");
 }
+
+// ── Avatars (docs/55) ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn profile_avatar_upload_download_delete_round_trip() {
+    let app = routes::router().with_state(test_state().await);
+    let (did, token) = register_and_get_token(&app).await;
+    let ciphertext = vec![0x5Au8; 4096];
+
+    // Upload (overwrite-in-place; no allocate step).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/profile/avatar")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(ciphertext.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Fetch by DID (authenticated) → exact bytes.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/profile/avatar/{did}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let got = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(got.as_ref(), ciphertext.as_slice());
+
+    // Fetch without auth → 401 (avatar fetch is authenticated, existence-hiding).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/profile/avatar/{did}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Unknown DID → 404 (identical to "no avatar").
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/profile/avatar/did:plc:doesnotexist")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Delete, then fetch → 404.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/profile/avatar")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/profile/avatar/{did}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn profile_avatar_rejects_oversize() {
+    let app = routes::router().with_state(test_state().await);
+    let (_did, token) = register_and_get_token(&app).await;
+    // Over the 64 KiB default cap but under the 256 KiB transport limit.
+    let oversize = vec![0u8; 100 * 1024];
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/profile/avatar")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(oversize))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn group_avatar_upload_download_delete_round_trip() {
+    let app = routes::router().with_state(test_state().await);
+    let (_did, token) = register_and_get_token(&app).await;
+    // Stand-in for crypto::GroupKey::avatar_object_id() — any well-formed UUID.
+    let id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    let ciphertext = vec![0x11u8; 2048];
+
+    // Upload (session-authed; the opaque id is the capability).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/v1/groups/avatar/{id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(ciphertext.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Download WITHOUT auth — the unguessable id is the membership capability.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/groups/avatar/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let got = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(got.as_ref(), ciphertext.as_slice());
+
+    // A non-UUID id is rejected (blob-store path-traversal guard).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v1/groups/avatar/not-a-uuid")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(vec![1u8; 8]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Delete, then download → 404.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/groups/avatar/{id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/groups/avatar/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
