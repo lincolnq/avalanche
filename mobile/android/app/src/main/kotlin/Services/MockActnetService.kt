@@ -4,6 +4,7 @@ import uniffi.app_core.AccountInfoFfi
 import uniffi.app_core.ConversationSummaryFfi
 import uniffi.app_core.DecryptedMessage
 import uniffi.app_core.IncomingEvent
+import uniffi.app_core.LastMessagePreviewFfi
 import uniffi.app_core.MessageRevisionFfi
 import uniffi.app_core.MessageTarget
 import uniffi.app_core.PreparedAccount
@@ -147,7 +148,12 @@ class MockAppCore(
                 conversationId = convId,
                 groupTitle = null,
                 lastMessage = last,
-                lastMessageAttachmentContentType = last.attachments.firstOrNull()?.contentType,
+                lastMessagePreview = when {
+                    last.contacts.isNotEmpty() -> LastMessagePreviewFfi.CONTACT
+                    last.attachments.firstOrNull()?.contentType?.startsWith("image/") == true -> LastMessagePreviewFfi.PHOTO
+                    last.attachments.isNotEmpty() -> LastMessagePreviewFfi.FILE
+                    else -> null
+                },
                 isRequest = false,
                 isBlocked = false,
                 unreadCount = unread,
@@ -180,6 +186,7 @@ class MockAppCore(
                         expireAtMs = msg.expireAtMs,
                         attachments = msg.attachments,
                         previews = msg.previews,
+                        contacts = msg.contacts,
                     )
                 } else {
                     msg
@@ -367,6 +374,7 @@ class MockAppCore(
                 isRequest = false,
                 attachments = emptyList(),
                 previews = emptyList(),
+                contacts = emptyList(),
             )
             pendingMessages.add(msg)
         }

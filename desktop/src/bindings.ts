@@ -67,6 +67,12 @@ export const commands = {
 	refreshContactProfile: (accountId: string, did: string) => typedError<boolean, string>(__TAURI_INVOKE("refresh_contact_profile", { accountId, did })),
 	listContacts: (accountId: string) => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_contacts", { accountId })),
 	touchContact: (accountId: string, did: string, curated: boolean) => typedError<null, string>(__TAURI_INVOKE("touch_contact", { accountId, did, curated })),
+	/**
+	 *  Save a received shared contact card (docs/35): curate the DID and record the
+	 *  shared name as the local nickname. The real profile arrives on first contact
+	 *  via the DID. Mirrors iOS AppState.saveSharedContact.
+	 */
+	saveSharedContact: (accountId: string, did: string, name: string) => typedError<null, string>(__TAURI_INVOKE("save_shared_contact", { accountId, did, name })),
 	fetchAndCacheProfile: (accountId: string, did: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("fetch_and_cache_profile", { accountId, did, profileKey })),
 	primeContactProfile: (accountId: string, did: string, displayName: string, profileKey: number[]) => typedError<null, string>(__TAURI_INVOKE("prime_contact_profile", { accountId, did, displayName, profileKey })),
 	blockContact: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("block_contact", { accountId, did })),
@@ -166,7 +172,7 @@ export const commands = {
 	 *  One path for both targets (the `MessageTarget` fork lives in app-core). Async
 	 *  + `spawn_blocking` (network I/O).
 	 */
-	sendMessageWithAttachments: (accountId: string, target: MessageTarget, body: string, attachments: AttachmentFfi[], previews: LinkPreviewFfi[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_message_with_attachments", { accountId, target, body, attachments, previews, sentAtMs })),
+	sendMessageWithAttachments: (accountId: string, target: MessageTarget, body: string, attachments: AttachmentFfi[], previews: LinkPreviewFfi[], contacts: SharedContactFfi[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_message_with_attachments", { accountId, target, body, attachments, previews, contacts, sentAtMs })),
 	/**
 	 *  Open a validated http(s) URL in the OS default browser. The WebView must never
 	 *  navigate to message URLs in-app (A2); link clicks and link-preview card taps
@@ -342,12 +348,13 @@ export type ConversationSummaryFfi = {
 	groupTitle: string | null,
 	lastMessage: StoredMessageFfi | null,
 	/**
-	 *  MIME type of `last_message`'s first attachment (docs/35), or `None` when
-	 *  it has none. The chat list renders a type-aware preview (an image type
-	 *  previews as "Photo", anything else as "Attachment") for a caption-less
-	 *  attachment whose `body` is empty; the blobs themselves are not loaded here.
+	 *  What non-text content `last_message` carries (docs/35): `None` = plain
+	 *  text. One descriptor for every content type — the client maps the kind to
+	 *  an icon + noun and composes it with the body ("📷 caption", or "📷 Photo"
+	 *  when the body is empty). Adding a content type is a new enum variant, not
+	 *  a new summary field.
 	 */
-	lastMessageAttachmentContentType: string | null,
+	lastMessagePreview: LastMessagePreviewFfi | null,
 	/**
 	 *  True for a DM from an un-curated, un-blocked sender — an unaccepted
 	 *  message request (docs/12 §1). The chat list shows a "Message request"
@@ -426,6 +433,12 @@ export type DecryptedMessage = {
 	 *  whose `url` occurs in the body are surfaced.
 	 */
 	previews: LinkPreviewFfi[],
+	/**
+	 *  Shared contact cards carried on a text body (docs/35). Empty for messages
+	 *  with none. The consumer persists these via `save_message` and offers a
+	 *  "Save contact" action (`save_shared_contact`).
+	 */
+	contacts: SharedContactFfi[],
 };
 
 /**  A delivery status update for an outgoing message (e.g. read receipt received). */
@@ -661,6 +674,16 @@ export type JoinResultFfi =
 { type: "pending" };
 
 /**
+ *  What non-text content a conversation's last message carries, for the chat
+ *  list preview (docs/35). One descriptor for every content type: the client
+ *  maps the kind to an icon + noun and composes it with the body. Adding a
+ *  content type (poll, voice note, location, …) is one new variant here + one
+ *  client label case — no new `ConversationSummaryFfi` fields. System/metadata
+ *  events are not here (they ride `last_message_kind`/`metadata`).
+ */
+export type LastMessagePreviewFfi = "photo" | "file" | "contact";
+
+/**
  *  A rich link-preview card (docs/35). The sender generates it at compose time;
  *  `image` (the og:image) is a normal [`AttachmentFfi`] so it rides the E2E
  *  attachment path and the client downloads it like any other blob. `None`
@@ -736,6 +759,16 @@ export type ReactionFfi = {
 	reactedAtMs: number,
 };
 
+/**
+ *  A contact card shared inside a message (docs/35) — the FFI shape of the wire
+ *  `SharedContact`. Structured and inline (not a blob attachment): just the
+ *  person's DID and the display-name the sender knows them by. No profile key.
+ */
+export type SharedContactFfi = {
+	did: string,
+	name: string,
+};
+
 /**  A message from local history (persisted in SQLCipher). */
 export type StoredMessageFfi = {
 	id: string,
@@ -781,6 +814,11 @@ export type StoredMessageFfi = {
 	 *  `load_messages`; persisted by `save_message`.
 	 */
 	previews: LinkPreviewFfi[],
+	/**
+	 *  Shared contact cards on this message (docs/35). Populated by
+	 *  `load_messages`; persisted by `save_message`.
+	 */
+	contacts: SharedContactFfi[],
 };
 
 /* Tauri Specta runtime */

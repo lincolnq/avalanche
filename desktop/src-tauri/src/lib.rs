@@ -164,6 +164,7 @@ pub fn run() {
             refresh_contact_profile,
             list_contacts,
             touch_contact,
+            save_shared_contact,
             fetch_and_cache_profile,
             prime_contact_profile,
             block_contact,
@@ -1599,12 +1600,32 @@ async fn send_message_with_attachments(
     body: String,
     attachments: Vec<app_core::AttachmentFfi>,
     previews: Vec<app_core::LinkPreviewFfi>,
+    contacts: Vec<app_core::SharedContactFfi>,
     sent_at_ms: i64,
 ) -> Result<(), String> {
     let app = get_app(&state, &account_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        app.send_message_with_attachments(target, body, attachments, previews, sent_at_ms)
+        app.send_message_with_attachments(target, body, attachments, previews, contacts, sent_at_ms)
             .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Save a received shared contact card (docs/35): curate the DID and record the
+/// shared name as the local nickname. The real profile arrives on first contact
+/// via the DID. Mirrors iOS AppState.saveSharedContact.
+#[tauri::command]
+#[specta::specta]
+async fn save_shared_contact(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    did: String,
+    name: String,
+) -> Result<(), String> {
+    let app = get_app(&state, &account_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.save_shared_contact(did, name).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

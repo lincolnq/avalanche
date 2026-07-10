@@ -70,6 +70,7 @@ fun GroupDetailView(
     onOpenConversation: (Conversation) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var summary by remember { mutableStateOf<GroupSummaryFfi?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -385,6 +386,18 @@ fun GroupDetailView(
                                 isSelf = member.did == accountId,
                                 amAdmin = amAdmin,
                                 onOpenDm = { openDm(member) },
+                                // Copy this member as a contact card (docs/35):
+                                // paste it into any conversation to share them.
+                                // Use the *resolved* name, not `memberName` — for
+                                // your own row that would be "You"; sharing your
+                                // own card must carry your real display name.
+                                onCopyContact = {
+                                    ContactClipboard.write(
+                                        context = context,
+                                        did = member.did,
+                                        name = appViewModel.resolvedName(did = member.did, accountId = accountId),
+                                    )
+                                },
                                 onMakeAdmin = { changeRole(member, toAdmin = true) },
                                 onRemoveAdmin = { changeRole(member, toAdmin = false) },
                             )
@@ -536,6 +549,7 @@ private fun MemberRow(
     isSelf: Boolean,
     amAdmin: Boolean,
     onOpenDm: () -> Unit,
+    onCopyContact: () -> Unit,
     onMakeAdmin: () -> Unit,
     onRemoveAdmin: () -> Unit,
 ) {
@@ -581,6 +595,13 @@ private fun MemberRow(
                 onClick = {
                     menuExpanded = false
                     onOpenDm()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Copy contact") },
+                onClick = {
+                    menuExpanded = false
+                    onCopyContact()
                 },
             )
             // Admins can promote/demote anyone but themselves.

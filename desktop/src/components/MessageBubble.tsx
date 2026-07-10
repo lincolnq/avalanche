@@ -13,6 +13,7 @@ import { DeliveryStatus } from "../models/Message";
 import { formatTime, linkify } from "../lib/format";
 import AttachmentView from "./AttachmentView";
 import LinkPreviewCard from "./LinkPreviewCard";
+import SharedContactCard from "./SharedContactCard";
 import "./MessageBubble.css";
 
 const DELIVERY_ICON_SIZE = 14;
@@ -38,8 +39,10 @@ export default function MessageBubble(props: Props) {
   const canEdit = () => props.mine && !deleted();
   const attachments = () => props.message.attachments ?? [];
   const previews = () => props.message.previews ?? [];
-  // Omit the empty text bubble for an attachment-only message (iOS parity).
-  const showBubble = () => props.message.body.length > 0 || attachments().length === 0;
+  const contacts = () => props.message.contacts ?? [];
+  // Omit the empty text bubble for an attachment- or contact-only message (parity).
+  const showBubble = () =>
+    props.message.body.length > 0 || (attachments().length === 0 && contacts().length === 0);
 
   // Reaction clusters grouped by emoji, preserving first-appearance order.
   const clusters = () => {
@@ -135,6 +138,19 @@ export default function MessageBubble(props: Props) {
                     <LinkPreviewCard
                       preview={p}
                       accountId={props.conversation.accountId}
+                    />
+                  )}
+                </For>
+              </div>
+            </Show>
+            <Show when={contacts().length > 0}>
+              <div class="preview-list">
+                <For each={contacts()}>
+                  {(c) => (
+                    <SharedContactCard
+                      contact={c}
+                      accountId={props.conversation.accountId}
+                      mine={props.mine}
                     />
                   )}
                 </For>

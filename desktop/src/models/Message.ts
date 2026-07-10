@@ -1,4 +1,4 @@
-import type { AttachmentFfi, LinkPreviewFfi } from "../bindings";
+import type { AttachmentFfi, LinkPreviewFfi, SharedContactFfi } from "../bindings";
 
 export enum DeliveryStatus {
   sending = 0,
@@ -27,4 +27,7 @@ export interface Message {
   // plain-text messages; treat undefined as empty when rendering.
   attachments?: AttachmentFfi[];
   previews?: LinkPreviewFfi[];
+  // Shared contact cards on this message (docs/35); absent on plain text.
+  // Rendered as a tappable card with a "Save" action.
+  contacts?: SharedContactFfi[];
 }

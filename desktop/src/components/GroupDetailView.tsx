@@ -1,6 +1,7 @@
 import { createSignal, onMount, For, Show, Switch, Match } from "solid-js";
 import { FiX } from "solid-icons/fi";
 import { useApp } from "../state/AppContext";
+import { copyContact } from "../lib/contactClipboard";
 import type { Conversation } from "../models";
 import type {
   GroupSummaryFfi,
@@ -130,6 +131,18 @@ export default function GroupDetailView(props: Props) {
     const conv = app.findOrCreateDMConversation(member.did, accountId());
     app.selectConversation(conv.id);
     props.onClose();
+  }
+
+  // Copy this member as a contact card (docs/35): paste it into any conversation
+  // to share them. Use the *resolved* name, not `memberName` — for your own row
+  // that would be "You"; sharing your own card must carry your real display name.
+  function copyContactFromMenu(member: GroupMemberFfi) {
+    setMenuMemberId(null);
+    const name =
+      member.did === accountId()
+        ? app.store.accounts.find((a) => a.id === accountId())?.displayName ?? ""
+        : app.displayName(member.did, accountId());
+    copyContact({ did: member.did, name });
   }
 
   async function changeRole(member: GroupMemberFfi, newRole: number) {
@@ -311,6 +324,12 @@ export default function GroupDetailView(props: Props) {
                                 {member.did === accountId()
                                   ? "Note to self"
                                   : `Message ${memberName(member)}`}
+                              </button>
+                              <button
+                                class="groupdetail-menu-item"
+                                onClick={() => copyContactFromMenu(member)}
+                              >
+                                Copy contact
                               </button>
                               <Show
                                 when={

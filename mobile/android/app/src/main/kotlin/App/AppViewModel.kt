@@ -27,6 +27,8 @@ import uniffi.app_core.IncomingEvent
 import uniffi.app_core.MessageRevisionFfi
 import uniffi.app_core.AttachmentFfi
 import uniffi.app_core.LinkPreviewFfi
+import uniffi.app_core.SharedContactFfi
+import uniffi.app_core.LastMessagePreviewFfi
 import uniffi.app_core.MessageTarget
 import uniffi.app_core.PreparedAccount
 import uniffi.app_core.ReactionFfi
@@ -1321,6 +1323,7 @@ class AppViewModel(
         imageContentType: String = "image/jpeg",
         imageFileName: String? = "photo.jpg",
         preview: LinkPreviewFfi? = null,
+        contact: SharedContactFfi? = null,
         messageId: String,
         sentAtMs: Long,
     ) {
@@ -1342,6 +1345,8 @@ class AppViewModel(
         } ?: 0u
 
         val previews = preview?.let { listOf(it) } ?: emptyList()
+        // Shared contact cards ride inline (docs/35) — no upload step.
+        val contacts = contact?.let { listOf(it) } ?: emptyList()
 
         runCatching {
             // Upload the staged image first (docs/35) so its pointer — carrying
@@ -1357,13 +1362,14 @@ class AppViewModel(
 
             // Graft the attachment + preview onto the optimistic transcript row,
             // and correct the chat-list preview's attachment type.
-            if (attachments.isNotEmpty() || previews.isNotEmpty()) {
+            if (attachments.isNotEmpty() || previews.isNotEmpty() || contacts.isNotEmpty()) {
                 _messagesByConversation.update { map ->
                     val msgs = map[conversation.id] ?: return@update map
                     map + (conversation.id to msgs.map {
                         if (it.id == messageId) it.copy(
                             attachments = if (attachments.isNotEmpty()) attachments else it.attachments,
                             previews = if (previews.isNotEmpty()) previews else it.previews,
+                            contacts = if (contacts.isNotEmpty()) contacts else it.contacts,
                         ) else it
                     })
                 }
@@ -1371,7 +1377,11 @@ class AppViewModel(
             _conversations.update { list ->
                 list.map { c ->
                     if (c.id == conversation.id) {
-                        c.copy(lastMessageAttachmentContentType = if (imageData != null) imageContentType else null)
+                        c.copy(lastMessagePreview = when {
+                            imageData != null -> LastMessagePreviewFfi.PHOTO
+                            contact != null -> LastMessagePreviewFfi.CONTACT
+                            else -> null
+                        })
                     } else c
                 }
             }
@@ -1382,12 +1392,12 @@ class AppViewModel(
                 body = text, sentAtMs = sentAtMs, editedAtMs = null, readAtMs = sentAtMs,
                 deliveryStatus = DeliveryStatus.SENDING.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
-                attachments = attachments, previews = previews,
+                attachments = attachments, previews = previews, contacts = contacts,
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = pending) } }
 
             withContext(Dispatchers.IO) {
-                core.sendMessageWithAttachments(target, text, attachments, previews, sentAtMs)
+                core.sendMessageWithAttachments(target, text, attachments, previews, contacts, sentAtMs)
             }
             updateMessageStatus(messageId = messageId, conversationId = conversation.id, newStatus = DeliveryStatus.SENT)
             val sent = StoredMessageFfi(
@@ -1395,7 +1405,7 @@ class AppViewModel(
                 body = text, sentAtMs = sentAtMs, editedAtMs = null, readAtMs = sentAtMs,
                 deliveryStatus = DeliveryStatus.SENT.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
-                attachments = attachments, previews = previews,
+                attachments = attachments, previews = previews, contacts = contacts,
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = sent) } }
         }.onFailure { error ->
@@ -1406,7 +1416,7 @@ class AppViewModel(
                 body = text, sentAtMs = sentAtMs, editedAtMs = null, readAtMs = sentAtMs,
                 deliveryStatus = DeliveryStatus.FAILED.code.toUByte(), editCount = 0u, deleted = false,
                 kind = 0L, metadata = null, expireTimerSecs = timer, expireAtMs = null,
-                attachments = emptyList(), previews = emptyList(),
+                attachments = emptyList(), previews = emptyList(), contacts = emptyList(),
             )
             withContext(Dispatchers.IO) { runCatching { core.saveMessage(msg = failed) } }
             throw error
@@ -1524,9 +1534,12 @@ class AppViewModel(
                 if (c.id == conversation.id) {
                     c.copy(
                         lastMessage = message.body,
-                        // Mirror the message's attachment type (null for plain
-                        // text, which clears any prior "📷 Photo"/"📎 Attachment").
-                        lastMessageAttachmentContentType = message.attachments.firstOrNull()?.contentType,
+                        // Mirror the message's content descriptor (null for plain
+                        // text, which clears any prior 📷/📎/👤 decoration).
+                        lastMessagePreview = lastMessagePreviewOf(
+                            message.contacts.isNotEmpty(),
+                            message.attachments.firstOrNull()?.contentType,
+                        ),
                         lastMessageDate = Date(message.sentAtMs),
                         lastMessageSenderDid = message.senderAccountId,
                     )
@@ -1688,7 +1701,7 @@ class AppViewModel(
                 val lastMsg = s.lastMessage
                 val date = lastMsg?.let { Date(it.sentAtMs) }
                 val preview = lastMsg?.body
-                val lastAttachmentCt = s.lastMessageAttachmentContentType
+                val lastPreview = s.lastMessagePreview
                 val lastKind = lastMsg?.kind?.toInt() ?: 0
                 val lastMeta = lastMsg?.metadata
                 val lastSender = lastMsg?.senderDid
@@ -1712,7 +1725,7 @@ class AppViewModel(
                             recipientDid = null,
                             groupId = groupId,
                             lastMessage = preview,
-                            lastMessageAttachmentContentType = lastAttachmentCt,
+                            lastMessagePreview = lastPreview,
                             lastMessageDate = date,
                             lastMessageKind = lastKind,
                             lastMessageMetadata = lastMeta,
@@ -1739,7 +1752,7 @@ class AppViewModel(
                         serverUrl = serverUrl,
                         recipientDid = recipientDid,
                         lastMessage = preview,
-                        lastMessageAttachmentContentType = lastAttachmentCt,
+                        lastMessagePreview = lastPreview,
                         lastMessageDate = date,
                         isGroup = false,
                         isRequest = s.isRequest,
@@ -1870,6 +1883,7 @@ class AppViewModel(
         expireAtMs = m.expireAtMs,
         attachments = m.attachments,
         previews = m.previews,
+        contacts = m.contacts,
     )
 
     /**
@@ -2057,6 +2071,25 @@ class AppViewModel(
         val core = cores[accountId] ?: return emptyList()
         return withContext(Dispatchers.IO) {
             runCatching { core.listContacts() }.getOrElse { emptyList() }
+        }
+    }
+
+    /**
+     * Save a received shared contact card (docs/35) to the local contact book.
+     * Curates the DID and records the shared name as the local nickname; the
+     * person's real profile arrives on first contact via the DID. Updates the
+     * in-memory name cache so the name shows immediately. Mirrors iOS
+     * AppState.saveSharedContact.
+     */
+    suspend fun saveSharedContact(contact: SharedContactFfi, accountId: String) {
+        val core = cores[accountId] ?: return
+        runCatching {
+            withContext(Dispatchers.IO) { core.saveSharedContact(did = contact.did, name = contact.name) }
+            if (contact.name.trim().isNotEmpty()) {
+                displayNameCache[contact.did] = contact.name
+            }
+        }.onFailure { error ->
+            AppLog.error("contacts", "save shared contact failed: ${error.message}")
         }
     }
 
@@ -2693,10 +2726,14 @@ class AppViewModel(
     private fun handleIncomingMessage(msg: DecryptedMessage, accountId: String) {
         val senderDid = msg.senderDid
         val text = runCatching { String(msg.plaintext, Charsets.UTF_8) }.getOrElse { "(binary)" }
-        // Type of the first attachment, if any (docs/35) — drives the chat-list
-        // preview ("📷 Photo" / "📎 Attachment") for a caption-less attachment.
-        // `null` for a plain message, which also clears any stale value below.
-        val attachmentCt = msg.attachments.firstOrNull()?.contentType
+        // What non-text content this message carries (docs/35) — drives the
+        // chat-list preview (📷/📎/👤). A shared contact wins; else an image
+        // attachment is a photo, any other attachment a generic file. `null` for
+        // a plain message, which also clears any stale value below.
+        val lastPreview = lastMessagePreviewOf(
+            msg.contacts.isNotEmpty(),
+            msg.attachments.firstOrNull()?.contentType,
+        )
 
         // Use the sender's timestamp if available, otherwise fall back to local
         // time. This must drive the conversation-row timestamp too (not the
@@ -2724,7 +2761,7 @@ class AppViewModel(
                 list.map { c ->
                     if (c.id == convId) c.copy(
                         lastMessage = text,
-                        lastMessageAttachmentContentType = attachmentCt,
+                        lastMessagePreview = lastPreview,
                         lastMessageDate = lastMessageDate,
                         lastMessageSenderDid = senderDid,
                     ).clearLastMessageEvent()
@@ -2742,7 +2779,7 @@ class AppViewModel(
                     list.mapIndexed { idx, c ->
                         if (idx == existingIdx) c.copy(
                             lastMessage = text,
-                            lastMessageAttachmentContentType = attachmentCt,
+                            lastMessagePreview = lastPreview,
                             lastMessageDate = lastMessageDate,
                             lastMessageSenderDid = senderDid,
                         ).clearLastMessageEvent()
@@ -2760,7 +2797,7 @@ class AppViewModel(
                     serverUrl = serverUrl,
                     recipientDid = senderDid,
                     lastMessage = text,
-                    lastMessageAttachmentContentType = attachmentCt,
+                    lastMessagePreview = lastPreview,
                     lastMessageDate = lastMessageDate,
                     lastMessageSenderDid = senderDid,
                     isGroup = false,
@@ -2788,6 +2825,7 @@ class AppViewModel(
             expireTimerSecs = msg.expireTimerSecs,
             attachments = msg.attachments,
             previews = msg.previews,
+            contacts = msg.contacts,
         )
         // Only append to the in-memory list if it's already loaded; otherwise
         // leave the entry absent so loadMessagesFromStore() does a full DB load
@@ -2838,6 +2876,7 @@ class AppViewModel(
                 expireAtMs = null,
                 attachments = msg.attachments,
                 previews = msg.previews,
+                contacts = msg.contacts,
             )
             val profileKey = msg.profileKey
             val isRequest = msg.isRequest

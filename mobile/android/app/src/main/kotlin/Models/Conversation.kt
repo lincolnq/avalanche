@@ -1,6 +1,7 @@
 package net.theavalanche.app
 
 import java.util.Date
+import uniffi.app_core.LastMessagePreviewFfi
 
 /**
  * In-memory view of a conversation as the chat list sees it.
@@ -20,14 +21,13 @@ data class Conversation(
     var groupId: String? = null,
     var lastMessage: String? = null,
     /**
-     * MIME type of the latest message's first attachment (docs/35), or `null`
-     * when it has none. Mirrors the persisted `message_attachments` rows so the
-     * row can render a type-aware preview ("📷 Photo" / "📎 Attachment") for a
-     * caption-less attachment whose `lastMessage` body is empty — derived at
-     * render time rather than baked into `lastMessage` (which holds only the
-     * persisted body).
+     * What non-text content the latest message carries (docs/35), or `null` for
+     * plain text. One descriptor for every content type; the row composes its
+     * icon + noun with the body ("📷 caption", or "📷 Photo" when the body is
+     * empty). Kept separate from `lastMessage` (the body) so a captioned photo /
+     * a contact-with-message shows both. Adding a content type = one enum case.
      */
-    var lastMessageAttachmentContentType: String? = null,
+    var lastMessagePreview: LastMessagePreviewFfi? = null,
     var lastMessageDate: Date? = null,
     /**
      * When the last message is a group system/metadata event (docs/03 §3.6),
@@ -61,15 +61,30 @@ data class Conversation(
 }
 
 /**
- * Chat-list preview decoration for a message whose body is a caption-less
- * attachment (docs/35), given the attachment's MIME type. An image type reads
- * as a photo; anything else is a generic attachment. `null` content type (no
- * attachment) yields `null`.
+ * Chat-list preview decoration for a message's non-text content (docs/35): the
+ * icon and the noun to show when there's no caption. `null` for plain text. The
+ * row composes this with the body — "📷 caption" when there's a caption, "📷
+ * Photo" when the body is empty. Add a branch per new `LastMessagePreviewFfi`
+ * variant; that's the only client-side change a new content type needs.
  */
-fun attachmentPreviewLabel(contentType: String?): String? = when {
-    contentType == null -> null
-    contentType.startsWith("image/") -> "📷 Photo"
-    else -> "📎 Attachment"
+/**
+ * Derive the chat-list content descriptor (docs/35) from a message's non-text
+ * content: a shared contact wins, then an image attachment (photo), any other
+ * attachment (file), else plain text (`null`). Mirrors the core's own
+ * `load_conversations` computation for the live/optimistic paths.
+ */
+fun lastMessagePreviewOf(hasContact: Boolean, firstAttachmentContentType: String?): LastMessagePreviewFfi? = when {
+    hasContact -> LastMessagePreviewFfi.CONTACT
+    firstAttachmentContentType == null -> null
+    firstAttachmentContentType.startsWith("image/") -> LastMessagePreviewFfi.PHOTO
+    else -> LastMessagePreviewFfi.FILE
+}
+
+fun lastMessagePreviewDecoration(preview: LastMessagePreviewFfi?): Pair<String, String>? = when (preview) {
+    LastMessagePreviewFfi.PHOTO -> "📷" to "Photo"
+    LastMessagePreviewFfi.FILE -> "📎" to "Attachment"
+    LastMessagePreviewFfi.CONTACT -> "👤" to "Contact"
+    null -> null
 }
 
 /**

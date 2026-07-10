@@ -1,6 +1,6 @@
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store";
 import type { Conversation } from "../models";
-import { attachmentPlaceholder } from "../lib/format";
+import { composeLastMessagePreview } from "../lib/format";
 import { parseGroupEventMeta } from "../lib/groupEvents";
 import type {
   ConversationSummaryFfi,
@@ -37,6 +37,8 @@ export type Conversations = Pick<
   | "isBot"
   | "isDeepLink"
   | "handleDeepLink"
+  | "listContacts"
+  | "saveSharedContact"
 > & {
   // Internal API for the other state modules
   accountIdForConversation: (conversationId: string) => string | null;
@@ -201,14 +203,12 @@ export function createConversations(deps: ConversationsDeps): Conversations {
             ? "Note to Self"
             : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
 
-        // Caption-less attachment messages have an empty body — preview them as
-        // "Photo"/"Attachment" using the summary's attachment content type (iOS
-        // chat-list parity).
+        // Compose the content decoration (📷/📎/👤) with the body (docs/35): a
+        // caption shows "📷 caption", a caption-less content message shows "📷
+        // Photo", and plain text shows just the body. Kept in sync with the live
+        // and incoming paths via `lastMessagePreview` (iOS chat-list parity).
         const lastBody = s.lastMessage?.body ?? "";
-        const lastPreview =
-          lastBody.trim().length === 0 && s.lastMessageAttachmentContentType
-            ? attachmentPlaceholder(s.lastMessageAttachmentContentType)
-            : s.lastMessage?.body ?? undefined;
+        const lastPreview = composeLastMessagePreview(s.lastMessagePreview, lastBody);
 
         all.push({
           id: s.conversationId,
@@ -500,6 +500,25 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     }
   }
 
+  // Curated/interacted contacts for an account (docs/35) — drives the "Saved"
+  // state on a received contact card. Thin service pass-through.
+  async function listContacts(accountId: string) {
+    return serviceFor(accountId).listContacts().catch(() => []);
+  }
+
+  // Save a received shared contact card (docs/35) to the local contact book:
+  // curate the DID and record the shared name as the local nickname; the
+  // person's real profile arrives on first contact via the DID. Warms the name
+  // cache so the name shows immediately. Mirrors iOS AppState.saveSharedContact.
+  async function saveSharedContact(accountId: string, did: string, name: string) {
+    try {
+      await serviceFor(accountId).saveSharedContact(did, name);
+      if (name.trim().length > 0) setDisplayNameCache(did, name);
+    } catch (err) {
+      console.warn("saveSharedContact failed:", err);
+    }
+  }
+
   return {
     loadConversationsFromStore,
     reloadConversations,
@@ -514,5 +533,7 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     cachedDisplayName,
     resolveIncomingSender,
     resetCaches,
+    listContacts,
+    saveSharedContact,
   };
 }
