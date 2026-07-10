@@ -250,6 +250,10 @@ pub struct GroupActionsWire {
     pub modify_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modify_expiry: Option<String>,
+    /// Sub-encrypted `ModifyAvatar` payload (docs/55). Server-gated by
+    /// `modify_title_role` (title + avatar are one "group identity" permission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modify_avatar: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -213,6 +213,8 @@ pub enum GroupEventKind {
     ExpiryChanged,
     /// The group policy (join policy / announcement-only / link password) changed.
     PolicyChanged,
+    /// The group avatar (photo) changed or was removed (docs/55).
+    AvatarChanged,
 }
 
 /// Stable numeric code for a [`GroupEventKind`], persisted in
@@ -235,6 +237,7 @@ pub fn kind_code(kind: GroupEventKind) -> i64 {
         GroupEventKind::DescriptionChanged => 14,
         GroupEventKind::ExpiryChanged => 15,
         GroupEventKind::PolicyChanged => 16,
+        GroupEventKind::AvatarChanged => 17,
     }
 }
 
@@ -1240,6 +1243,86 @@ pub async fn set_expiry(
     Ok(events)
 }
 
+/// Set or clear the group avatar (docs/55). `jpeg = Some(..)` uploads the
+/// encrypted image to the group's opaque, master-key-derived object id
+/// (overwrite-in-place) and bumps `GroupState.avatar.version`; `jpeg = None`
+/// removes it. Gated server-side by `modify_title_role`. Emits an
+/// `AvatarChanged` timeline entry. The image is encrypted with a
+/// master-key-derived key every member can compute, so no key is distributed.
+pub async fn set_avatar(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+    group_id_b64_s: &str,
+    jpeg: Option<&[u8]>,
+) -> Result<Vec<GroupMetadataEvent>, AppError> {
+    use sha2::{Digest as _, Sha256};
+
+    if let Some(bytes) = jpeg {
+        if bytes.len() > crate::profile::MAX_AVATAR_BYTES {
+            return Err(AppError::AvatarTooLarge(bytes.len(), crate::profile::MAX_AVATAR_BYTES));
+        }
+    }
+
+    // Derive the avatar key + object id from the group master key.
+    let row = store
+        .load_group(group_id_b64_s)
+        .await?
+        .ok_or_else(|| AppError::Protocol("group not found in local store".into()))?;
+    let group_key = GroupKey::from_bytes(
+        row.master_key
+            .clone()
+            .try_into()
+            .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
+    );
+    let object_id = group_key.avatar_object_id().to_string();
+
+    // Upload (or delete) the blob out-of-band before the state change.
+    let payload: Option<(Vec<u8>, u32)> = match jpeg {
+        Some(bytes) => {
+            let ciphertext = crate::profile::encrypt_avatar(bytes, &group_key.avatar_key())?;
+            let digest = Sha256::digest(&ciphertext).to_vec();
+            let size = ciphertext.len() as u32;
+            client.put_group_avatar(&object_id, &ciphertext).await?;
+            Some((digest, size))
+        }
+        None => {
+            // Best-effort delete; the authoritative removal is the state change.
+            let _ = client.delete_group_avatar(&object_id).await;
+            None
+        }
+    };
+
+    let version_cell = std::cell::Cell::new(0i64);
+    let (_, events) = submit_actions(store, client, did, group_id_b64_s, |state, group_key| {
+        let avatar = payload.as_ref().map(|(digest, size)| {
+            let new_version = state.avatar.as_ref().map(|a| a.version).unwrap_or(0) + 1;
+            version_cell.set(new_version as i64);
+            gproto::GroupAvatar { version: new_version, digest: digest.clone(), size_bytes: *size }
+        });
+        state.avatar = avatar.clone();
+        let sub = gproto::ModifyAvatar { avatar };
+        Ok(GroupActionsWire {
+            modify_avatar: Some(b64(&group_key.encrypt_state(&sub.encode_to_vec()))),
+            ..Default::default()
+        })
+    })
+    .await?;
+
+    // Update the local cache so the setter renders immediately.
+    match jpeg {
+        Some(bytes) => {
+            let _ = store
+                .upsert_avatar(store::avatars::AVATAR_KIND_GROUP, group_id_b64_s, version_cell.get(), bytes)
+                .await;
+        }
+        None => {
+            let _ = store.delete_avatar(store::avatars::AVATAR_KIND_GROUP, group_id_b64_s).await;
+        }
+    }
+    Ok(events)
+}
+
 // ── apply_pending_changes / rotate ───────────────────────────────────────
 
 // ── change → timeline-entry derivation (docs/03 §3.6) ────────────────────
@@ -1542,6 +1625,14 @@ fn derive_change_events(ctx: &ChangeContext, actions: &GroupActionsWire) -> Vec<
     if actions.modify_policy.is_some() {
         let summary = format!("{} changed the group settings", actor_label(actor_did));
         out.push(make(GroupEventKind::PolicyChanged, String::new(), String::new(), now_ms, summary));
+    }
+    if actions.modify_avatar.is_some() {
+        let summary = if post.avatar.is_some() {
+            format!("{} changed the group photo", actor_label(actor_did))
+        } else {
+            format!("{} removed the group photo", actor_label(actor_did))
+        };
+        out.push(make(GroupEventKind::AvatarChanged, String::new(), String::new(), now_ms, summary));
     }
     out
 }
@@ -2711,6 +2802,106 @@ impl AppCore {
                 };
                 self.emit_group_events(events);
                 Ok::<_, AppError>(())
+            })
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Set (or replace) the group avatar (docs/55). `jpeg` is the cropped,
+    /// downscaled image the platform UI produced. Gated by `modify_title_role`.
+    /// Emits an `AvatarChanged` timeline entry.
+    pub fn set_group_avatar(&self, group_id: String, jpeg: Vec<u8>) -> Result<(), AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                let events = {
+                    let inner = self.inner.lock().await;
+                    let did = inner.did.clone();
+                    set_avatar(&inner.store, &inner.client, &did, &group_id, Some(&jpeg)).await?
+                };
+                self.emit_group_events(events);
+                Ok::<_, AppError>(())
+            })
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Remove the group avatar (docs/55). Gated by `modify_title_role`.
+    pub fn clear_group_avatar(&self, group_id: String) -> Result<(), AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                let events = {
+                    let inner = self.inner.lock().await;
+                    let did = inner.did.clone();
+                    set_avatar(&inner.store, &inner.client, &did, &group_id, None).await?
+                };
+                self.emit_group_events(events);
+                Ok::<_, AppError>(())
+            })
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// A group's cached avatar JPEG bytes, or `None`. Local read only — the
+    /// fetch happens in [`AppCore::fetch_group_avatar`].
+    pub fn group_avatar(&self, group_id: String) -> Result<Option<Vec<u8>>, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                self.store
+                    .load_avatar(store::avatars::AVATAR_KIND_GROUP, &group_id)
+                    .await
+                    .map_err(AppError::from)
+            })
+            .map_err(AppErrorFfi::from)
+    }
+
+    /// Fetch + cache a group's avatar when the cached copy is behind the version
+    /// in the local group state (docs/55). Call on group open — the conversation-
+    /// open refresh, mirroring `refresh_contact_profile` for DMs. Returns true if
+    /// the cache was updated. Lock-free (store + client handles).
+    pub fn fetch_group_avatar(&self, group_id: String) -> Result<bool, AppErrorFfi> {
+        ffi_runtime()
+            .block_on(async {
+                let Some(row) = self.store.load_group(&group_id).await.map_err(AppError::from)? else {
+                    return Ok(false);
+                };
+                let state = gproto::GroupState::decode(row.encrypted_state_plaintext.as_slice())
+                    .map_err(|e| AppError::Protocol(format!("decode GroupState: {e}")))?;
+                let Some(av) = state.avatar else {
+                    // No avatar in state — drop any stale cache.
+                    let _ = self
+                        .store
+                        .delete_avatar(store::avatars::AVATAR_KIND_GROUP, &group_id)
+                        .await;
+                    return Ok(false);
+                };
+                let cached = self
+                    .store
+                    .load_avatar_version(store::avatars::AVATAR_KIND_GROUP, &group_id)
+                    .await
+                    .map_err(AppError::from)?;
+                if cached.is_some_and(|c| c >= av.version as i64) {
+                    return Ok(false);
+                }
+                let group_key = GroupKey::from_bytes(
+                    row.master_key
+                        .clone()
+                        .try_into()
+                        .map_err(|_| AppError::Protocol("master_key length != 32".into()))?,
+                );
+                let object_id = group_key.avatar_object_id().to_string();
+                let ciphertext = match self.client.get_group_avatar(&object_id).await? {
+                    Some(ct) => ct,
+                    None => return Ok(false),
+                };
+                if !av.digest.is_empty() {
+                    use sha2::{Digest as _, Sha256};
+                    if Sha256::digest(&ciphertext).as_slice() != av.digest.as_slice() {
+                        return Ok(false);
+                    }
+                }
+                let jpeg = crate::profile::decrypt_avatar(&ciphertext, &group_key.avatar_key())?;
+                self.store
+                    .upsert_avatar(store::avatars::AVATAR_KIND_GROUP, &group_id, av.version as i64, &jpeg)
+                    .await
+                    .map_err(AppError::from)?;
+                Ok::<bool, AppError>(true)
             })
             .map_err(AppErrorFfi::from)
     }

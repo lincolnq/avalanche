@@ -464,6 +464,10 @@ struct ActionsWire {
     modify_description: Option<String>,
     #[serde(default)]
     modify_expiry: Option<String>,
+    // Sub-encrypted `ModifyAvatar` (docs/55); opaque to the server, gated by
+    // `modify_title_role` (title + avatar are one "group identity" permission).
+    #[serde(default)]
+    modify_avatar: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1089,7 +1093,8 @@ fn classify_actions(actions: &ActionsWire) -> Result<ActionClasses, ServerError>
         || actions.modify_policy.is_some()
         || actions.modify_title.is_some()
         || actions.modify_description.is_some()
-        || actions.modify_expiry.is_some();
+        || actions.modify_expiry.is_some()
+        || actions.modify_avatar.is_some();
 
     if self_kind.is_some() && contains_admin {
         return Err(ServerError::BadRequest(
@@ -1192,6 +1197,10 @@ fn enforce_admin_role_checks(
     }
     if actions.modify_expiry.is_some() {
         check(policy.modify_expiry_role, "modify_expiry")?;
+    }
+    // Avatar changes reuse the title permission (docs/55) — no separate role.
+    if actions.modify_avatar.is_some() {
+        check(policy.modify_title_role, "modify_avatar")?;
     }
     if actions.modify_policy.is_some() {
         check(ROLE_ADMIN, "modify_policy")?;
