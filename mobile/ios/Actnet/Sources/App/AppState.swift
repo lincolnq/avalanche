@@ -1070,6 +1070,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Pure cache read of a group's avatar — safe to call from a view `body` or
+    /// toolbar (no resolution side effect, so it can't mutate observable state
+    /// during layout). Pair with `loadGroupAvatar` in `.onAppear`/`.task`.
+    func cachedGroupAvatar(_ groupId: String) -> Data? { groupAvatarCache[groupId] }
+
+    /// Kick off group-avatar resolution from a lifecycle callback (not from a
+    /// body/toolbar read), so it never triggers a `@Published` write mid-layout —
+    /// which spins the SwiftUI layout engine (esp. inside a toolbar during a
+    /// navigation push).
+    func loadGroupAvatar(groupId: String, accountId: String) {
+        resolveGroupAvatar(groupId: groupId, accountId: accountId)
+    }
+
     /// Set/replace the user's own avatar (docs/55): encrypt+upload via core, then
     /// reflect it locally on the `Account` and in the cache.
     func setOwnAvatar(_ jpeg: Data, accountId: String) async throws {

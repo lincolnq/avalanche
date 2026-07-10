@@ -263,9 +263,12 @@ struct ConversationView: View {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
                         HStack(spacing: 8) {
+                            // Pure cache read — must not trigger resolution from a
+                            // toolbar body (it mutates AppState → SwiftUI layout
+                            // cycle during the push). Fetch is kicked in onAppear.
                             ContactAvatar(
                                 name: conversation.title,
-                                imageData: appState.groupAvatar(groupId: groupId, accountId: conversation.accountId),
+                                imageData: appState.cachedGroupAvatar(groupId),
                                 size: 28
                             )
                             Text(conversation.title)
@@ -357,6 +360,7 @@ struct ConversationView: View {
             }
             if let groupId = conversation.groupId {
                 appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
+                appState.loadGroupAvatar(groupId: groupId, accountId: conversation.accountId)
                 Task {
                     isGroupMember = await appState.isGroupMember(
                         groupId: groupId, accountId: conversation.accountId

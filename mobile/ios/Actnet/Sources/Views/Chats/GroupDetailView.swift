@@ -185,7 +185,10 @@ struct GroupDetailView: View {
             Button("Save") { renameGroup(renameText) }
                 .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .task { await load() }
+        .task {
+            await load()
+            appState.loadGroupAvatar(groupId: groupId, accountId: accountId)
+        }
     }
 
     /// Rename the group (admin-only; server-enforced). app-core emits the
@@ -194,7 +197,9 @@ struct GroupDetailView: View {
     /// same as rename), read-only for everyone else.
     @ViewBuilder
     private func groupAvatarView(_ s: GroupSummaryFfi) -> some View {
-        let current = appState.groupAvatar(groupId: groupId, accountId: accountId)
+        // Pure cache read (no resolution side effect in body); fetch is kicked
+        // from `.task` below.
+        let current = appState.cachedGroupAvatar(groupId)
         let name = s.title.isEmpty ? "Group" : s.title
         if amAdmin {
             EditableAvatar(
