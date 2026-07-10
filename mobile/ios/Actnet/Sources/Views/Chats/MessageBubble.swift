@@ -47,6 +47,16 @@ struct MessageBubble: View {
     /// ConversationView supplies this; defaults to no-op for the static overlay
     /// copy.
     var onImageTap: (AttachmentFfi) -> Void = { _ in }
+    /// Tapping "Save contact" on a shared contact card (docs/35); ConversationView
+    /// wires this to `AppState.saveSharedContact`. No-op by default.
+    var onSaveContact: (SharedContactFfi) -> Void = { _ in }
+    /// Contact-card context-menu actions (docs/35): open a DM with the person,
+    /// and copy the card to re-share it. ConversationView wires these.
+    var onMessageContact: (SharedContactFfi) -> Void = { _ in }
+    var onCopyContact: (SharedContactFfi) -> Void = { _ in }
+    /// DIDs already curated in the contact book, so a shared contact card shows
+    /// "Saved" rather than an active Save button (docs/35).
+    var savedContactDids: Set<String> = []
 
     /// This bubble's content frame in global coords, tracked so a long-press can
     /// hand the overlay a start position for the lift-to-center animation.
@@ -85,14 +95,27 @@ struct MessageBubble: View {
                     )
                 }
             }
-            // The text bubble is omitted for an attachment-only message
-            // (empty body), so a photo doesn't get an empty grey bubble.
-            if !message.body.isEmpty || message.attachments.isEmpty || message.isDeleted {
+            // The text bubble is omitted for an attachment- or contact-only
+            // message (empty body), so it doesn't get an empty grey bubble.
+            if !message.body.isEmpty
+                || (message.attachments.isEmpty && message.contacts.isEmpty)
+                || message.isDeleted {
                 bubble
             }
             // Link-preview cards (docs/35) below the text bubble.
             ForEach(Array(message.previews.enumerated()), id: \.offset) { _, preview in
                 LinkPreviewCard(preview: preview, isMe: isMe, loader: attachmentLoader)
+            }
+            // Shared contact cards (docs/35) below the text bubble.
+            ForEach(Array(message.contacts.enumerated()), id: \.offset) { _, contact in
+                SharedContactCard(
+                    contact: contact,
+                    isMe: isMe,
+                    alreadySaved: savedContactDids.contains(contact.did),
+                    onSave: { onSaveContact(contact) },
+                    onMessage: { onMessageContact(contact) },
+                    onCopy: { onCopyContact(contact) }
+                )
             }
             if !reactionClusters.isEmpty {
                 reactionCluster

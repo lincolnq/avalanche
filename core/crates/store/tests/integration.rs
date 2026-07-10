@@ -608,9 +608,9 @@ async fn attachments_save_load_download_and_cleanup() {
 }
 
 #[tokio::test]
-async fn load_conversations_reports_last_message_attachment_content_type() {
+async fn load_conversations_reports_last_message_preview() {
     use store::attachments::AttachmentRow;
-    use store::messages::HistoryMessage;
+    use store::messages::{HistoryMessage, LastMessagePreview};
 
     let store = DeviceStore::open_in_memory().await.unwrap();
 
@@ -666,20 +666,27 @@ async fn load_conversations_reports_last_message_attachment_content_type() {
         .await
         .unwrap();
 
+    // A caption-less shared contact card (empty body, one contact).
+    store.save_message(&msg("m3", "dm-dave", "")).await.unwrap();
+    store
+        .save_shared_contacts("m3", Some(r#"[{"did":"did:plc:x","name":"X"}]"#.to_string()))
+        .await
+        .unwrap();
+
     let convs = store
         .load_conversations(Timestamp(2000), "did:plc:me")
         .await
         .unwrap();
     let bob = convs.iter().find(|c| c.conversation_id == "dm-bob").unwrap();
     let carol = convs.iter().find(|c| c.conversation_id == "dm-carol").unwrap();
+    let dave = convs.iter().find(|c| c.conversation_id == "dm-dave").unwrap();
 
-    // The photo conversation reports its attachment's MIME type even though the
-    // message body is empty — this is what lets the chat list render "Photo"
-    // after a restart instead of a blank preview.
-    assert_eq!(
-        bob.last_message_attachment_content_type.as_deref(),
-        Some("image/jpeg")
-    );
-    // A plain message reports no attachment type.
-    assert_eq!(carol.last_message_attachment_content_type, None);
+    // The photo conversation previews as Photo even though the body is empty —
+    // this is what lets the chat list render an indicator after a restart
+    // instead of a blank preview. The image MIME maps to Photo (vs File).
+    assert_eq!(bob.last_message_preview, Some(LastMessagePreview::Photo));
+    // A plain message has no content descriptor.
+    assert_eq!(carol.last_message_preview, None);
+    // A caption-less contact card previews as Contact.
+    assert_eq!(dave.last_message_preview, Some(LastMessagePreview::Contact));
 }

@@ -15,13 +15,12 @@ struct Conversation: Identifiable, Hashable {
     /// URL-safe-no-pad base64 group id when this is a group conversation.
     var groupId: String?
     var lastMessage: String?
-    /// MIME type of the latest message's first attachment (docs/35), or `nil`
-    /// when it has none. Mirrors the persisted `message_attachments` rows so the
-    /// row can render a type-aware preview ("📷 Photo" / "📎 Attachment") for a
-    /// caption-less attachment whose `lastMessage` body is empty — derived at
-    /// render time rather than baked into `lastMessage` (which holds only the
-    /// persisted body).
-    var lastMessageAttachmentContentType: String?
+    /// What non-text content the latest message carries (docs/35), or `nil` for
+    /// plain text. One descriptor for every content type; the row composes its
+    /// icon + noun with the body ("📷 caption", or "📷 Photo" when the body is
+    /// empty). Kept separate from `lastMessage` (the body) so a captioned photo /
+    /// a contact-with-message shows both. Adding a content type = one enum case.
+    var lastMessagePreview: LastMessagePreviewFfi?
     var lastMessageDate: Date?
     /// When the last message is a group system/metadata event (docs/03 §3.6),
     /// these let the row render the resolved preview ("You made Bob an admin")
@@ -48,13 +47,18 @@ struct Conversation: Identifiable, Hashable {
     }
 }
 
-/// Chat-list preview decoration for a message whose body is a caption-less
-/// attachment (docs/35), given the attachment's MIME type. `image/*` reads as a
-/// photo; anything else is a generic attachment. `nil` content type (no
-/// attachment) yields `nil`.
-func attachmentPreviewLabel(contentType: String?) -> String? {
-    guard let contentType else { return nil }
-    return contentType.hasPrefix("image/") ? "📷 Photo" : "📎 Attachment"
+/// Chat-list preview decoration for a message's non-text content (docs/35): the
+/// icon and the noun to show when there's no caption. `nil` for plain text. The
+/// row composes this with the body — "📷 caption" when there's a caption, "📷
+/// Photo" when the body is empty. Add a `case` per new `LastMessagePreviewFfi`
+/// variant; that's the only client-side change a new content type needs.
+func lastMessagePreviewDecoration(_ preview: LastMessagePreviewFfi?) -> (icon: String, noun: String)? {
+    switch preview {
+    case .photo:   return ("📷", "Photo")
+    case .file:    return ("📎", "Attachment")
+    case .contact: return ("👤", "Contact")
+    case nil:      return nil
+    }
 }
 
 /// Build a stable conversation id from a server-visible group id (URL-safe

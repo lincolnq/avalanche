@@ -1047,6 +1047,7 @@ final class AppState: ObservableObject {
         imageContentType: String = "image/jpeg",
         imageFileName: String? = "photo.jpg",
         preview: LinkPreviewFfi? = nil,
+        contact: SharedContactFfi? = nil,
         messageId: String,
         sentAtMs: Int64
     ) async throws {
@@ -1070,6 +1071,8 @@ final class AppState: ObservableObject {
         }
 
         let previews = preview.map { [$0] } ?? []
+        // Shared contact cards ride inline (docs/35) — no upload step.
+        let contacts = contact.map { [$0] } ?? []
 
         do {
             // Upload the staged image first (docs/35) so its pointer — carrying
@@ -1093,9 +1096,10 @@ final class AppState: ObservableObject {
             if let idx = messagesByConversation[conversation.id]?.firstIndex(where: { $0.id == messageId }) {
                 if !attachments.isEmpty { messagesByConversation[conversation.id]?[idx].attachments = attachments }
                 if !previews.isEmpty { messagesByConversation[conversation.id]?[idx].previews = previews }
+                if !contacts.isEmpty { messagesByConversation[conversation.id]?[idx].contacts = contacts }
             }
             if let idx = conversations.firstIndex(where: { $0.id == conversation.id }) {
-                conversations[idx].lastMessageAttachmentContentType = imageData != nil ? imageContentType : nil
+                conversations[idx].lastMessagePreview = imageData != nil ? .photo : (contact != nil ? .contact : nil)
             }
 
             // Persist as "sending" up front so a failure is recoverable across launches.
@@ -1104,13 +1108,14 @@ final class AppState: ObservableObject {
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
                 deliveryStatus: UInt8(DeliveryStatus.sending.rawValue), editCount: 0, deleted: false,
                 kind: 0, metadata: nil, expireTimerSecs: timer, expireAtMs: nil,
-                attachments: attachments, previews: previews
+                attachments: attachments, previews: previews, contacts: contacts
             )
             try await Task.detached { try core.saveMessage(msg: pending) }.value
 
             try await Task.detached {
                 try core.sendMessageWithAttachments(
-                    target: target, body: text, attachments: attachments, previews: previews, sentAtMs: sentAtMs
+                    target: target, body: text, attachments: attachments, previews: previews,
+                    contacts: contacts, sentAtMs: sentAtMs
                 )
             }.value
             updateMessageStatus(messageId: messageId, conversationId: conversation.id, newStatus: .sent)
@@ -1119,7 +1124,7 @@ final class AppState: ObservableObject {
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
                 deliveryStatus: UInt8(DeliveryStatus.sent.rawValue), editCount: 0, deleted: false,
                 kind: 0, metadata: nil, expireTimerSecs: timer, expireAtMs: nil,
-                attachments: attachments, previews: previews
+                attachments: attachments, previews: previews, contacts: contacts
             )
             Task.detached { try? core.saveMessage(msg: sent) }
         } catch {
@@ -1130,10 +1135,28 @@ final class AppState: ObservableObject {
                 body: text, sentAtMs: sentAtMs, editedAtMs: nil, readAtMs: sentAtMs,
                 deliveryStatus: UInt8(DeliveryStatus.failed.rawValue), editCount: 0, deleted: false,
                 kind: 0, metadata: nil, expireTimerSecs: timer, expireAtMs: nil,
-                attachments: [], previews: []
+                attachments: [], previews: [], contacts: []
             )
             Task.detached { try? core.saveMessage(msg: failed) }
             throw error
+        }
+    }
+
+    /// Save a received shared contact card (docs/35) to the local contact book.
+    /// Curates the DID and records the shared name as the local nickname; the
+    /// person's real profile arrives on first contact via the DID. Updates the
+    /// in-memory name cache so the name shows immediately.
+    func saveSharedContact(_ contact: SharedContactFfi, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        do {
+            try await Task.detached {
+                try core.saveSharedContact(did: contact.did, name: contact.name)
+            }.value
+            if !contact.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                displayNameCache[contact.did] = contact.name
+            }
+        } catch {
+            AppLog.error("contacts", "save shared contact failed: \(error.localizedDescription)")
         }
     }
 
@@ -1407,7 +1430,7 @@ final class AppState: ObservableObject {
                 // DIDs to names at display time. Freezing groupEventText here
                 // would bake in "Unknown" before names are cached.
                 let preview = s.lastMessage?.body
-                let lastAttachmentCt = s.lastMessageAttachmentContentType
+                let lastPreview = s.lastMessagePreview
                 let lastKind = Int(s.lastMessage?.kind ?? 0)
                 let lastMeta = s.lastMessage?.metadata
                 let lastSender = s.lastMessage?.senderDid
@@ -1432,7 +1455,7 @@ final class AppState: ObservableObject {
                         recipientDid: nil,
                         groupId: groupId,
                         lastMessage: preview,
-                        lastMessageAttachmentContentType: lastAttachmentCt,
+                        lastMessagePreview: lastPreview,
                         lastMessageDate: date,
                         lastMessageKind: lastKind,
                         lastMessageMetadata: lastMeta,
@@ -1455,7 +1478,7 @@ final class AppState: ObservableObject {
                     serverUrl: serverUrl,
                     recipientDid: recipientDid,
                     lastMessage: preview,
-                    lastMessageAttachmentContentType: lastAttachmentCt,
+                    lastMessagePreview: lastPreview,
                     lastMessageDate: date,
                     isGroup: false,
                     isRequest: s.isRequest,
@@ -1547,7 +1570,8 @@ final class AppState: ObservableObject {
             expireTimerSecs: m.expireTimerSecs,
             expireAtMs: m.expireAtMs,
             attachments: m.attachments,
-            previews: m.previews
+            previews: m.previews,
+            contacts: m.contacts
         )
     }
 
@@ -2232,10 +2256,13 @@ final class AppState: ObservableObject {
     private func handleIncomingMessage(_ msg: DecryptedMessage, accountId: String) {
         let senderDid = msg.senderDid
         let text = String(data: msg.plaintext, encoding: .utf8) ?? "(binary)"
-        // Type of the first attachment, if any (docs/35) — drives the chat-list
-        // preview ("📷 Photo" / "📎 Attachment") for a caption-less attachment.
-        // `nil` for a plain message, which also clears any stale value below.
-        let attachmentCt = msg.attachments.first?.contentType
+        // What non-text content this message carries (docs/35) — drives the
+        // chat-list preview (📷/📎/👤). A shared contact wins; else an image
+        // attachment is a photo, any other attachment a generic file. `nil` for a
+        // plain message, which also clears any stale value below.
+        let lastPreview: LastMessagePreviewFfi? = !msg.contacts.isEmpty
+            ? .contact
+            : msg.attachments.first.map { $0.contentType.hasPrefix("image/") ? .photo : .file }
 
         // Use the sender's timestamp if available, otherwise fall back to local
         // time. This must drive the conversation-row timestamp too (not the
@@ -2263,7 +2290,7 @@ final class AppState: ObservableObject {
             convId = conv.id
             if let idx = conversations.firstIndex(where: { $0.id == convId }) {
                 conversations[idx].lastMessage = text
-                conversations[idx].lastMessageAttachmentContentType = attachmentCt
+                conversations[idx].lastMessagePreview = lastPreview
                 conversations[idx].lastMessageDate = lastMessageDate
                 conversations[idx].lastMessageSenderDid = senderDid
                 conversations[idx].clearLastMessageEvent()
@@ -2275,7 +2302,7 @@ final class AppState: ObservableObject {
         }) {
             convId = conversations[idx].id
             conversations[idx].lastMessage = text
-            conversations[idx].lastMessageAttachmentContentType = attachmentCt
+            conversations[idx].lastMessagePreview = lastPreview
             conversations[idx].lastMessageDate = lastMessageDate
             conversations[idx].lastMessageSenderDid = senderDid
             conversations[idx].clearLastMessageEvent()
@@ -2291,7 +2318,7 @@ final class AppState: ObservableObject {
                 serverUrl: serverUrl,
                 recipientDid: senderDid,
                 lastMessage: text,
-                lastMessageAttachmentContentType: attachmentCt,
+                lastMessagePreview: lastPreview,
                 lastMessageDate: lastMessageDate,
                 lastMessageSenderDid: senderDid,
                 isGroup: false
@@ -2319,7 +2346,8 @@ final class AppState: ObservableObject {
             deliveryStatus: .sent,
             expireTimerSecs: msg.expireTimerSecs,
             attachments: msg.attachments,
-            previews: msg.previews
+            previews: msg.previews,
+            contacts: msg.contacts
         )
         // Only append to the in-memory list if it's already loaded; otherwise
         // leave the entry nil so loadMessagesFromStore() does a full DB load
@@ -2367,7 +2395,8 @@ final class AppState: ObservableObject {
                 expireTimerSecs: msg.expireTimerSecs,
                 expireAtMs: nil,
                 attachments: msg.attachments,
-                previews: msg.previews
+                previews: msg.previews,
+                contacts: msg.contacts
             )
             Task.detached {
                 try? core.saveMessage(msg: stored)

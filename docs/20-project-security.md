@@ -214,6 +214,7 @@ The genuinely Project-facing surfaces, and what each newly exposes:
 | Surface (see `23`) | New disclosure / trust | Mitigation |
 |---|---|---|
 | **Entry points** (`+` menu, message long-press) | A registered entry point is an attributed label that could phish ("Verify your account"); a message-action discloses *that one message* to the Project | Entries visibly attributed to their Project; admin vetting; message-action disclosure is per-message, consent-gated by the tap (signpost on first use per Project) |
+| **Participant entry points** (member long-press, `participant.context-on-action`) | Discloses a *third party's* DID + the fact they're in this group + the actor's intent to act on them — the membership linkage §3.9 protects | **Bot-membership-gated**: renders only where the Project's bot is already a visible group member, which already holds the roster (DIDs cleartext in the encrypted blob, `03` §3) — so the tap adds only the actor's *intent*, no new membership fact. Attributed; consent-gated by the tap; groups only. A bot-free (webview-only) Project is ineligible for this surface |
 | **Magic links** (self-authenticating Project links, shareable in messages) | Tapping silently mints and hands the clicker's identity token to the Project; a sender-chosen, per-share context turns a shared link into a who-clicked / social-graph beacon | The link carries no credential — the clicking device mints a Project-scoped token at tap time, and **only for Projects on the clicker's own vetted allowlist** (no open-redirect: a non-vetted URL gets no token); first-use-per-Project signpost; identity tier (`identity.magic-links` + pseudonymous default) bounds what's disclosed |
 | **Webview I/O** (URL params in, deeplinks out) | The return-content deeplink makes the client fetch a webview-chosen URL (SSRF/privacy) and proposes a message/attachment the user then sends | **No bridge** = no native API surface; the fetch is https-only, size-capped, origin-allowlisted (sender-side, like on-device unfurl); return-content is **proposed, never sent silently**; conversation posts go through the bot server-side. Inbound params never carry E2E data |
 | **Slash-command manifest** | A bot advertises commands; autocomplete text is Project-supplied (mild phishing via misleading descriptions) | No bridge and no new wire format — a slash command is a plain message the bot reads (it's a member; expected). Attributed to the bot; manifest vetted by the admin |
@@ -255,6 +256,7 @@ There is no separate "officialness" trust primitive. The ✓ **verified badge** 
 - `surface.slash-commands` — advertise a command manifest for `/` autocomplete.
 - `surface.emoji` — contribute custom emoji / reaction assets.
 - `message.context-on-action` — receive a specific message as context when the user invokes a long-press action. Per-invocation; the tap is the disclosure.
+- `participant.context-on-action` — register a long-press entry on a **group member** and receive that member's DID as context when the user invokes it (e.g. "flag this member", "assign to team"). Groups only. Per-invocation; the tap is the disclosure. Unlike `surface.compose`, it is **bot-membership-gated** — it renders only in groups where the Project's bot is already a visible member, so the target's DID + group membership are already known to the bot and the tap discloses only the invoking user's *intent* (see *Client surfaces* appearance rules and the §3.9 note below). Role-gating (admin-only entries) is enforced Project-side via the bot's own view of the actor's role.
 
 ### Server-enforced capabilities
 
@@ -374,6 +376,7 @@ Bot-membership gates the bot-backed surfaces, but a **compose helper has no bot*
 | Affordance | Appears in | Scope |
 |---|---|---|
 | Slash autocomplete, in-conversation entry points (bot-backed) | only conversation(s) where that Project's **bot is a member** | per-conversation (⊂ one account) |
+| Participant long-press entries (`participant.context-on-action`) | only group(s) where that Project's **bot is a member** | per-conversation (⊂ one account) |
 | Compose helpers / "+" entries (no bot — Giphy, meme maker) | the **"+" menu of conversations on the account/homeserver where the Project is installed** | per-account |
 | Custom emoji / reaction packs | the **reaction picker in conversations on the installing account's homeserver** | per-account |
 | Bot-posted content & rich text | wherever that **bot is a member** | per-conversation |

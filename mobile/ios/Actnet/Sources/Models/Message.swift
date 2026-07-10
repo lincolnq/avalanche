@@ -81,6 +81,9 @@ struct Message: Identifiable {
     var attachments: [AttachmentFfi] = []
     /// Link-preview cards on this message (docs/35); empty for plain text.
     var previews: [LinkPreviewFfi] = []
+    /// Shared contact cards on this message (docs/35); empty for plain text.
+    /// Rendered as a tappable card with a "Save contact" action.
+    var contacts: [SharedContactFfi] = []
 
     var sentAt: Date { Date(timeIntervalSince1970: Double(sentAtMs) / 1000.0) }
     var isEdited: Bool { editedAtMs != nil }

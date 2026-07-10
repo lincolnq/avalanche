@@ -84,6 +84,20 @@ struct GroupDetailView: View {
                                 } label: {
                                     Label(dmLabel(member), systemImage: "bubble.left")
                                 }
+                                // Copy this member as a contact card (docs/35):
+                                // writes {did, name} to the clipboard; paste it
+                                // into any conversation to share them. Use the
+                                // *resolved* name, not `memberName` — for your own
+                                // row that would be "You"; sharing your own card
+                                // must carry your real display name.
+                                Button {
+                                    ContactPasteboard.write(
+                                        did: member.did,
+                                        name: appState.resolvedName(for: member.did, accountId: accountId)
+                                    )
+                                } label: {
+                                    Label("Copy contact", systemImage: "doc.on.doc")
+                                }
                                 if amAdmin && member.did != accountId {
                                     if member.role == 1 {
                                         Button {

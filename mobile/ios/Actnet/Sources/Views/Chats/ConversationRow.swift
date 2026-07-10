@@ -39,15 +39,16 @@ struct ConversationRow: View {
             )
             return appState.groupEventText(m, accountId: conversation.accountId)
         }
-        // Real body wins; for a caption-less attachment (empty body) fall back
-        // to a type-aware decoration ("📷 Photo" / "📎 Attachment") derived from
-        // the persisted attachment, so live and post-restart previews match.
+        // Compose the content decoration (📷/📎/👤) with the body (docs/35): a
+        // caption shows "📷 caption", a caption-less content message shows "📷
+        // Photo", and plain text shows just the body. Kept in sync between live
+        // and post-restart previews via `lastMessagePreview`.
         let rawBody = conversation.lastMessage ?? ""
         let body: String
-        if !rawBody.isEmpty {
+        if let deco = lastMessagePreviewDecoration(conversation.lastMessagePreview) {
+            body = rawBody.isEmpty ? "\(deco.icon) \(deco.noun)" : "\(deco.icon) \(rawBody)"
+        } else if !rawBody.isEmpty {
             body = rawBody
-        } else if let label = attachmentPreviewLabel(contentType: conversation.lastMessageAttachmentContentType) {
-            body = label
         } else {
             return nil
         }

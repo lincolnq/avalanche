@@ -226,7 +226,12 @@ CREATE TABLE IF NOT EXISTS contacts (
     is_curated           INTEGER NOT NULL DEFAULT 0,
     last_interaction_at  INTEGER NOT NULL DEFAULT 0,
     is_blocked           INTEGER NOT NULL DEFAULT 0,
-    has_pending_request  INTEGER NOT NULL DEFAULT 0
+    has_pending_request  INTEGER NOT NULL DEFAULT 0,
+    -- Local alias — the name I know them by (docs/52). Set when the user saves a
+    -- shared contact card (the sender name for them) or renames a contact.
+    -- Preferred over the profile display name for rendering; never erases it.
+    -- Local-only for now (not carried by the contact sync adapter yet).
+    nickname             TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_recency
     ON contacts (last_interaction_at DESC);
@@ -260,7 +265,8 @@ CREATE TABLE IF NOT EXISTS message_history (
     kind              INTEGER NOT NULL DEFAULT 0,      -- 0 = normal chat, >0 = system/metadata event (docs/03 §3.6)
     metadata          TEXT,                            -- JSON for system rows (actor/target dids, event kind); NULL for normal chat
     expire_timer_secs INTEGER NOT NULL DEFAULT 0,      -- disappearing-messages duration for this message (docs/03 §5); 0 = no expiry
-    expire_at         INTEGER                          -- unix millis deletion deadline; NULL = countdown not started (set when read_at is set)
+    expire_at         INTEGER,                         -- unix millis deletion deadline; NULL = countdown not started (set when read_at is set)
+    shared_contacts   TEXT                             -- JSON array of shared contact cards [{did,name}] (docs/35); NULL when none. Stored inline (not a table): the payload is tiny and immutable, and drops with the row.
 );
 CREATE INDEX IF NOT EXISTS idx_message_history_conv
     ON message_history (conversation_id, sent_at);

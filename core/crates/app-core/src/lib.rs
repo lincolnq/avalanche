@@ -61,7 +61,8 @@ use error::{AppError, AppErrorFfi};
 use net::types::{RegisterRequest, ReplaceDeviceRequest};
 use proto::{
     content_message::Body, delete_message, receipt_message, AttachmentPointer, ContentMessage,
-    DeleteMessage, EditMessage, LinkPreview, ReactionMessage, ReceiptMessage, TextMessage,
+    DeleteMessage, EditMessage, LinkPreview, ReactionMessage, ReceiptMessage, SharedContact,
+    TextMessage,
 };
 use prost::Message as _;
 use rand::TryRngCore as _;
@@ -230,6 +231,59 @@ fn ffi_to_pointer(a: &AttachmentFfi) -> AttachmentPointer {
         caption: a.caption.clone().unwrap_or_default(),
         flags: a.flags.max(0) as u32,
     }
+}
+
+/// A contact card shared inside a message (docs/35) — the FFI shape of the wire
+/// `SharedContact`. Structured and inline (not a blob attachment): just the
+/// person's DID and the display-name the sender knows them by. No profile key.
+#[derive(uniffi::Record, Clone, Debug)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
+pub struct SharedContactFfi {
+    pub did: String,
+    pub name: String,
+}
+
+/// Decode a wire `SharedContact` into its FFI shape.
+fn shared_contact_to_ffi(c: SharedContact) -> SharedContactFfi {
+    SharedContactFfi { did: c.did, name: c.name }
+}
+
+/// Encode an FFI shared contact back to its wire shape.
+fn ffi_to_shared_contact(c: &SharedContactFfi) -> SharedContact {
+    SharedContact { did: c.did.clone(), name: c.name.clone() }
+}
+
+/// Private serde shape for persisting shared contacts as JSON on the
+/// `message_history.shared_contacts` column (docs/35). Mirrors `SharedContactFfi`
+/// but is always (de)serializable regardless of the `specta` feature.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SharedContactJson {
+    did: String,
+    name: String,
+}
+
+/// Serialize shared contacts for the store column; `None` when empty.
+fn shared_contacts_to_json(contacts: &[SharedContactFfi]) -> Option<String> {
+    if contacts.is_empty() {
+        return None;
+    }
+    let rows: Vec<SharedContactJson> = contacts
+        .iter()
+        .map(|c| SharedContactJson { did: c.did.clone(), name: c.name.clone() })
+        .collect();
+    serde_json::to_string(&rows).ok()
+}
+
+/// Parse the stored shared-contacts JSON back into FFI rows (empty on error).
+fn shared_contacts_from_json(json: &str) -> Vec<SharedContactFfi> {
+    serde_json::from_str::<Vec<SharedContactJson>>(json)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|c| SharedContactFfi { did: c.did, name: c.name })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Convert a stored attachment row to its FFI shape.
@@ -431,6 +485,10 @@ pub struct DecryptedMessage {
     /// Link-preview cards (docs/35). Already anti-spoof-filtered: only previews
     /// whose `url` occurs in the body are surfaced.
     pub previews: Vec<LinkPreviewFfi>,
+    /// Shared contact cards carried on a text body (docs/35). Empty for messages
+    /// with none. The consumer persists these via `save_message` and offers a
+    /// "Save contact" action (`save_shared_contact`).
+    pub contacts: Vec<SharedContactFfi>,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -471,6 +529,9 @@ pub struct StoredMessageFfi {
     /// Link-preview cards on this message (docs/35), ordered. Populated by
     /// `load_messages`; persisted by `save_message`.
     pub previews: Vec<LinkPreviewFfi>,
+    /// Shared contact cards on this message (docs/35). Populated by
+    /// `load_messages`; persisted by `save_message`.
+    pub contacts: Vec<SharedContactFfi>,
 }
 
 /// A reaction on a message (docs/33-reactions.md), keyed by the target's wire
@@ -536,10 +597,36 @@ fn stored_to_ffi(m: store::messages::HistoryMessage) -> StoredMessageFfi {
         metadata: m.metadata,
         expire_timer_secs: m.expire_timer_secs as u32,
         expire_at_ms: m.expire_at.map(|t| t.as_millis()),
-        // Attachments and previews are loaded and merged separately
+        // Attachments, previews, and contacts are loaded and merged separately
         // (load_messages); a bare conversion carries none.
         attachments: Vec::new(),
         previews: Vec::new(),
+        contacts: Vec::new(),
+    }
+}
+
+/// What non-text content a conversation's last message carries, for the chat
+/// list preview (docs/35). One descriptor for every content type: the client
+/// maps the kind to an icon + noun and composes it with the body. Adding a
+/// content type (poll, voice note, location, …) is one new variant here + one
+/// client label case — no new `ConversationSummaryFfi` fields. System/metadata
+/// events are not here (they ride `last_message_kind`/`metadata`).
+#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
+pub enum LastMessagePreviewFfi {
+    Photo,
+    File,
+    Contact,
+}
+
+impl From<store::messages::LastMessagePreview> for LastMessagePreviewFfi {
+    fn from(p: store::messages::LastMessagePreview) -> Self {
+        match p {
+            store::messages::LastMessagePreview::Photo => Self::Photo,
+            store::messages::LastMessagePreview::File => Self::File,
+            store::messages::LastMessagePreview::Contact => Self::Contact,
+        }
     }
 }
 
@@ -559,11 +646,12 @@ pub struct ConversationSummaryFfi {
     /// list falls back to a network fetch in that case.
     pub group_title: Option<String>,
     pub last_message: Option<StoredMessageFfi>,
-    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
-    /// it has none. The chat list renders a type-aware preview (an image type
-    /// previews as "Photo", anything else as "Attachment") for a caption-less
-    /// attachment whose `body` is empty; the blobs themselves are not loaded here.
-    pub last_message_attachment_content_type: Option<String>,
+    /// What non-text content `last_message` carries (docs/35): `None` = plain
+    /// text. One descriptor for every content type — the client maps the kind to
+    /// an icon + noun and composes it with the body ("📷 caption", or "📷 Photo"
+    /// when the body is empty). Adding a content type is a new enum variant, not
+    /// a new summary field.
+    pub last_message_preview: Option<LastMessagePreviewFfi>,
     /// True for a DM from an un-curated, un-blocked sender — an unaccepted
     /// message request (docs/12 §1). The chat list shows a "Message request"
     /// label and the conversation opens into the Accept/Delete/Report gate.
@@ -1992,19 +2080,22 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
-    /// Send a text message with attachments and/or link previews to a
-    /// [`MessageTarget`] (docs/35). Attachments must already be uploaded via
-    /// [`Self::upload_attachment`]; each preview's `image` (if any) is itself an
-    /// uploaded attachment pointer. `body` may be empty for an attachment-only
+    /// Send a text message with attachments, link previews, and/or shared
+    /// contact cards to a [`MessageTarget`] (docs/35). Attachments must already
+    /// be uploaded via [`Self::upload_attachment`]; each preview's `image` (if
+    /// any) is itself an uploaded attachment pointer. Shared contacts ride
+    /// inline (no upload). `body` may be empty for an attachment/contact-only
     /// message. Works for both DMs and groups.
     ///
     /// Call from a background thread — this blocks until complete.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_message_with_attachments(
         &self,
         target: MessageTarget,
         body: String,
         attachments: Vec<AttachmentFfi>,
         previews: Vec<LinkPreviewFfi>,
+        contacts: Vec<SharedContactFfi>,
         sent_at_ms: i64,
     ) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
@@ -2015,11 +2106,12 @@ impl AppCore {
             }
             let attachments = attachments.iter().map(ffi_to_pointer).collect();
             let preview = previews.iter().map(ffi_to_preview).collect();
+            let contact = contacts.iter().map(ffi_to_shared_contact).collect();
             inner
                 .send_to_target(
                     ws.as_ref(),
                     &target,
-                    Body::Text(TextMessage { body, attachments, preview }),
+                    Body::Text(TextMessage { body, attachments, preview, contact }),
                     sent_at_ms as u64,
                 )
                 .await?;
@@ -2563,6 +2655,8 @@ impl AppCore {
             .enumerate()
             .map(|(i, p)| ffi_to_link_preview_row(&msg_id, i as i64, p))
             .collect();
+        // Shared contacts persist inline as JSON on the message row (docs/35).
+        let shared_contacts_json = shared_contacts_to_json(&msg.contacts);
         ffi_runtime().block_on(async {
             let inner = self.inner.lock().await;
             inner.store.save_message(&store::messages::HistoryMessage {
@@ -2597,6 +2691,12 @@ impl AppCore {
             // Persist link previews (docs/35).
             if !preview_rows.is_empty() {
                 inner.store.save_link_previews(&msg_id, &preview_rows).await.map_err(AppError::from)?;
+            }
+            // Persist shared contact cards inline on the row (docs/35). Only
+            // write when present so a status-transition re-save of a plain
+            // message doesn't clobber nothing with nothing.
+            if shared_contacts_json.is_some() {
+                inner.store.save_shared_contacts(&msg_id, shared_contacts_json).await.map_err(AppError::from)?;
             }
             Ok::<_, AppError>(())
         }).map_err(AppErrorFfi::from)?;
@@ -2654,6 +2754,18 @@ impl AppCore {
             for p in previews {
                 prev_by_msg.entry(p.message_id.clone()).or_default().push(link_preview_row_to_ffi(p));
             }
+            // Shared contacts (docs/35): one JSON blob per message row, parsed
+            // and keyed by message id, same one-query-then-group shape.
+            let contact_json = inner
+                .store
+                .load_shared_contacts_for_conversation(&conversation_id)
+                .await
+                .map_err(AppError::from)?;
+            let mut contacts_by_msg: std::collections::HashMap<String, Vec<SharedContactFfi>> =
+                std::collections::HashMap::new();
+            for (msg_id, json) in contact_json {
+                contacts_by_msg.insert(msg_id, shared_contacts_from_json(&json));
+            }
             Ok::<_, AppError>(msgs.into_iter().map(|m| {
                 let mut ffi = stored_to_ffi(m);
                 if let Some(a) = by_msg.remove(&ffi.id) {
@@ -2661,6 +2773,9 @@ impl AppCore {
                 }
                 if let Some(p) = prev_by_msg.remove(&ffi.id) {
                     ffi.previews = p;
+                }
+                if let Some(c) = contacts_by_msg.remove(&ffi.id) {
+                    ffi.contacts = c;
                 }
                 ffi
             }).collect())
@@ -2728,7 +2843,7 @@ impl AppCore {
                         .and_then(|gid| titles.get(gid).cloned()),
                     conversation_id: c.conversation_id,
                     last_message: c.last_message.map(stored_to_ffi),
-                    last_message_attachment_content_type: c.last_message_attachment_content_type,
+                    last_message_preview: c.last_message_preview.map(Into::into),
                     is_request,
                     is_blocked,
                     unread_count: c.unread_count,
@@ -3023,6 +3138,16 @@ impl AppCore {
     /// no profile has been cached yet (the UI should fall back to the DID).
     pub fn contact_display_name(&self, did: String) -> Result<String, AppErrorFfi> {
         ffi_runtime().block_on(async {
+            // Local nickname ("the name I know them by", docs/52) wins over the
+            // fetched profile display name.
+            let nickname = self.store.load_contact(&did).await
+                .ok()
+                .flatten()
+                .and_then(|c| c.nickname)
+                .unwrap_or_default();
+            if !nickname.is_empty() {
+                return Ok::<_, AppError>(nickname);
+            }
             let name = self.store.load_contact_profile(&did).await
                 .map_err(AppError::from)?
                 .map(|p| p.display_name)
@@ -3048,14 +3173,25 @@ impl AppCore {
             let inner = self; // read-only: lock-free store handle
             let mut out = std::collections::HashMap::with_capacity(dids.len());
             for did in dids {
+                // Local nickname first (docs/52), then profile, then account info.
                 let mut name = inner
                     .store
-                    .load_contact_profile(&did)
+                    .load_contact(&did)
                     .await
                     .ok()
                     .flatten()
-                    .map(|p| p.display_name)
+                    .and_then(|c| c.nickname)
                     .unwrap_or_default();
+                if name.is_empty() {
+                    name = inner
+                        .store
+                        .load_contact_profile(&did)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|p| p.display_name)
+                        .unwrap_or_default();
+                }
                 if name.is_empty() {
                     name = inner
                         .store
@@ -3150,18 +3286,21 @@ impl AppCore {
                 if row.did == own_did {
                     continue;
                 }
-                // Name source priority mirrors `resolveDisplayName` on the
-                // client: the encrypted-profile name (humans) first, then the
-                // cached server account record (bots). Both are local reads, so
-                // contact-book names — including bots — resolve offline.
-                let mut display_name = inner
-                    .store
-                    .load_contact_profile(&row.did)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|p| p.display_name)
-                    .unwrap_or_default();
+                // Name source priority: the user's local nickname ("the name I
+                // know them by", docs/52) first, then the encrypted-profile name
+                // (humans), then the cached server account record (bots). All
+                // local reads, so contact-book names resolve offline.
+                let mut display_name = row.nickname.clone().unwrap_or_default();
+                if display_name.is_empty() {
+                    display_name = inner
+                        .store
+                        .load_contact_profile(&row.did)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|p| p.display_name)
+                        .unwrap_or_default();
+                }
                 if display_name.is_empty() {
                     display_name = inner
                         .store
@@ -3196,6 +3335,30 @@ impl AppCore {
                 .touch_contact(&did, curated, Timestamp::now())
                 .await
                 .map_err(AppError::from)
+        })
+        .map_err(AppErrorFfi::from)
+    }
+
+    /// Save a received shared contact card (docs/35) to the local contact book.
+    /// Marks the DID curated (so it appears in People) and records the shared
+    /// name as the local nickname — "the name I know them by". No profile key is
+    /// involved; the person's real profile arrives on first contact via the DID.
+    /// Idempotent; a blank name leaves the nickname cleared.
+    pub fn save_shared_contact(&self, did: String, name: String) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let inner = self; // idempotent local store writes; lock-free handle
+            inner
+                .store
+                .touch_contact(&did, true, Timestamp::now())
+                .await
+                .map_err(AppError::from)?;
+            let nickname = (!name.trim().is_empty()).then(|| name.clone());
+            inner
+                .store
+                .set_contact_nickname(&did, nickname)
+                .await
+                .map_err(AppError::from)?;
+            Ok::<_, AppError>(())
         })
         .map_err(AppErrorFfi::from)
     }
@@ -4460,13 +4623,15 @@ impl AppCore {
         inner.download_attachment_inner(attachment).await
     }
 
-    /// Async send-with-attachments/previews for tests (docs/35).
+    /// Async send-with-attachments/previews/contacts for tests (docs/35).
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_attachments_async(
         &self,
         target: MessageTarget,
         body: &str,
         attachments: Vec<AttachmentFfi>,
         previews: Vec<LinkPreviewFfi>,
+        contacts: Vec<SharedContactFfi>,
         sent_at_ms: i64,
     ) -> Result<(), AppError> {
         let ws = self.ws.lock().expect("ws mutex poisoned").clone();
@@ -4476,11 +4641,12 @@ impl AppCore {
         }
         let attachments = attachments.iter().map(ffi_to_pointer).collect();
         let preview = previews.iter().map(ffi_to_preview).collect();
+        let contact = contacts.iter().map(ffi_to_shared_contact).collect();
         inner
             .send_to_target(
                 ws.as_ref(),
                 &target,
-                Body::Text(TextMessage { body: body.to_string(), attachments, preview }),
+                Body::Text(TextMessage { body: body.to_string(), attachments, preview, contact }),
                 sent_at_ms as u64,
             )
             .await
@@ -5275,6 +5441,45 @@ impl AppCore {
             }
             tokio::time::sleep(LINK_POLL_INTERVAL).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_contact_tests {
+    use super::*;
+
+    #[test]
+    fn json_round_trips_contacts() {
+        let contacts = vec![
+            SharedContactFfi { did: "did:plc:alice".into(), name: "Alice (canvass lead)".into() },
+            SharedContactFfi { did: "did:plc:bob".into(), name: "Bob".into() },
+        ];
+        let json = shared_contacts_to_json(&contacts).expect("some json");
+        let back = shared_contacts_from_json(&json);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].did, "did:plc:alice");
+        assert_eq!(back[0].name, "Alice (canvass lead)");
+        assert_eq!(back[1].did, "did:plc:bob");
+    }
+
+    #[test]
+    fn empty_contacts_serialize_to_none() {
+        assert!(shared_contacts_to_json(&[]).is_none());
+    }
+
+    #[test]
+    fn malformed_json_yields_empty() {
+        assert!(shared_contacts_from_json("not json").is_empty());
+    }
+
+    #[test]
+    fn wire_ffi_conversions_are_lossless() {
+        let ffi = SharedContactFfi { did: "did:plc:x".into(), name: "X".into() };
+        let wire = ffi_to_shared_contact(&ffi);
+        assert_eq!(wire.did, "did:plc:x");
+        let back = shared_contact_to_ffi(wire);
+        assert_eq!(back.did, ffi.did);
+        assert_eq!(back.name, ffi.name);
     }
 }
 

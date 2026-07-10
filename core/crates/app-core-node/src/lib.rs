@@ -18,7 +18,8 @@ use app_core::{
     self as core, AccountInfoFfi, AttachmentFfi, ConnectionState, ContactRowFfi,
     ConversationSummaryFfi, CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate,
     GroupMemberFfi, GroupPendingFfi, AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo,
-    JoinResultFfi, LinkPreviewFfi, MessageTarget, ProjectInfoFfi, StoredMessageFfi,
+    JoinResultFfi, LastMessagePreviewFfi, LinkPreviewFfi, MessageTarget, ProjectInfoFfi,
+    SharedContactFfi, StoredMessageFfi,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -157,6 +158,26 @@ impl From<LinkPreviewJs> for LinkPreviewFfi {
     }
 }
 
+/// A contact card shared inside a message (docs/35). Structured, inline: the
+/// person's DID and the name the sender knows them by. No profile key.
+#[napi(object)]
+pub struct SharedContactJs {
+    pub did: String,
+    pub name: String,
+}
+
+impl From<SharedContactFfi> for SharedContactJs {
+    fn from(c: SharedContactFfi) -> Self {
+        Self { did: c.did, name: c.name }
+    }
+}
+
+impl From<SharedContactJs> for SharedContactFfi {
+    fn from(c: SharedContactJs) -> Self {
+        Self { did: c.did, name: c.name }
+    }
+}
+
 #[napi(object)]
 pub struct DecryptedMessageJs {
     pub server_id: i64,
@@ -177,6 +198,8 @@ pub struct DecryptedMessageJs {
     pub attachments: Vec<AttachmentJs>,
     /// Link-preview cards (docs/35), anti-spoof-filtered.
     pub previews: Vec<LinkPreviewJs>,
+    /// Shared contact cards (docs/35); empty for plain text.
+    pub contacts: Vec<SharedContactJs>,
 }
 
 impl From<DecryptedMessage> for DecryptedMessageJs {
@@ -192,6 +215,7 @@ impl From<DecryptedMessage> for DecryptedMessageJs {
             is_request: m.is_request,
             attachments: m.attachments.into_iter().map(Into::into).collect(),
             previews: m.previews.into_iter().map(Into::into).collect(),
+            contacts: m.contacts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -214,6 +238,8 @@ pub struct StoredMessageJs {
     pub attachments: Vec<AttachmentJs>,
     /// Link-preview cards on this message (docs/35); empty for plain text.
     pub previews: Vec<LinkPreviewJs>,
+    /// Shared contact cards on this message (docs/35); empty for plain text.
+    pub contacts: Vec<SharedContactJs>,
 }
 
 impl From<StoredMessageFfi> for StoredMessageJs {
@@ -231,6 +257,7 @@ impl From<StoredMessageFfi> for StoredMessageJs {
             metadata: m.metadata,
             attachments: m.attachments.into_iter().map(Into::into).collect(),
             previews: m.previews.into_iter().map(Into::into).collect(),
+            contacts: m.contacts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -259,6 +286,7 @@ impl From<StoredMessageJs> for StoredMessageFfi {
             expire_at_ms: None,
             attachments: m.attachments.into_iter().map(Into::into).collect(),
             previews: m.previews.into_iter().map(Into::into).collect(),
+            contacts: m.contacts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -267,10 +295,12 @@ impl From<StoredMessageJs> for StoredMessageFfi {
 pub struct ConversationSummaryJs {
     pub conversation_id: String,
     pub last_message: Option<StoredMessageJs>,
-    /// MIME type of `last_message`'s first attachment (docs/35), or `None` when
-    /// it has none, so the chat list can preview a caption-less attachment whose
-    /// body is empty (an image type previews as "Photo", else "Attachment").
-    pub last_message_attachment_content_type: Option<String>,
+    /// What non-text content `last_message` carries (docs/35), as a lowercase
+    /// tag: `"photo"` / `"file"` / `"contact"`, or `None` for plain text. Lets a
+    /// client preview a caption-less message. (A string tag rather than a native
+    /// enum: bots rarely render chat-list previews and this keeps the binding
+    /// trivial; the tag set matches `LastMessagePreviewFfi`.)
+    pub last_message_preview: Option<String>,
     /// Number of unread inbound messages — the chat list's unread badge.
     /// `i64` (not `u64`) to surface as a plain JS number rather than a BigInt,
     /// matching the existing `unread_count` accessor.
@@ -282,7 +312,11 @@ impl From<ConversationSummaryFfi> for ConversationSummaryJs {
         Self {
             conversation_id: c.conversation_id,
             last_message: c.last_message.map(Into::into),
-            last_message_attachment_content_type: c.last_message_attachment_content_type,
+            last_message_preview: c.last_message_preview.map(|p| match p {
+                LastMessagePreviewFfi::Photo => "photo".to_string(),
+                LastMessagePreviewFfi::File => "file".to_string(),
+                LastMessagePreviewFfi::Contact => "contact".to_string(),
+            }),
             unread_count: c.unread_count as i64,
         }
     }
@@ -1004,14 +1038,16 @@ impl AppCore {
         body: String,
         attachments: Vec<AttachmentJs>,
         previews: Vec<LinkPreviewJs>,
+        contacts: Vec<SharedContactJs>,
         sent_at_ms: i64,
     ) -> napi::Result<()> {
         let core = self.inner.clone();
         let target = target.into_ffi()?;
         let attachments: Vec<AttachmentFfi> = attachments.into_iter().map(Into::into).collect();
         let previews: Vec<LinkPreviewFfi> = previews.into_iter().map(Into::into).collect();
+        let contacts: Vec<SharedContactFfi> = contacts.into_iter().map(Into::into).collect();
         tokio::task::spawn_blocking(move || {
-            core.send_message_with_attachments(target, body, attachments, previews, sent_at_ms)
+            core.send_message_with_attachments(target, body, attachments, previews, contacts, sent_at_ms)
         })
         .await
         .map_err(join_err)?

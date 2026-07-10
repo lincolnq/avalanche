@@ -93,6 +93,7 @@ async fn alice_sends_dm_with_attachment_bob_downloads_and_decrypts() {
             "look at this",
             vec![pointer],
             vec![],
+            vec![],
             now_ms(),
         )
         .await
@@ -113,6 +114,40 @@ async fn alice_sends_dm_with_attachment_bob_downloads_and_decrypts() {
     // Bob downloads, verifies the digest, decrypts, and recovers the exact bytes.
     let recovered = bob.download_attachment_async(att).await.unwrap();
     assert_eq!(recovered, original);
+}
+
+#[tokio::test]
+async fn alice_shares_a_contact_card_bob_receives_it() {
+    use app_core::{MessageTarget, SharedContactFfi};
+
+    let url = server_url();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token()).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token()).await.unwrap();
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    // Alice shares Carol's contact card (docs/35) — DID + the name she knows
+    // Carol by, no profile key. Rides inline on a text message.
+    let card = SharedContactFfi { did: "did:plc:carol".into(), name: "Carol (canvass lead)".into() };
+    alice
+        .send_message_with_attachments_async(
+            MessageTarget::Dm { recipient_did: bob_did.clone() },
+            "you should meet carol",
+            vec![],
+            vec![],
+            vec![card],
+            now_ms(),
+        )
+        .await
+        .unwrap();
+
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].plaintext, b"you should meet carol");
+    assert_eq!(msgs[0].contacts.len(), 1, "the shared contact rides inline");
+    assert_eq!(msgs[0].contacts[0].did, "did:plc:carol");
+    assert_eq!(msgs[0].contacts[0].name, "Carol (canvass lead)");
+    // The card type has no profile-key field at all (privacy by construction).
 }
 
 #[tokio::test]

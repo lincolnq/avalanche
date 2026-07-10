@@ -47,6 +47,15 @@ struct ConversationView: View {
     /// Whether the clipboard currently holds an image, gating the paste button's
     /// visibility (docs/35). Refreshed on appear, app-active, and pasteboard change.
     @State private var canPasteImage = false
+    /// A staged shared contact card (docs/35), pasted from a "Copy contact"
+    /// action, shown as a chip in the composer until you send or remove it.
+    @State private var stagedContact: SharedContactFfi?
+    /// Whether the clipboard holds a contact card, gating the paste button.
+    @State private var canPasteContact = false
+    /// DIDs already curated in the contact book (docs/35): a received contact
+    /// card shows "Saved" for these, and an active Save button otherwise.
+    /// Loaded on appear and updated optimistically when the user taps Save.
+    @State private var savedContactDids: Set<String> = []
     /// The message under the Signal-style long-press actions overlay (docs/33),
     /// with its on-screen frame + resolved sender name so the overlay can lift
     /// the exact bubble to center. Nil when no overlay is showing.
@@ -174,7 +183,26 @@ struct ConversationView: View {
                                 },
                                 onImageTap: { att in
                                     imageViewerStart = ImageViewerStart(id: att.id)
-                                }
+                                },
+                                onSaveContact: { contact in
+                                    // Optimistically mark curated so the card flips
+                                    // to "Saved" immediately, then persist.
+                                    savedContactDids.insert(contact.did)
+                                    Task { await appState.saveSharedContact(contact, accountId: conversation.accountId) }
+                                },
+                                onMessageContact: { contact in
+                                    // Open (or create) the DM with this person and
+                                    // navigate to it, matching the group member menu.
+                                    let conv = appState.findOrCreateDMConversation(
+                                        recipientDid: contact.did, accountId: conversation.accountId
+                                    )
+                                    appState.selectedTab = .chats
+                                    appState.navigateToConversation = conv
+                                },
+                                onCopyContact: { contact in
+                                    ContactPasteboard.write(did: contact.did, name: contact.name)
+                                },
+                                savedContactDids: savedContactDids
                             )
                             .id(message.sentAtMs)
                         }
@@ -317,6 +345,7 @@ struct ConversationView: View {
             appState.loadMessagesFromStore(conversationId: conversation.id, accountId: conversation.accountId)
             appState.loadReactions(conversationId: conversation.id, accountId: conversation.accountId)
             appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
+            loadSavedContactDids()
             // Re-fetch the contact's encrypted profile and update the cached
             // display name if it changed. Primary change-detection path.
             if let recipientDid = conversation.recipientDid {
@@ -382,7 +411,7 @@ struct ConversationView: View {
 
         // Staging strip (docs/35): pending image and/or link-preview card shown
         // above the input while editing == nil, each removable with an x.
-        if editingMessage == nil, stagedImageData != nil || stagedPreview != nil {
+        if editingMessage == nil, stagedImageData != nil || stagedPreview != nil || stagedContact != nil {
             stagingStrip
         }
 
@@ -394,10 +423,10 @@ struct ConversationView: View {
                         .font(.title)
                         .foregroundStyle(Color.avBrand)
                 }
-                // Paste an image from the clipboard (docs/35) — shown only when the
-                // clipboard actually holds an image.
-                if canPasteImage {
-                    Button { pasteImage() } label: {
+                // Paste from the clipboard (docs/35) — shown when it holds an
+                // image or a copied contact card.
+                if canPasteImage || canPasteContact {
+                    Button { pasteFromClipboard() } label: {
                         Image(systemName: "doc.on.clipboard")
                             .font(.title3)
                             .foregroundStyle(Color.avBrand)
@@ -451,6 +480,7 @@ struct ConversationView: View {
         !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || stagedImageData != nil
             || stagedPreview != nil
+            || stagedContact != nil
     }
 
     /// The horizontal strip of staged attachments above the input.
@@ -475,6 +505,12 @@ struct ConversationView: View {
                         dismissedPreviewURL = stagedPreviewURL
                         clearStagedPreview()
                     }
+                }
+            }
+            if let stagedContact {
+                ZStack(alignment: .topTrailing) {
+                    SharedContactCard(contact: stagedContact, isMe: true)
+                    removeButton { self.stagedContact = nil }
                 }
             }
             Spacer(minLength: 0)
@@ -602,18 +638,35 @@ struct ConversationView: View {
         }
     }
 
-    /// Stage an image from the system clipboard (docs/35). Re-encoded to JPEG to
-    /// match the photo-picker path, which `sendComposed` uploads as image/jpeg.
-    private func pasteImage() {
+    /// Stage the current clipboard content in the composer (docs/35). A copied
+    /// contact card takes priority over an image; re-encodes a pasted image to
+    /// JPEG to match the photo-picker path (`sendComposed` uploads image/jpeg).
+    private func pasteFromClipboard() {
+        if let contact = ContactPasteboard.read() {
+            stagedContact = contact
+            return
+        }
         guard let image = UIPasteboard.general.image,
               let data = image.preparedForSending() else { return }
         stageImageData(data)
     }
 
     /// Refresh whether the paste button should show — i.e. the clipboard holds an
-    /// image. Cheap; called on appear, on app-active, and on pasteboard change.
+    /// image or a copied contact card. Cheap; called on appear, on app-active,
+    /// and on pasteboard change.
     private func refreshPasteAvailability() {
         canPasteImage = UIPasteboard.general.hasImages
+        canPasteContact = ContactPasteboard.hasContact
+    }
+
+    /// Load the set of already-curated contact DIDs (docs/35) so a received
+    /// contact card renders "Saved" for people already in the book, and an
+    /// active Save button otherwise.
+    private func loadSavedContactDids() {
+        Task {
+            let rows = await appState.listContacts(accountId: conversation.accountId)
+            savedContactDids = Set(rows.filter { $0.isCurated }.map { $0.did })
+        }
     }
 
     /// Debounced link-preview generation (docs/35): ~0.6s after the last
@@ -663,6 +716,7 @@ struct ConversationView: View {
     private func clearStaged() {
         clearStagedImage()
         clearStagedPreview()
+        stagedContact = nil
         dismissedPreviewURL = nil
         previewTask?.cancel()
     }
@@ -672,10 +726,11 @@ struct ConversationView: View {
     /// optimistic row + chat-list bump here, then clears the composer.
     private func send() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || stagedImageData != nil || stagedPreview != nil else { return }
+        guard !trimmed.isEmpty || stagedImageData != nil || stagedPreview != nil || stagedContact != nil else { return }
         let text = messageText
         let image = stagedImageData
         let preview = stagedPreview
+        let contact = stagedContact
         messageText = ""
         clearStaged()
         errorMessage = nil
@@ -690,7 +745,8 @@ struct ConversationView: View {
             body: text,
             sentAtMs: nowMs,
             readAtMs: nowMs,  // outgoing = immediately read
-            deliveryStatus: .sending
+            deliveryStatus: .sending,
+            contacts: contact.map { [$0] } ?? []
         )
         appState.messagesByConversation[conversation.id, default: []].append(message)
         scrollPosition.scrollTo(edge: .bottom)
@@ -702,7 +758,7 @@ struct ConversationView: View {
             appState.conversations[idx].lastMessage = text
             // Reflect the staged image's type so the row previews "📷 Photo"
             // immediately; nil clears any prior attachment decoration.
-            appState.conversations[idx].lastMessageAttachmentContentType = image != nil ? "image/jpeg" : nil
+            appState.conversations[idx].lastMessagePreview = image != nil ? .photo : (contact != nil ? .contact : nil)
             appState.conversations[idx].lastMessageDate = message.sentAt
             appState.conversations[idx].lastMessageSenderDid = conversation.accountId  // "You:"
             appState.conversations[idx].clearLastMessageEvent()
@@ -715,6 +771,7 @@ struct ConversationView: View {
                     text: text,
                     imageData: image,
                     preview: preview,
+                    contact: contact,
                     messageId: messageId,
                     sentAtMs: nowMs
                 )

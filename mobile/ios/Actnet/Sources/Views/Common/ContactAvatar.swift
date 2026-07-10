@@ -18,6 +18,11 @@ struct ContactAvatar: View {
     var imageData: Data? = nil
     var isBot: Bool = false
     let size: CGFloat
+    /// Accent used for the placeholder fill + initial. Defaults to the brand
+    /// plum, which reads on paper/incoming backgrounds. Callers placing the
+    /// avatar on a dark/plum surface (e.g. a sent contact card) pass a light
+    /// tint like `.sand100` so the initial doesn't vanish into the background.
+    var tint: Color = .avBrand
 
     var body: some View {
         avatarContent
@@ -26,7 +31,7 @@ struct ContactAvatar: View {
 
     @ViewBuilder
     private var avatarContent: some View {
-        let color = Color.avBrand
+        let color = tint
         if let data = imageData, let uiImage = UIImage(data: data) {
             Image(uiImage: uiImage)
                 .resizable()
