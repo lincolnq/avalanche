@@ -45,6 +45,55 @@ pub fn generate_profile_key() -> [u8; PROFILE_KEY_LEN] {
     rand::Rng::random(&mut rand::rng())
 }
 
+/// Maximum avatar *plaintext* (JPEG) size app-core will encrypt (docs/55). The
+/// server caps the ciphertext at `avatar_max_size_bytes` (64 KiB default);
+/// AES-256-GCM adds a 12-byte nonce + 16-byte tag, so this leaves comfortable
+/// headroom below that cap. Callers (the platform UIs) downscale/compress to
+/// well under this before calling `set_*_avatar`.
+pub const MAX_AVATAR_BYTES: usize = 60 * 1024;
+
+/// Encrypt raw avatar image bytes under a 32-byte key (AES-256-GCM,
+/// `nonce (12) || ciphertext+tag`), the same layout as the profile blob. Used
+/// for both personal avatars (encrypted under the profile key) and group
+/// avatars (encrypted under a master-key-derived key). docs/55.
+pub fn encrypt_avatar(
+    plaintext: &[u8],
+    key: &[u8; PROFILE_KEY_LEN],
+) -> Result<Vec<u8>, AppError> {
+    let cipher = Aes256Gcm::new(key.into());
+    let nonce_bytes: [u8; NONCE_LEN] = rand::Rng::random(&mut rand::rng());
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| AppError::Protocol(format!("avatar encryption failed: {e}")))?;
+    let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&ciphertext);
+    Ok(blob)
+}
+
+/// Decrypt an avatar blob produced by [`encrypt_avatar`].
+pub fn decrypt_avatar(blob: &[u8], key: &[u8; PROFILE_KEY_LEN]) -> Result<Vec<u8>, AppError> {
+    if blob.len() < NONCE_LEN + 16 {
+        return Err(AppError::Protocol("avatar blob too short".into()));
+    }
+    let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.into());
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| AppError::Protocol("avatar decryption failed (wrong key?)".into()))
+}
+
+/// Base64 SHA-256 of an avatar ciphertext blob — the integrity digest carried in
+/// the profile blob / group state and verified before decrypt.
+pub fn avatar_digest_b64(ciphertext: &[u8]) -> String {
+    use base64::prelude::*;
+    use sha2::{Digest as _, Sha256};
+    let d = Sha256::digest(ciphertext);
+    BASE64_STANDARD.encode(d)
+}
+
 /// Encrypt a profile plaintext under the given 32-byte profile key.
 pub fn encrypt_profile(
     plaintext: &ProfilePlaintext,

@@ -272,6 +272,8 @@ impl AppCoreInner {
             Err(_) => return,
         };
 
+        sync_contact_avatar(&self.store, &self.client, sender_did, &key, &plaintext).await;
+
         let _ = self
             .store
             .upsert_contact_profile(&store::profiles::ContactProfile {
@@ -282,6 +284,8 @@ impl AppCoreInner {
             })
             .await;
     }
+
+    // (avatar sync helper is a free fn below, shared with refresh_contact_profile)
 
     /// Load the user's own profile key as bytes, or empty if not yet set.
     /// Empty bytes in the proto field signal "not sharing" — recipients ignore
@@ -1870,6 +1874,53 @@ pub(crate) async fn apply_sync_read(
         }
     }
     changed
+}
+
+/// Best-effort: fetch, verify, decrypt, and cache a contact's avatar from the
+/// `avatar_version`/`avatar_digest` in their freshly-decrypted profile (docs/55).
+/// Downloads only when the advertised version is newer than the cached one;
+/// clears the cache when the contact removed their avatar. All errors are
+/// swallowed — this must never block profile or message handling. Shared by the
+/// inbound-profile-key path and the conversation-open refresh.
+pub(crate) async fn sync_contact_avatar(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+    profile_key: &[u8; profile::PROFILE_KEY_LEN],
+    plaintext: &profile::ProfilePlaintext,
+) {
+    use store::avatars::AVATAR_KIND_ACCOUNT;
+    match plaintext.avatar_version {
+        Some(v) => {
+            let cached = store
+                .load_avatar_version(AVATAR_KIND_ACCOUNT, did)
+                .await
+                .ok()
+                .flatten();
+            if cached.is_some_and(|c| c >= v as i64) {
+                return; // already have this version
+            }
+            let ciphertext = match client.get_profile_avatar(did).await {
+                Ok(Some(ct)) => ct,
+                _ => return,
+            };
+            // Verify integrity against the digest the profile advertised.
+            if let Some(dg) = &plaintext.avatar_digest {
+                if &profile::avatar_digest_b64(&ciphertext) != dg {
+                    return;
+                }
+            }
+            if let Ok(jpeg) = profile::decrypt_avatar(&ciphertext, profile_key) {
+                let _ = store
+                    .upsert_avatar(AVATAR_KIND_ACCOUNT, did, v as i64, &jpeg)
+                    .await;
+            }
+        }
+        None => {
+            // Contact removed their avatar — drop any cached copy.
+            let _ = store.delete_avatar(AVATAR_KIND_ACCOUNT, did).await;
+        }
+    }
 }
 
 #[cfg(test)]

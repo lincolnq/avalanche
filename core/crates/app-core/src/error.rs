@@ -29,6 +29,9 @@ pub enum AppError {
 
     #[error("attachment error: {0}")]
     Attachment(#[from] crypto::attachments::AttachmentError),
+
+    #[error("avatar too large: {0} bytes (max {1})")]
+    AvatarTooLarge(usize, usize),
 }
 
 /// UniFFI-exported error type. Flattened to strings since UniFFI can't
@@ -63,6 +66,11 @@ pub enum AppErrorFfi {
 
     #[error("{reason}")]
     Attachment { reason: String },
+
+    /// The supplied avatar image exceeds the size cap (docs/55). The caller
+    /// should downscale / re-compress and retry.
+    #[error("{reason}")]
+    AvatarTooLarge { reason: String },
 }
 
 impl From<AppError> for AppErrorFfi {
@@ -79,6 +87,9 @@ impl From<AppError> for AppErrorFfi {
                 AppErrorFfi::IdentityDeletionFailed { reason: s }
             }
             AppError::Attachment(e) => AppErrorFfi::Attachment { reason: e.to_string() },
+            AppError::AvatarTooLarge(n, max) => AppErrorFfi::AvatarTooLarge {
+                reason: format!("avatar too large: {n} bytes (max {max})"),
+            },
         }
     }
 }

@@ -3134,6 +3134,95 @@ impl AppCore {
         }).map_err(AppErrorFfi::from)
     }
 
+    /// Set (or replace) the user's own avatar (docs/55). `jpeg` is the
+    /// already-cropped, downscaled JPEG the platform UI produced — app-core does
+    /// no image processing. Encrypts it under the profile key, uploads the blob,
+    /// bumps `avatar_version` in the profile blob (so contacts refetch), and
+    /// caches it locally. Lock-free (a profile update, like `set_display_name`).
+    pub fn set_own_avatar(&self, jpeg: Vec<u8>) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            if jpeg.len() > profile::MAX_AVATAR_BYTES {
+                return Err(AppError::AvatarTooLarge(jpeg.len(), profile::MAX_AVATAR_BYTES));
+            }
+            let own = self.store.load_own_profile().await.map_err(AppError::from)?
+                .ok_or_else(|| AppError::Protocol("no own profile (account not yet set up)".into()))?;
+            if own.profile_key.len() != profile::PROFILE_KEY_LEN {
+                return Err(AppError::Protocol("stored profile key has wrong length".into()));
+            }
+            let mut key = [0u8; profile::PROFILE_KEY_LEN];
+            key.copy_from_slice(&own.profile_key);
+
+            let ciphertext = profile::encrypt_avatar(&jpeg, &key)?;
+            let digest = profile::avatar_digest_b64(&ciphertext);
+            self.client.put_profile_avatar(&ciphertext).await?;
+
+            let new_version = self.store
+                .load_avatar_version(store::avatars::AVATAR_KIND_ACCOUNT, &self.did)
+                .await.map_err(AppError::from)?
+                .unwrap_or(0) + 1;
+
+            let blob = profile::encrypt_profile(&profile::ProfilePlaintext {
+                display_name: own.display_name,
+                avatar_version: Some(new_version as u32),
+                avatar_digest: Some(digest),
+            }, &key)?;
+            self.client.put_profile(&blob).await?;
+
+            self.store
+                .upsert_avatar(store::avatars::AVATAR_KIND_ACCOUNT, &self.did, new_version, &jpeg)
+                .await.map_err(AppError::from)?;
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// Remove the user's own avatar (docs/55): delete the server blob, re-publish
+    /// the profile blob without an avatar ref, and clear the local cache.
+    pub fn clear_own_avatar(&self) -> Result<(), AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            let own = self.store.load_own_profile().await.map_err(AppError::from)?
+                .ok_or_else(|| AppError::Protocol("no own profile (account not yet set up)".into()))?;
+            if own.profile_key.len() != profile::PROFILE_KEY_LEN {
+                return Err(AppError::Protocol("stored profile key has wrong length".into()));
+            }
+            let mut key = [0u8; profile::PROFILE_KEY_LEN];
+            key.copy_from_slice(&own.profile_key);
+
+            self.client.delete_profile_avatar().await?;
+            let blob = profile::encrypt_profile(&profile::ProfilePlaintext {
+                display_name: own.display_name,
+                avatar_version: None,
+                avatar_digest: None,
+            }, &key)?;
+            self.client.put_profile(&blob).await?;
+            self.store
+                .delete_avatar(store::avatars::AVATAR_KIND_ACCOUNT, &self.did)
+                .await.map_err(AppError::from)?;
+            Ok::<_, AppError>(())
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// The user's own avatar JPEG bytes from the local cache, or `None`. Local
+    /// read only (populated by `set_own_avatar`; a freshly linked device won't
+    /// have it cached until the avatar is re-set — a known follow-up).
+    pub fn own_avatar(&self) -> Result<Option<Vec<u8>>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            self.store
+                .load_avatar(store::avatars::AVATAR_KIND_ACCOUNT, &self.did)
+                .await.map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
+    /// A contact's cached avatar JPEG bytes, or `None`. Local read only — the
+    /// fetch happens in the profile-sync paths (`fetch_and_cache_profile` /
+    /// `refresh_contact_profile`), mirroring display-name resolution.
+    pub fn contact_avatar(&self, did: String) -> Result<Option<Vec<u8>>, AppErrorFfi> {
+        ffi_runtime().block_on(async {
+            self.store
+                .load_avatar(store::avatars::AVATAR_KIND_ACCOUNT, &did)
+                .await.map_err(AppError::from)
+        }).map_err(AppErrorFfi::from)
+    }
+
     /// Look up the cached display name for a contact. Returns empty string if
     /// no profile has been cached yet (the UI should fall back to the DID).
     pub fn contact_display_name(&self, did: String) -> Result<String, AppErrorFfi> {
@@ -3258,6 +3347,10 @@ impl AppCore {
                 Ok(p) => p,
                 Err(_) => return Ok(false),
             };
+
+            // Sync the avatar too (docs/55) — the profile blob carries the
+            // avatar version/digest; this is the conversation-open refresh path.
+            crate::messaging::sync_contact_avatar(&inner.store, &inner.client, &did, &key, &plaintext).await;
 
             let changed = plaintext.display_name != cached.display_name;
             inner.store.upsert_contact_profile(&store::profiles::ContactProfile {
