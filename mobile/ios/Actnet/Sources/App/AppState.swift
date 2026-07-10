@@ -120,6 +120,19 @@ final class AppState: ObservableObject {
     /// Populated by `fetchGroupTitle` and consumed by the conversation
     /// list / `Conversation.title`.
     private var groupTitleCache: [String: String] = [:]
+    /// Cached avatar image bytes for DIDs (own + contacts), keyed by DID.
+    /// `@Published` so rows/headers re-render when an avatar resolves (docs/55).
+    @Published private var avatarCache: [String: Data] = [:]
+    /// Cached group avatar bytes, keyed by URL-safe-no-pad base64 group_id.
+    @Published private var groupAvatarCache: [String: Data] = [:]
+    private var avatarInFlight: Set<String> = []
+    private var groupAvatarInFlight: Set<String> = []
+    /// Avatar the user picked during onboarding, before any account/core existed
+    /// (docs/55). Applied once in `finishAccountRegistration` and cleared.
+    var pendingOnboardingAvatar: Data?
+    /// DIDs/groups that resolved to no avatar this session — suppresses
+    /// re-spawning a resolve task on every re-render. Cleared on reconnect.
+    private var unresolvedAvatars: Set<String> = []
     private var _service: any ActnetService
 
     var service: any ActnetService { _service }
@@ -320,6 +333,13 @@ final class AppState: ObservableObject {
                         dbFilename: p.dbFilename,
                         servers: p.servers
                     ))
+                }
+
+                // Load the cached own avatar (docs/55) so it renders on relaunch.
+                if let idx = accounts.firstIndex(where: { $0.id == p.did }),
+                   let avatar = (try? await Task.detached(operation: { try core.ownAvatar() }).value) ?? nil {
+                    accounts[idx].avatarData = avatar
+                    self.avatarCache[p.did] = avatar
                 }
             } catch {
                 print("Failed to authenticate account \(p.did) (will show offline): \(error)")
@@ -666,6 +686,13 @@ final class AppState: ObservableObject {
             servers: [PersistedServer(id: serverUrl, name: serverName, url: serverUrl)]
         ))
 
+        // Apply an avatar picked during onboarding (docs/55), now that the core
+        // exists. Best-effort — a failure here shouldn't block sign-up.
+        if let avatar = pendingOnboardingAvatar {
+            pendingOnboardingAvatar = nil
+            try? await setOwnAvatar(avatar, accountId: did)
+        }
+
         // Rebuild the conversation list from the freshly-registered core's
         // store. For recovery this is what surfaces groups restored from the
         // recovery blob (their master keys are already in the `groups` table,
@@ -978,6 +1005,106 @@ final class AppState: ObservableObject {
                 self?.applyResolvedDisplayName(did: did, name: newName)
             }
         }
+    }
+
+    // MARK: - Avatars (docs/55)
+
+    /// Avatar bytes to render for a DID (own account or contact), or `nil` while
+    /// it resolves / if none. Own avatars live on the `Account` model; contact
+    /// avatars come from the local cache, resolved lazily (mirrors
+    /// `displayName(for:accountId:)`).
+    func avatar(for did: String, accountId: String) -> Data? {
+        if let account = accounts.first(where: { $0.id == did }) {
+            return account.avatarData
+        }
+        if let data = avatarCache[did] { return data }
+        resolveAvatar(did: did, accountId: accountId)
+        return nil
+    }
+
+    private func resolveAvatar(did: String, accountId: String) {
+        guard !avatarInFlight.contains(did), !unresolvedAvatars.contains(did) else { return }
+        guard let core = cores[accountId] else { return }
+        avatarInFlight.insert(did)
+        let targetDid = did
+        Task.detached { [weak self] in
+            let data = try? core.contactAvatar(did: targetDid)
+            await MainActor.run {
+                guard let self else { return }
+                self.avatarInFlight.remove(targetDid)
+                if let data, !data.isEmpty {
+                    self.avatarCache[targetDid] = data
+                } else {
+                    self.unresolvedAvatars.insert(targetDid)
+                }
+            }
+        }
+    }
+
+    /// Group avatar bytes to render, or `nil` while it resolves / if none.
+    /// Resolution also pulls a fresh copy from the server when the local cache is
+    /// behind the group state's version (`fetchGroupAvatar`).
+    func groupAvatar(groupId: String, accountId: String) -> Data? {
+        if let data = groupAvatarCache[groupId] { return data }
+        resolveGroupAvatar(groupId: groupId, accountId: accountId)
+        return nil
+    }
+
+    private func resolveGroupAvatar(groupId: String, accountId: String) {
+        let key = groupId
+        guard !groupAvatarInFlight.contains(key), !unresolvedAvatars.contains(key) else { return }
+        guard let core = cores[accountId] else { return }
+        groupAvatarInFlight.insert(key)
+        Task.detached { [weak self] in
+            _ = try? core.fetchGroupAvatar(groupId: key)
+            let data = try? core.groupAvatar(groupId: key)
+            await MainActor.run {
+                guard let self else { return }
+                self.groupAvatarInFlight.remove(key)
+                if let data, !data.isEmpty {
+                    self.groupAvatarCache[key] = data
+                } else {
+                    self.unresolvedAvatars.insert(key)
+                }
+            }
+        }
+    }
+
+    /// Set/replace the user's own avatar (docs/55): encrypt+upload via core, then
+    /// reflect it locally on the `Account` and in the cache.
+    func setOwnAvatar(_ jpeg: Data, accountId: String) async throws {
+        guard let core = cores[accountId] else { return }
+        try await Task.detached { try core.setOwnAvatar(jpeg: jpeg) }.value
+        if let idx = accounts.firstIndex(where: { $0.id == accountId }) {
+            accounts[idx].avatarData = jpeg
+        }
+        avatarCache[accountId] = jpeg
+    }
+
+    /// Remove the user's own avatar.
+    func removeOwnAvatar(accountId: String) async throws {
+        guard let core = cores[accountId] else { return }
+        try await Task.detached { try core.clearOwnAvatar() }.value
+        if let idx = accounts.firstIndex(where: { $0.id == accountId }) {
+            accounts[idx].avatarData = nil
+        }
+        avatarCache[accountId] = nil
+    }
+
+    /// Set/replace a group's avatar (docs/55). Gated by `modify_title_role`
+    /// server-side; surfaces an `avatarChanged` system message.
+    func setGroupAvatar(_ jpeg: Data, groupId: String, accountId: String) async throws {
+        guard let core = cores[accountId] else { return }
+        try await Task.detached { try core.setGroupAvatar(groupId: groupId, jpeg: jpeg) }.value
+        groupAvatarCache[groupId] = jpeg
+        unresolvedAvatars.remove(groupId)
+    }
+
+    /// Remove a group's avatar.
+    func removeGroupAvatar(groupId: String, accountId: String) async throws {
+        guard let core = cores[accountId] else { return }
+        try await Task.detached { try core.clearGroupAvatar(groupId: groupId) }.value
+        groupAvatarCache[groupId] = nil
     }
 
     // MARK: - Abuse handling (docs/12-abuse-handling.md)

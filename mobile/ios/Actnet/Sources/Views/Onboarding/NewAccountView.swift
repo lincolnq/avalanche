@@ -6,6 +6,7 @@ struct NewAccountView: View {
     var showRecoverLink: Bool = true
 
     @State private var displayName = ""
+    @State private var avatarData: Data?
     @State private var showPasskeyExplainer = false
     @State private var showRecovery = false
 
@@ -21,15 +22,20 @@ struct NewAccountView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // TODO: Avatar photo picker
-            Circle()
-                .fill(Color.avCard)
-                .frame(width: 100, height: 100)
-                .overlay {
-                    Image(systemName: "camera")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+            EditableAvatar(
+                currentImage: avatarData,
+                placeholderName: displayName,
+                size: 100,
+                onPicked: { data in
+                    avatarData = data
+                    // Stash for application once the account/core exists (docs/55).
+                    appState.pendingOnboardingAvatar = data
+                },
+                onRemove: avatarData == nil ? nil : {
+                    avatarData = nil
+                    appState.pendingOnboardingAvatar = nil
                 }
+            )
 
             TextField("Your name", text: $displayName)
                 .textFieldStyle(.roundedBorder)

@@ -11,6 +11,23 @@ struct IdentityDetailView: View {
     @State private var stubMessage = ""
     @State private var isDeleting = false
     @State private var deleteError: String?
+    @State private var avatarError: String?
+
+    /// Read the avatar from the live `AppState` account so it updates the instant
+    /// `setOwnAvatar`/`removeOwnAvatar` mutate `accounts`.
+    private var liveAvatar: Data? {
+        appState.accounts.first(where: { $0.id == account.id })?.avatarData ?? account.avatarData
+    }
+
+    private func setAvatar(_ data: Data) async {
+        do { try await appState.setOwnAvatar(data, accountId: account.id) }
+        catch { avatarError = error.localizedDescription }
+    }
+
+    private func removeAvatar() async {
+        do { try await appState.removeOwnAvatar(accountId: account.id) }
+        catch { avatarError = error.localizedDescription }
+    }
 
     private var homeServer: ServerInfo? {
         // No discovery-server bit on the model yet; first server stands in.
@@ -27,7 +44,13 @@ struct IdentityDetailView: View {
         ScrollView {
             VStack(spacing: 20) {
                 VStack(spacing: 8) {
-                    AccountAvatar(account: account, size: 72)
+                    EditableAvatar(
+                        currentImage: liveAvatar,
+                        placeholderName: account.displayName,
+                        size: 72,
+                        onPicked: { data in Task { await setAvatar(data) } },
+                        onRemove: { Task { await removeAvatar() } }
+                    )
                     Text(account.displayName)
                         .font(.title2)
                         .fontWeight(.semibold)
@@ -173,6 +196,11 @@ struct IdentityDetailView: View {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
+        }
+        .alert("Couldn't update photo", isPresented: .constant(avatarError != nil)) {
+            Button("OK", role: .cancel) { avatarError = nil }
+        } message: {
+            Text(avatarError ?? "")
         }
     }
 

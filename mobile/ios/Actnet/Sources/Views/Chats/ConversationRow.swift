@@ -18,6 +18,17 @@ struct ConversationRow: View {
         return appState.isBot(did, accountId: conversation.accountId)
     }
 
+    /// The avatar photo for this row (docs/55): the group avatar for groups, the
+    /// peer's avatar for DMs. `nil` falls back to the icon placeholder.
+    private var avatarData: Data? {
+        if conversation.isGroup {
+            guard let gid = conversation.groupId else { return nil }
+            return appState.groupAvatar(groupId: gid, accountId: conversation.accountId)
+        }
+        guard let did = conversation.recipientDid else { return nil }
+        return appState.avatar(for: did, accountId: conversation.accountId)
+    }
+
     /// Preview text for the latest message. For a group system event we render
     /// it reactively (resolving DIDs to names at display time), so it updates
     /// from "You made Unknown an admin" to the real name once profiles resolve —
@@ -67,17 +78,26 @@ struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Group/DM avatar placeholder. Hexagon + badge when the DM partner
-            // is a bot; circle otherwise.
+            // Group/DM avatar. Shows the set photo (docs/55) when available;
+            // otherwise the existing shape + icon placeholder. Hexagon when the
+            // DM partner is a bot; circle otherwise.
             let isBot = isBotConversation
             let frame: AnyShape = isBot ? AnyShape(Hexagon()) : AnyShape(Circle())
-            frame
-                .fill(Color.avCard)
-                .frame(width: 48, height: 48)
-                .overlay {
-                    Image(systemName: conversation.isGroup ? "person.3" : "person")
-                        .foregroundStyle(.secondary)
-                }
+            if let data = avatarData, let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(frame)
+            } else {
+                frame
+                    .fill(Color.avCard)
+                    .frame(width: 48, height: 48)
+                    .overlay {
+                        Image(systemName: conversation.isGroup ? "person.3" : "person")
+                            .foregroundStyle(.secondary)
+                    }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {

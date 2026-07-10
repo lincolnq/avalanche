@@ -37,22 +37,26 @@ struct GroupDetailView: View {
             if let s = summary {
                 List {
                     Section {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(s.title.isEmpty ? "Group" : s.title).font(.headline)
-                                if amAdmin {
-                                    Spacer()
-                                    Button("Rename") {
-                                        renameText = s.title
-                                        showRename = true
+                        VStack(spacing: 12) {
+                            groupAvatarView(s)
+                                .frame(maxWidth: .infinity)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(s.title.isEmpty ? "Group" : s.title).font(.headline)
+                                    if amAdmin {
+                                        Spacer()
+                                        Button("Rename") {
+                                            renameText = s.title
+                                            showRename = true
+                                        }
+                                        .font(.subheadline)
                                     }
-                                    .font(.subheadline)
                                 }
+                                if !s.description.isEmpty {
+                                    Text(s.description).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                Text("Revision \(s.revision)").font(.caption).foregroundStyle(.secondary)
                             }
-                            if !s.description.isEmpty {
-                                Text(s.description).font(.subheadline).foregroundStyle(.secondary)
-                            }
-                            Text("Revision \(s.revision)").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Section("Disappearing messages") {
@@ -115,7 +119,12 @@ struct GroupDetailView: View {
                                 }
                             } label: {
                                 HStack(spacing: 10) {
-                                    ContactAvatar(name: memberName(member), isBot: isBot(member), size: 32)
+                                    ContactAvatar(
+                                        name: memberName(member),
+                                        imageData: appState.avatar(for: member.did, accountId: accountId),
+                                        isBot: isBot(member),
+                                        size: 32
+                                    )
                                     Text(memberName(member))
                                         .lineLimit(1)
                                         .foregroundStyle(.primary)
@@ -181,6 +190,43 @@ struct GroupDetailView: View {
 
     /// Rename the group (admin-only; server-enforced). app-core emits the
     /// "changed the group name to X" timeline entry, so the conversation updates.
+    /// Group avatar (docs/55): editable for admins (gated by `modify_title_role`,
+    /// same as rename), read-only for everyone else.
+    @ViewBuilder
+    private func groupAvatarView(_ s: GroupSummaryFfi) -> some View {
+        let current = appState.groupAvatar(groupId: groupId, accountId: accountId)
+        let name = s.title.isEmpty ? "Group" : s.title
+        if amAdmin {
+            EditableAvatar(
+                currentImage: current,
+                placeholderName: name,
+                size: 72,
+                onPicked: { data in Task { await setGroupAvatar(data) } },
+                onRemove: current == nil ? nil : { Task { await removeGroupAvatar() } }
+            )
+        } else {
+            ContactAvatar(name: name, imageData: current, size: 72)
+        }
+    }
+
+    private func setGroupAvatar(_ data: Data) async {
+        do {
+            try await appState.setGroupAvatar(data, groupId: groupId, accountId: accountId)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeGroupAvatar() async {
+        do {
+            try await appState.removeGroupAvatar(groupId: groupId, accountId: accountId)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func renameGroup(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         // Group names must not be empty, and skip a no-op rename.

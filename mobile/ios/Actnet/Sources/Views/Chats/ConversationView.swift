@@ -263,7 +263,11 @@ struct ConversationView: View {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
                         HStack(spacing: 8) {
-                            ContactAvatar(name: conversation.title, size: 28)
+                            ContactAvatar(
+                                name: conversation.title,
+                                imageData: appState.groupAvatar(groupId: groupId, accountId: conversation.accountId),
+                                size: 28
+                            )
                             Text(conversation.title)
                                 .font(.headline)
                                 .foregroundStyle(.primary)
