@@ -520,6 +520,8 @@ pub async fn create_group(
         title: title.to_string(),
         description: description.to_string(),
         expiry_seconds,
+        // No avatar at creation; set later via `set_group_avatar` (docs/55).
+        avatar: None,
         members: vec![gproto::Member {
             did: founder_did.to_string(),
             encrypted_member_id: founder_emi_bytes.clone(),

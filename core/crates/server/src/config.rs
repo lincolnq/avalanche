@@ -120,6 +120,10 @@ pub struct Config {
     /// Rolling per-account upload quota in bytes per hour. Default 500 MB. Set
     /// via `ATTACHMENT_BYTES_PER_HOUR`.
     pub attachment_bytes_per_hour: i64,
+    /// Per-avatar ciphertext size cap in bytes (docs/55). Avatars are small,
+    /// long-lived, overwrite-in-place blobs (one per account / group), distinct
+    /// from general attachments. Default 64 KiB. Set via `AVATAR_MAX_SIZE_BYTES`.
+    pub avatar_max_size_bytes: i64,
 }
 
 impl Config {
@@ -202,6 +206,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024 * 1024),
+            avatar_max_size_bytes: std::env::var("AVATAR_MAX_SIZE_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(64 * 1024),
         }
     }
 

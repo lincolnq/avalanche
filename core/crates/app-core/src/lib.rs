@@ -1834,7 +1834,7 @@ impl AppCore {
                 let mut key_arr = [0u8; profile::PROFILE_KEY_LEN];
                 key_arr.copy_from_slice(key);
                 let encrypted = profile::encrypt_profile(
-                    &profile::ProfilePlaintext { display_name: name.clone() },
+                    &profile::ProfilePlaintext { display_name: name.clone(), ..Default::default() },
                     &key_arr,
                 )?;
                 client.put_profile(&encrypted).await?;
@@ -3124,7 +3124,7 @@ impl AppCore {
             let mut key = [0u8; profile::PROFILE_KEY_LEN];
             key.copy_from_slice(&own.profile_key);
             let blob = profile::encrypt_profile(
-                &profile::ProfilePlaintext { display_name: display_name.clone() },
+                &profile::ProfilePlaintext { display_name: display_name.clone(), ..Default::default() },
                 &key,
             )?;
             self.client.put_profile(&blob).await?;
@@ -4295,7 +4295,7 @@ impl AppCore {
                 let name = display_name.clone().unwrap_or_default();
                 let key = profile::generate_profile_key();
                 let blob = profile::encrypt_profile(
-                    &profile::ProfilePlaintext { display_name: name.clone() },
+                    &profile::ProfilePlaintext { display_name: name.clone(), ..Default::default() },
                     &key,
                 )?;
                 (Some(key), Some(blob), Some(name))

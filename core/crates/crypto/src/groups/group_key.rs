@@ -101,6 +101,36 @@ impl GroupKey {
         &self.secret
     }
 
+    /// Domain-separated 32-byte symmetric key for encrypting the group's avatar
+    /// image (docs/55). Derived from the master key via domain-separated
+    /// SHA-256 — the master key is already 32 bytes of high-entropy secret, so a
+    /// single hashed output is a sound KDF here and avoids an extra HKDF
+    /// dependency. Every member holds the master key, so all can derive this
+    /// without any extra key distribution.
+    pub fn avatar_key(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"actnet-group-avatar-key-v1");
+        h.update(self.bytes);
+        h.finalize().into()
+    }
+
+    /// Opaque, unguessable object id for the group's avatar blob on the hosting
+    /// server (docs/55). Derived from the master key, so it (a) doubles as a
+    /// membership capability — only members can compute it — and (b) is stable,
+    /// so a new upload overwrites the old blob in place (bounded storage). UUID-
+    /// shaped to satisfy the server blob-store's id guard.
+    pub fn avatar_object_id(&self) -> Uuid {
+        use sha2::{Digest as _, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"actnet-group-avatar-id-v1");
+        h.update(self.bytes);
+        let d = h.finalize();
+        let mut b = [0u8; 16];
+        b.copy_from_slice(&d[..16]);
+        Uuid::from_bytes(b)
+    }
+
     /// Bundle of the public values the server needs in order to verify
     /// presentations against this group. Uploaded by the founder at
     /// create-group time and stored server-side.
@@ -245,6 +275,21 @@ mod tests {
         let c_bytes = zkgroup::serialize(&c);
         assert_eq!(a_bytes, b_bytes);
         assert_ne!(a_bytes, c_bytes);
+    }
+
+    #[test]
+    fn avatar_key_and_id_deterministic_per_group_and_unguessable() {
+        let a = GroupKey::generate();
+        let a2 = GroupKey::from_bytes(a.to_bytes());
+        let b = GroupKey::generate();
+        // Deterministic in the master key.
+        assert_eq!(a.avatar_key(), a2.avatar_key());
+        assert_eq!(a.avatar_object_id(), a2.avatar_object_id());
+        // Different groups → different key + id (unguessable without the master key).
+        assert_ne!(a.avatar_key(), b.avatar_key());
+        assert_ne!(a.avatar_object_id(), b.avatar_object_id());
+        // Key is domain-separated from anything else derived from the master key.
+        assert_ne!(a.avatar_key().to_vec(), a.to_bytes().to_vec());
     }
 
     #[test]

@@ -71,6 +71,7 @@ async fn test_state() -> AppState {
         attachment_blob_ttl_secs: 45 * 86400,
         attachment_max_size_bytes: 100 * 1024 * 1024,
         attachment_bytes_per_hour: 500 * 1024 * 1024,
+        avatar_max_size_bytes: 64 * 1024,
     };
     // Load (or seed) the group crypto bundle exactly as `main.rs` does — a
     // bincoded `GroupCryptoBundle` under the current version. Seeding the raw

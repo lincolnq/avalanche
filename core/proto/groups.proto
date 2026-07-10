@@ -31,8 +31,13 @@ message GroupState {
   string description = 11;
   // Disappearing-message timer, seconds. 0 = disabled.
   uint32 expiry_seconds = 12;
-  // Avatar reference + key (TODO: fill in once attachment plumbing exists).
-  reserved 13 to 19;
+  // Group avatar reference (docs/55). Absent = no avatar. The image bytes live
+  // out-of-band as an encrypted blob at an opaque object id derived from the
+  // master key; only version/digest/size ride here. Members re-derive the object
+  // id + decryption key from the master key they already hold. Bump `version` to
+  // trigger a refetch and bust caches.
+  GroupAvatar avatar = 13;
+  reserved 14 to 19;
 
   // Membership snapshot. The server stores its own routing subset in
   // `member_credentials` / `members_pending` / `members_pending_approval`;
@@ -102,6 +107,10 @@ message Policy {
   Role modify_title_role = 3;
   Role modify_description_role = 4;
   Role modify_expiry_role = 5;
+  // Note: avatar changes are gated by `modify_title_role` (title + avatar are one
+  // "group identity" permission, docs/55) — no separate avatar role, to avoid a
+  // policy-schema migration.
+  reserved 6;
 
   JoinPolicy join_policy = 10;
   // Empty bytes = no link password set.
@@ -123,4 +132,21 @@ message ModifyDescription {
 
 message ModifyExpiry {
   uint32 new_expiry_seconds = 1;
+}
+
+// Group avatar reference carried in GroupState (docs/55). The encrypted image
+// blob lives out-of-band at an opaque object id derived from the group master
+// key (SHA-256 of a domain tag + master key), so it is not carried here;
+// members re-derive the object id + a domain-separated decryption key from the
+// master key they already hold.
+message GroupAvatar {
+  uint32 version    = 1;  // monotonic; bump on change to bust caches / trigger refetch
+  bytes  digest     = 2;  // SHA-256 of the ciphertext, verified before decrypt
+  uint32 size_bytes = 3;  // ciphertext length
+}
+
+// Sub-encrypted `modify_avatar` action payload (docs/55). An empty `avatar`
+// (version 0) means the avatar was removed.
+message ModifyAvatar {
+  GroupAvatar avatar = 1;
 }
