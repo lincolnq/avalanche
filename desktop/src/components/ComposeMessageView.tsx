@@ -216,9 +216,15 @@ export default function ComposeMessageView(props: Props) {
     const el = inputRef;
     if (!el) return;
     el.style.height = "auto";
+    // scrollHeight covers content + padding but NOT the border. With the global
+    // border-box sizing (theme.css), the box height must add the border back, or
+    // the content is clipped 1px at top and bottom and a scrollbar shows even at
+    // a single line. offsetHeight - clientHeight is the vertical border (2px).
+    const border = el.offsetHeight - el.clientHeight;
+    const content = el.scrollHeight + border;
     const h = expanded()
-      ? Math.min(Math.max(el.scrollHeight, 120), EXPANDED_MAX)
-      : Math.min(el.scrollHeight, COLLAPSED_MAX);
+      ? Math.min(Math.max(content, 120), EXPANDED_MAX)
+      : Math.min(content, COLLAPSED_MAX);
     el.style.height = `${h}px`;
   }
 
