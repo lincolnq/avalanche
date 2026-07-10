@@ -584,6 +584,7 @@ fn group_event_kind_name(kind: app_core::groups::GroupEventKind) -> &'static str
         K::DescriptionChanged => "descriptionChanged",
         K::ExpiryChanged => "expiryChanged",
         K::PolicyChanged => "policyChanged",
+        K::AvatarChanged => "avatarChanged",
     }
 }
 
