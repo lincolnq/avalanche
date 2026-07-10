@@ -7,7 +7,6 @@ import {
   Switch,
   Match,
 } from "solid-js";
-import { FiUsers } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { Conversation, Message } from "../../models";
 import { initials } from "../../lib/format";
@@ -17,7 +16,7 @@ import ComposeMessageView from "../../components/ComposeMessageView";
 import EditHistorySheet from "../../components/EditHistorySheet";
 import ImageViewerModal from "../../components/ImageViewerModal";
 import GroupDetailView from "../../components/GroupDetailView";
-import DisappearingMessagesPicker from "../../components/DisappearingMessagesPicker";
+import ConversationInfoView from "../../components/ConversationInfoView";
 import "./ConversationView.css";
 
 interface Props {
@@ -36,8 +35,6 @@ export default function ConversationView(props: Props) {
     deleteRequest,
     reportAndBlock,
     unblockContact,
-    getConversationTimer,
-    setConversationTimer,
   } = app;
   let messagesEnd: HTMLDivElement | undefined;
 
@@ -45,8 +42,10 @@ export default function ConversationView(props: Props) {
   const [historyMessage, setHistoryMessage] = createSignal<Message | null>(null);
   // The attachment id of the image tapped to open the fullscreen viewer (docs/35).
   const [imageViewerStartId, setImageViewerStartId] = createSignal<string | null>(null);
+  // Conversation controls open by clicking the header name/avatar: the group
+  // detail modal for groups, the DM conversation-info modal for DMs.
   const [showGroupDetail, setShowGroupDetail] = createSignal(false);
-  const [timerSecs, setTimerSecs] = createSignal(0);
+  const [showConvInfo, setShowConvInfo] = createSignal(false);
   // Group membership, read from app-core's persistent store (survives refresh,
   // unlike the in-memory hasLeft flag). Default true to avoid flashing the
   // read-only notice for groups you're in while the check resolves. The
@@ -55,14 +54,13 @@ export default function ConversationView(props: Props) {
   const [groupMember, setGroupMember] = createSignal(true);
   let groupMemberGen = 0;
 
-  const isDm = () => !props.conversation.isGroup && !!props.conversation.recipientDid;
   // A group you've left or been removed from: composer is replaced by a notice.
   const isLeftGroup = () =>
     props.conversation.isGroup &&
     (props.conversation.hasLeft === true || !groupMember());
 
   // Re-runs whenever conversation changes, not just on first mount. Loads both
-  // the message timeline and its reaction clusters, and the DM timer.
+  // the message timeline and its reaction clusters.
   createEffect(() => {
     loadMessagesFromStore(props.conversation.id, props.conversation.accountId);
     loadReactions(props.conversation.id);
@@ -70,17 +68,7 @@ export default function ConversationView(props: Props) {
     setEditingMessage(null);
     setHistoryMessage(null);
     setShowGroupDetail(false);
-    // Load the disappearing-messages timer for DMs (groups manage their own
-    // timer in the group detail view). The DM timer is keyed by peer DID in
-    // app-core's store, so read it with recipientDid — not the conversation id.
-    const recipientDid = props.conversation.recipientDid;
-    if (isDm() && recipientDid) {
-      void getConversationTimer(props.conversation.accountId, recipientDid).then((s) =>
-        setTimerSecs(s ?? 0)
-      );
-    } else {
-      setTimerSecs(0);
-    }
+    setShowConvInfo(false);
     // Resolve group membership from the persistent store so the read-only state
     // is correct after a refresh (when the in-memory hasLeft flag is gone).
     const groupId = props.conversation.groupId;
@@ -154,41 +142,25 @@ export default function ConversationView(props: Props) {
     messagesEnd?.scrollIntoView({ behavior: jump ? "auto" : "smooth" });
   });
 
-  function changeTimer(secs: number) {
-    const recipientDid = props.conversation.recipientDid;
-    if (!recipientDid) return;
-    setTimerSecs(secs); // optimistic
-    const accountId = props.conversation.accountId;
-    void setConversationTimer(accountId, recipientDid, secs === 0 ? null : secs).finally(() => {
-      // Re-read the authoritative stored value so the picker reverts if the
-      // write failed (mirrors the group setExpiry reload-after-write path).
-      void getConversationTimer(accountId, recipientDid).then((s) => setTimerSecs(s ?? 0));
-    });
-  }
-
   return (
     <div class="conv-view">
       <div class="conv-header">
-        <div class="conv-header-main">
+        {/* All conversation controls open from the header name/avatar: the
+            group detail modal for groups, the DM conversation-info modal
+            (disappearing timer, etc.) for DMs. Mirrors iOS's tap-title pattern. */}
+        <button
+          class="conv-header-main"
+          onClick={() =>
+            props.conversation.isGroup
+              ? setShowGroupDetail(true)
+              : setShowConvInfo(true)
+          }
+          aria-label="Conversation info"
+          title="Conversation info"
+        >
           <div class="conv-header-avatar">{initials(props.conversation.title)}</div>
           {props.conversation.title}
-        </div>
-        <Show when={isDm()}>
-          <div class="conv-header-timer">
-            <span class="conv-header-timer-label">Disappearing</span>
-            <DisappearingMessagesPicker seconds={timerSecs()} onChange={changeTimer} />
-          </div>
-        </Show>
-        <Show when={props.conversation.isGroup}>
-          <button
-            class="conv-header-info"
-            onClick={() => setShowGroupDetail(true)}
-            aria-label="Group info"
-            title="Group info"
-          >
-            <FiUsers size={18} />
-          </button>
-        </Show>
+        </button>
       </div>
       <div class="messages-list scrollbar-thin">
         <Show
@@ -303,6 +275,12 @@ export default function ConversationView(props: Props) {
         <GroupDetailView
           conversation={props.conversation}
           onClose={() => setShowGroupDetail(false)}
+        />
+      </Show>
+      <Show when={showConvInfo()}>
+        <ConversationInfoView
+          conversation={props.conversation}
+          onClose={() => setShowConvInfo(false)}
         />
       </Show>
       <Show when={imageViewerStartId()}>

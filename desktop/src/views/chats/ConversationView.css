@@ -16,37 +16,26 @@
   gap: 10px;
   flex-shrink: 0;
 }
+/* The name+avatar is the single entry point to conversation controls; it's a
+   button reset to plain text with a hover highlight signalling it's clickable. */
 .conv-header-main {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-}
-.conv-header-timer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.conv-header-timer-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-}
-.conv-header-info {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
   border: none;
-  border-radius: 50%;
   background: transparent;
-  color: var(--color-accent);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
   cursor: pointer;
-  flex-shrink: 0;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: var(--radius-button);
+  text-align: left;
 }
-.conv-header-info:hover {
+.conv-header-main:hover {
   background: var(--color-divider);
 }
 .conv-header-avatar {
