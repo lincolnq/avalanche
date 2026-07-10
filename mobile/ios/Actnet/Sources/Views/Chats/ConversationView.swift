@@ -27,6 +27,13 @@ struct ConversationView: View {
     /// keep the readable transcript but lose the composer. Always true for DMs.
     /// Loaded on appear and after leaving.
     @State private var isGroupMember = true
+    /// Group avatar shown in the nav-bar header (docs/55). Held in view-local
+    /// `@State` — NOT read from `appState` inside the toolbar — because a
+    /// `.toolbar` principal bound to an ObservableObject re-hosts on its churn
+    /// and wedges the nav bar's layout. This changes at most once or twice (seed
+    /// from cache on appear, then when a fetch resolves), so the toolbar stays
+    /// stable. `nil` → the initials placeholder.
+    @State private var headerAvatar: Data?
     /// Photo picker selection (docs/35). On pick we *stage* the image in the
     /// composer (below) rather than sending immediately.
     @State private var photoItem: PhotosPickerItem?
@@ -228,6 +235,12 @@ struct ConversationView: View {
                 scrollPosition.scrollTo(edge: .bottom)
                 appState.markAllMessagesRead(conversationId: conversation.id, accountId: conversation.accountId)
             }
+            // Push a resolved group avatar into view-local @State for the header
+            // (docs/55). Reading appState here (a body modifier) is fine; reading
+            // it inside the toolbar is what wedged layout. Fires at most once.
+            .onChange(of: appState.cachedGroupAvatar(conversation.groupId ?? "")) { _, newValue in
+                headerAvatar = newValue
+            }
 
             if let error = errorMessage {
                 Text(error)
@@ -263,14 +276,11 @@ struct ConversationView: View {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
                         HStack(spacing: 8) {
-                            // No group photo in the nav-bar header on purpose (docs/55):
-                            // a `.toolbar` principal that reads an ObservableObject
-                            // (appState) re-hosts against its churn and, with a long
-                            // timeline, wedges the nav bar's StackLayout.spacing() in a
-                            // non-converging loop. The group photo shows where it's safe —
-                            // the inbox row and Group Details (both Lists). Keep this to
-                            // plain values (conversation.title) only.
-                            ContactAvatar(name: conversation.title, size: 28)
+                            // `headerAvatar` is view-local @State (seeded/updated from
+                            // lifecycle callbacks), NOT a live `appState` read — reading
+                            // an ObservableObject here re-hosts the nav bar on every
+                            // appState change and wedges its layout (docs/55).
+                            ContactAvatar(name: conversation.title, imageData: headerAvatar, size: 28)
                             Text(conversation.title)
                                 .font(.headline)
                                 .foregroundStyle(.primary)
@@ -360,6 +370,10 @@ struct ConversationView: View {
             }
             if let groupId = conversation.groupId {
                 appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
+                // Seed the header avatar from cache (stable @State), then kick a
+                // fetch; the onChange above pushes the resolved value in (docs/55).
+                headerAvatar = appState.cachedGroupAvatar(groupId)
+                appState.loadGroupAvatar(groupId: groupId, accountId: conversation.accountId)
                 Task {
                     isGroupMember = await appState.isGroupMember(
                         groupId: groupId, accountId: conversation.accountId
