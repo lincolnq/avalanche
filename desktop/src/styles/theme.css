@@ -38,7 +38,15 @@ button, input, select, textarea {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
   /* Palette (light) */
-  --color-bg: #FFF1E9;            /* primary background — sand100 / avPaper */
+  --color-bg: #F1ECE8;            /* app chrome surface — neutral warm greige.
+                                     Backs the window frame, chats pane, settings,
+                                     onboarding, sheets — everything that is NOT the
+                                     conversation canvas. Kept neutral (not paper) so
+                                     a non-maximized window doesn't clash with the
+                                     desktop behind it. */
+  --color-paper: #FFF1E9;         /* conversation canvas — sand100 / avPaper. The warm
+                                     "paper" texture, reserved for the message thread
+                                     (conv view, compose bar, in-thread banners). */
   --color-text: #1F1815;          /* primary text — sand900 / avInk */
   --color-text-secondary: #6E6258;/* muted/secondary text — sand600 / avMuted */
   --color-sidebar: #2A1620;       /* dark sidebar / hero surfaces — plum900 (fixed) */
@@ -68,7 +76,9 @@ button, input, select, textarea {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #2A1620;            /* plum900 */
+    --color-bg: #201A1D;            /* neutral dark greige chrome (darker/greyer than
+                                       the plum paper so the frame recedes) */
+    --color-paper: #2A1620;         /* plum900 — conversation canvas */
     --color-text: #FFF8F1;          /* sand50 */
     --color-text-secondary: #E5D4C0;/* sand300 */
     --color-sidebar: #1C0F16;       /* darker than bg, for sidebar separation */

@@ -34,7 +34,7 @@ export default function JoiningServerView(props: Props) {
   }
 
   return (
-    <div class="joining-server">
+    <div class="joining-server" data-tauri-drag-region>
         <div class="js-avatar">{initials(props.account.displayName)}</div>
         <div class="js-title">
           Join {props.inviteInfo.serverName} as {props.account.displayName}?

@@ -23,7 +23,7 @@ export default function RecoveryExplainerView(props: Props) {
   const canRecover = () => phrase().trim().length > 0 && serverUrl().trim().length > 0;
 
   return (
-    <div class="recovery-explainer">
+    <div class="recovery-explainer" data-tauri-drag-region>
       <button class="back-btn recovery-explainer-back" onClick={props.onBack}>
         <FiArrowLeft size={14} />Back
       </button>

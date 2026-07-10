@@ -32,8 +32,11 @@ export default function ChatsView() {
   return (
     <div class="chats-split">
       <div class="chats-list-panel">
-        <div class="chats-header">
-          <span class="chats-header-title">
+        {/* The header row is the window drag strip (Signal/WhatsApp): the title
+            rides up alongside the macOS traffic lights. The new-message button is
+            a child without the attribute, so it stays clickable. */}
+        <div class="chats-header" data-tauri-drag-region>
+          <span class="chats-header-title" data-tauri-drag-region>
             Chats
             {totalUnread() > 0 && (
               <span class="chats-unread-badge">{totalUnread()}</span>
@@ -75,7 +78,11 @@ export default function ChatsView() {
       <div class="detail-panel">
         <Show
           when={selected()}
-          fallback={<div class="no-selection">Select a conversation</div>}
+          fallback={
+            <div class="no-selection" data-tauri-drag-region>
+              Select a conversation
+            </div>
+          }
         >
           {(conv) => <ConversationView conversation={conv()} />}
         </Show>

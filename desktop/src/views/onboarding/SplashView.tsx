@@ -16,9 +16,12 @@ export default function SplashView(props: SplashViewProps) {
   });
 
   return (
-    <div class="splash">
-      <div class="splash-wordmark">Avalanche</div>
-      <div class="splash-tagline">Secure messaging for organizers</div>
+    // The whole splash is a drag region (no title bar; traffic lights overlay
+    // the top-left). Buttons are children without the attribute, so they still
+    // click; the wordmark/tagline carry it so dragging by them works too.
+    <div class="splash" data-tauri-drag-region>
+      <div class="splash-wordmark" data-tauri-drag-region>Avalanche</div>
+      <div class="splash-tagline" data-tauri-drag-region>Secure messaging for organizers</div>
       <div class="splash-actions">
         <button class="btn-primary splash-btn" onClick={props.onEnterLink}>
           Enter Invite Link

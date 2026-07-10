@@ -172,7 +172,7 @@
   margin-top: 4px;
   min-width: 168px;
   padding: 4px;
-  background: var(--color-bg);
+  background: var(--color-paper);
   border: 1px solid var(--color-input-border);
   border-radius: var(--radius-button);
   box-shadow: 0 6px 20px rgba(42, 22, 32, 0.18);
@@ -242,7 +242,7 @@
   line-height: 1.6;
   border: 1px solid var(--color-input-border);
   border-radius: 12px;
-  background: var(--color-bg);
+  background: var(--color-paper);
   color: var(--color-text);
   cursor: pointer;
 }

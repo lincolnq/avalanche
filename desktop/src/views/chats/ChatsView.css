@@ -20,6 +20,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Window drag strip — don't let a drag select the title text. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 .chats-header-title {
   display: flex;
@@ -76,4 +79,7 @@
   color: var(--color-text-secondary);
   font-size: 14px;
   background: var(--color-bg);
+  /* Empty detail pane doubles as a window drag region. */
+  -webkit-user-select: none;
+  user-select: none;
 }

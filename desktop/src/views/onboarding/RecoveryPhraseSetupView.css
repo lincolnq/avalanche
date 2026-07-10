@@ -10,6 +10,10 @@
   margin: 20px 24px 0;
   align-self: flex-start;
 }
+/* macOS: clear the traffic lights that overlay this top-left back button. */
+.is-macos .phrase-setup-back {
+  margin-top: 44px;
+}
 
 .phrase-setup-body {
   flex: 1;

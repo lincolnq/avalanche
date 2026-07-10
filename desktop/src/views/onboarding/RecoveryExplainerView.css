@@ -10,6 +10,11 @@
   margin: 20px 24px 0;
   align-self: flex-start;
 }
+/* macOS: no native title bar; the traffic lights overlay the top-left where this
+   back button sits. Drop it below them. */
+.is-macos .recovery-explainer-back {
+  margin-top: 44px;
+}
 
 .recovery-explainer-body {
   flex: 1;

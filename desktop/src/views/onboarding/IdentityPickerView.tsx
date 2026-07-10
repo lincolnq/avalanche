@@ -17,7 +17,7 @@ export default function IdentityPickerView(props: Props) {
   const { store } = useApp();
 
   return (
-    <div class="identity-picker">
+    <div class="identity-picker" data-tauri-drag-region>
         <div class="ip-header">Choose Identity</div>
         <div class="ip-subtitle">Join {props.inviteInfo.serverName} as…</div>
 

@@ -85,7 +85,7 @@ export default function RecoveryPhraseSetupView(props: Props) {
   }
 
   return (
-    <div class="phrase-setup">
+    <div class="phrase-setup" data-tauri-drag-region>
       <button class="back-btn phrase-setup-back" onClick={props.onBack}>
         <FiArrowLeft size={14} />Back
       </button>

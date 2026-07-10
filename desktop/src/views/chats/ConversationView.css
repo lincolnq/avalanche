@@ -1,3 +1,5 @@
+/* The view frame (and thus the header, which sets no background of its own) is
+   neutral chrome; only the scrolling message area below is the paper canvas. */
 .conv-view {
   display: flex;
   flex-direction: column;
@@ -15,6 +17,9 @@
   justify-content: space-between;
   gap: 10px;
   flex-shrink: 0;
+  /* Window drag strip (the name/avatar button keeps its own click). */
+  -webkit-user-select: none;
+  user-select: none;
 }
 /* The name+avatar is the single entry point to conversation controls; it's a
    button reset to plain text with a hover highlight signalling it's clickable. */
@@ -58,6 +63,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  background: var(--color-paper);
 }
 .empty-conv {
   flex: 1;
@@ -120,7 +126,7 @@
 }
 .request-accept {
   background: var(--color-accent);
-  color: var(--color-bg);
+  color: #fff;
 }
 .request-accept:hover {
   opacity: 0.85;

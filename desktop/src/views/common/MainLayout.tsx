@@ -42,11 +42,14 @@ export default function MainLayout(props: RouteSectionProps): JSX.Element {
 
   return (
     <div class="layout">
-      <nav class="sidebar">
+      {/* The sidebar's empty areas (top inset under the macOS traffic lights and
+          the flex spacer) drag the window; the icon links/buttons are children
+          without the attribute, so they stay clickable. */}
+      <nav class="sidebar" data-tauri-drag-region>
         {NAV_ITEMS.map((item) => (
           <NavLink item={item} />
         ))}
-        <div class="sidebar-spacer" />
+        <div class="sidebar-spacer" data-tauri-drag-region />
         <A href="/settings" class="sidebar-settings-link" aria-label="Settings" title="Settings">
           {/* Feather "settings" outlined gear, matching iOS SF Symbol
               `gearshape` and Android's Material settings icon. Renders with

@@ -17,7 +17,9 @@
         "width": 1200,
         "height": 800,
         "resizable": true,
-        "devtools": true
+        "devtools": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

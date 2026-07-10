@@ -21,7 +21,7 @@ export default function InviteLinkEntryView(props: Props) {
   );
 
   return (
-    <div class="invite-entry">
+    <div class="invite-entry" data-tauri-drag-region>
       <div class="ie-title">Enter Invite Link</div>
       <div class="ie-subtitle">Paste your Avalanche invite link or bare token below.</div>
       <input

@@ -1,9 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/capability.json",
   "identifier": "default",
+  "description": "Main-window capability. 'allow-all' is NOT Tauri's blanket allow: it is the app-local permission set defined in permissions/avalanche.toml that grants every custom app-core command (login, next_events, load_conversations, ...). It is load-bearing — removing it denies all custom commands, so startup session-restore fails and the app drops to the login screen. It only covers app commands; core plugin commands (e.g. core:window:allow-start-dragging for window dragging) must be granted separately below.",
   "local": true,
   "windows": ["main"],
   "permissions": [
+    "allow-all",
     "core:default",
     "store:default",
     "core:event:allow-listen",
@@ -11,6 +13,6 @@
     "core:webview:allow-create-webview-window",
     "notification:default",
     "deep-link:default",
-    "allow-all"
+    "core:window:allow-start-dragging"
   ]
 }

@@ -12,6 +12,10 @@
   font-weight: 600;
   border-bottom: 1px solid var(--color-divider);
 }
+/* macOS: the traffic lights overlay this top-left header; drop it below them. */
+.is-macos .recovery-console-header {
+  padding-top: 44px;
+}
 
 .recovery-console-log {
   flex: 1;

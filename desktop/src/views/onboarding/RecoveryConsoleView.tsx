@@ -46,7 +46,7 @@ export default function RecoveryConsoleView(props: Props) {
   }
 
   return (
-    <div class="recovery-console">
+    <div class="recovery-console" data-tauri-drag-region>
       <div class="recovery-console-header">
         <span>Recovering…</span>
       </div>

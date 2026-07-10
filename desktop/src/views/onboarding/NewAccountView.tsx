@@ -23,7 +23,7 @@ export default function NewAccountView(props: Props) {
   }
 
   return (
-    <div class="new-account">
+    <div class="new-account" data-tauri-drag-region>
         <div class="na-title">New Identity</div>
         <div class="na-subtitle">on {props.inviteInfo.serverName}</div>
         <div class="na-avatar"><FiUser size={32} /></div>

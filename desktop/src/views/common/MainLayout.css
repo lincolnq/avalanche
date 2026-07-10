@@ -15,6 +15,22 @@
   gap: 8px;
   flex-shrink: 0;
 }
+/* macOS: the native title bar is hidden (titleBarStyle: Overlay) and the traffic
+   lights overlay the top-left of the window — i.e. over the sidebar. Widen the
+   rail so all three buttons sit inside the dark sidebar instead of spilling over
+   the border into the chats pane, and drop the icons below them vertically. */
+.is-macos .sidebar {
+  width: 80px;
+  padding-top: 34px;
+}
+/* Empty sidebar regions (its padding + the flex spacer) drag the window, matching
+   Signal/WhatsApp. The nav's links/buttons are separate children without the
+   attribute, so they still receive clicks. */
+.sidebar[data-tauri-drag-region],
+.sidebar-spacer {
+  -webkit-user-select: none;
+  user-select: none;
+}
 .sidebar-link {
   display: flex;
   flex-direction: column;

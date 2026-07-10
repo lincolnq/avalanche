@@ -82,7 +82,7 @@ export default function LinkNewDeviceView(props: Props) {
   }
 
   return (
-    <div class="link-device">
+    <div class="link-device" data-tauri-drag-region>
       <div class="ld-title">Link this device</div>
       <Switch>
         <Match when={phase().name === "choose"}>

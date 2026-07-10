@@ -144,7 +144,10 @@ export default function ConversationView(props: Props) {
 
   return (
     <div class="conv-view">
-      <div class="conv-header">
+      {/* The header row is the window drag strip. The name/avatar is a button
+          (opens conversation info) so it keeps its click; dragging works from the
+          empty header space around it. */}
+      <div class="conv-header" data-tauri-drag-region>
         {/* All conversation controls open from the header name/avatar: the
             group detail modal for groups, the DM conversation-info modal
             (disappearing timer, etc.) for DMs. Mirrors iOS's tap-title pattern. */}

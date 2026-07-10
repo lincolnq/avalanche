@@ -7,6 +7,9 @@
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
+  /* Window drag strip — don't let a drag select the wordmark/tagline text. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 .splash-wordmark {
   font-size: 48px;
