@@ -262,6 +262,19 @@ export interface LinkPreview {
   image?: Attachment;
 }
 
+/**
+ * A shared contact card on a message (docs/35): a person's DID plus the name the
+ * sender knows them by. Structured/inline metadata (not a blob attachment).
+ *
+ * @category Types
+ */
+export interface SharedContact {
+  /** The shared person's DID. */
+  did: string;
+  /** Name as the sender knows them (display-only). */
+  name: string;
+}
+
 export interface DecryptedMessage {
   /** Server-assigned monotonic id. Used for acking. */
   serverId: number;
@@ -307,6 +320,8 @@ export interface DecryptedMessage {
   attachments: Attachment[];
   /** Link-preview cards (docs/35), anti-spoof-filtered; empty for plain text. */
   previews: LinkPreview[];
+  /** Shared contact cards (docs/35); empty for plain text. */
+  contacts: SharedContact[];
 }
 
 /**
@@ -351,6 +366,8 @@ export interface StoredMessage {
   attachments?: Attachment[];
   /** Link-preview cards on this message (docs/35); empty for plain text. */
   previews?: LinkPreview[];
+  /** Shared contact cards on this message (docs/35); empty for plain text. */
+  contacts?: SharedContact[];
 }
 
 /**
@@ -367,10 +384,10 @@ export interface ConversationSummary {
    *  we know about (e.g. groups we've been invited to) that don't yet have
    *  any persisted messages. */
   lastMessage?: StoredMessage;
-  /** MIME type of {@link lastMessage}'s first attachment, or `undefined` when
-   *  it has none. Lets the chat list preview a caption-less attachment whose
-   *  body is empty (an image type previews as "Photo", else "Attachment"). */
-  lastMessageAttachmentContentType?: string;
+  /** Preview tag for {@link lastMessage}'s non-text content (docs/35), or
+   *  `undefined` for plain text: `"photo"` / `"file"` / `"contact"`. Lets the
+   *  chat list preview a caption-less message whose body is empty. */
+  lastMessagePreview?: string;
   /** Number of unread inbound messages — the chat list's unread badge. Read
    *  from the persisted store, so it is correct for every conversation. */
   unreadCount: number;
@@ -634,6 +651,16 @@ const linkPreviewToNative = (p: LinkPreview): native.LinkPreviewJs => ({
   image: p.image ? attachmentToNative(p.image) : undefined,
 });
 
+const sharedContactFromNative = (c: native.SharedContactJs): SharedContact => ({
+  did: c.did,
+  name: c.name,
+});
+
+const sharedContactToNative = (c: SharedContact): native.SharedContactJs => ({
+  did: c.did,
+  name: c.name,
+});
+
 const decryptedMessageFromNative = (m: native.DecryptedMessageJs): DecryptedMessage => {
   const plaintext = asU8(m.plaintext);
   return {
@@ -648,6 +675,7 @@ const decryptedMessageFromNative = (m: native.DecryptedMessageJs): DecryptedMess
     isRequest: m.isRequest,
     attachments: (m.attachments ?? []).map(attachmentFromNative),
     previews: (m.previews ?? []).map(linkPreviewFromNative),
+    contacts: (m.contacts ?? []).map(sharedContactFromNative),
   };
 };
 
@@ -664,6 +692,7 @@ const storedMessageFromNative = (m: native.StoredMessageJs): StoredMessage => ({
   metadata: m.metadata ?? undefined,
   attachments: (m.attachments ?? []).map(attachmentFromNative),
   previews: (m.previews ?? []).map(linkPreviewFromNative),
+  contacts: (m.contacts ?? []).map(sharedContactFromNative),
 });
 
 const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
@@ -680,12 +709,13 @@ const storedMessageToNative = (m: StoredMessage): native.StoredMessageJs => ({
   metadata: m.metadata ?? undefined,
   attachments: (m.attachments ?? []).map(attachmentToNative),
   previews: (m.previews ?? []).map(linkPreviewToNative),
+  contacts: (m.contacts ?? []).map(sharedContactToNative),
 });
 
 const conversationSummaryFromNative = (c: native.ConversationSummaryJs): ConversationSummary => ({
   conversationId: c.conversationId,
   lastMessage: c.lastMessage ? storedMessageFromNative(c.lastMessage) : undefined,
-  lastMessageAttachmentContentType: c.lastMessageAttachmentContentType ?? undefined,
+  lastMessagePreview: c.lastMessagePreview ?? undefined,
   unreadCount: c.unreadCount,
 });
 
@@ -1121,6 +1151,7 @@ export class AppCore {
     body: string,
     attachments: Attachment[],
     previews: LinkPreview[] = [],
+    contacts: SharedContact[] = [],
     sentAt?: Temporal.Instant,
   ): Promise<void> {
     const ts = sentAt ?? Temporal.Now.instant();
@@ -1129,6 +1160,7 @@ export class AppCore {
       body,
       attachments.map(attachmentToNative),
       previews.map(linkPreviewToNative),
+      contacts.map(sharedContactToNative),
       instantToMs(ts),
     );
   }
