@@ -8,6 +8,9 @@
 //   - Auto-invite every new human account (AccountJoinedEvent WS push) to
 //     every group adminbot is currently an admin of — `#admins` and any
 //     other group it's been added to as admin.
+//   - Announce every new *bot* account in `#admins` with its contact card,
+//     so admins can see any bot on the server — except the noisy ephemeral
+//     ones (UNANNOUNCED_BOT_NAMES, e.g. testbot). Bots are never auto-invited.
 //   - Cap the disappearing-messages timer at 4 weeks on any group it's an
 //     admin of, enforced when it's added to the group (0/"off" is clamped
 //     too). Enforcing on a later timer change awaits a group-state push.
@@ -48,6 +51,16 @@ const SUPERUSER_PROJECT_SLUG = "adminbot";
 // treated as exceeding this and clamped down too, so every group adminbot
 // admins keeps messages for at most this long.
 const MAX_GROUP_EXPIRY_SECS = 4 * 7 * 24 * 60 * 60;
+
+// Bot display names adminbot will NOT announce in #admins when they join. Every
+// account registration fires accountJoined — including bots — and we want admins
+// to see the contact card of any bot that joins EXCEPT the noisy ephemeral ones:
+// testbot spins up a fresh throwaway bot account on every "Text Me" tap
+// (node/packages/testbot/src/index.ts), which would flood #admins. This is a
+// deliberate temporary special-case keyed on the well-known display name; the
+// durable fix is to announce only bots linked to a Project (their DID appears in
+// a project's bot_dids) and drop this list.
+const UNANNOUNCED_BOT_NAMES = new Set(["Testbot"]);
 
 // GitHub repo whose releases define "the latest Avalanche version" — the same
 // source the configure page (`web/assets/configure/configure.js`) and the
@@ -244,6 +257,7 @@ async function handleMessage(
 async function handleAdminEvent(
   core: AppCore,
   event: AdminEvent,
+  adminsGroupId: string,
 ): Promise<void> {
   if (event.kind !== "accountJoined") return;
   const { did } = event.accountJoined;
@@ -252,16 +266,18 @@ async function handleAdminEvent(
   // Only humans get auto-invited. Every account registration fires this
   // event — including bots (e.g. testbot spins up a fresh bot account on each
   // "Text Me"). Inviting them would fill groups with bots and fan a Sender
-  // Key out to every member on each invite, so skip any bot account.
-  let isBot: boolean;
+  // Key out to every member on each invite, so skip auto-invite for any bot.
+  // Instead, a bot join is announced in #admins with the bot's contact card
+  // (below), except for the noisy ephemeral ones (UNANNOUNCED_BOT_NAMES).
+  let info: Awaited<ReturnType<typeof core.getAccountInfo>>;
   try {
-    isBot = (await core.getAccountInfo(did)).isBot;
+    info = await core.getAccountInfo(did);
   } catch (e) {
     console.error(`adminbot: getAccountInfo(${did}) failed: ${(e as Error).message}; skipping`);
     return;
   }
-  if (isBot) {
-    console.log(`adminbot: new account ${did} is a bot — not auto-inviting`);
+  if (info.isBot) {
+    await announceBotJoin(core, adminsGroupId, did, info.displayName);
     return;
   }
 
@@ -278,6 +294,55 @@ async function handleAdminEvent(
     console.log(`adminbot: sent welcome DM to ${did}`);
   } catch (e) {
     console.error(`adminbot: welcome DM to ${did} failed: ${(e as Error).message}`);
+  }
+}
+
+// Announce a newly-joined bot in #admins with its contact card, so admins can
+// see (and tap through to) any bot on the server. Skips the well-known noisy
+// ephemeral bots (see UNANNOUNCED_BOT_NAMES). The bot's display name is public
+// server metadata (getAccountInfo populates it for bots); the contact card is a
+// structured, inline SharedContact — the same one People/compose send — carried
+// on an otherwise-text message via sendWithAttachments. If the bot registered
+// with a Project's setup code, the server has already linked its DID into that
+// Project (registration.rs links before it fans the join out), so we name the
+// registering Project in the announcement. Failures are logged and swallowed: a
+// missed announcement must never wedge the admin-event loop.
+async function announceBotJoin(
+  core: AppCore,
+  adminsGroupId: string,
+  did: string,
+  displayName?: string,
+): Promise<void> {
+  const name = displayName?.trim() || did;
+  if (displayName && UNANNOUNCED_BOT_NAMES.has(displayName.trim())) {
+    console.log(`adminbot: new bot ${did} ("${name}") is ephemeral — not announcing`);
+    return;
+  }
+
+  // Which installed Project (if any) registered this bot. Best-effort: on any
+  // lookup failure we still announce, just without the project attribution.
+  let projectName: string | undefined;
+  try {
+    projectName = (await fetchProjects(core)).find((p) => p.bot_dids.includes(did))?.name;
+  } catch (e) {
+    console.error(`adminbot: project lookup for ${did} failed: ${(e as Error).message}`);
+  }
+
+  const suffix = projectName ? ` (registered by the "${projectName}" project)` : "";
+  try {
+    console.log(
+      `adminbot: announcing new bot ${did} ("${name}")` +
+        `${projectName ? ` from project "${projectName}"` : ""} in #admins`,
+    );
+    await core.sendWithAttachments(
+      { kind: "group", groupId: adminsGroupId },
+      `A new bot joined the server: ${name}${suffix}`,
+      [],
+      [],
+      [{ did, name }],
+    );
+  } catch (e) {
+    console.error(`adminbot: announcing bot ${did} failed: ${(e as Error).message}`);
   }
 }
 
@@ -840,29 +905,35 @@ async function performInstall(
   return { ok: true, lines };
 }
 
+// Server view of an installed Project (superuser `GET /v1/admin/projects`).
+// `bot_dids` is the set of bot accounts linked to the project — the server adds
+// a bot's DID here when it registers with that project's setup code.
+interface ProjectView {
+  slug: string;
+  name: string;
+  url: string | null;
+  has_signing_key: boolean;
+  capabilities: string[];
+  bot_dids: string[];
+  superuser: boolean;
+}
+
+// Fetch installed Projects via the superuser admin API. Throws on transport or
+// unexpected-response failure — callers decide how to degrade.
+async function fetchProjects(core: AppCore): Promise<ProjectView[]> {
+  const raw = await core.adminRequest("GET", "/v1/admin/projects", "");
+  const parsed = JSON.parse(raw) as { projects?: ProjectView[] };
+  if (!Array.isArray(parsed.projects)) throw new Error("unexpected server response");
+  return parsed.projects;
+}
+
 // `/list-projects` — list installed Projects and their capabilities.
 async function runListProjects(core: AppCore, channel: SendTarget): Promise<void> {
-  let raw: string;
-  try {
-    raw = await core.adminRequest("GET", "/v1/admin/projects", "");
-  } catch (e) {
-    await core.send(channel, `list failed: ${(e as Error).message}`);
-    return;
-  }
-  interface ProjectView {
-    slug: string;
-    name: string;
-    url: string | null;
-    has_signing_key: boolean;
-    capabilities: string[];
-    bot_dids: string[];
-    superuser: boolean;
-  }
   let projects: ProjectView[];
   try {
-    projects = (JSON.parse(raw) as { projects: ProjectView[] }).projects;
-  } catch {
-    await core.send(channel, `list failed: unexpected server response.`);
+    projects = await fetchProjects(core);
+  } catch (e) {
+    await core.send(channel, `list failed: ${(e as Error).message}`);
     return;
   }
   if (projects.length === 0) {
@@ -962,7 +1033,7 @@ async function run(): Promise<void> {
 
   const adminLoop = (async () => {
     for await (const event of core.adminEvents()) {
-      handleAdminEvent(core, event).catch((e) => {
+      handleAdminEvent(core, event, groupId).catch((e) => {
         console.error(`adminbot: admin handler error: ${(e as Error).message}`);
       });
     }
