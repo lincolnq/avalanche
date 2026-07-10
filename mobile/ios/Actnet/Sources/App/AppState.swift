@@ -877,6 +877,7 @@ final class AppState: ObservableObject {
             }
             return "\(actor) set disappearing messages to \(DisappearingMessagesPicker.label(for: ev.expirySeconds))"
         case .policyChanged: return "\(actor) changed the group settings"
+        case .avatarChanged: return "\(actor) changed the group photo"
         }
     }
 

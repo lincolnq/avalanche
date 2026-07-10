@@ -159,4 +159,15 @@ extension AppCoreProtocol {
     func listGroups() throws -> [String] { [] }
     func rotateGroupPseudonym(groupId: String) throws -> Data { Data(count: 24) }
     func sendGroupMessage(groupId: String, plaintext: Data, sentAtMs: Int64) throws {}
+
+    // MARK: - Avatars (docs/55)
+
+    func setOwnAvatar(jpeg: Data) throws {}
+    func clearOwnAvatar() throws {}
+    func ownAvatar() throws -> Data? { nil }
+    func contactAvatar(did: String) throws -> Data? { nil }
+    func setGroupAvatar(groupId: String, jpeg: Data) throws {}
+    func clearGroupAvatar(groupId: String) throws {}
+    func groupAvatar(groupId: String) throws -> Data? { nil }
+    func fetchGroupAvatar(groupId: String) throws -> Bool { false }
 }
