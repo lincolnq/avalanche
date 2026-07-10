@@ -1147,6 +1147,7 @@ class AppViewModel(
                 if (ev.expirySeconds == 0u) "$actor turned off disappearing messages"
                 else "$actor set disappearing messages to ${disappearingMessagesLabel(ev.expirySeconds)}"
             GroupEventKind.POLICY_CHANGED -> "$actor changed the group settings"
+            GroupEventKind.AVATAR_CHANGED -> "$actor changed the group photo"
         }
     }
 

@@ -27,6 +27,7 @@ fun GroupEventKind.Companion.fromCode(code: Int): GroupEventKind? = when (code) 
     14 -> GroupEventKind.DESCRIPTION_CHANGED
     15 -> GroupEventKind.EXPIRY_CHANGED
     16 -> GroupEventKind.POLICY_CHANGED
+    17 -> GroupEventKind.AVATAR_CHANGED
     else -> null
 }
 
