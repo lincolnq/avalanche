@@ -263,14 +263,14 @@ struct ConversationView: View {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
                     } label: {
                         HStack(spacing: 8) {
-                            // Pure cache read — must not trigger resolution from a
-                            // toolbar body (it mutates AppState → SwiftUI layout
-                            // cycle during the push). Fetch is kicked in onAppear.
-                            ContactAvatar(
-                                name: conversation.title,
-                                imageData: appState.cachedGroupAvatar(groupId),
-                                size: 28
-                            )
+                            // No group photo in the nav-bar header on purpose (docs/55):
+                            // a `.toolbar` principal that reads an ObservableObject
+                            // (appState) re-hosts against its churn and, with a long
+                            // timeline, wedges the nav bar's StackLayout.spacing() in a
+                            // non-converging loop. The group photo shows where it's safe —
+                            // the inbox row and Group Details (both Lists). Keep this to
+                            // plain values (conversation.title) only.
+                            ContactAvatar(name: conversation.title, size: 28)
                             Text(conversation.title)
                                 .font(.headline)
                                 .foregroundStyle(.primary)
@@ -360,7 +360,6 @@ struct ConversationView: View {
             }
             if let groupId = conversation.groupId {
                 appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
-                appState.loadGroupAvatar(groupId: groupId, accountId: conversation.accountId)
                 Task {
                     isGroupMember = await appState.isGroupMember(
                         groupId: groupId, accountId: conversation.accountId
