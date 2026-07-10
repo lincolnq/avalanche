@@ -1047,6 +1047,96 @@ impl Client {
         Ok(Some(blob))
     }
 
+    // ── Avatars (docs/55) ──────────────────────────────────────────────────
+    //
+    // Small, long-lived, overwrite-in-place encrypted image blobs — raw
+    // ciphertext bodies (not base64/JSON). Personal avatars are keyed by the
+    // caller's account server-side and fetched by DID; group avatars are keyed
+    // by an opaque, master-key-derived object id (the capability).
+
+    /// Upload (overwrite) the caller's encrypted avatar blob.
+    pub async fn put_profile_avatar(&self, ciphertext: &[u8]) -> Result<(), NetError> {
+        let body = ciphertext.to_vec();
+        let resp = self
+            .send_authed(reqwest::Method::PUT, "/v1/profile/avatar", move |b| {
+                b.header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .body(body.clone())
+            })
+            .await?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Fetch a user's encrypted avatar blob by DID. `Ok(None)` on 404 (unknown
+    /// DID or no avatar — indistinguishable, like [`get_profile`](Self::get_profile)).
+    pub async fn get_profile_avatar(&self, did: &str) -> Result<Option<Vec<u8>>, NetError> {
+        let path = format!("/v1/profile/avatar/{did}");
+        let resp = self.send_authed(reqwest::Method::GET, &path, |b| b).await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(Some(resp.bytes().await?.to_vec()))
+    }
+
+    /// Clear the caller's avatar blob (idempotent).
+    pub async fn delete_profile_avatar(&self) -> Result<(), NetError> {
+        let resp = self
+            .send_authed(reqwest::Method::DELETE, "/v1/profile/avatar", |b| b)
+            .await?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Upload (overwrite) a group's encrypted avatar blob at its opaque object
+    /// `id` (derived by the caller from the group master key).
+    pub async fn put_group_avatar(&self, id: &str, ciphertext: &[u8]) -> Result<(), NetError> {
+        let path = format!("/v1/groups/avatar/{id}");
+        let body = ciphertext.to_vec();
+        let resp = self
+            .send_authed(reqwest::Method::PUT, &path, move |b| {
+                b.header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .body(body.clone())
+            })
+            .await?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Fetch a group's encrypted avatar blob by its opaque object `id`.
+    /// `Ok(None)` on 404.
+    pub async fn get_group_avatar(&self, id: &str) -> Result<Option<Vec<u8>>, NetError> {
+        let path = format!("/v1/groups/avatar/{id}");
+        let resp = self.send_authed(reqwest::Method::GET, &path, |b| b).await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(NetError::Server(status.as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(Some(resp.bytes().await?.to_vec()))
+    }
+
+    /// Clear a group's avatar blob at its opaque object `id` (idempotent).
+    pub async fn delete_group_avatar(&self, id: &str) -> Result<(), NetError> {
+        let path = format!("/v1/groups/avatar/{id}");
+        let resp = self.send_authed(reqwest::Method::DELETE, &path, |b| b).await?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(resp.status().as_u16(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
     // ── Attachments (docs/35-attachments.md) ──────────────────────────────
 
     /// Allocate an upload slot for an attachment blob of `ciphertext_size`

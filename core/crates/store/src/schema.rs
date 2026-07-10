@@ -142,6 +142,19 @@ CREATE TABLE IF NOT EXISTS device_account (
     registered_at   INTEGER NOT NULL,   -- unix millis
     registration_id INTEGER NOT NULL
 );
+
+-- Device-local cache of decrypted avatar images (docs/55). Rebuildable from the
+-- server, so it lives here (never synced; keeps avatar bytes out of identity
+-- snapshots). One row per owner. `owner_kind` separates account/DID-keyed
+-- avatars (own + contacts) from group-keyed ones; `version` mirrors the owner's
+-- published avatar_version so app-core only refetches when it advances.
+CREATE TABLE IF NOT EXISTS avatar_cache (
+    owner_kind  INTEGER NOT NULL,   -- 0 = account/DID, 1 = group
+    owner_id    TEXT    NOT NULL,   -- DID or base64-url group id
+    version     INTEGER NOT NULL,
+    bytes       BLOB    NOT NULL,
+    PRIMARY KEY (owner_kind, owner_id)
+);
 ";
 
 /// Schema for **identity.db** — durable per-identity state (synced; snapshotted).
@@ -396,6 +409,7 @@ pub const DEVICE_TABLES: &[&str] = &[
     "profile_fetch_state",
     "message_queue",
     "storage_cursor",
+    "avatar_cache",
 ];
 
 /// Tables that belong to the **identity** store. Used by the one-time migration

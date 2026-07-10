@@ -37,6 +37,7 @@
 
 pub mod account;
 pub mod attachments;
+pub mod avatars;
 pub mod contacts;
 pub mod link_previews;
 pub mod conversations;
