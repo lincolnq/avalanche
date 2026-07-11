@@ -291,6 +291,14 @@ async fn send_push_wakeups(relay_url: &str, db: &sqlx::PgPool, device_pks: &[i64
         }
     }
 
+    send_wakeup_pings(relay_url, pseudonyms).await;
+}
+
+/// POST a set of push pseudonyms to the relay's `/v1/wakeup`. Best-effort:
+/// failures are logged but don't affect message delivery. Shared by the DM
+/// path (account pseudonyms, looked up above) and the group fan-out path
+/// (per-group pseudonyms, already in hand — see `routes::groups`).
+pub(crate) async fn send_wakeup_pings(relay_url: &str, pseudonyms: Vec<String>) {
     if pseudonyms.is_empty() {
         return;
     }

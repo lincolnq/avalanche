@@ -809,9 +809,11 @@ async fn send_group_message(
     )
     .map_err(|_| ServerError::Unauthorized)?;
 
-    // Enqueue per recipient. Push immediately if a subscriber is live.
+    // Enqueue per recipient. Push immediately if a subscriber is live,
+    // otherwise remember the pseudonym so we can wake the device via the relay.
     let expiry_secs = clamp_group_expiry(&state.config, body.expiry_secs);
     let mut message_ids = Vec::with_capacity(recipient_targets.len());
+    let mut offline_pseudonyms: Vec<Vec<u8>> = Vec::new();
     let mut conn = state.db.acquire().await?;
     for (pseudonym, fanout) in &recipient_targets {
         let id = db::group_messages::enqueue(
@@ -824,7 +826,7 @@ async fn send_group_message(
         .await?;
         message_ids.push(id);
 
-        // Live push if subscribed.
+        // Live push if subscribed; otherwise queue a relay wakeup below.
         let subs = state.group_subscriptions.read().await;
         if let Some(tx) = subs.get(pseudonym.as_slice()) {
             let _ = tx.send(crate::state::WsPush::GroupDelivery(
@@ -836,6 +838,25 @@ async fn send_group_message(
                     enqueued_at: None,
                 },
             ));
+        } else {
+            offline_pseudonyms.push(pseudonym.clone());
+        }
+    }
+
+    // Wake offline recipients via the push relay, mirroring the DM path
+    // (`messages::send_messages`). Group pseudonyms are opaque bytes on the
+    // wire; the relay's pseudonym namespace is text, so encode with the same
+    // URL-safe-no-pad base64 the client uses for group pseudonyms elsewhere
+    // (`app_core::groups::b64`) — the client's relay registration must match.
+    // Best-effort: spawned so it never blocks the send response.
+    if !offline_pseudonyms.is_empty() {
+        if let Some(relay_url) = &state.config.relay_url {
+            let relay_url = relay_url.clone();
+            let pseudonyms: Vec<String> =
+                offline_pseudonyms.iter().map(|p| b64_encode(p)).collect();
+            tokio::spawn(async move {
+                crate::routes::messages::send_wakeup_pings(&relay_url, pseudonyms).await;
+            });
         }
     }
 
