@@ -704,6 +704,43 @@ impl Client {
         Ok(())
     }
 
+    /// Register a batch of pseudonyms sharing one device token with the relay
+    /// in a single request. Used for the account + per-group pseudonyms at
+    /// launch (docs/03 §3.7); one POST stays within the relay's per-IP register
+    /// rate limit where a POST-per-pseudonym would trip it. No-op if empty.
+    pub async fn register_push_pseudonyms_with_relay(
+        &self,
+        relay_url: &str,
+        pseudonyms: &[String],
+        device_token: &str,
+        platform: &str,
+        environment: &str,
+    ) -> Result<(), NetError> {
+        if pseudonyms.is_empty() {
+            return Ok(());
+        }
+        let body = serde_json::json!({
+            "pseudonyms": pseudonyms,
+            "device_token": device_token,
+            "platform": platform,
+            "environment": environment,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/v1/register", relay_url.trim_end_matches('/')))
+            .json(&body)
+            .send()
+            .await
+            .map_err(NetError::Http)?;
+        if !resp.status().is_success() {
+            return Err(NetError::Server(
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Unregister a pseudonym from the relay (rotation / logout).
     pub async fn unregister_push_with_relay(
         &self,

@@ -416,7 +416,16 @@ async fn send_unifiedpush(http: &reqwest::Client, endpoint: &str) -> Result<(), 
 
 #[derive(Deserialize)]
 struct RegisterRequest {
-    pseudonym: String,
+    /// Single pseudonym (legacy shape). Either this or `pseudonyms` (or both)
+    /// must yield at least one pseudonym.
+    #[serde(default)]
+    pseudonym: Option<String>,
+    /// Batch of pseudonyms sharing one device token. A device maps *many*
+    /// pseudonyms (its account pseudonym + one per group, docs/03 §3.7) to the
+    /// same token; registering them in one request keeps a launch-time
+    /// re-register within the per-IP rate limit instead of firing N POSTs.
+    #[serde(default)]
+    pseudonyms: Vec<String>,
     device_token: String,
     platform: String,
     /// "sandbox" or "production" for APNs. Clients pick based on build
@@ -429,28 +438,48 @@ struct RegisterResponse {
     ok: bool,
 }
 
-/// Register or update a pseudonym-to-device-token mapping.
+/// Register or update pseudonym-to-device-token mappings. Accepts a single
+/// `pseudonym` (legacy) and/or a `pseudonyms` batch; all map to the one token.
 async fn register(
     State(state): State<Arc<RelayState>>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
+    // Combine the legacy single field with the batch, de-duplicating.
+    let mut all = req.pseudonyms;
+    if let Some(p) = req.pseudonym {
+        all.push(p);
+    }
+    all.sort();
+    all.dedup();
+    if all.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let count = all.len();
+    let device_token = req.device_token;
+    let platform = req.platform;
+    let environment = req.environment;
     let result = state.conn.call(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO push_registrations \
-             (pseudonym, device_token, platform, environment, registered_at, rotated_at) \
-             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'), NULL)",
-            rusqlite::params![req.pseudonym, req.device_token, req.platform, req.environment],
-        )?;
+        let tx = conn.transaction()?;
+        for pseudonym in &all {
+            tx.execute(
+                "INSERT OR REPLACE INTO push_registrations \
+                 (pseudonym, device_token, platform, environment, registered_at, rotated_at) \
+                 VALUES (?1, ?2, ?3, ?4, strftime('%s','now'), NULL)",
+                rusqlite::params![pseudonym, device_token, platform, environment],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }).await;
 
     match result {
         Ok(()) => {
-            tracing::info!("registered pseudonym");
+            tracing::info!(count, "registered pseudonym(s)");
             Ok(Json(RegisterResponse { ok: true }))
         }
         Err(e) => {
-            tracing::error!(error = %e, "failed to register pseudonym");
+            tracing::error!(error = %e, "failed to register pseudonym(s)");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

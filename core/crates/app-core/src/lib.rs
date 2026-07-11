@@ -3075,13 +3075,14 @@ impl AppCore {
                             count = group_pseudonyms.len(),
                             "push: registering group pseudonyms with relay"
                         );
-                    }
-                    for ps in group_pseudonyms {
+                        // One batched request — a POST-per-group would trip the
+                        // relay's per-IP register rate limit (429) for a member
+                        // of more than a handful of groups.
                         if let Err(e) = inner
                             .client
-                            .register_push_with_relay(
+                            .register_push_pseudonyms_with_relay(
                                 &relay_url,
-                                &ps,
+                                &group_pseudonyms,
                                 &device_token,
                                 &platform,
                                 &environment,
