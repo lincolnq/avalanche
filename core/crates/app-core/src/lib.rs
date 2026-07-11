@@ -1150,6 +1150,12 @@ pub struct AppCore {
     /// serialize ratchet / sender-key mutation still go through `inner` (see
     /// `messaging.rs`); this handle is not a license to skip that lock.
     pub(crate) store: store::DeviceStore,
+    /// Lock-free handle to the identity store, cloned from `inner`.
+    /// `IdentityStore` is `Clone` and shares one serialized connection (same
+    /// pattern as `store`). Read-only / idempotent-write FFI paths that need
+    /// durable per-identity state (e.g. enumerating groups in
+    /// `register_push_token`) use this so they never wait on `inner`.
+    pub(crate) identity: store::IdentityStore,
     /// Lock-free handle to the homeserver client, cloned from `inner`. `Client`
     /// clones share their auth state and connection pool, so a session token
     /// obtained through any clone is visible through all of them. Non-crypto
@@ -1289,11 +1295,13 @@ impl AppCore {
         // Both share their underlying resource (one serialized DB connection;
         // one auth/connection-pool), so these stay consistent with `inner`.
         let store = inner.store.clone();
+        let identity = inner.identity.clone();
         let client = inner.client.clone();
         let did = inner.did.clone();
         Self {
             inner: Mutex::new(inner),
             store,
+            identity,
             client,
             did,
             state_tx,
@@ -3043,6 +3051,49 @@ impl AppCore {
                 if let Some(old) = existing {
                     let _ = inner.client.unregister_push_with_relay(&relay_url, &old.pseudonym).await;
                     let _ = inner.client.unregister_push_pseudonym(&old.pseudonym).await;
+                }
+            }
+
+            // Also register this device's per-group push pseudonyms with the
+            // relay (docs/03 §3.7: "the client registers (group_push_pseudonym,
+            // device_token) directly with the relay"). The homeserver already
+            // knows the group pseudonyms for routing (via push_binding), but the
+            // relay only learns the pseudonym→token mapping here — without it a
+            // group wakeup finds no token and can't push. Re-asserting every
+            // launch is idempotent and self-heals token churn / new groups.
+            // Encoding must match the server's group wakeup (URL-safe-no-pad
+            // base64 of the pseudonym bytes; app_core::groups::b64). Best-effort
+            // per group — a failure logs and never fails account registration.
+            match inner.identity.list_groups().await {
+                Ok(groups) => {
+                    let group_pseudonyms: Vec<String> = groups
+                        .iter()
+                        .filter_map(|g| g.group_push_pseudonym.as_deref().map(groups::b64))
+                        .collect();
+                    if !group_pseudonyms.is_empty() {
+                        tracing::info!(
+                            count = group_pseudonyms.len(),
+                            "push: registering group pseudonyms with relay"
+                        );
+                    }
+                    for ps in group_pseudonyms {
+                        if let Err(e) = inner
+                            .client
+                            .register_push_with_relay(
+                                &relay_url,
+                                &ps,
+                                &device_token,
+                                &platform,
+                                &environment,
+                            )
+                            .await
+                        {
+                            tracing::warn!("push: group pseudonym relay registration failed: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("push: could not list groups for relay registration: {e}");
                 }
             }
 
