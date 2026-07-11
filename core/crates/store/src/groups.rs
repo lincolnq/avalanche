@@ -419,6 +419,134 @@ impl DeviceStore {
             .await
             .map_err(StoreError::Db)
     }
+
+    // ── pending (undecryptable) group ciphertext ────────────────────────
+    //
+    // A group message whose Sender Key isn't installed yet is buffered here
+    // and retried when the sender's SKDM arrives. See the `pending_group_ciphertext`
+    // schema note. The buffered `ciphertext` is always the inner SenderKeyMessage.
+
+    /// Buffer one undecryptable group ciphertext for later retry.
+    pub async fn buffer_pending_group_ciphertext(
+        &self,
+        group_id: &str,
+        sender_did: &str,
+        sender_device_id: u32,
+        ciphertext: &[u8],
+        server_id: Option<i64>,
+    ) -> Result<(), StoreError> {
+        let group_id = group_id.to_string();
+        let sender_did = sender_did.to_string();
+        let ciphertext = ciphertext.to_vec();
+        let received_at_ms = Timestamp::now().as_millis();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO pending_group_ciphertext \
+                       (group_id, sender_did, sender_device_id, ciphertext, server_id, received_at_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        group_id,
+                        sender_did,
+                        sender_device_id as i64,
+                        ciphertext,
+                        server_id,
+                        received_at_ms,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Load every buffered ciphertext from `(sender_did, sender_device_id)`,
+    /// oldest first (retry must preserve receive order so the Sender Key chain
+    /// advances correctly).
+    pub async fn load_pending_group_ciphertext_for_sender(
+        &self,
+        sender_did: &str,
+        sender_device_id: u32,
+    ) -> Result<Vec<PendingGroupCiphertext>, StoreError> {
+        let sender_did = sender_did.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, group_id, sender_did, sender_device_id, ciphertext, \
+                            server_id, received_at_ms \
+                     FROM pending_group_ciphertext \
+                     WHERE sender_did = ?1 AND sender_device_id = ?2 \
+                     ORDER BY id ASC",
+                )?;
+                let rows = stmt
+                    .query_map(
+                        rusqlite::params![sender_did, sender_device_id as i64],
+                        row_to_pending_group_ciphertext,
+                    )?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Delete one buffered row by `id` (after a successful retry).
+    pub async fn delete_pending_group_ciphertext(&self, id: i64) -> Result<(), StoreError> {
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM pending_group_ciphertext WHERE id = ?1",
+                    rusqlite::params![id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Drop buffered rows older than `cutoff_ms` (absolute epoch millis).
+    /// Bounds the table when a sender's SKDM never arrives. Called
+    /// opportunistically on buffer insert.
+    pub async fn prune_pending_group_ciphertext(&self, cutoff_ms: i64) -> Result<(), StoreError> {
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM pending_group_ciphertext WHERE received_at_ms < ?1",
+                    rusqlite::params![cutoff_ms],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+}
+
+/// One buffered undecryptable group ciphertext awaiting its Sender Key.
+#[derive(Debug, Clone)]
+pub struct PendingGroupCiphertext {
+    pub id: i64,
+    pub group_id: String,
+    pub sender_did: String,
+    pub sender_device_id: u32,
+    /// Inner SenderKeyMessage bytes — the input to `decrypt_group_content`.
+    pub ciphertext: Vec<u8>,
+    /// Original server message id, carried onto the recovered message for dedup.
+    pub server_id: Option<i64>,
+    pub received_at_ms: i64,
+}
+
+fn row_to_pending_group_ciphertext(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PendingGroupCiphertext> {
+    Ok(PendingGroupCiphertext {
+        id: row.get::<_, i64>(0)?,
+        group_id: row.get::<_, String>(1)?,
+        sender_did: row.get::<_, String>(2)?,
+        sender_device_id: row.get::<_, i64>(3)? as u32,
+        ciphertext: row.get::<_, Vec<u8>>(4)?,
+        server_id: row.get::<_, Option<i64>>(5)?,
+        received_at_ms: row.get::<_, i64>(6)?,
+    })
 }
 
 fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {

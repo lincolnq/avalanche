@@ -10,6 +10,86 @@ async fn load_identity_returns_none_before_creation() {
 }
 
 #[tokio::test]
+async fn pending_group_ciphertext_round_trips() {
+    let store = DeviceStore::open_in_memory().await.unwrap();
+
+    // Two buffered messages from the same sender+device, plus one from a
+    // different device that must not bleed into the sender's results.
+    store
+        .buffer_pending_group_ciphertext("grp1", "did:plc:alice", 1, b"ct-a", Some(10))
+        .await
+        .unwrap();
+    store
+        .buffer_pending_group_ciphertext("grp1", "did:plc:alice", 1, b"ct-b", Some(11))
+        .await
+        .unwrap();
+    store
+        .buffer_pending_group_ciphertext("grp1", "did:plc:alice", 2, b"other-device", None)
+        .await
+        .unwrap();
+
+    let rows = store
+        .load_pending_group_ciphertext_for_sender("did:plc:alice", 1)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2, "only this (sender, device)'s rows");
+    // Oldest-first ordering (retry must preserve receive order).
+    assert_eq!(rows[0].ciphertext, b"ct-a");
+    assert_eq!(rows[1].ciphertext, b"ct-b");
+    assert_eq!(rows[0].group_id, "grp1");
+    assert_eq!(rows[0].server_id, Some(10));
+
+    // A different device is isolated.
+    let other = store
+        .load_pending_group_ciphertext_for_sender("did:plc:alice", 2)
+        .await
+        .unwrap();
+    assert_eq!(other.len(), 1);
+    assert_eq!(other[0].server_id, None);
+
+    // Delete one row (simulating a successful retry) leaves the sibling.
+    store.delete_pending_group_ciphertext(rows[0].id).await.unwrap();
+    let after = store
+        .load_pending_group_ciphertext_for_sender("did:plc:alice", 1)
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].ciphertext, b"ct-b");
+}
+
+#[tokio::test]
+async fn prune_pending_group_ciphertext_drops_only_stale_rows() {
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    store
+        .buffer_pending_group_ciphertext("grp1", "did:plc:alice", 1, b"ct", None)
+        .await
+        .unwrap();
+
+    // Cutoff in the far past: nothing pruned (row was just inserted with a
+    // near-now timestamp).
+    store.prune_pending_group_ciphertext(0).await.unwrap();
+    assert_eq!(
+        store
+            .load_pending_group_ciphertext_for_sender("did:plc:alice", 1)
+            .await
+            .unwrap()
+            .len(),
+        1,
+    );
+
+    // Cutoff in the far future: the row is stale relative to it and pruned.
+    store
+        .prune_pending_group_ciphertext(i64::MAX)
+        .await
+        .unwrap();
+    assert!(store
+        .load_pending_group_ciphertext_for_sender("did:plc:alice", 1)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn store_satisfies_crypto_store_trait() {
     use crypto::Store as CryptoStore;
 

@@ -400,3 +400,79 @@ async fn group_send_establishes_missing_session() {
     assert_eq!(alice_msgs[0].plaintext, plaintext);
     assert_eq!(alice_msgs[0].sender_did, bob_did);
 }
+
+/// Missing-sender-key recovery: a group message that arrives before the
+/// sender's Sender Key is installed is buffered locally (not dropped), and
+/// recovered automatically when that sender's SKDM is finally processed.
+///
+/// Ordering is forced by the two transports: group content is pulled via
+/// `fetch_group_messages` while SKDMs arrive as pairwise DMs drained by
+/// `receive_messages`. Alice pulls bob's group message *before* draining his
+/// accept-time SKDM, so she has no key for it yet.
+#[tokio::test]
+async fn buffered_group_message_recovers_when_skdm_arrives() {
+    let url = server_url();
+
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let bob_did = bob.did_async().await;
+
+    // Group with alice + bob; bob accepts (his accept DMs an SKDM to alice).
+    let created = alice
+        .create_group_async("Recovery", "buffer+retry e2e", 0)
+        .await
+        .unwrap();
+    alice
+        .invite_member_async(&created.group_id, &bob_did, 0)
+        .await
+        .unwrap();
+    let _ = bob.receive_messages_async().await.unwrap();
+    let _ = bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    bob.accept_invite_async(&created.group_id).await.unwrap();
+
+    // Alice sees bob as a member but DELIBERATELY does not drain his SKDM yet,
+    // so she still lacks his Sender Key.
+    let alice_state = alice.fetch_group_state_async(&created.group_id).await.unwrap();
+    assert_eq!(alice_state.members.len(), 2);
+
+    // Bob sends a group message; alice pulls it before she has his key.
+    let plaintext = b"hi alice, freshly-joined bob here";
+    bob.send_group_message_async(&created.group_id, plaintext)
+        .await
+        .unwrap();
+
+    // Alice's group pull can't decrypt it (no Sender Key) -> buffered locally,
+    // NOT surfaced and NOT lost.
+    let pulled = alice.fetch_group_messages_async(&created.group_id).await.unwrap();
+    assert!(
+        pulled.is_empty(),
+        "message must be buffered (not surfaced) while bob's key is missing"
+    );
+
+    // Alice drains bob's SKDM. Processing it installs his key and retries the
+    // buffered message, which surfaces in the receive_messages result.
+    let recovered = alice.receive_messages_async().await.unwrap();
+    let mine: Vec<_> = recovered
+        .into_iter()
+        .filter(|m| m.group_id.as_deref() == Some(created.group_id.as_str()))
+        .collect();
+    assert_eq!(mine.len(), 1, "the buffered group message should be recovered");
+    assert_eq!(mine[0].plaintext, plaintext);
+    assert_eq!(mine[0].sender_did, bob_did);
+
+    // Idempotent: nothing is re-surfaced or duplicated on subsequent drains
+    // (the buffered row was deleted, the server row already acked).
+    let pulled2 = alice.fetch_group_messages_async(&created.group_id).await.unwrap();
+    assert!(pulled2.is_empty());
+    let drained2 = alice.receive_messages_async().await.unwrap();
+    assert!(
+        drained2
+            .iter()
+            .all(|m| m.group_id.as_deref() != Some(created.group_id.as_str())),
+        "recovered message must not surface twice"
+    );
+}

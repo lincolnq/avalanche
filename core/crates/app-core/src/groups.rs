@@ -2138,6 +2138,44 @@ pub async fn send_group_message(
 /// each through the receive pipeline (validate sender cert →
 /// `sender_keys::group_decrypt`), and ack them server-side. Returns the
 /// validated, decrypted messages in delivery order.
+/// How long an undecryptable group message is kept buffered awaiting its
+/// sender's SKDM before it's pruned (docs/03; missing-key recovery). Long
+/// enough to cover a peer being offline for a few days; short enough to bound
+/// the `pending_group_ciphertext` table if the key never arrives.
+pub(crate) const PENDING_GROUP_CIPHERTEXT_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Buffer a group message that could not be decrypted because the sender's
+/// Sender Key isn't installed yet, so it can be retried when their SKDM
+/// arrives. `ciphertext` must be the inner SenderKeyMessage (the input to
+/// [`decrypt_group_content`]), never a sealed-sender envelope. Best-effort;
+/// also prunes stale rows to bound the table.
+pub(crate) async fn buffer_undecryptable_group_content(
+    store: &store::DeviceStore,
+    group_id_b64: &str,
+    sender_did: &str,
+    sender_device_id: u32,
+    ciphertext: &[u8],
+    server_id: Option<i64>,
+) {
+    if let Err(e) = store
+        .buffer_pending_group_ciphertext(
+            group_id_b64,
+            sender_did,
+            sender_device_id,
+            ciphertext,
+            server_id,
+        )
+        .await
+    {
+        tracing::warn!("[groups] failed to buffer undecryptable group message: {e}");
+        return;
+    }
+    let cutoff = Timestamp::now().as_millis() - PENDING_GROUP_CIPHERTEXT_TTL_MS;
+    if let Err(e) = store.prune_pending_group_ciphertext(cutoff).await {
+        tracing::debug!("[groups] pruning pending group ciphertext failed: {e}");
+    }
+}
+
 pub async fn fetch_group_messages(
     store: &mut store::DeviceStore,
     client: &net::Client,
@@ -2203,7 +2241,20 @@ pub async fn fetch_group_messages(
         {
             Ok(pt) => pt,
             Err(e) => {
-                tracing::warn!("[groups] group_decrypt failed: {e}");
+                // Sender Key probably not installed yet (sender just joined).
+                // Buffer the inner SenderKeyMessage (`env.contents`) so it
+                // retries when the sender's SKDM arrives, instead of dropping
+                // it. We still ack the server row below.
+                tracing::warn!("[groups] group_decrypt failed, buffering for retry: {e}");
+                buffer_undecryptable_group_content(
+                    store,
+                    group_id_b64,
+                    &info.sender_did,
+                    info.sender_device_id,
+                    &env.contents,
+                    Some(msg.id),
+                )
+                .await;
                 acked.push(msg.id);
                 continue;
             }
@@ -2560,10 +2611,12 @@ impl AppCore {
                 tracing::warn!("[groups] GroupContext DM to {recipient_did} failed: {e}");
             }
 
-            // Send our SKDM as a separate DM. Same best-effort handling —
-            // if it's lost, the invitee will see our future group
-            // messages as undecryptable, and we re-send on demand (TODO:
-            // missing-key recovery path).
+            // Send our SKDM as a separate DM. Same best-effort handling — if
+            // it's late, the invitee buffers our undecryptable group messages
+            // and retries them once this SKDM arrives (missing-key recovery:
+            // `buffer_undecryptable_group_content` + `retry_pending_group_ciphertext`).
+            // If it's lost outright, a resend-on-demand nudge is still TODO
+            // (docs/02 sender-key recovery; the buffer is its substrate).
             let skdm_msg = ContentMessage {
                 body: Some(Body::SenderKeyDistribution(proto::SenderKeyDistribution {
                     group_id: group_id_bytes,

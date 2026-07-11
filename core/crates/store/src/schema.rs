@@ -78,6 +78,25 @@ CREATE TABLE IF NOT EXISTS sender_key_shared (
     PRIMARY KEY (group_id, recipient_did, recipient_device_id)
 );
 
+-- Group messages that could not be decrypted because the sender's Sender Key
+-- (SKDM) was not yet installed — the normal state just after a member joins,
+-- when their content can arrive before their SKDM is processed. Buffered here
+-- (the server row is still acked) and retried locally when that sender's SKDM
+-- arrives (docs/03; missing-key recovery). `ciphertext` is always the inner
+-- SenderKeyMessage bytes (the input to `decrypt_group_content`), never a
+-- sealed-sender envelope, so a retry never replays sealed-sender decryption.
+CREATE TABLE IF NOT EXISTS pending_group_ciphertext (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id          TEXT    NOT NULL,   -- b64 group id
+    sender_did        TEXT    NOT NULL,
+    sender_device_id  INTEGER NOT NULL,
+    ciphertext        BLOB    NOT NULL,   -- inner SenderKeyMessage bytes
+    server_id         INTEGER,            -- original message_id, for dedup on surface
+    received_at_ms    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_gct_sender
+    ON pending_group_ciphertext(sender_did, sender_device_id);
+
 -- Push notification pseudonym + device token for this device.
 CREATE TABLE IF NOT EXISTS push_state (
     id            INTEGER PRIMARY KEY CHECK (id = 1),

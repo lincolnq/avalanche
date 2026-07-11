@@ -382,13 +382,33 @@ impl AppCoreInner {
             now_ms,
         )
         .map_err(|e| AppError::Protocol(format!("sender_cert validate: {e}")))?;
-        let plaintext = groups::decrypt_group_content(
+        let plaintext = match groups::decrypt_group_content(
             &mut self.store,
             &info.sender_did,
             info.sender_device_id,
             &env.contents,
         )
-        .await?;
+        .await
+        {
+            Ok(pt) => pt,
+            Err(e) => {
+                // Sender Key probably not installed yet (sender just joined).
+                // Buffer the *inner* SenderKeyMessage (`env.contents`) — never
+                // the sealed-sender envelope, which can't be replayed — so it
+                // retries when the sender's SKDM arrives. The caller still acks
+                // the delivery. Sealed-sender/cert failures above are NOT
+                // buffered: they aren't recoverable by a later SKDM.
+                self.buffer_undecryptable_group(
+                    &group_id_b64,
+                    &info.sender_did,
+                    info.sender_device_id,
+                    &env.contents,
+                    Some(delivery.message_id),
+                )
+                .await;
+                return Err(e);
+            }
+        };
         Ok(DecryptedMessage {
             server_id: delivery.message_id,
             sender_did: info.sender_did,
@@ -408,6 +428,90 @@ impl AppCoreInner {
             previews: Vec::new(),
             contacts: Vec::new(),
         })
+    }
+
+    /// Buffer a group message that could not be decrypted because the sender's
+    /// Sender Key isn't installed yet, so it can be retried when their SKDM
+    /// arrives (see the `pending_group_ciphertext` schema note). `ciphertext`
+    /// must be the inner SenderKeyMessage (the input to `decrypt_group_content`),
+    /// never a sealed-sender envelope. Best-effort; also prunes stale rows.
+    pub(crate) async fn buffer_undecryptable_group(
+        &self,
+        group_id_b64: &str,
+        sender_did: &str,
+        sender_device_id: u32,
+        ciphertext: &[u8],
+        server_id: Option<i64>,
+    ) {
+        groups::buffer_undecryptable_group_content(
+            &self.store,
+            group_id_b64,
+            sender_did,
+            sender_device_id,
+            ciphertext,
+            server_id,
+        )
+        .await;
+    }
+
+    /// Retry every buffered group ciphertext from `(sender_did, sender_device_id)`
+    /// now that their SKDM may be installed. Returns the recovered messages
+    /// (plaintext = `decrypt_group_content` output, `group_id`/`server_id` carried
+    /// through) in receive order. Rows that decrypt are deleted; rows that still
+    /// fail are left buffered for a later SKDM / resend. Never errors — a store
+    /// failure just yields no recoveries.
+    pub(crate) async fn retry_pending_group_ciphertext(
+        &mut self,
+        sender_did: &str,
+        sender_device_id: u32,
+    ) -> Vec<DecryptedMessage> {
+        let rows = match self
+            .store
+            .load_pending_group_ciphertext_for_sender(sender_did, sender_device_id)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("[groups] loading pending group ciphertext failed: {e}");
+                return Vec::new();
+            }
+        };
+        let mut recovered = Vec::new();
+        for row in rows {
+            match groups::decrypt_group_content(
+                &mut self.store,
+                sender_did,
+                sender_device_id,
+                &row.ciphertext,
+            )
+            .await
+            {
+                Ok(plaintext) => {
+                    let _ = self.store.delete_pending_group_ciphertext(row.id).await;
+                    recovered.push(DecryptedMessage {
+                        server_id: row.server_id.unwrap_or(0),
+                        sender_did: sender_did.to_string(),
+                        sender_device_id,
+                        group_id: Some(row.group_id),
+                        plaintext,
+                        sent_at_ms: None,
+                        expire_timer_secs: 0,
+                        profile_key: None,
+                        is_request: false,
+                        attachments: Vec::new(),
+                        previews: Vec::new(),
+                        contacts: Vec::new(),
+                    });
+                }
+                Err(e) => {
+                    // Still no usable key for this one — leave it buffered.
+                    tracing::debug!(
+                        "[groups] buffered group message from {sender_did} still undecryptable: {e}"
+                    );
+                }
+            }
+        }
+        recovered
     }
 
     /// Finalize joining a group after the master key has been persisted:
@@ -1216,10 +1320,12 @@ impl AppCoreInner {
                             // Install the sender's group key locally so
                             // future `GroupMessage`s from them decrypt.
                             // No app-level event — SKDM is plumbing.
+                            let sender_did = raw.sender_did.clone();
+                            let sender_device_id = raw.sender_device_id;
                             if let Err(e) = groups::process_inbound_skdm(
                                 &mut self.store,
-                                &raw.sender_did,
-                                raw.sender_device_id,
+                                &sender_did,
+                                sender_device_id,
                                 &skdm_msg.skdm,
                             )
                             .await
@@ -1227,6 +1333,18 @@ impl AppCoreInner {
                                 tracing::warn!(
                                     "[groups] failed to process inbound SKDM: {e}"
                                 );
+                            } else {
+                                // The key is now installed — retry any of this
+                                // sender's group messages we had to buffer
+                                // because it hadn't arrived yet, and surface the
+                                // recovered ones alongside this batch.
+                                let recovered = self
+                                    .retry_pending_group_ciphertext(
+                                        &sender_did,
+                                        sender_device_id,
+                                    )
+                                    .await;
+                                decrypted.extend(recovered);
                             }
                         }
                         Some(Body::GroupMessage(gm)) => {
@@ -1247,9 +1365,22 @@ impl AppCoreInner {
                                     });
                                 }
                                 Err(e) => {
+                                    // Most likely the sender's Sender Key isn't
+                                    // installed yet (they just joined). Buffer
+                                    // the ciphertext and retry when their SKDM
+                                    // arrives, rather than dropping it. The
+                                    // server row is still acked below.
                                     tracing::warn!(
-                                        "[groups] failed to decrypt GroupMessage: {e}"
+                                        "[groups] failed to decrypt GroupMessage, buffering for retry: {e}"
                                     );
+                                    self.buffer_undecryptable_group(
+                                        &groups::b64(&gm.group_id),
+                                        &raw.sender_did,
+                                        raw.sender_device_id,
+                                        &gm.ciphertext,
+                                        Some(raw.server_id),
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1566,18 +1697,38 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
         Some(Body::SenderKeyDistribution(skdm_msg)) => {
             // Install the sender's group key locally so future
             // `GroupMessage`s from them decrypt.
+            let sender_did = decrypted.sender_did.clone();
+            let sender_device_id = decrypted.sender_device_id;
             let mut inner = core.inner.lock().await;
-            if let Err(e) = groups::process_inbound_skdm(
+            let recovered = match groups::process_inbound_skdm(
                 &mut inner.store,
-                &decrypted.sender_did,
-                decrypted.sender_device_id,
+                &sender_did,
+                sender_device_id,
                 &skdm_msg.skdm,
             )
             .await
             {
-                tracing::warn!("[groups] failed to process inbound SKDM: {e}");
+                Ok(()) => {
+                    // The key is now installed — retry any of this sender's
+                    // group messages we had to buffer while it was missing.
+                    inner
+                        .retry_pending_group_ciphertext(&sender_did, sender_device_id)
+                        .await
+                }
+                Err(e) => {
+                    tracing::warn!("[groups] failed to process inbound SKDM: {e}");
+                    Vec::new()
+                }
+            };
+            drop(inner);
+            // No app-level event for the SKDM itself — it's plumbing. But each
+            // recovered group message is real content: re-dispatch it through
+            // the same decoder a live delivery uses (boxed — this is async
+            // self-recursion). Recovered payloads are group content, never
+            // SKDMs, so recursion is one level deep.
+            for msg in recovered {
+                Box::pin(process_decrypted(core, msg)).await;
             }
-            // No app-level event — SKDM is plumbing, not content.
         }
         Some(Body::GroupMessage(gm)) => {
             // Decrypt under the sender's cached Sender Key; surface as a
@@ -1604,7 +1755,20 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     let _ = core.event_tx.send(IncomingEvent::Message { msg: out });
                 }
                 Err(e) => {
-                    tracing::warn!("[groups] failed to decrypt GroupMessage: {e}");
+                    // Sender Key probably not installed yet — buffer for retry
+                    // when their SKDM arrives instead of dropping the message.
+                    tracing::warn!(
+                        "[groups] failed to decrypt GroupMessage, buffering for retry: {e}"
+                    );
+                    inner
+                        .buffer_undecryptable_group(
+                            &groups::b64(&gm.group_id),
+                            &decrypted.sender_did,
+                            decrypted.sender_device_id,
+                            &gm.ciphertext,
+                            Some(decrypted.server_id),
+                        )
+                        .await;
                 }
             }
         }
