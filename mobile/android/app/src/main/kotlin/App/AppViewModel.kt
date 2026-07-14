@@ -1551,6 +1551,12 @@ class AppViewModel(
                         lastMessageDate = Date(message.sentAtMs),
                         lastMessageSenderDid = message.senderAccountId,
                     )
+                        // A just-sent message is always a normal chat message, so
+                        // clear any prior system-event overlay (e.g. "X joined");
+                        // otherwise the list keeps rendering the stale event line
+                        // instead of this message. Mirrors iOS
+                        // ConversationView.swift bump + clearLastMessageEvent().
+                        .clearLastMessageEvent()
                 } else c
             }
         }
