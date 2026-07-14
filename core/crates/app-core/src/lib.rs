@@ -3038,32 +3038,27 @@ impl AppCore {
                 existing.as_ref().unwrap().pseudonym.clone()
             };
 
-            // Always re-register — relay+server treat this as INSERT OR REPLACE.
+            // Register with the relay first — both the account pseudonym and
+            // this device's per-group pseudonyms. These are relay-only calls;
+            // they must NOT be gated on the homeserver `register_push_pseudonym`
+            // below, which can fail if the homeserver is briefly unreachable
+            // (e.g. a flaky dev tunnel) and would otherwise strand group push
+            // for the whole launch. The relay treats re-register as
+            // INSERT OR REPLACE.
             inner.client
                 .register_push_with_relay(&relay_url, &pseudonym, &device_token, &platform, &environment)
                 .await.map_err(AppError::Net)?;
-            inner.client.register_push_pseudonym(&pseudonym).await
-                .map_err(AppError::Net)?;
 
-            // If we rotated, retire the previous pseudonym. Best-effort —
-            // a failure leaves a stranded row that the relay's GC reaps.
-            if rotate {
-                if let Some(old) = existing {
-                    let _ = inner.client.unregister_push_with_relay(&relay_url, &old.pseudonym).await;
-                    let _ = inner.client.unregister_push_pseudonym(&old.pseudonym).await;
-                }
-            }
-
-            // Also register this device's per-group push pseudonyms with the
-            // relay (docs/03 §3.7: "the client registers (group_push_pseudonym,
+            // Register this device's per-group push pseudonyms with the relay
+            // (docs/03 §3.7: "the client registers (group_push_pseudonym,
             // device_token) directly with the relay"). The homeserver already
-            // knows the group pseudonyms for routing (via push_binding), but the
+            // knows the group pseudonyms for routing (via push_binding); the
             // relay only learns the pseudonym→token mapping here — without it a
             // group wakeup finds no token and can't push. Re-asserting every
             // launch is idempotent and self-heals token churn / new groups.
             // Encoding must match the server's group wakeup (URL-safe-no-pad
-            // base64 of the pseudonym bytes; app_core::groups::b64). Best-effort
-            // per group — a failure logs and never fails account registration.
+            // base64 of the pseudonym bytes; app_core::groups::b64). Best-effort:
+            // a failure logs and never fails account registration.
             match inner.identity.list_groups().await {
                 Ok(groups) => {
                     let group_pseudonyms: Vec<String> = groups
@@ -3095,6 +3090,22 @@ impl AppCore {
                 }
                 Err(e) => {
                     tracing::warn!("push: could not list groups for relay registration: {e}");
+                }
+            }
+
+            // Homeserver-side account pseudonym registration (used for DM
+            // wakeup routing). This is the call that can fail on an unreachable
+            // homeserver — placed after all relay work so a homeserver blip
+            // can't strand the relay registrations above.
+            inner.client.register_push_pseudonym(&pseudonym).await
+                .map_err(AppError::Net)?;
+
+            // If we rotated, retire the previous pseudonym. Best-effort —
+            // a failure leaves a stranded row that the relay's GC reaps.
+            if rotate {
+                if let Some(old) = existing {
+                    let _ = inner.client.unregister_push_with_relay(&relay_url, &old.pseudonym).await;
+                    let _ = inner.client.unregister_push_pseudonym(&old.pseudonym).await;
                 }
             }
 
