@@ -556,7 +556,11 @@ class AppViewModel(
                 avatarData = null,
                 servers = serverInfos,
             )
-            _accounts.update { it + account }
+            // Replace-or-append by DID atomically: a duplicate account id is a
+            // hard crash in the accounts LazyColumn (duplicate key). A concurrent
+            // registration/recovery append or a persisted list already containing
+            // the DID twice would otherwise leave two entries for one account.
+            _accounts.update { list -> list.filter { it.id != account.id } + account }
 
             val core = withContext(Dispatchers.IO) {
                 runCatching { _service.login(dbPath = dbFile.absolutePath, dbKey = dbKey) }.getOrNull()
@@ -906,7 +910,10 @@ class AppViewModel(
             avatarData = null,
             servers = listOf(ServerInfo(id = serverUrl, name = serverName, url = serverUri)),
         )
-        _accounts.update { it + account }
+        // Replace-or-append by DID atomically (see restoreAccountsImpl): the
+        // single-flight guards in recover/link read _accounts before their async
+        // work, so a race could otherwise append the same DID twice.
+        _accounts.update { list -> list.filter { it.id != account.id } + account }
 
         persistAccount(
             PersistedAccount(
@@ -1763,7 +1770,19 @@ class AppViewModel(
             }
         }
 
-        val sorted = newConvs.sortedByDescending { it.lastMessageDate?.time ?: Long.MIN_VALUE }
+        // A group conversation ID is `group-<groupId>` with no account prefix
+        // (unlike DMs, which embed the account DID), so when two local accounts
+        // are both members of the same group each account's load_conversations
+        // yields the same `group-<groupId>` row. Collapse those to one entry —
+        // keeping the account with the most recent activity — so the list holds
+        // a unique ID per conversation. A duplicate ID is a hard crash in
+        // Compose's LazyColumn (duplicate key), where SwiftUI's List merely
+        // tolerates it.
+        val deduped = newConvs
+            .groupBy { it.id }
+            .values
+            .map { group -> group.maxByOrNull { it.lastMessageDate?.time ?: Long.MIN_VALUE }!! }
+        val sorted = deduped.sortedByDescending { it.lastMessageDate?.time ?: Long.MIN_VALUE }
         _conversations.value = sorted
         _unreadCounts.value = newUnread
         _conversationsLoaded.value = true
@@ -1930,7 +1949,10 @@ class AppViewModel(
             recipientDid = recipientDid,
             isGroup = false,
         )
-        _conversations.update { it + conv }
+        // Atomic re-check: see findOrCreateGroupConversation — a concurrent
+        // loadConversationsFromStore replace can slip between the snapshot guard
+        // above and this append and reintroduce the row.
+        _conversations.update { list -> if (list.any { it.id == convId }) list else list + conv }
         return conv
     }
 
@@ -1956,7 +1978,11 @@ class AppViewModel(
             groupId = groupId,
             isGroup = true,
         )
-        _conversations.update { it + conv }
+        // Re-check the id inside the atomic update: the firstOrNull guard above
+        // reads a snapshot, but a full loadConversationsFromStore replace (which
+        // assigns _conversations.value outright) can land between that read and
+        // this append, so an unconditional `it + conv` would duplicate the row.
+        _conversations.update { list -> if (list.any { it.id == convId }) list else list + conv }
         groupTitleCache[groupId] = title
         return conv
     }
@@ -2803,7 +2829,9 @@ class AppViewModel(
                     lastMessageSenderDid = senderDid,
                     isGroup = false,
                 )
-                _conversations.update { it + conv }
+                // Atomic re-check against a concurrent full reload (see
+                // findOrCreateDMConversation) so the row is never duplicated.
+                _conversations.update { list -> if (list.any { it.id == convId }) list else list + conv }
             }
         }
 
@@ -2987,6 +3015,11 @@ class AppViewModel(
                     servers = servers,
                 )
             }
+                // Heal any pre-existing corruption: an older build's non-atomic
+                // persistAccount could leave the same DID stored twice. Keep the
+                // first occurrence so callers (restore, onboarding check) never
+                // see a duplicate. The next persistAccount rewrites the deduped list.
+                .distinctBy { it.did }
         }.getOrElse { emptyList() }
     }
 
