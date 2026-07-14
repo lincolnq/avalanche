@@ -311,6 +311,11 @@ final class AppState: ObservableObject {
                     ServerInfo(id: s.id, name: s.name, url: URL(string: s.url)!)
                 }
             )
+            // Replace-or-append by DID: a persisted list that already contains
+            // the DID twice (see loadPersistedAccounts) or a concurrent register
+            // would otherwise leave two rows for one account, which duplicates an
+            // id in the accounts ForEach (a hard crash on Android's LazyColumn).
+            accounts.removeAll { $0.id == account.id }
             accounts.append(account)
 
             do {
@@ -677,6 +682,9 @@ final class AppState: ObservableObject {
             avatarData: nil,
             servers: [ServerInfo(id: serverUrl, name: serverName, url: URL(string: serverUrl)!)]
         )
+        // Replace-or-append by DID (see restoreAccounts) so registration can't
+        // leave a duplicate account id even if this DID is already present.
+        accounts.removeAll { $0.id == account.id }
         accounts.append(account)
 
         Self.persistAccount(PersistedAccount(
@@ -1627,7 +1635,22 @@ final class AppState: ObservableObject {
                 ))
             }
         }
-        conversations = newConvs.sorted {
+        // Collapse duplicate conversation IDs before publishing: a group ID is
+        // `group-<groupId>` with no account prefix (unlike DMs), so when two
+        // local accounts both belong to the same group each account's summaries
+        // yield one `group-<groupId>` row — a duplicate id that makes SwiftUI's
+        // ForEach warn and mis-animate (and hard-crashes Compose's LazyColumn on
+        // Android). Keep the entry with the most recent activity. Mirrors the
+        // Android dedup in AppViewModel.loadConversationsFromStore.
+        var dedupedById: [String: Conversation] = [:]
+        for c in newConvs {
+            if let existing = dedupedById[c.id],
+               (existing.lastMessageDate ?? .distantPast) >= (c.lastMessageDate ?? .distantPast) {
+                continue
+            }
+            dedupedById[c.id] = c
+        }
+        conversations = dedupedById.values.sorted {
             ($0.lastMessageDate ?? .distantPast) > ($1.lastMessageDate ?? .distantPast)
         }
         unreadCounts = newUnread
@@ -2630,7 +2653,13 @@ final class AppState: ObservableObject {
 
     private static func loadPersistedAccounts() -> [PersistedAccount] {
         guard let data = UserDefaults.standard.data(forKey: accountsKey) else { return [] }
-        return (try? JSONDecoder().decode([PersistedAccount].self, from: data)) ?? []
+        let decoded = (try? JSONDecoder().decode([PersistedAccount].self, from: data)) ?? []
+        // Heal any pre-existing corruption: an older build's non-atomic
+        // persistAccount could leave the same DID stored twice. Keep the first
+        // occurrence so restore/onboarding never see a duplicate; the next
+        // persistAccount rewrites the deduped list.
+        var seen = Set<String>()
+        return decoded.filter { seen.insert($0.did).inserted }
     }
 
     private static func persistAccount(_ account: PersistedAccount) {

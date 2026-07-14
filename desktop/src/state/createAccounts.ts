@@ -249,7 +249,10 @@ export function createAccounts(deps: AccountsDeps): Accounts {
       servers: [serverInfo],
     };
 
-    setStore("accounts", (prev) => [...prev, account]);
+    // Replace-or-append by DID so registration can't leave a duplicate account
+    // id even if this DID is already present (mirrors iOS finishAccountRegistration
+    // and the restoreAccounts guard). A duplicate id crashes Android's LazyColumn.
+    setStore("accounts", (prev) => [...prev.filter((a) => a.id !== account.id), account]);
 
     await addPersistedAccount({
       did: result.did,
@@ -443,7 +446,9 @@ export function createAccounts(deps: AccountsDeps): Accounts {
       avatarData: null,
       servers: [serverInfo],
     };
-    setStore("accounts", (prev) => [...prev, account]);
+    // Replace-or-append by DID (see createAccount) — the guard above races an
+    // await, so append defensively rather than unconditionally.
+    setStore("accounts", (prev) => [...prev.filter((a) => a.id !== account.id), account]);
     await addPersistedAccount({
       did: result.did,
       displayName: account.displayName,
