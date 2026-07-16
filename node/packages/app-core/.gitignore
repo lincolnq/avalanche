@@ -3,6 +3,8 @@ docs/
 native/index.js
 native/index.d.ts
 native/*.node
+# stray native addons anywhere in the package (napi assembly leftovers)
+*.node
 # napi prepublish / create-npm-dir byproducts (first-publish bootstrap)
 npm/
 artifacts/

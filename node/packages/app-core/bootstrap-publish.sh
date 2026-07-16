@@ -8,7 +8,7 @@
 # Prereqs:
 #   - `npm login` (your own account, member of the @theavalanche org, 2FA ready)
 #   - Trigger the workflow manually (Actions → Release → Run workflow) so the
-#     napi-build job produces the four `napi-<triple>` artifacts, then download
+#     napi-build job produces the three `napi-<triple>` artifacts, then download
 #     them into one directory:
 #       gh run download <run-id> --dir /tmp/napi
 #
@@ -28,13 +28,13 @@ if [ ! -d "$ARTIFACTS" ]; then
   exit 1
 fi
 
-# Collect the four platform .node files + the (target-independent) loader glue
+# Collect the three platform .node files + the (target-independent) loader glue
 # from the downloaded artifact tree into native/.
 mkdir -p native
 found=$(find "$ARTIFACTS" -name 'app-core.*.node' | wc -l | tr -d ' ')
-if [ "$found" -ne 4 ]; then
-  echo "error: expected 4 app-core.*.node files under '$ARTIFACTS', found $found" >&2
-  echo "       (did all four napi-build matrix legs succeed and download?)" >&2
+if [ "$found" -ne 3 ]; then
+  echo "error: expected 3 app-core.*.node files under '$ARTIFACTS', found $found" >&2
+  echo "       (did all three napi-build matrix legs succeed and download?)" >&2
   exit 1
 fi
 find "$ARTIFACTS" -name 'app-core.*.node' -exec cp {} native/ \;
@@ -48,11 +48,11 @@ npm run build:ts
 # Stamp the version, assemble the per-platform npm packages, publish them, then
 # publish the main package. npm will prompt for your 2FA one-time code.
 npm version "$VERSION" --no-git-tag-version --allow-same-version
-npx napi create-npm-dir -t npm
+npx napi create-npm-dir -t .   # -t is --target (output dir); "." -> ./npm/<triple>
 npx napi artifacts -d native
 npx napi prepublish -t npm --skip-gh-release   # publishes the 4 sub-packages
 npm publish                                    # publishes @theavalanche/app-core
 
-echo "Published @theavalanche/app-core@$VERSION + 4 platform packages."
-echo "Next: add a Trusted Publisher to all five packages on npmjs.com, then"
+echo "Published @theavalanche/app-core@$VERSION + 3 platform packages."
+echo "Next: add a Trusted Publisher to all four packages on npmjs.com, then"
 echo "future stable tags publish from CI via OIDC (no token)."

@@ -1,6 +1,6 @@
 {
   "name": "@theavalanche/app-core",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Node.js bindings for Avalanche's app-core (encrypted messaging client).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,8 +13,7 @@
   "homepage": "https://github.com/lincolnq/avalanche/tree/main/node/packages/app-core#readme",
   "bugs": "https://github.com/lincolnq/avalanche/issues",
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "files": [
     "dist/",
@@ -28,7 +27,6 @@
     "triples": {
       "defaults": false,
       "additional": [
-        "x86_64-apple-darwin",
         "aarch64-apple-darwin",
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu"
@@ -46,6 +44,11 @@
   },
   "dependencies": {
     "temporal-spec": "^0.3.1"
+  },
+  "optionalDependencies": {
+    "@theavalanche/app-core-darwin-arm64": "0.4.0",
+    "@theavalanche/app-core-linux-x64-gnu": "0.4.0",
+    "@theavalanche/app-core-linux-arm64-gnu": "0.4.0"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4",

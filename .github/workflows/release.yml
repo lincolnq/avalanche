@@ -21,10 +21,10 @@ name: Release
 #
 # The @theavalanche/app-core npm package is ALSO published here, for STABLE tags only
 # (a `vX.Y.Z` with no prerelease suffix). The `napi-build` job compiles the
-# native addon for four triples (linux x64/arm64, macOS x64/arm64); `publish-npm`
+# native addon for three triples (linux x64/arm64, macOS arm64); `publish-npm`
 # assembles the split platform packages and publishes to npmjs via OIDC trusted
 # publishing (no token — a trusted publisher must be configured for each of the
-# five package names on npmjs.com). The npm version is the tag minus its `v`.
+# four package names on npmjs.com). The npm version is the tag minus its `v`.
 
 on:
   push:
@@ -205,8 +205,6 @@ jobs:
             runner: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            runner: macos-13
           - target: aarch64-apple-darwin
             runner: macos-latest
     runs-on: ${{ matrix.runner }}
@@ -244,9 +242,9 @@ jobs:
 
       # Upload the whole native/ dir: the arch-specific app-core.<triple>.node
       # AND the generated loader glue (index.js / index.d.ts). The glue is
-      # target-independent (generated from the #[napi] signatures) so all four
+      # target-independent (generated from the #[napi] signatures) so all three
       # legs produce byte-identical copies — merge-multiple in the publish job
-      # dedups them; the four .node files are distinct.
+      # dedups them; the three .node files are distinct.
       - uses: actions/upload-artifact@v4
         with:
           name: napi-${{ matrix.target }}
@@ -315,7 +313,7 @@ jobs:
           # Create npm/<triple>/ sub-packages, copy each .node from native/ into
           # them, then publish the sub-packages and rewrite optionalDependencies
           # on the main package.json.
-          npx napi create-npm-dir -t npm
+          npx napi create-npm-dir -t .
           npx napi artifacts -d native
           npx napi prepublish -t npm --skip-gh-release
 

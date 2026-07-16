@@ -41,11 +41,12 @@ npm run docs -w @theavalanche/app-core         # generate HTML API docs → node
 (a `vX.Y.Z` with no prerelease suffix), by the `napi-build` + `publish-npm` jobs in
 `.github/workflows/release.yml`. The npm version is the tag minus its `v`, matching
 the repo's one-tag-one-version scheme. It ships as **split platform packages**:
-`@theavalanche/app-core` plus four `@theavalanche/app-core-<platform>` sub-packages
-(linux x64/arm64, macOS x64/arm64) declared as `optionalDependencies`; the
+`@theavalanche/app-core` plus three `@theavalanche/app-core-<platform>` sub-packages
+(linux x64/arm64, macOS arm64) declared as `optionalDependencies`; the
 napi-generated `native/index.js` loader resolves the right one at runtime. There is
 **no `postinstall` build step**, so npm v12's opt-in-lifecycle-scripts default is a
-non-issue.
+non-issue. (Intel macOS / `darwin-x64` is intentionally not built — Apple Silicon
+only; adding it later is additive and non-breaking.)
 
 Steady-state auth is **OIDC trusted publishing** (no secret): the workflow's
 `id-token: write` grant lets npm mint a short-lived credential, and provenance is
@@ -54,8 +55,8 @@ automation tokens (which lose publish rights ~Jan 2027).
 
 **Why the first publish is different.** A trusted publisher attaches to an
 *existing* package (via the npmjs package-settings page), and the main package
-pins all four `@theavalanche/app-core-<platform>` sub-packages at the same version
-— so the first publish must build all four triples and create all five names at
+pins all three `@theavalanche/app-core-<platform>` sub-packages at the same version
+— so the first publish must build all three triples and create all four names at
 once. A dev Mac can only build its own triple (`darwin-arm64`), and OIDC can't be
 used yet (nothing to attach a trusted publisher to). So for the first publish we
 build the binaries in CI, download them, and publish from a logged-in machine — no
@@ -65,16 +66,16 @@ token is ever stored in CI.
 
 1. Create the free **`@theavalanche`** org on npmjs.com (public packages are free)
    and `npm login` locally as a member (2FA ready).
-2. **Build the four binaries in CI:** Actions → Release → *Run workflow* (the
+2. **Build the three binaries in CI:** Actions → Release → *Run workflow* (the
    `workflow_dispatch` trigger). This runs ONLY the `napi-build` job — the
-   release/publish jobs are gated to tag pushes — producing four `napi-<triple>`
+   release/publish jobs are gated to tag pushes — producing three `napi-<triple>`
    artifacts. Download them into one dir: `gh run download <run-id> --dir /tmp/napi`.
-3. **Publish all five packages from your machine:** from `node/packages/app-core`,
+3. **Publish all four packages from your machine:** from `node/packages/app-core`,
    `./bootstrap-publish.sh 0.4.0 /tmp/napi` (version WITHOUT the leading `v`). It
-   stages the binaries + loader glue, builds the TS wrapper, and publishes the four
+   stages the binaries + loader glue, builds the TS wrapper, and publishes the three
    sub-packages then the main package (npm prompts for your 2FA code).
-4. On npmjs.com, for **each** of the five now-existing packages
-   (`@theavalanche/app-core` + the four `@theavalanche/app-core-<platform>`), add a
+4. On npmjs.com, for **each** of the four now-existing packages
+   (`@theavalanche/app-core` + the three `@theavalanche/app-core-<platform>`), add a
    **Trusted Publisher**: GitHub repo `lincolnq/avalanche`, workflow `release.yml`.
 5. Done. Every later stable `vX.Y.Z` tag publishes from CI via OIDC — no secret,
    provenance attested. Prerelease tags (`v0.5.0-rc.1`) build the GitHub Release
