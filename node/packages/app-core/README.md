@@ -1,12 +1,18 @@
 # @theavalanche/app-core
 
-Node.js bindings for [actnet](https://github.com/civitech/actnet)'s `app-core` — the Rust client library that implements account creation, end-to-end encrypted messaging, and group flows on top of libsignal + SQLCipher.
+Node.js bindings for [Avalanche](https://github.com/lincolnq/avalanche)'s `app-core` — the Rust client library that implements account creation, end-to-end encrypted messaging, and group flows on top of libsignal + SQLCipher.
 
 This package is a thin TypeScript layer over a `napi-rs` cdylib. Bots and server-side automation talk to a homeserver through this API the same way the iOS app does.
 
 ## Install
 
-This crate isn't on npm yet; build from the actnet checkout:
+```bash
+npm install @theavalanche/app-core
+```
+
+The native addon ships as prebuilt platform packages (macOS arm64, Linux x64/arm64), resolved automatically — no build step or toolchain required.
+
+To build from source instead (from an [Avalanche](https://github.com/lincolnq/avalanche) checkout):
 
 ```bash
 # from repo root
@@ -27,7 +33,7 @@ Outputs:
 ## Runtime requirements
 
 - **Node ≥ 26** with a native `Temporal` global. Standard nodejs.org binaries include it. Some distro images (notably `node:26-alpine` without the Rust toolchain at build time) ship without `Temporal`; the wrapper itself loads fine, but any method that takes or returns a `Temporal.Instant` will throw.
-- **macOS / Linux** — the build script targets `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`. Windows isn't wired up.
+- **macOS (Apple Silicon) / Linux (x64, arm64)** — prebuilt for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`. Intel macOS (`x86_64-apple-darwin`) and Windows aren't built.
 
 ## Quick start: a bot that echoes DMs
 
