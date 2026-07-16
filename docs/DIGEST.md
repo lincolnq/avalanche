@@ -500,8 +500,18 @@ E2E); push real interactivity into an explicit full-screen webview.
   public routing pointer; only holds off-box). **Coordination is data-carried, never bot-to-bot RPC**
   (`AccountJoinedEvent` push + catch-up + invite-token routing tags). Server-enforced caps (dot namespace,
   catalog in `20`): `accounts.read` (roster snapshot + account join/leave feeds), `registration.gatekeeper`.
+  `/install-project` consumes a manifest (pasted/URL) → creates the Project + grants approved caps.
   **Rejected:** bot-to-bot RPC/service mesh (liveness fragility), per-admin
   server-verified credentials (would leak admin roster, eroding the property `#admins` protects).
+- **Client directory / Network tab (✅ DB-backed, `22`):** `GET /v1/projects` reads a `directory_entries`
+  table (nullable `project_id` FK → `projects`, `ON DELETE CASCADE`), not the legacy `PROJECTS` env — which
+  is now only a **one-time startup seed** (empty-table guard; preserves seeded rows' operator-set `official`/
+  `client_id`). A manifest's `webEntries` publish per-Project entries via `PUT /v1/admin/projects/{slug}/
+  directory` (replace-semantics), reviewed by the admin at install, stored **always non-official** (officialness
+  is never self-declared) with no OAuth `client_id`. Untrusted-input capped (≤10 entries, http(s)-only, length-
+  limited, control-chars rejected). Wire `ProjectInfo` shape unchanged → no client changes. Testbot keeps its
+  entry transitively via the seed. **Deferred:** deploy-CLI reconciliation (retire `PROJECTS`-env generation);
+  OAuth for manifest-declared entries. This is the resolution of the old "two projects concepts" reconcile TODO.
 - **Vetted onboarding / gatekeeper** (📐, `24`) — gates account creation behind human vetting. Shaped oddly
   because the applicant has **no DID until the end**: front half runs out-of-band (email/SMS invite). Needs
   **closed registration** (`POST /v1/accounts` refused without a token validating against an installed

@@ -283,7 +283,10 @@ The manifest is the artifact the admin's tooling reads at install time to learn 
   "name": "Beagle",
   "description": "Posts a beagle fact on request.",
   "url": "https://beagle.example.org",
-  "permissions": ["accounts.read"]
+  "permissions": ["accounts.read"],
+  "webEntries": [
+    { "name": "Beagle", "url": "https://beagle.example.org/", "description": "Get a beagle fact." }
+  ]
 }
 ```
 
@@ -292,6 +295,7 @@ The manifest is the artifact the admin's tooling reads at install time to learn 
 - `description` — optional one-line summary, shown to the admin at install.
 - `url` — optional; the Project's web origin, for a webview Project. Omitted for a headless bot.
 - `permissions` — the permission ids it requests, drawn from the single dot-separated namespace above: any of the client-honored *scopes* and/or the *server-enforced capabilities* (`accounts.read`, `registration.gatekeeper`). **Default-deny** — the admin approves which to grant; anything unlisted is never granted. The manifest declares a *request*, not authority; the grant is the admin's act, recorded server-side.
+- `webEntries` — optional; the web pages this Project publishes in the client **Network tab** (the project directory, `GET /v1/projects`). Each entry is `{name, url, description?}`. The admin reviews them at install; they are stored server-side in the `directory_entries` table (replace-semantics per Project, `ON DELETE CASCADE` on uninstall) and are **always non-official** (officialness is server-vouched, never self-declared — `54-bots-and-verification.md`) with no OAuth `client_id`. Untrusted input: capped at 10 entries, `http(s)`-only URLs, name ≤100 and description ≤280 chars, trimmed, control-chars rejected. **OAuth "Sign in with Avalanche" for manifest-declared entries is a deferred follow-up** (the `client_id`/`official` columns exist and are populated only by the one-time seed of legacy operator entries).
 
 The manifest is **untrusted input** (Project-authored): sanitize and length-limit its strings, homoglyph-guard the name, and attribute every resulting surface to its `(server, Project)` — exactly as for the client-visible manifests under *multiple homeservers* above.
 

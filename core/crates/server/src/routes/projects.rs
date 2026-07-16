@@ -40,8 +40,21 @@ struct ProjectInfo {
 async fn list_projects(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ProjectInfo>>, ServerError> {
-    let projects: Vec<ProjectInfo> = serde_json::from_str(&state.config.projects_json)
-        .map_err(|e| ServerError::Internal(format!("invalid PROJECTS config: {e}")))?;
+    // The directory is DB-backed (docs/22): manifest-driven entries plus any
+    // legacy PROJECTS env rows seeded once at startup (see main.rs). The wire
+    // shape is unchanged, so clients need no change.
+    let mut conn = state.db.acquire().await?;
+    let entries = db::directory::list(&mut conn).await?;
+    let projects = entries
+        .into_iter()
+        .map(|e| ProjectInfo {
+            name: e.name,
+            url: e.url,
+            description: e.description,
+            client_id: e.client_id,
+            official: e.official,
+        })
+        .collect();
     Ok(Json(projects))
 }
 

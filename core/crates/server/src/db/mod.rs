@@ -21,6 +21,7 @@ pub mod capabilities;
 pub mod challenges;
 pub mod devices;
 pub mod did;
+pub mod directory;
 pub mod groups;
 pub mod group_messages;
 pub mod messages;

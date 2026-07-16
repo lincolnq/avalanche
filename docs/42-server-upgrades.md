@@ -39,6 +39,16 @@ every host (server or Project) has its own `deployments/<tag>/` + `current`
 symlink and its own copy of `av-deploy`, and runs the identical install/update
 machinery over whatever component(s) it hosts.
 
+**Client directory (Network tab) note.** The install/update scripts still write
+the `PROJECTS` env var (and Caddy routes) via `regenerate_projects` when a bot is
+installed, but the server now treats `PROJECTS` only as a **one-time seed source**
+for the DB-backed directory (`directory_entries`; `GET /v1/projects` reads the DB
+— see `22-adminbot.md`). So an installed bot like testbot still appears in the
+Network tab (its `PROJECTS` entry is seeded into the DB on first boot), with no
+deploy change required. Reconciling the deploy scripts to drive the DB directory
+directly (and retire the `PROJECTS`-env half of `regenerate_projects`) is a
+tracked follow-up (`02-todos-deferred.md`).
+
 Some Projects keep **local state** (adminbot has a SQLCipher `store.db` +
 `state.json`; testbot is stateless). It lives under `shared/<project>/` so it
 survives flips and pruning — but beyond keeping it out of the versioned tree,

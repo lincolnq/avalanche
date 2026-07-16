@@ -106,6 +106,52 @@ async fn main() {
             .expect("failed to seed superuser project");
     }
 
+    // One-time migration of the legacy PROJECTS env directory into the DB
+    // (docs/22): the client directory is now DB-backed. Seeds only when the
+    // table is empty, preserving each entry's operator-set official flag +
+    // OAuth client id. Once seeded, later PROJECTS edits are ignored — the
+    // directory is DB-owned and managed via adminbot from here on.
+    {
+        #[derive(serde::Deserialize)]
+        struct SeedProject {
+            name: String,
+            url: String,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            client_id: Option<String>,
+            #[serde(default)]
+            official: bool,
+        }
+        let mut conn = pool.acquire().await.expect("failed to acquire db connection");
+        if db::directory::is_empty(&mut conn)
+            .await
+            .expect("failed to check directory")
+        {
+            match serde_json::from_str::<Vec<SeedProject>>(&config.projects_json) {
+                Ok(seed) if !seed.is_empty() => {
+                    let entries: Vec<_> = seed
+                        .into_iter()
+                        .map(|p| db::directory::SeedEntry {
+                            name: p.name,
+                            url: p.url,
+                            description: p.description,
+                            client_id: p.client_id,
+                            official: p.official,
+                        })
+                        .collect();
+                    let n = entries.len();
+                    db::directory::seed(&mut conn, &entries)
+                        .await
+                        .expect("failed to seed directory from PROJECTS env");
+                    tracing::info!(count = n, "seeded project directory from PROJECTS env");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "invalid PROJECTS env; skipping directory seed"),
+            }
+        }
+    }
+
     // Warn loudly if registration is closed but no admission path is
     // configured — otherwise no one (not even the first admin) can register.
     if config.registration_mode == server::config::RegistrationMode::Closed

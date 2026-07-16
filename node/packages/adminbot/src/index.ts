@@ -616,6 +616,19 @@ const PERMISSION_LABELS: Record<string, string> = {
 };
 const permissionLabel = (id: string): string => PERMISSION_LABELS[id] ?? id;
 
+// One Network-tab (project directory) web page a manifest can declare.
+interface ManifestWebEntry {
+  name: string;
+  url: string;
+  description?: string;
+}
+
+// Untrusted-input caps mirrored on the server (docs/20 §manifest); kept in sync
+// with MAX_DIRECTORY_ENTRIES / MAX_ENTRY_* in server routes/admin.rs.
+const MAX_WEB_ENTRIES = 10;
+const MAX_WEB_ENTRY_NAME = 100;
+const MAX_WEB_ENTRY_DESC = 280;
+
 // A project's self-description. Mirrors the future well-known-URL manifest.
 interface ProjectManifest {
   slug: string;
@@ -623,6 +636,9 @@ interface ProjectManifest {
   description?: string;
   url?: string;
   permissions: string[];
+  // Web pages to publish in the client "Network" tab (docs/22). Always shown to
+  // the admin for review at install; stored non-official server-side.
+  webEntries: ManifestWebEntry[];
 }
 
 type InstallStep = "manifest" | "confirm";
@@ -730,7 +746,46 @@ async function loadManifest(input: string): Promise<ProjectManifest> {
     description: typeof m.description === "string" ? m.description : undefined,
     url,
     permissions,
+    webEntries: parseWebEntries(m.webEntries),
   };
+}
+
+// Validate + normalize a manifest's optional `webEntries` (the Network-tab
+// pages). Untrusted input: cap the count, require http(s) URLs, length-limit and
+// trim name/description, reject control characters. Throws a plain-language
+// Error on any problem. The server re-validates independently (routes/admin.rs).
+function parseWebEntries(raw: unknown): ManifestWebEntry[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error('"webEntries" must be a list.');
+  }
+  if (raw.length > MAX_WEB_ENTRIES) {
+    throw new Error(`a manifest may list at most ${MAX_WEB_ENTRIES} web entries.`);
+  }
+  // eslint-disable-next-line no-control-regex
+  const hasControl = (s: string): boolean => /[\x00-\x1f\x7f]/.test(s);
+  return raw.map((item, i): ManifestWebEntry => {
+    if (typeof item !== "object" || item === null) {
+      throw new Error(`web entry #${i + 1} must be an object.`);
+    }
+    const e = item as Record<string, unknown>;
+    const name = typeof e.name === "string" ? e.name.trim() : "";
+    const url = typeof e.url === "string" ? e.url.trim() : "";
+    const description = typeof e.description === "string" ? e.description.trim() : "";
+    if (name.length === 0 || name.length > MAX_WEB_ENTRY_NAME) {
+      throw new Error(`web entry #${i + 1} needs a "name" of 1–${MAX_WEB_ENTRY_NAME} characters.`);
+    }
+    if (!/^https?:\/\//.test(url)) {
+      throw new Error(`web entry #${i + 1}'s "url" must start with http:// or https://.`);
+    }
+    if (description.length > MAX_WEB_ENTRY_DESC) {
+      throw new Error(`web entry #${i + 1}'s "description" must be at most ${MAX_WEB_ENTRY_DESC} characters.`);
+    }
+    if (hasControl(name) || hasControl(url) || hasControl(description)) {
+      throw new Error(`web entry #${i + 1} must not contain control characters.`);
+    }
+    return { name, url, description: description || undefined };
+  });
 }
 
 // The confirm prompt: what the project is + the permissions it requests,
@@ -738,6 +793,10 @@ async function loadManifest(input: string): Promise<ProjectManifest> {
 function confirmPrompt(m: ProjectManifest): string {
   const lines = [`${m.name} wants to be installed.`];
   if (m.description) lines.push(m.description);
+  if (m.webEntries.length > 0) {
+    lines.push("", "It will add these pages to the Network tab:");
+    m.webEntries.forEach((e) => lines.push(`  • ${e.name} — ${e.url}`));
+  }
   if (m.permissions.length === 0) {
     lines.push("", "It isn't requesting any special permissions.", "", "Reply `yes` to install, or /cancel.");
   } else {
@@ -884,6 +943,21 @@ async function performInstall(
   }
   if (granted.length) lines.push(`Granted: ${granted.map(permissionLabel).join(", ")}.`);
   if (failures.length) lines.push(`Couldn't grant: ${failures.join("; ")}.`);
+
+  // Publish the manifest's Network-tab pages (replace semantics). Only when the
+  // project row exists; a failure here is reported but non-fatal.
+  if (manifest.webEntries.length > 0) {
+    try {
+      await core.adminRequest(
+        "PUT",
+        `/v1/admin/projects/${slug}/directory`,
+        JSON.stringify({ entries: manifest.webEntries }),
+      );
+      lines.push(`Added ${manifest.webEntries.length} page(s) to the Network tab.`);
+    } catch (e) {
+      lines.push(`Couldn't add Network-tab pages: ${(e as Error).message}`);
+    }
+  }
 
   if (env.sharedSecret) {
     const token = AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, slug);

@@ -11,7 +11,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use base64::prelude::*;
@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/projects/{slug}", delete(uninstall_project))
         .route("/v1/admin/projects/{slug}/bots", post(link_bot))
         .route("/v1/admin/projects/{slug}/bots/{bot_did}", delete(unlink_bot))
+        .route("/v1/admin/projects/{slug}/directory", put(set_directory))
         .route("/v1/admin/capabilities", post(grant_capability))
         .route(
             "/v1/admin/capabilities/{slug}/{capability}",
@@ -214,6 +215,89 @@ async fn unlink_bot(
     if !db::projects::unlink_bot(&mut conn, account.id).await? {
         return Err(ServerError::NotFound);
     }
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---- Directory (Network tab) entries ---------------------------------------
+
+/// Upper bounds on a Project's manifest-declared directory entries. The manifest
+/// is untrusted input (docs/20 §manifest), so the server caps count and sizes
+/// and rejects non-web URLs independently of any client-side check.
+const MAX_DIRECTORY_ENTRIES: usize = 10;
+const MAX_ENTRY_NAME_LEN: usize = 100;
+const MAX_ENTRY_DESC_LEN: usize = 280;
+
+#[derive(Deserialize)]
+struct SetDirectoryRequest {
+    #[serde(default)]
+    entries: Vec<DirectoryEntryInput>,
+}
+
+#[derive(Deserialize)]
+struct DirectoryEntryInput {
+    name: String,
+    url: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// Validate + normalize (trim) one batch of directory entries. Rejects an
+/// over-count batch, empty/oversize names, oversize descriptions, non-http(s)
+/// URLs, and any control characters.
+fn clean_directory_entries(
+    entries: Vec<DirectoryEntryInput>,
+) -> Result<Vec<db::directory::ProjectEntry>, ServerError> {
+    if entries.len() > MAX_DIRECTORY_ENTRIES {
+        return Err(ServerError::BadRequest(format!(
+            "at most {MAX_DIRECTORY_ENTRIES} directory entries are allowed"
+        )));
+    }
+    let has_control = |s: &str| s.chars().any(char::is_control);
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let name = e.name.trim().to_string();
+        let url = e.url.trim().to_string();
+        let description = e.description.trim().to_string();
+        if name.is_empty() || name.len() > MAX_ENTRY_NAME_LEN {
+            return Err(ServerError::BadRequest(format!(
+                "each directory entry needs a name of 1–{MAX_ENTRY_NAME_LEN} characters"
+            )));
+        }
+        if description.len() > MAX_ENTRY_DESC_LEN {
+            return Err(ServerError::BadRequest(format!(
+                "directory entry description must be at most {MAX_ENTRY_DESC_LEN} characters"
+            )));
+        }
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(ServerError::BadRequest(
+                "each directory entry url must start with http:// or https://".into(),
+            ));
+        }
+        if has_control(&name) || has_control(&url) || has_control(&description) {
+            return Err(ServerError::BadRequest(
+                "directory entries must not contain control characters".into(),
+            ));
+        }
+        out.push(db::directory::ProjectEntry { name, url, description });
+    }
+    Ok(out)
+}
+
+/// `PUT /v1/admin/projects/{slug}/directory` — replace the full set of
+/// Network-tab entries for a Project (replace semantics, idempotent on
+/// re-install). Manifest-driven entries are always non-official with no OAuth
+/// client id (docs/22).
+async fn set_directory(
+    State(state): State<AppState>,
+    auth: AuthAdminbot,
+    Path(slug): Path<String>,
+    Json(req): Json<SetDirectoryRequest>,
+) -> Result<Json<Value>, ServerError> {
+    let entries = clean_directory_entries(req.entries)?;
+    let mut conn = state.db.acquire().await?;
+    let project_id = resolve_mutable_project(&mut conn, &slug).await?;
+    db::directory::replace_for_project(&mut conn, project_id, &entries).await?;
+    tracing::info!(%slug, by = %auth.did, count = entries.len(), "project directory set");
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -413,4 +497,45 @@ async fn get_accounts(
         })
         .collect();
     Ok(Json(json!({ "accounts": views, "next": next })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(name: &str, url: &str, description: &str) -> DirectoryEntryInput {
+        DirectoryEntryInput {
+            name: name.into(),
+            url: url.into(),
+            description: description.into(),
+        }
+    }
+
+    #[test]
+    fn clean_directory_entries_accepts_and_trims() {
+        let out = clean_directory_entries(vec![input("  Page  ", " https://x.test/ ", " hi ")]).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Page");
+        assert_eq!(out[0].url, "https://x.test/");
+        assert_eq!(out[0].description, "hi");
+    }
+
+    #[test]
+    fn clean_directory_entries_rejects_over_count() {
+        let many: Vec<_> = (0..MAX_DIRECTORY_ENTRIES + 1)
+            .map(|i| input(&format!("P{i}"), &format!("https://x{i}.test/"), ""))
+            .collect();
+        assert!(clean_directory_entries(many).is_err());
+    }
+
+    #[test]
+    fn clean_directory_entries_rejects_bad_url_and_empty_name() {
+        assert!(clean_directory_entries(vec![input("P", "ftp://x.test/", "")]).is_err());
+        assert!(clean_directory_entries(vec![input("   ", "https://x.test/", "")]).is_err());
+    }
+
+    #[test]
+    fn clean_directory_entries_rejects_control_chars() {
+        assert!(clean_directory_entries(vec![input("Bad\u{7}", "https://x.test/", "")]).is_err());
+    }
 }

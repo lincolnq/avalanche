@@ -1196,6 +1196,110 @@ async fn gatekeeper_signing_key_set_and_clear() {
 }
 
 #[tokio::test]
+async fn directory_replace_is_full_replace_and_ordered() {
+    use server::db::directory::{self, ProjectEntry};
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let pid = projects::create(&mut *tx, "proj-dir-r", "Dir", None).await.unwrap();
+    let e = |n: &str, u: &str| ProjectEntry {
+        name: n.into(),
+        url: u.into(),
+        description: String::new(),
+    };
+    directory::replace_for_project(
+        &mut *tx,
+        pid,
+        &[e("A", "https://dbdir-a.test/"), e("B", "https://dbdir-b.test/")],
+    )
+    .await
+    .unwrap();
+
+    // Manifest entries are stored non-official with no client id, in order.
+    let mine: Vec<_> = directory::list(&mut *tx)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.url.starts_with("https://dbdir-"))
+        .collect();
+    assert_eq!(mine.len(), 2);
+    assert_eq!(mine[0].url, "https://dbdir-a.test/");
+    assert_eq!(mine[1].url, "https://dbdir-b.test/");
+    assert!(!mine[0].official);
+    assert!(mine[0].client_id.is_none());
+
+    // Replace fully swaps the set (old entries gone).
+    directory::replace_for_project(&mut *tx, pid, &[e("C", "https://dbdir-c.test/")])
+        .await
+        .unwrap();
+    let mine: Vec<_> = directory::list(&mut *tx)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.url.starts_with("https://dbdir-"))
+        .collect();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].url, "https://dbdir-c.test/");
+}
+
+#[tokio::test]
+async fn directory_entries_cascade_on_project_delete() {
+    use server::db::directory::{self, ProjectEntry};
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    let pid = projects::create(&mut *tx, "proj-dir-cascade", "Dir", None).await.unwrap();
+    directory::replace_for_project(
+        &mut *tx,
+        pid,
+        &[ProjectEntry {
+            name: "X".into(),
+            url: "https://dbdir-cascade.test/".into(),
+            description: String::new(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    assert!(projects::delete_by_slug(&mut *tx, "proj-dir-cascade").await.unwrap());
+    let present = directory::list(&mut *tx)
+        .await
+        .unwrap()
+        .into_iter()
+        .any(|d| d.url == "https://dbdir-cascade.test/");
+    assert!(!present, "directory entries must cascade-delete with the project");
+}
+
+#[tokio::test]
+async fn directory_seed_preserves_official_and_client_id() {
+    use server::db::directory::{self, SeedEntry};
+    let pool = test_pool().await;
+    let mut tx = begin_tx(&pool).await;
+
+    directory::seed(
+        &mut *tx,
+        &[SeedEntry {
+            name: "Testbot".into(),
+            url: "https://dbdir-seed.test/".into(),
+            description: "demo".into(),
+            client_id: Some("testbot".into()),
+            official: true,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let seeded = directory::list(&mut *tx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|d| d.url == "https://dbdir-seed.test/")
+        .expect("seeded entry present");
+    assert!(seeded.official, "seed preserves operator-set official flag");
+    assert_eq!(seeded.client_id.as_deref(), Some("testbot"));
+}
+
+#[tokio::test]
 async fn token_redemption_is_single_use() {
     let pool = test_pool().await;
     let mut tx = begin_tx(&pool).await;
