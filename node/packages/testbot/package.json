@@ -1,5 +1,5 @@
 {
-  "name": "@actnet/testbot",
+  "name": "@theavalanche/testbot",
   "version": "0.1.0",
   "description": "actnet's testbot Project — an HTTP service that spins up AI chatbot accounts on demand.",
   "private": true,
@@ -14,7 +14,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@actnet/app-core": "*",
+    "@theavalanche/app-core": "*",
     "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {

@@ -22,7 +22,7 @@
  * ### Getting started
  *
  * ```ts
- * import { initLogging, AppCore } from "@actnet/app-core";
+ * import { initLogging, AppCore } from "@theavalanche/app-core";
  *
  * initLogging("info");
  *

@@ -5,9 +5,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @actnet/app-core",
-    "build:debug": "npm run build:debug -w @actnet/app-core",
-    "docs": "npm run docs -w @actnet/app-core"
+    "build": "npm run build -w @theavalanche/app-core",
+    "build:debug": "npm run build:debug -w @theavalanche/app-core",
+    "docs": "npm run docs -w @theavalanche/app-core"
   },
   "engines": {
     "node": ">=26"

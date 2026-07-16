@@ -1,5 +1,5 @@
 {
-  "name": "@actnet/adminbot",
+  "name": "@theavalanche/adminbot",
   "version": "0.1.0",
   "description": "actnet's first-party adminbot — handles new-user onboarding and the #admins chat console.",
   "private": true,
@@ -14,7 +14,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@actnet/app-core": "*"
+    "@theavalanche/app-core": "*"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",

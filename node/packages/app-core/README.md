@@ -1,4 +1,4 @@
-# @actnet/app-core
+# @theavalanche/app-core
 
 Node.js bindings for [actnet](https://github.com/civitech/actnet)'s `app-core` — the Rust client library that implements account creation, end-to-end encrypted messaging, and group flows on top of libsignal + SQLCipher.
 
@@ -32,7 +32,7 @@ Outputs:
 ## Quick start: a bot that echoes DMs
 
 ```ts
-import { initLogging, AppCore } from "@actnet/app-core";
+import { initLogging, AppCore } from "@theavalanche/app-core";
 
 initLogging("info");
 

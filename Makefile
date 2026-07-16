@@ -87,7 +87,7 @@ GIT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 MARKETING_VERSION ?= $(or $(GIT_TAG),0.0.0)
 CURRENT_PROJECT_VERSION ?= $(or $(shell git rev-list --count HEAD 2>/dev/null),0)
 
-# Node @actnet/app-core napi binding — same file-based incremental approach as
+# Node @theavalanche/app-core napi binding — same file-based incremental approach as
 # the iOS chain. The native build regenerates native/index.d.ts every run, so
 # it doubles as the stamp for "the binding is current with the Rust sources".
 # The TS wrapper compiles to dist/index.js. Both are real file targets gated on
@@ -110,16 +110,16 @@ node-debug:
 	cd node && [ -d node_modules ] || npm install
 	cd node && npm run build:debug
 
-# Rebuild the @actnet/app-core napi native binding when any Rust source
+# Rebuild the @theavalanche/app-core napi native binding when any Rust source
 # changes (the binding statically links the whole core, so the dep set is the
 # same RUST_SOURCES the xcframework uses). cargo's incremental keeps this cheap.
 $(APP_CORE_NATIVE): $(RUST_SOURCES)
 	cd node && [ -d node_modules ] || npm install
-	cd node && npm run build:native -w @actnet/app-core
+	cd node && npm run build:native -w @theavalanche/app-core
 
 # Recompile the TS wrapper when the native binding or the wrapper sources change.
 $(APP_CORE_DIST): $(APP_CORE_NATIVE) $(APP_CORE_TS_SOURCES)
-	cd node && npm run build:ts -w @actnet/app-core
+	cd node && npm run build:ts -w @theavalanche/app-core
 
 # Human-friendly alias for "bring the shared binding up to date". The real
 # gating lives on the file targets above; this just names them.
@@ -140,7 +140,7 @@ node-app-core: $(APP_CORE_DIST)
 # Build the adminbot package. Depends on the shared app-core binding (which
 # only rebuilds when the Rust/TS sources actually change).
 node-adminbot-build: $(APP_CORE_DIST)
-	cd node && npm run build -w @actnet/adminbot
+	cd node && npm run build -w @theavalanche/adminbot
 
 # Run the adminbot. Idempotent — first run registers the reserved DID, later
 # runs re-login against the existing SQLCipher store.
@@ -162,7 +162,7 @@ node-adminbot: node-adminbot-build
 # Build the testbot package. Depends on the shared app-core binding (which
 # only rebuilds when the Rust/TS sources actually change).
 node-testbot-build: $(APP_CORE_DIST)
-	cd node && npm run build -w @actnet/testbot
+	cd node && npm run build -w @theavalanche/testbot
 
 # Run the testbot HTTP service.
 node-testbot: node-testbot-build

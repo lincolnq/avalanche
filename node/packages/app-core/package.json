@@ -1,16 +1,27 @@
 {
-  "name": "@actnet/app-core",
+  "name": "@theavalanche/app-core",
   "version": "0.1.0",
-  "description": "Node.js bindings for actnet's app-core (encrypted messaging client).",
+  "description": "Node.js bindings for Avalanche's app-core (encrypted messaging client).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "private": true,
   "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lincolnq/avalanche.git",
+    "directory": "node/packages/app-core"
+  },
+  "homepage": "https://github.com/lincolnq/avalanche/tree/main/node/packages/app-core#readme",
+  "bugs": "https://github.com/lincolnq/avalanche/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "dist/",
     "native/index.js",
     "native/index.d.ts",
-    "native/*.node"
+    "README.md",
+    "LICENSE"
   ],
   "napi": {
     "name": "app-core",

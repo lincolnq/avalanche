@@ -487,7 +487,7 @@ E2E); push real interactivity into an explicit full-screen webview.
   anyone can share them; beware the who-clicked beacon.
 
 ### First-party Projects
-- **Testbot** (✅, `21`) — `node/packages/testbot/` TS bot on `@actnet/app-core`: web "Text Me" button →
+- **Testbot** (✅, `21`) — `node/packages/testbot/` TS bot on `@theavalanche/app-core`: web "Text Me" button →
   ephemeral bot DMs you, relays to Claude Haiku. Proof-of-concept for the Project model.
 - **Adminbot** (✅ minimal, `22`) — server admin via chat. Two foundations: (1) **one superuser DID**
   (`did:local:adminbot`) pinned in server config; all `/v1/admin/*` check `caller==ADMINBOT_DID`. (2) An

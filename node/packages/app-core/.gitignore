@@ -3,3 +3,6 @@ docs/
 native/index.js
 native/index.d.ts
 native/*.node
+# napi prepublish / create-npm-dir byproducts (first-publish bootstrap)
+npm/
+artifacts/

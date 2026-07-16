@@ -242,7 +242,7 @@ These are the first Projects we build ourselves. They serve as the primary acqui
 
 **Implemented:**
 
-- **Testbot** — AI chatbot via encrypted DMs. See [docs/21-chatbot-project.md](21-chatbot-project.md). Package: `node/packages/testbot/` (TypeScript, on `@actnet/app-core`).
+- **Testbot** — AI chatbot via encrypted DMs. See [docs/21-chatbot-project.md](21-chatbot-project.md). Package: `node/packages/testbot/` (TypeScript, on `@theavalanche/app-core`).
 
 **Designs (not yet built):**
 

@@ -149,7 +149,7 @@ Add expired-token cleanup to the existing background garbage-collection task.
 
 Package: `node/packages/testbot/`
 
-- A TypeScript service on `@actnet/app-core` (the napi binding), using Node's
+- A TypeScript service on `@theavalanche/app-core` (the napi binding), using Node's
   built-in `node:http` (no web framework) and global `fetch` for the Claude API.
 - Starts an HTTP server on `:3001`.
 - `GET /`: serves a static HTML page with the "Text Me" button.

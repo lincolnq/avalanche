@@ -18,10 +18,23 @@ name: Release
 #     av-testbot-<target>.tar.gz  → av-testbot/...
 #
 # To add a component: append to RUST_BINS or NODE_BOTS below — nothing else.
+#
+# The @theavalanche/app-core npm package is ALSO published here, for STABLE tags only
+# (a `vX.Y.Z` with no prerelease suffix). The `napi-build` job compiles the
+# native addon for four triples (linux x64/arm64, macOS x64/arm64); `publish-npm`
+# assembles the split platform packages and publishes to npmjs via OIDC trusted
+# publishing (no token — a trusted publisher must be configured for each of the
+# five package names on npmjs.com). The npm version is the tag minus its `v`.
 
 on:
   push:
     tags: ["v*"]
+  # Manual trigger builds ONLY the napi native binaries (the napi-build job) and
+  # uploads them as artifacts — the release/publish jobs are gated to tag pushes.
+  # Used for the one-time first-publish bootstrap: build here, download the
+  # artifacts locally, publish all five npm packages from your own machine. See
+  # node/CLAUDE.md "Publishing to npm".
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,7 +43,7 @@ env:
   RUST_BINS: |
     server avalanche-server
     relay relay
-  # napi-backed bot packages (the @actnet/<bot> workspace). Each is built with
+  # napi-backed bot packages (the @theavalanche/<bot> workspace). Each is built with
   # tsc and packaged with a shared node_modules. Tarball is av-<bot>.
   NODE_BOTS: |
     adminbot
@@ -39,6 +52,7 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +105,7 @@ jobs:
           done <<< "$RUST_BINS"
 
       # ── Node bots ────────────────────────────────────────────────────────
-      # The native napi module for @actnet/app-core builds for the runner's
+      # The native napi module for @theavalanche/app-core builds for the runner's
       # host platform, which matches `matrix.target` since we pick arch-specific
       # runners — so each bot tarball is arch-specific. Build every bot first,
       # THEN `npm prune --omit=dev` once (prune removes typescript, so it must
@@ -101,10 +115,10 @@ jobs:
         run: |
           cd node
           npm ci
-          npm run build -w @actnet/app-core
+          npm run build -w @theavalanche/app-core
           while read -r bot; do
             [ -z "$bot" ] && continue
-            npm run build -w "@actnet/$bot"
+            npm run build -w "@theavalanche/$bot"
           done <<< "$NODE_BOTS"
 
       - name: Prune dev dependencies
@@ -139,6 +153,7 @@ jobs:
   # built once (not in the per-arch matrix) and named without a target suffix.
   bundle:
     name: Build deploy bundle
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,6 +174,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [build, bundle]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -173,3 +189,139 @@ jobs:
         with:
           draft: true
           files: av-*.tar.gz
+
+  # ── npm: build the native addon for every published triple ─────────────────
+  # Separate from the `build` job above because that one is Linux-only (server
+  # binaries + bots are server-side). The npm package targets JS developers, so
+  # it needs macOS too. Each leg compiles ONLY the @theavalanche/app-core native addon
+  # for its host triple and uploads the resulting app-core.<triple>.node.
+  napi-build:
+    name: napi build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: napi-${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install protobuf compiler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protobuf compiler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      # `--platform` targets the runner's host triple, which matches
+      # matrix.target since each triple has its own native runner.
+      - name: Build native addon (release)
+        run: |
+          cd node
+          npm ci
+          npm run build:native -w @theavalanche/app-core
+
+      # Upload the whole native/ dir: the arch-specific app-core.<triple>.node
+      # AND the generated loader glue (index.js / index.d.ts). The glue is
+      # target-independent (generated from the #[napi] signatures) so all four
+      # legs produce byte-identical copies — merge-multiple in the publish job
+      # dedups them; the four .node files are distinct.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.target }}
+          path: node/packages/app-core/native/*
+          if-no-files-found: error
+
+  # ── npm: assemble split platform packages and publish ───────────────────────
+  # Stable tags only (no prerelease suffix). Dual-mode auth:
+  #   * Normally: OIDC trusted publishing — the id-token grant mints a
+  #     short-lived credential, no secret. Requires a Trusted Publisher to be
+  #     configured on npmjs for each package (only possible once a package
+  #     exists).
+  #   * Bootstrap: the FIRST publish must create the package names, which OIDC
+  #     can't do (trusted publishers attach to existing packages). For that one
+  #     run, add an `NPM_TOKEN` repo secret (a granular access token with
+  #     publish rights to @theavalanche/*); it takes precedence. Then configure
+  #     the trusted publishers and DELETE the secret so subsequent tags use OIDC.
+  # `NODE_AUTH_TOKEN` is empty when the secret is absent, so npm falls back to
+  # OIDC automatically.
+  publish-npm:
+    name: Publish @theavalanche/app-core to npm
+    needs: [napi-build]
+    # Tag pushes only, stable versions only. The manual (workflow_dispatch)
+    # trigger builds binaries for the local bootstrap but never auto-publishes.
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing + provenance require npm >= 11.5.1.
+      - name: Upgrade npm
+        run: npm i -g npm@latest
+
+      # Bring every triple's .node plus the generated loader glue into native/
+      # BEFORE tsc runs — the TypeScript wrapper imports types from
+      # ../native/index.js, so index.d.ts must be present to compile.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: napi-*
+          merge-multiple: true
+          path: node/packages/app-core/native
+
+      - name: Install workspace + build TypeScript
+        run: |
+          cd node
+          npm ci
+          npm run build:ts -w @theavalanche/app-core
+
+      - name: Set version from tag, assemble + publish platform packages
+        working-directory: node/packages/app-core
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Publishing @theavalanche/app-core@$VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # Create npm/<triple>/ sub-packages, copy each .node from native/ into
+          # them, then publish the sub-packages and rewrite optionalDependencies
+          # on the main package.json.
+          npx napi create-npm-dir -t npm
+          npx napi artifacts -d native
+          npx napi prepublish -t npm --skip-gh-release
+
+      - name: Publish main package
+        working-directory: node/packages/app-core
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish

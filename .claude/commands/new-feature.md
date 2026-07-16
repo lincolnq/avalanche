@@ -138,6 +138,6 @@ Only after the user has approved the spec:
 ## Step 7 — Handoff
 
 After `make test` passes:
-1. List which tests require a running server (`make test-e2e`) and which require the napi build (`make node && npm run smoke -w @actnet/app-core`).
+1. List which tests require a running server (`make test-e2e`) and which require the napi build (`make node && npm run smoke -w @theavalanche/app-core`).
 2. List any REQUIRES DECISION assumptions from step 4 that were deferred and should be reviewed in the diff.
 3. Remind the user to run `/done` before opening a PR.

@@ -3,7 +3,7 @@
 // A standalone HTTP service that serves a tiny web UI and spins up AI chatbot
 // accounts on demand. Each bot is a full Signal-protocol participant: it
 // registers on the homeserver, holds its own identity keys, and sends/receives
-// encrypted DMs via `@actnet/app-core`. Bots converse using Claude Haiku; an
+// encrypted DMs via `@theavalanche/app-core`. Bots converse using Claude Haiku; an
 // Anthropic key is required (configured via `.env` - see `loadDotenv`).
 //
 // Lifecycle / state:
@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import qrcode from "qrcode-generator";
 
-import { AppCore, initLogging, type SendTarget } from "@actnet/app-core";
+import { AppCore, initLogging, type SendTarget } from "@theavalanche/app-core";
 
 const OPENING = "Hey! I'm a testbot. Ask me anything.";
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";

@@ -36,7 +36,7 @@ import {
   type GroupSummary,
   type IncomingEvent,
   type SendTarget,
-} from "@actnet/app-core";
+} from "@theavalanche/app-core";
 
 // Reserved well-known suffix for the canonical adminbot account. This also
 // matches the server's superuser Project slug (ADMINBOT_PROJECT_SLUG), so the

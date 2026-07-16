@@ -14,5 +14,5 @@ You can code your bots in TypeScript or Rust. We recommend TypeScript (but Rust 
 
 Bots are written using `app-core`, an asynchronous library which is responsible for an account on an Avalanche server: connection establishment, authentication, sending and receiving messages, persistent data and more.
 
-In TypeScript, bots are built with our `@actnet/app-core` TypeScript library — see the [API reference](/api/).
+In TypeScript, bots are built with our `@theavalanche/app-core` TypeScript library — see the [API reference](/api/).
 

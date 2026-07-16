@@ -205,7 +205,7 @@ platform's capabilities and degrade gracefully:
 | Reaction-confirm | *inbound* reaction events | Typed `yes` confirm |
 | Edit-in-place status | message edit | One concise terminal message |
 
-**Current @actnet/app-core Node bots (as of this writing):** can *send*
+**Current @theavalanche/app-core Node bots (as of this writing):** can *send*
 reactions (`sendReaction`) and DMs, but the Node wrapper does **not** surface
 inbound reaction/edit/delete events and exposes no `sendEdit`. So for Node bots
 today, use: 👀→✅/❌ reactions on the trigger, DM Q&A, **typed-yes** confirm, and
@@ -213,7 +213,7 @@ concise new messages instead of edit-in-place. Wiring inbound reaction events +
 `sendEdit` through napi/TS would unlock reaction-confirm and edit-in-place — do
 that as a deliberate, separate change if a flow needs them, not implicitly.
 
-## Implementation notes (@actnet/app-core bots)
+## Implementation notes (@theavalanche/app-core bots)
 
 - **Interview state:** a `Map` keyed by the interviewee's DID holding the current
   step + collected answers + the trigger's `{target, author, sentAt}`. Intercept

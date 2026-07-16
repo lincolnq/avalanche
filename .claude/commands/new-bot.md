@@ -5,7 +5,7 @@ Scaffold a new Node.js bot package named `$ARGUMENTS` under `node/packages/`.
 **`node/packages/$ARGUMENTS/package.json`:**
 ```json
 {
-  "name": "@actnet/$ARGUMENTS",
+  "name": "@theavalanche/$ARGUMENTS",
   "version": "0.1.0",
   "description": "<one-line description of what this bot does>",
   "private": true,
@@ -20,7 +20,7 @@ Scaffold a new Node.js bot package named `$ARGUMENTS` under `node/packages/`.
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@actnet/app-core": "*"
+    "@theavalanche/app-core": "*"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",
@@ -58,7 +58,7 @@ Scaffold a new Node.js bot package named `$ARGUMENTS` under `node/packages/`.
 
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { AppCore, initLogging } from "@actnet/app-core";
+import { AppCore, initLogging } from "@theavalanche/app-core";
 
 const BOT_DID_SUFFIX = "$ARGUMENTS";
 const BOT_DID = `did:local:${BOT_DID_SUFFIX}`;
@@ -136,14 +136,14 @@ Add a Makefile target in the root `Makefile` following the `adminbot` pattern:
 ```makefile
 $ARGUMENTS:
 	cd node && [ -d node_modules ] || npm install
-	cd node && npm run build:native -w @actnet/app-core
-	cd node && npm run build -w @actnet/$ARGUMENTS
+	cd node && npm run build:native -w @theavalanche/app-core
+	cd node && npm run build -w @theavalanche/$ARGUMENTS
 	cd node && node --env-file=.env packages/$ARGUMENTS/dist/index.js
 .PHONY: $ARGUMENTS
 ```
 
 ## Step 3 — Verify
 
-Run `cd node && npm install && npm run build -w @actnet/$ARGUMENTS` and fix any TypeScript errors.
+Run `cd node && npm install && npm run build -w @theavalanche/$ARGUMENTS` and fix any TypeScript errors.
 
 Report: the bot's DID suffix, the environment variables it reads, and the event types it handles.
