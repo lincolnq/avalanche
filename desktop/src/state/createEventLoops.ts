@@ -14,7 +14,6 @@ import type {
   IncomingEvent,
 } from "../services/AvalancheService";
 import { deliveryRank } from "../lib/format";
-import { buildStoredMessage } from "./helpers";
 import type { Services } from "./createServices";
 import type { AppContextValue, AppStore, SessionGuards } from "./types";
 
@@ -304,10 +303,13 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
       return;
     }
 
-    // Received from another user — append as a new message.
+    // Received from another user — append as a new message. Key the id on the
+    // server message id (matching what app-core persists on the receive path),
+    // so when this conversation's transcript is (re)loaded from the store the
+    // in-memory entry reconciles to the persisted row instead of duplicating it.
     const body = new TextDecoder().decode(new Uint8Array(m.plaintext));
     const msg: Message = {
-      id: crypto.randomUUID(),
+      id: `server-${m.serverId}`,
       conversationId,
       senderAccountId: m.senderDid,
       body,
@@ -342,31 +344,14 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
         setStore("conversations", ci, "unreadCount", (n) => (n ?? 0) + 1);
       }
     }
-    // Persist the incoming message. app-core does NOT persist messages on the
-    // receive path (the client owns local history), so without this every
-    // received message is lost on app restart/refresh while sent messages
-    // (which are saved) survive. readAtMs stays null (unread) until the
-    // conversation is opened; the store starts the disappearing-messages
-    // countdown on read. Mirrors iOS AppState.
-    void serviceFor(accountId)
-      .saveMessage(
-        buildStoredMessage({
-          id: msg.id,
-          conversationId,
-          senderDid: m.senderDid,
-          body,
-          sentAtMs: msg.sentAtMs,
-          readAtMs: null,
-          deliveryStatus: msg.deliveryStatus,
-          expireTimerSecs: m.expireTimerSecs,
-          attachments: m.attachments,
-          previews: m.previews,
-          contacts: m.contacts,
-        })
-      )
-      .catch((err: unknown) => {
-        console.warn("saveMessage (incoming) failed:", err);
-      });
+    // NOTE: app-core now durably persists incoming messages to local history
+    // *before* it acks the server (for human accounts — bots opt out), so the
+    // client no longer persists on the receive path. Doing so here too would
+    // write a second row (and previously risked losing the message entirely if
+    // this best-effort save failed after the server had already dropped its
+    // copy). The in-memory entry above is for live display; the durable copy is
+    // app-core's, read back on the next transcript load. readAtMs stays null
+    // (unread) until the conversation is opened.
 
     // Update conversation preview, or create the conversation in-memory.
     const convIdx = store.conversations.findIndex((c) => c.id === conversationId);

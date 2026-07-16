@@ -1166,6 +1166,16 @@ pub struct AppCore {
     /// login/recovery builds a new instance), so it's held lock-free rather than
     /// reached through `inner` on every read.
     pub(crate) did: String,
+    /// Whether the receive path durably persists incoming message content to
+    /// local history *before* acking the server (docs/03). True for human
+    /// accounts, false for bots — derived in [`Self::build`] from the DID
+    /// (`did:local:` bots are operator-managed and opt out of local history,
+    /// same as they opt out of storage sync / recovery blobs). Load-bearing for
+    /// durability: the server deletes its queued copy the instant we ack, and
+    /// app-core hands content up only over a non-durable in-memory channel, so
+    /// persisting here first is the only thing that survives a consumer that
+    /// drops the event (wedge / crash / restart).
+    pub(crate) persist_incoming: bool,
     /// Canonical connection-state observable. The reconnect task publishes;
     /// each waiter calls `state_tx.subscribe()` to get its own receiver.
     pub(crate) state_tx: tokio::sync::watch::Sender<ConnectionState>,
@@ -1298,12 +1308,18 @@ impl AppCore {
         let identity = inner.identity.clone();
         let client = inner.client.clone();
         let did = inner.did.clone();
+        // Bots (did:local:) opt out of local history — operator-managed, ephemeral
+        // (e.g. testbot). Humans (did:plc:) persist so received content survives a
+        // consumer that drops the in-memory event. Same bot/human split already
+        // used for storage-sync opt-out and recovery blobs.
+        let persist_incoming = !did.starts_with("did:local:");
         Self {
             inner: Mutex::new(inner),
             store,
             identity,
             client,
             did,
+            persist_incoming,
             state_tx,
             event_tx,
             event_rx: Mutex::new(event_rx),

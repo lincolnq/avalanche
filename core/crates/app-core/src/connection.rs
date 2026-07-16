@@ -220,11 +220,16 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                     }
                 };
 
+                // Parse the content envelope, durably persist content (for
+                // accounts that opted in), and emit IncomingEvents — BEFORE
+                // acking. The ack tells the server to delete its queued copy, so
+                // it must not happen until the message is durably on this device;
+                // acking first loses the message if the content is dropped before
+                // it's persisted (docs/03).
+                process_decrypted(core, decrypted).await;
+
                 // Ack on the wire so the server stops re-delivering it.
                 let _ = ws.ack(delivery.ack_token).await;
-
-                // Parse the content envelope and emit appropriate IncomingEvents.
-                process_decrypted(core, decrypted).await;
             }
             joined = ws.next_account_joined() => {
                 match joined {
@@ -310,19 +315,20 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                     }
                 };
 
-                // Always ack so the server stops re-pushing — even on
-                // decrypt failure, the message is unrecoverable for this
-                // session.
-                let _ = ws.group_ack(delivery.ack_token).await;
-
                 if let Some(msg) = decrypted {
                     // Group content now rides a `ContentMessage` envelope just
                     // like DMs, so dispatch through the same decoder: text →
                     // Message, plus reactions/edits/deletes. Raw-text legacy
                     // group messages fall back to a plain Message inside
-                    // `process_decrypted`.
+                    // `process_decrypted`. Runs BEFORE the ack so durable content
+                    // is persisted before the server drops its copy (docs/03).
                     process_decrypted(core, msg).await;
                 }
+
+                // Always ack so the server stops re-pushing — even on decrypt
+                // failure the message is unrecoverable for this session, and on
+                // success `process_decrypted` has already persisted it durably.
+                let _ = ws.group_ack(delivery.ack_token).await;
             }
         }
     }

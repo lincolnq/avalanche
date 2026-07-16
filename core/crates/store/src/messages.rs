@@ -165,6 +165,47 @@ impl IdentityStore {
             .map_err(StoreError::Db)
     }
 
+    /// Save a *received* message to local history, first-write-wins.
+    ///
+    /// Unlike [`Self::save_message`] (which UPSERTs — needed for outgoing status
+    /// transitions), this uses `ON CONFLICT(id) DO NOTHING`, so a redelivery of a
+    /// message we already stored is a no-op. That matters because the UPSERT sets
+    /// `read_at = excluded.read_at`: re-saving an incoming row (which we persist
+    /// with `read_at = NULL`) after the user has read it would reset it to
+    /// unread. Returns `true` iff a new row was inserted, so the caller can skip
+    /// re-writing attachments/previews for a duplicate.
+    pub async fn save_incoming_message(&self, msg: &HistoryMessage) -> Result<bool, StoreError> {
+        let id = msg.id.clone();
+        let conversation_id = msg.conversation_id.clone();
+        let sender_did = msg.sender_did.clone();
+        let body = msg.body.clone();
+        let sent_at = msg.sent_at.as_millis();
+        let read_at = msg.read_at.map(|t| t.as_millis());
+        let delivery_status = msg.delivery_status as i64;
+        let expire_timer_secs = msg.expire_timer_secs;
+        // Incoming rows start unread (read_at NULL), so no deadline yet — it's
+        // stamped in `mark_messages_read` (same as `save_message`).
+        let expire_at: Option<i64> = if expire_timer_secs > 0 {
+            read_at.map(|r| r + expire_timer_secs * 1000)
+        } else {
+            None
+        };
+
+        self.conn
+            .call(move |conn| {
+                let affected = conn.execute(
+                    "INSERT INTO message_history
+                     (id, conversation_id, sender_did, body, sent_at, edited_at, read_at, delivery_status, kind, metadata, expire_timer_secs, expire_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 0, NULL, ?8, ?9)
+                     ON CONFLICT(id) DO NOTHING",
+                    rusqlite::params![id, conversation_id, sender_did, body, sent_at, read_at, delivery_status, expire_timer_secs, expire_at],
+                )?;
+                Ok(affected > 0)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     /// Persist a system/metadata timeline entry (docs/03 §3.6 group events).
     /// Idempotent: re-applying the same `/changes` page is a no-op because the
     /// deterministic `id` (`grpevt-<group>-<revision>-<seq>`) collides and we

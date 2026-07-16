@@ -1630,6 +1630,75 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     .await;
             }
 
+            // Durably persist incoming content to local history *before* the
+            // caller acks the server (connection.rs). The server deletes its
+            // queued copy the instant we ack, and app-core hands content up only
+            // over a non-durable in-memory channel — so without this a received
+            // message is lost if the consumer drops the event (loop wedge, throw,
+            // teardown, crash, restart). app-core owns this only for accounts
+            // that opted in (humans); bots (did:local:) keep the emit-only
+            // behavior. Skipped for self-messages (note-to-self / synced
+            // transcripts are handled by the SyncSent path) and for blocked
+            // senders (dropped above). Idempotent by id, so a redelivery that
+            // re-lands here after ack can't duplicate. Covers DMs and group text
+            // alike — both flow through this arm (docs/03 DM/group parity).
+            if core.persist_incoming && !is_self {
+                let msg_id = format!("server-{}", decrypted.server_id);
+                let stored = store::messages::HistoryMessage {
+                    id: msg_id.clone(),
+                    conversation_id: conv_id.clone(),
+                    sender_did: decrypted.sender_did.clone(),
+                    body: body.clone(),
+                    sent_at: sent_at.map(Timestamp).unwrap_or_else(Timestamp::now),
+                    edited_at: None,
+                    read_at: None, // unread until the conversation is opened
+                    delivery_status: 2, // delivered
+                    edit_count: 0,
+                    deleted_at: None,
+                    kind: 0,
+                    metadata: None,
+                    expire_timer_secs: msg.expire_timer_secs as i64,
+                    expire_at: None, // store computes it from read_at on open
+                };
+                // First-write-wins: a redelivery of a message we already stored
+                // is a no-op, so it can't reset read state or re-write rows.
+                match core.store.save_incoming_message(&stored).await {
+                    Ok(false) => { /* already stored (redelivery) — preserve state */ }
+                    Ok(true) => {
+                        if !attachments.is_empty() {
+                            let rows: Vec<store::attachments::AttachmentRow> = attachments
+                                .iter()
+                                .enumerate()
+                                .map(|(i, a)| crate::ffi_to_attachment_row(&msg_id, i as i64, a))
+                                .collect();
+                            let _ = core.store.save_attachments(&msg_id, &rows).await;
+                        }
+                        if !previews.is_empty() {
+                            let rows: Vec<store::link_previews::LinkPreviewRow> = previews
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| crate::ffi_to_link_preview_row(&msg_id, i as i64, p))
+                                .collect();
+                            let _ = core.store.save_link_previews(&msg_id, &rows).await;
+                        }
+                        let contacts_json = crate::shared_contacts_to_json(&contacts);
+                        if contacts_json.is_some() {
+                            let _ = core.store.save_shared_contacts(&msg_id, contacts_json).await;
+                        }
+                    }
+                    Err(e) => {
+                        // Hard local-store failure after a successful (destructive)
+                        // decrypt: the ratchet already advanced, so a server
+                        // redelivery can't be re-decrypted and the caller will ack
+                        // regardless. This is the one unavoidable loss window; log
+                        // loudly rather than fail silently.
+                        tracing::error!(
+                            "[recv] failed to persist incoming message {msg_id}: {e}"
+                        );
+                    }
+                }
+            }
+
             let out = DecryptedMessage {
                 plaintext: body.into_bytes(),
                 sent_at_ms: sent_at,
