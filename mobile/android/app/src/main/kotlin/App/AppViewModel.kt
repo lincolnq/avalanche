@@ -1605,7 +1605,13 @@ class AppViewModel(
                 // regardless of whether the transcript was loaded in memory.
                 val unread = (runCatching { core.loadMessages(conversationId = convId) }.getOrNull() ?: emptyList())
                     .filter { it.readAtMs == null && it.senderDid != accountId }
-                runCatching { core.markMessagesRead(conversationId = convId, upToSentAtMs = nowMs) }
+                // Threshold is compared against each row's sent_at (the sender's
+                // clock), so use the latest message actually present — not
+                // wall-clock nowMs. If our clock trails the sender's, a
+                // just-received message's sent_at can exceed nowMs and be skipped,
+                // leaving it unread after restart though it looked read live.
+                val threshold = maxOf(nowMs, unread.maxOfOrNull { it.sentAtMs } ?: 0L)
+                runCatching { core.markMessagesRead(conversationId = convId, upToSentAtMs = threshold) }
                 val timestampsBySender = unread.groupBy { it.senderDid }
                     .mapValues { (_, ms) -> ms.map { it.sentAtMs } }
                 for ((senderDid, timestamps) in timestampsBySender) {
@@ -2841,12 +2847,14 @@ class AppViewModel(
             }
         }
 
-        val messageId = UUID.randomUUID().toString()
-        // If the user is currently viewing this conversation, treat the message
-        // as read on arrival (and acknowledge it below) rather than flashing an
-        // unread badge for something they're already looking at. We stamp
-        // readAt directly on the persisted row — rather than a follow-up
-        // markMessagesRead — so it can't race the save that writes the row.
+        // Key the in-memory entry on the server message id, matching what app-core
+        // persists on the receive path, so a transcript (re)load reconciles to the
+        // persisted row instead of duplicating it.
+        val messageId = "server-${msg.serverId}"
+        // If the user is currently viewing this conversation, show it read on
+        // arrival (in-memory) rather than flashing an unread badge. Durable read
+        // state is written by markMessagesRead when the conversation is viewed,
+        // not stamped at save time — app-core owns the row now (read_at=NULL).
         val isActive = _currentConversationId.value == convId
         val readAtMs: Long? = if (isActive) System.currentTimeMillis() else null
         val message = Message(
@@ -2891,38 +2899,17 @@ class AppViewModel(
         val knownName = _accounts.value.firstOrNull { it.id == senderDid }?.displayName
             ?: displayNameCache[senderDid]
 
-        // Persist to SQLCipher in the background.
+        // app-core now persists incoming messages to local history *before* it
+        // acks the server (for human accounts), so the client no longer saves on
+        // receive: a second save here would duplicate the row, and its UPSERT
+        // would reset read_at to null on a redelivery. Read state + read receipts
+        // for an actively-viewed conversation are handled by markMessagesRead.
         val core = cores[accountId]
         if (core != null) {
-            val stored = StoredMessageFfi(
-                id = messageId,
-                conversationId = convId,
-                senderDid = senderDid,
-                body = text,
-                sentAtMs = sentAtMs,
-                editedAtMs = null,
-                readAtMs = readAtMs,  // read on arrival iff actively viewing
-                deliveryStatus = 1u.toUByte(),
-                editCount = 0u,
-                deleted = false,
-                kind = 0L,
-                metadata = null,
-                expireTimerSecs = msg.expireTimerSecs,
-                expireAtMs = null,
-                attachments = msg.attachments,
-                previews = msg.previews,
-                contacts = msg.contacts,
-            )
             val profileKey = msg.profileKey
             val isRequest = msg.isRequest
             viewModelScope.launch {
                 val resolved = withContext(Dispatchers.IO) {
-                    runCatching { core.saveMessage(msg = stored) }
-                    // Acknowledge after the row is persisted (the FFI gates
-                    // receipts to curated senders, so this no-ops for requests).
-                    if (isActive) {
-                        runCatching { core.sendReadReceipt(recipientDid = senderDid, timestamps = listOf(sentAtMs)) }
-                    }
                     runCatching { core.touchContact(did = senderDid, curated = false) }
                     if (isRequest) {
                         runCatching { core.setPendingRequest(did = senderDid, pending = true) }

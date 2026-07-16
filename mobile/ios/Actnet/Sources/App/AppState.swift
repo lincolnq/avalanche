@@ -1444,7 +1444,13 @@ final class AppState: ObservableObject {
         Task.detached {
             let unread = ((try? core.loadMessages(conversationId: convId)) ?? [])
                 .filter { $0.readAtMs == nil && $0.senderDid != accountId }
-            try? core.markMessagesRead(conversationId: convId, upToSentAtMs: nowMs)
+            // Threshold is compared against each row's sent_at (the *sender's*
+            // clock), so use the latest message actually present — not wall-clock
+            // `nowMs`. If our clock trails the sender's, a just-received message's
+            // sent_at can exceed nowMs and be skipped, leaving it unread after
+            // restart though it looked read live. Max-ing makes this skew-proof.
+            let threshold = max(nowMs, unread.map { $0.sentAtMs }.max() ?? 0)
+            try? core.markMessagesRead(conversationId: convId, upToSentAtMs: threshold)
             var timestampsBySender: [String: [Int64]] = [:]
             for m in unread {
                 timestampsBySender[m.senderDid, default: []].append(m.sentAtMs)
@@ -2490,12 +2496,15 @@ final class AppState: ObservableObject {
             conversations.append(conv)
         }
 
-        let messageId = UUID().uuidString
-        // If the user is currently viewing this conversation, treat the message
-        // as read on arrival (and acknowledge it below) rather than flashing an
-        // unread badge for something they're already looking at. We stamp
-        // read_at directly on the persisted row — rather than a follow-up
-        // markMessagesRead — so it can't race the save that writes the row.
+        // Key the in-memory entry on the server message id, matching what app-core
+        // persists on the receive path, so a transcript (re)load reconciles to the
+        // persisted row instead of duplicating it.
+        let messageId = "server-\(msg.serverId)"
+        // If the user is currently viewing this conversation, show it read on
+        // arrival (in-memory) rather than flashing an unread badge. Durable read
+        // state is written by markMessagesRead when the conversation is viewed
+        // (the onChange path in ConversationView), not stamped at save time —
+        // app-core owns the row now and persists it read_at=NULL.
         let isActive = currentConversationId == convId
         let readAtMs: Int64? = isActive ? Int64(Date().timeIntervalSince1970 * 1000) : nil
         // Carry the sender's disappearing-messages timer (docs/03 §5) so the
@@ -2539,38 +2548,13 @@ final class AppState: ObservableObject {
             ?? displayNameCache[senderDid]
         let hasCore = cores[accountId] != nil
 
-        // Persist to SQLCipher in the background.
+        // app-core now persists incoming messages to local history *before* it
+        // acks the server (for human accounts), so the client no longer saves on
+        // receive: a second save here would duplicate the row, and its UPSERT
+        // would reset read_at to nil on a redelivery. Read state + read receipts
+        // for an actively-viewed conversation are handled by markMessagesRead (the
+        // onChange path in ConversationView → markAllMessagesRead).
         if let core = cores[accountId] {
-            let stored = StoredMessageFfi(
-                id: messageId,
-                conversationId: convId,
-                senderDid: senderDid,
-                body: text,
-                sentAtMs: sentAtMs,
-                editedAtMs: nil,
-                readAtMs: readAtMs,  // read on arrival iff actively viewing
-                deliveryStatus: 1,  // sent
-                editCount: 0,
-                deleted: false,
-                kind: 0,
-                metadata: nil,
-                // Carry the sender-stamped timer (docs/03 §5); the store starts
-                // the countdown when this message is marked read.
-                expireTimerSecs: msg.expireTimerSecs,
-                expireAtMs: nil,
-                attachments: msg.attachments,
-                previews: msg.previews,
-                contacts: msg.contacts
-            )
-            Task.detached {
-                try? core.saveMessage(msg: stored)
-                // Acknowledge after the row is persisted (the FFI gates receipts
-                // to curated senders, so this is a no-op for message requests).
-                if isActive {
-                    try? core.sendReadReceipt(recipientDid: senderDid, timestamps: [sentAtMs])
-                }
-            }
-
             // Contact/profile metadata is now an explicit client opt-in:
             // app-core decrypts and surfaces the message but no longer writes
             // these on receive (keeps non-UI clients like bots from persisting
