@@ -486,7 +486,9 @@ export type GroupEventKind =
 /**  The disappearing-message timer changed. */
 "expiryChanged" | 
 /**  The group policy (join policy / announcement-only / link password) changed. */
-"policyChanged";
+"policyChanged" | 
+/**  The group avatar (photo) changed or was removed (docs/55). */
+"avatarChanged";
 
 /**  A member's row in a group, decrypted under the group key. */
 export type GroupMemberFfi = {
