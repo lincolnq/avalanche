@@ -501,6 +501,39 @@ export interface ContactRow {
 }
 
 /**
+ * A single reaction on a message, returned by {@link AppCore.loadReactions}.
+ *
+ * @category Types
+ */
+export interface Reaction {
+  /** Conversation the reacted-to message lives in (DM peer DID or group id). */
+  conversationId: string;
+  /** DID of the reacted-to message's author. */
+  targetAuthor: string;
+  /** `sentAt` of the reacted-to message — its wire identity. */
+  targetSentAt: Temporal.Instant;
+  /** DID of the account that reacted. */
+  reactorDid: string;
+  /** The reaction emoji. */
+  emoji: string;
+  /** When the reaction was applied. */
+  reactedAt: Temporal.Instant;
+}
+
+/**
+ * A prior body of an edited message, returned by
+ * {@link AppCore.loadMessageRevisions} (oldest first).
+ *
+ * @category Types
+ */
+export interface MessageRevision {
+  /** The message body before this revision replaced it. */
+  body: string;
+  /** When this body was replaced by a newer edit. */
+  replacedAt: Temporal.Instant;
+}
+
+/**
  * Public metadata returned by {@link AppCore.getAccountInfo}. Server-side
  * lookup that does not require any prior interaction with the account.
  *
@@ -812,6 +845,20 @@ const contactRowFromNative = (c: native.ContactRowJs): ContactRow => ({
   displayName: c.displayName,
   isCurated: c.isCurated,
   lastInteractionAt: instantFromMs(c.lastInteractionAtMs),
+});
+
+const reactionFromNative = (r: native.ReactionJs): Reaction => ({
+  conversationId: r.conversationId,
+  targetAuthor: r.targetAuthor,
+  targetSentAt: instantFromMs(r.targetSentAtMs),
+  reactorDid: r.reactorDid,
+  emoji: r.emoji,
+  reactedAt: instantFromMs(r.reactedAtMs),
+});
+
+const messageRevisionFromNative = (r: native.MessageRevisionJs): MessageRevision => ({
+  body: r.body,
+  replacedAt: instantFromMs(r.replacedAtMs),
 });
 
 const accountInfoFromNative = (a: native.AccountInfoJs): AccountInfo => ({
@@ -1221,6 +1268,124 @@ export class AppCore {
   }
 
   /**
+   * Edit a previously-sent message (DM or group). Applies the new body locally
+   * and sends an `EditMessage` to the conversation.
+   *
+   * @param target       Where the message lives (DM peer or group).
+   * @param targetSentAt `sentAt` of the message being edited — its wire identity.
+   * @param newBody      The replacement text.
+   * @param sentAt       This edit op's timestamp. Defaults to now.
+   *
+   * @category Direct Messages
+   */
+  async sendEdit(
+    target: SendTarget,
+    targetSentAt: Temporal.Instant,
+    newBody: string,
+    sentAt?: Temporal.Instant,
+  ): Promise<void> {
+    const ts = sentAt ?? Temporal.Now.instant();
+    await this._native.sendEdit(
+      sendTargetToNative(target),
+      instantToMs(targetSentAt),
+      newBody,
+      instantToMs(ts),
+    );
+  }
+
+  /**
+   * Delete a message (DM or group). `forEveryone = true` tombstones it for the
+   * whole conversation (only your own messages — `targetAuthor` must be this
+   * account) and sends a delete. `forEveryone = false` removes it from this
+   * device only and sends nothing.
+   *
+   * @param target       Where the message lives (DM peer or group).
+   * @param targetAuthor DID of the message's author.
+   * @param targetSentAt `sentAt` of the message being deleted — its wire identity.
+   * @param forEveryone  `true` to retract for everyone (own messages only).
+   * @param sentAt       This delete op's timestamp. Defaults to now.
+   *
+   * @category Direct Messages
+   */
+  async sendDelete(
+    target: SendTarget,
+    targetAuthor: string,
+    targetSentAt: Temporal.Instant,
+    forEveryone: boolean,
+    sentAt?: Temporal.Instant,
+  ): Promise<void> {
+    const ts = sentAt ?? Temporal.Now.instant();
+    await this._native.sendDelete(
+      sendTargetToNative(target),
+      targetAuthor,
+      instantToMs(targetSentAt),
+      forEveryone,
+      instantToMs(ts),
+    );
+  }
+
+  /**
+   * All reactions in a conversation (DM peer DID or group id).
+   *
+   * @category Direct Messages
+   */
+  async loadReactions(conversationId: string): Promise<Reaction[]> {
+    const rows = await this._native.loadReactions(conversationId);
+    return rows.map(reactionFromNative);
+  }
+
+  /**
+   * The prior bodies of an edited message, oldest first (for an edit-history
+   * view). `author` / `sentAt` identify the message.
+   *
+   * @category Direct Messages
+   */
+  async loadMessageRevisions(
+    conversationId: string,
+    author: string,
+    sentAt: Temporal.Instant,
+  ): Promise<MessageRevision[]> {
+    const rows = await this._native.loadMessageRevisions(
+      conversationId,
+      author,
+      instantToMs(sentAt),
+    );
+    return rows.map(messageRevisionFromNative);
+  }
+
+  /**
+   * Set (or clear, with `undefined`) the disappearing-message timer for a DM.
+   * Persists locally and sends a `TimerChange` control message to the peer.
+   *
+   * @category Direct Messages
+   */
+  async setConversationTimer(recipientDid: string, expirySeconds?: number): Promise<void> {
+    await this._native.setConversationTimer(recipientDid, expirySeconds ?? undefined);
+  }
+
+  /**
+   * The stored disappearing-message timer for a conversation, or `undefined`
+   * if unset. For DMs `conversationId` is the peer's DID.
+   *
+   * @category Direct Messages
+   */
+  async getConversationTimer(conversationId: string): Promise<number | undefined> {
+    const secs = await this._native.getConversationTimer(conversationId);
+    return secs ?? undefined;
+  }
+
+  /**
+   * Reap expired (disappearing) messages whose timer has elapsed.
+   *
+   * @returns The conversation ids whose timelines changed.
+   *
+   * @category Direct Messages
+   */
+  async deleteExpiredMessages(): Promise<string[]> {
+    return await this._native.deleteExpiredMessages();
+  }
+
+  /**
    * Fetch and decrypt all pending messages from the homeserver.
    *
    * Most callers should use {@link AppCore.nextEvents} (the push-driven
@@ -1532,28 +1697,6 @@ export class AppCore {
   }
 
   /**
-   * Register / refresh this device's push token with the relay and the
-   * homeserver. Idempotent; safe (and recommended) to call on every launch.
-   *
-   * Rotates the pseudonym after ~7 days or when `(deviceToken, platform)`
-   * changes.
-   *
-   * @param platform     `"apns"` (iOS) or `"fcm"` (Android).
-   * @param environment  `"sandbox"` for debug builds, `"production"` for
-   *                     App Store / TestFlight builds.
-   *
-   * @category Account
-   */
-  async registerPushToken(
-    deviceToken: string,
-    platform: "apns" | "fcm",
-    relayUrl: string,
-    environment: "sandbox" | "production",
-  ): Promise<void> {
-    await this._native.registerPushToken(deviceToken, platform, relayUrl, environment);
-  }
-
-  /**
    * Re-upload the encrypted recovery blob (for instance after joining a
    * new homeserver).
    *
@@ -1629,6 +1772,51 @@ export class AppCore {
   }
 
   /**
+   * Set (or replace) the user's own avatar. `jpeg` is an already-cropped,
+   * downscaled JPEG — app-core does no image processing. Encrypts it under the
+   * profile key, uploads the blob, bumps the profile's avatar version so
+   * contacts refetch, and caches it locally.
+   *
+   * @category Profile
+   */
+  async setOwnAvatar(jpeg: Uint8Array): Promise<void> {
+    await this._native.setOwnAvatar(asBuf(jpeg));
+  }
+
+  /**
+   * Remove the user's own avatar: delete the server blob, re-publish the
+   * profile without an avatar ref, and clear the local cache.
+   *
+   * @category Profile
+   */
+  async clearOwnAvatar(): Promise<void> {
+    await this._native.clearOwnAvatar();
+  }
+
+  /**
+   * The user's own avatar JPEG bytes from the local cache, or `undefined`.
+   * Local read only (populated by {@link AppCore.setOwnAvatar}).
+   *
+   * @category Profile
+   */
+  async ownAvatar(): Promise<Uint8Array | undefined> {
+    const bytes = await this._native.ownAvatar();
+    return bytes ? asU8(bytes) : undefined;
+  }
+
+  /**
+   * A contact's cached avatar JPEG bytes, or `undefined`. Local read only —
+   * the fetch happens in the profile-sync paths
+   * ({@link AppCore.refreshContactProfile}).
+   *
+   * @category Profile
+   */
+  async contactAvatar(did: string): Promise<Uint8Array | undefined> {
+    const bytes = await this._native.contactAvatar(did);
+    return bytes ? asU8(bytes) : undefined;
+  }
+
+  /**
    * Every known contact, newest-interaction-first. Joins the curation flag
    * from `contacts` with the cached display name from `contact_profiles`.
    *
@@ -1649,6 +1837,85 @@ export class AppCore {
    */
   async touchContact(did: string, curated: boolean): Promise<void> {
     await this._native.touchContact(did, curated);
+  }
+
+  /**
+   * Resolve cached display names for a batch of DIDs. Each value is the local
+   * nickname if set, else the cached profile display name, else the account's
+   * bot name, else empty string (caller falls back to the DID).
+   *
+   * @category Contacts
+   */
+  async cachedDisplayNames(dids: string[]): Promise<Map<string, string>> {
+    const rec = await this._native.cachedDisplayNames(dids);
+    return new Map(Object.entries(rec));
+  }
+
+  /**
+   * Save a shared contact (received via a contact-card message) as a local
+   * contact with the given nickname.
+   *
+   * @category Contacts
+   */
+  async saveSharedContact(did: string, name: string): Promise<void> {
+    await this._native.saveSharedContact(did, name);
+  }
+
+  /**
+   * Block a contact: they can no longer reach this account, and their existing
+   * messages are hidden.
+   *
+   * @category Contacts
+   */
+  async blockContact(did: string): Promise<void> {
+    await this._native.blockContact(did);
+  }
+
+  /**
+   * Reverse {@link AppCore.blockContact}.
+   *
+   * @category Contacts
+   */
+  async unblockContact(did: string): Promise<void> {
+    await this._native.unblockContact(did);
+  }
+
+  /**
+   * Every currently-blocked contact.
+   *
+   * @category Contacts
+   */
+  async listBlocked(): Promise<ContactRow[]> {
+    const rows = await this._native.listBlocked();
+    return rows.map(contactRowFromNative);
+  }
+
+  /**
+   * Report a contact to the homeserver with a reason and block them in one
+   * step.
+   *
+   * @category Contacts
+   */
+  async reportAndBlock(did: string, reason: string): Promise<void> {
+    await this._native.reportAndBlock(did, reason);
+  }
+
+  /**
+   * Accept a pending message request from a contact.
+   *
+   * @category Contacts
+   */
+  async acceptRequest(did: string): Promise<void> {
+    await this._native.acceptRequest(did);
+  }
+
+  /**
+   * Delete (decline) a pending message request from a contact.
+   *
+   * @category Contacts
+   */
+  async deleteRequest(did: string): Promise<void> {
+    await this._native.deleteRequest(did);
   }
 
   /**
@@ -1913,6 +2180,86 @@ export class AppCore {
    */
   async rotateGroupPseudonym(groupId: string): Promise<Uint8Array> {
     return asU8(await this._native.rotateGroupPseudonym(groupId));
+  }
+
+  /**
+   * Set (or replace) the group avatar. `jpeg` is the cropped, downscaled
+   * image — app-core does no image processing. Gated by `modify_title_role`
+   * and surfaces an `AvatarChanged` system message in the timeline.
+   *
+   * @category Groups
+   */
+  async setGroupAvatar(groupId: string, jpeg: Uint8Array): Promise<void> {
+    await this._native.setGroupAvatar(groupId, asBuf(jpeg));
+  }
+
+  /**
+   * Remove the group avatar. Gated by `modify_title_role`.
+   *
+   * @category Groups
+   */
+  async clearGroupAvatar(groupId: string): Promise<void> {
+    await this._native.clearGroupAvatar(groupId);
+  }
+
+  /**
+   * A group's cached avatar JPEG bytes, or `undefined`. Local read only — the
+   * fetch happens in {@link AppCore.fetchGroupAvatar}.
+   *
+   * @category Groups
+   */
+  async groupAvatar(groupId: string): Promise<Uint8Array | undefined> {
+    const bytes = await this._native.groupAvatar(groupId);
+    return bytes ? asU8(bytes) : undefined;
+  }
+
+  /**
+   * Fetch + cache a group's avatar when the cached copy is behind the version
+   * in local group state. Call on group open.
+   *
+   * @returns `true` if the cache was updated.
+   *
+   * @category Groups
+   */
+  async fetchGroupAvatar(groupId: string): Promise<boolean> {
+    return await this._native.fetchGroupAvatar(groupId);
+  }
+
+  /**
+   * Change a group's title. Gated by `modify_title_role`; surfaces a
+   * `TitleChanged` system message in the timeline.
+   *
+   * @category Groups
+   */
+  async setGroupTitle(groupId: string, newTitle: string): Promise<void> {
+    await this._native.setGroupTitle(groupId, newTitle);
+  }
+
+  /**
+   * The group's disappearing-message expiry in seconds (0 if disabled).
+   *
+   * @category Groups
+   */
+  async groupExpirySeconds(groupId: string): Promise<number> {
+    return await this._native.groupExpirySeconds(groupId);
+  }
+
+  /**
+   * This identity's homeserver URL.
+   *
+   * @category Account
+   */
+  homeServer(): string {
+    return this._native.homeServer();
+  }
+
+  /**
+   * Flush the local SQLCipher database to durable storage (WAL checkpoint).
+   *
+   * @category Account
+   */
+  async syncStorage(): Promise<void> {
+    await this._native.syncStorage();
   }
 
   // ── device linking, existing-device side (docs/04 §4) ─────────────────────

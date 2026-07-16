@@ -37,13 +37,42 @@ for (const method of [
   "setAttachmentDownloaded",
   "oauthIssueCode",
   "oauthApproveDevice",
+  // avatars (profile + group)
+  "setOwnAvatar",
+  "clearOwnAvatar",
+  "ownAvatar",
+  "contactAvatar",
+  "setGroupAvatar",
+  "clearGroupAvatar",
+  "groupAvatar",
+  "fetchGroupAvatar",
+  // message-flow + safety parity
+  "sendEdit",
+  "sendDelete",
+  "loadReactions",
+  "loadMessageRevisions",
+  "setConversationTimer",
+  "getConversationTimer",
+  "deleteExpiredMessages",
+  "cachedDisplayNames",
+  "saveSharedContact",
+  "blockContact",
+  "unblockContact",
+  "listBlocked",
+  "reportAndBlock",
+  "acceptRequest",
+  "deleteRequest",
+  "setGroupTitle",
+  "groupExpirySeconds",
+  "homeServer",
+  "syncStorage",
 ]) {
   if (typeof AppCore.prototype[method] !== "function") {
     console.error(`unexpected: AppCore.prototype.${method} is not a function`);
     process.exit(1);
   }
 }
-console.log("contact opt-in + group + device-link methods present on AppCore");
+console.log("contact opt-in + group + device-link + avatar/message-flow methods present on AppCore");
 
 // DeviceLinkNew (new-device side of device linking, docs/04 §4). A full
 // round-trip needs a server + an existing device; this offline smoke only

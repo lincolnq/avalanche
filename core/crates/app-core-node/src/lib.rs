@@ -18,8 +18,8 @@ use app_core::{
     self as core, AccountInfoFfi, AttachmentFfi, ConnectionState, ContactRowFfi,
     ConversationSummaryFfi, CreatedGroupFfi, DecryptedMessage, DeliveryStatusUpdate,
     GroupMemberFfi, GroupPendingFfi, AdminEvent, GroupSummaryFfi, IncomingEvent, InviteInfo,
-    JoinResultFfi, LastMessagePreviewFfi, LinkPreviewFfi, MessageTarget, ProjectInfoFfi,
-    SharedContactFfi, StoredMessageFfi,
+    JoinResultFfi, LastMessagePreviewFfi, LinkPreviewFfi, MessageRevisionFfi, MessageTarget,
+    ProjectInfoFfi, ReactionFfi, SharedContactFfi, StoredMessageFfi,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -431,6 +431,41 @@ impl From<ContactRowFfi> for ContactRowJs {
             is_curated: c.is_curated,
             last_interaction_at_ms: c.last_interaction_at_ms,
         }
+    }
+}
+
+#[napi(object)]
+pub struct ReactionJs {
+    pub conversation_id: String,
+    pub target_author: String,
+    pub target_sent_at_ms: i64,
+    pub reactor_did: String,
+    pub emoji: String,
+    pub reacted_at_ms: i64,
+}
+
+impl From<ReactionFfi> for ReactionJs {
+    fn from(r: ReactionFfi) -> Self {
+        Self {
+            conversation_id: r.conversation_id,
+            target_author: r.target_author,
+            target_sent_at_ms: r.target_sent_at_ms,
+            reactor_did: r.reactor_did,
+            emoji: r.emoji,
+            reacted_at_ms: r.reacted_at_ms,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct MessageRevisionJs {
+    pub body: String,
+    pub replaced_at_ms: i64,
+}
+
+impl From<MessageRevisionFfi> for MessageRevisionJs {
+    fn from(r: MessageRevisionFfi) -> Self {
+        Self { body: r.body, replaced_at_ms: r.replaced_at_ms }
     }
 }
 
@@ -1377,23 +1412,6 @@ impl AppCore {
     }
 
     #[napi]
-    pub async fn register_push_token(
-        &self,
-        device_token: String,
-        platform: String,
-        relay_url: String,
-        environment: String,
-    ) -> napi::Result<()> {
-        let core = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            core.register_push_token(device_token, platform, relay_url, environment)
-        })
-        .await
-        .map_err(join_err)?
-        .map_err(to_napi)
-    }
-
-    #[napi]
     pub async fn update_recovery_blob(
         &self,
         prf_output: Buffer,
@@ -1441,6 +1459,236 @@ impl AppCore {
             .await
             .map_err(join_err)?
             .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn set_own_avatar(&self, jpeg: Buffer) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let jpeg = jpeg.to_vec();
+        tokio::task::spawn_blocking(move || core.set_own_avatar(jpeg))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn clear_own_avatar(&self) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.clear_own_avatar())
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn own_avatar(&self) -> napi::Result<Option<Buffer>> {
+        let core = self.inner.clone();
+        let bytes = tokio::task::spawn_blocking(move || core.own_avatar())
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(bytes.map(Into::into))
+    }
+
+    #[napi]
+    pub async fn contact_avatar(&self, did: String) -> napi::Result<Option<Buffer>> {
+        let core = self.inner.clone();
+        let bytes = tokio::task::spawn_blocking(move || core.contact_avatar(did))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(bytes.map(Into::into))
+    }
+
+    #[napi]
+    pub async fn cached_display_names(
+        &self,
+        dids: Vec<String>,
+    ) -> napi::Result<std::collections::HashMap<String, String>> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.cached_display_names(dids))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn save_shared_contact(&self, did: String, name: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.save_shared_contact(did, name))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn block_contact(&self, did: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.block_contact(did))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn unblock_contact(&self, did: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.unblock_contact(did))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn list_blocked(&self) -> napi::Result<Vec<ContactRowJs>> {
+        let core = self.inner.clone();
+        let rows = tokio::task::spawn_blocking(move || core.list_blocked())
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    #[napi]
+    pub async fn report_and_block(&self, did: String, reason: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.report_and_block(did, reason))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn accept_request(&self, did: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.accept_request(did))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn delete_request(&self, did: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.delete_request(did))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn send_edit(
+        &self,
+        target: MessageTargetJs,
+        target_sent_at_ms: i64,
+        new_body: String,
+        sent_at_ms: i64,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let target = target.into_ffi()?;
+        tokio::task::spawn_blocking(move || {
+            core.send_edit(target, target_sent_at_ms, new_body, sent_at_ms)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn send_delete(
+        &self,
+        target: MessageTargetJs,
+        target_author: String,
+        target_sent_at_ms: i64,
+        for_everyone: bool,
+        sent_at_ms: i64,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let target = target.into_ffi()?;
+        tokio::task::spawn_blocking(move || {
+            core.send_delete(target, target_author, target_sent_at_ms, for_everyone, sent_at_ms)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn load_reactions(
+        &self,
+        conversation_id: String,
+    ) -> napi::Result<Vec<ReactionJs>> {
+        let core = self.inner.clone();
+        let rows = tokio::task::spawn_blocking(move || core.load_reactions(conversation_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    #[napi]
+    pub async fn load_message_revisions(
+        &self,
+        conversation_id: String,
+        author: String,
+        sent_at_ms: i64,
+    ) -> napi::Result<Vec<MessageRevisionJs>> {
+        let core = self.inner.clone();
+        let rows = tokio::task::spawn_blocking(move || {
+            core.load_message_revisions(conversation_id, author, sent_at_ms)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(to_napi)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    #[napi]
+    pub async fn set_conversation_timer(
+        &self,
+        recipient_did: String,
+        expiry_secs: Option<u32>,
+    ) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.set_conversation_timer(recipient_did, expiry_secs))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn get_conversation_timer(
+        &self,
+        conversation_id: String,
+    ) -> napi::Result<Option<u32>> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.get_conversation_timer(conversation_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn delete_expired_messages(&self) -> napi::Result<Vec<String>> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.delete_expired_messages())
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn sync_storage(&self) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.sync_storage())
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub fn home_server(&self) -> String {
+        self.inner.home_server()
     }
 
     #[napi]
@@ -1761,6 +2009,62 @@ impl AppCore {
             .map_err(join_err)?
             .map_err(to_napi)?;
         Ok(bytes.into())
+    }
+
+    #[napi]
+    pub async fn set_group_avatar(&self, group_id: String, jpeg: Buffer) -> napi::Result<()> {
+        let core = self.inner.clone();
+        let jpeg = jpeg.to_vec();
+        tokio::task::spawn_blocking(move || core.set_group_avatar(group_id, jpeg))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn clear_group_avatar(&self, group_id: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.clear_group_avatar(group_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn group_avatar(&self, group_id: String) -> napi::Result<Option<Buffer>> {
+        let core = self.inner.clone();
+        let bytes = tokio::task::spawn_blocking(move || core.group_avatar(group_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)?;
+        Ok(bytes.map(Into::into))
+    }
+
+    #[napi]
+    pub async fn fetch_group_avatar(&self, group_id: String) -> napi::Result<bool> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.fetch_group_avatar(group_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn set_group_title(&self, group_id: String, new_title: String) -> napi::Result<()> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.set_group_title(group_id, new_title))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn group_expiry_seconds(&self, group_id: String) -> napi::Result<u32> {
+        let core = self.inner.clone();
+        tokio::task::spawn_blocking(move || core.group_expiry_seconds(group_id))
+            .await
+            .map_err(join_err)?
+            .map_err(to_napi)
     }
 }
 
