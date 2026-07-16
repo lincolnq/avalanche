@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use app_core::AppCore;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 // Desktop-specific convenience type (not in app-core).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -220,6 +220,7 @@ pub fn run() {
             download_attachment,
             send_message_with_attachments,
             open_external,
+            open_project_window,
             fetch_link_preview,
             // Device linking (Day-6 B1 / T71). New-device (account-less) side
             // uses DeviceLinkState; existing-device side operates on AppState.
@@ -261,7 +262,6 @@ pub fn run() {
         // frontend (the deep-link plugin's on_open_url only fires for the
         // cold-start launch, not this second-instance path on Windows/Linux).
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            use tauri::Emitter;
             // show() (not just unminimize) so a window hidden to the tray by
             // close-to-tray actually reappears — a hidden window is not minimized.
             show_main_window(app);
@@ -274,7 +274,6 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
-            use tauri::Emitter;
             use tauri_plugin_deep_link::DeepLinkExt;
 
             // Route the Rust core's `tracing` output to stderr so app-core /
@@ -1654,6 +1653,98 @@ fn open_external(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| e.to_string())
 }
 
+/// True if a URL navigated to *inside* a project webview is one of our deep
+/// links that should open a conversation/invite in the main app rather than
+/// load in the project window. Mirrors the recognized actions in the JS
+/// `parseDeepLink` (helpers.ts) and iOS/Android `isDeepLink`.
+///
+/// The `avalanche://` custom scheme is always ours, so any `avalanche://`
+/// navigation is a deep link. For the universal-link host we additionally
+/// require a recognized first path segment, so a project *served from*
+/// go.theavalanche.net can't have its own pages hijacked as deep links.
+fn is_project_deep_link(url: &tauri::Url) -> bool {
+    if url.scheme() == "avalanche" {
+        return true;
+    }
+    if url.host_str() == Some("go.theavalanche.net") {
+        if let Some(mut segs) = url.path_segments() {
+            return matches!(
+                segs.next(),
+                Some("conversation") | Some("i") | Some("invite")
+            );
+        }
+    }
+    false
+}
+
+/// Open a project in an isolated webview window, intercepting in-webview
+/// navigations to our deep links so they open a conversation in the main app
+/// (parity with iOS `ProjectWebView`/`WKNavigationDelegate` and Android's
+/// `ProjectWebView`). The window is created here rather than from JS because a
+/// navigation handler is a Rust closure JS can't provide.
+///
+/// Security: the window keeps a non-`main` label (`project-N`), so the `default`
+/// capability (`windows: ["main"]`) denies it every app-core command — the
+/// isolation invariant in desktop/CLAUDE.md is preserved. Verify empirically
+/// after changes: `invoke('ping')` from the project window must be rejected.
+///
+/// `async` matters: `WebviewWindowBuilder::build` deadlocks in a *sync* command
+/// on Windows (see wry/webview2), so this must stay `async`.
+#[tauri::command]
+#[specta::specta]
+async fn open_project_window(
+    app: tauri::AppHandle,
+    url: String,
+    token: String,
+    title: String,
+) -> Result<(), String> {
+    // A project entry is server-supplied; never open a javascript:/file:/data:
+    // window (T67 parity with the old JS `isAllowedProjectUrl` guard). Host is
+    // unrestricted (matches iOS/Android); only the scheme is gated.
+    if !is_web_url(&url) {
+        return Err("refusing to open project with non-http(s) url".to_string());
+    }
+    // Append the auth token as a query param (matches iOS + the project
+    // interface contract). `query_pairs_mut` percent-encodes and preserves any
+    // existing query, replacing the old JS `?token=${encodeURIComponent(...)}`.
+    let mut full = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    full.query_pairs_mut().append_pair("token", &token);
+
+    // Unique, non-`main` label per window so the capability ACL denies IPC.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!("project-{n}");
+
+    let app_for_nav = app.clone();
+    let label_for_nav = label.clone();
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(full))
+        .title(&title)
+        .inner_size(900.0, 700.0)
+        .on_navigation(move |target| {
+            // Runs in Rust on every navigation in this window. Bridge our deep
+            // links into the same entry point the OS deep-link path uses
+            // (AppContext listens for `avalanche-deeplink` → handleDeepLink);
+            // let the project's own pages/redirects through.
+            if is_project_deep_link(target) {
+                let _ = app_for_nav.emit("avalanche-deeplink", target.to_string());
+                show_main_window(&app_for_nav);
+                // Close this project window off the navigation callback.
+                let app_close = app_for_nav.clone();
+                let label_close = label_for_nav.clone();
+                let _ = app_for_nav.run_on_main_thread(move || {
+                    if let Some(w) = app_close.get_webview_window(&label_close) {
+                        let _ = w.close();
+                    }
+                });
+                return false; // cancel — don't navigate the project webview to it
+            }
+            true
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ── Link-preview OG fetch (A4) ───────────────────────────────────────────────
 
 const PREVIEW_MAX_HTML_BYTES: usize = 1024 * 1024; // 1 MiB of HTML is plenty for <head>
@@ -1781,5 +1872,32 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreviewMetaFfi, String> {
         image_bytes,
         image_content_type,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dl(u: &str) -> bool {
+        is_project_deep_link(&tauri::Url::parse(u).unwrap())
+    }
+
+    #[test]
+    fn deep_link_matcher() {
+        // Our custom scheme is always a deep link.
+        assert!(dl("avalanche://conversation/did:plc:abc"));
+        assert!(dl("avalanche://i/token123"));
+        // Universal-link host with a recognized action.
+        assert!(dl("https://go.theavalanche.net/conversation/did:plc:abc"));
+        assert!(dl("https://go.theavalanche.net/i/token123"));
+        assert!(dl("https://go.theavalanche.net/invite/token123"));
+        // Same host but an unrecognized path is NOT hijacked — a project could
+        // legitimately be served from that host.
+        assert!(!dl("https://go.theavalanche.net/"));
+        assert!(!dl("https://go.theavalanche.net/about"));
+        // Unrelated hosts are never deep links.
+        assert!(!dl("https://evil.example.com/conversation/x"));
+        assert!(!dl("https://project.example.com/?token=abc"));
+    }
 }
 

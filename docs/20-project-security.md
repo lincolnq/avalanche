@@ -199,7 +199,9 @@ The Project's web page runs in a `WKWebView` (iOS) / `WebView` (Android). Standa
 
 ### No JS bridge (for now)
 
-The web page has no bridge to the native app. All actions go through the Project's own HTTP backend, which then operates through bot accounts. The way the web page gets the user back to the app is by opening a deep link for navigation in the app.
+The web page has no bridge to the native app. All actions go through the Project's own HTTP backend, which then operates through bot accounts. The way the web page gets the user back to the app is by navigating to a deep link, which the app intercepts.
+
+**Canonical deep-link form — always use `https://go.theavalanche.net/<action>/<arg>`.** A Project webview that wants to open a conversation, invite, or other app destination navigates to a URL on the `go.theavalanche.net` host — e.g. `https://go.theavalanche.net/conversation/<did>`, `https://go.theavalanche.net/i/<token>`. The client's webview intercepts navigations to that host **by host match in its navigation delegate** on all three platforms (iOS `WKNavigationDelegate`, Android `WebViewClient`, desktop Tauri `on_navigation`), cancels the navigation, and routes it into the app's deep-link handler. Because interception is by host in the delegate, it does **not** depend on Universal Links / App Links firing (which are unreliable from inside an app's own webview) — the HTTP navigation is caught directly. **Do not emit a custom URL scheme (`avalanche://`/`theavalanche://`) from a webview:** it isn't a registered, working scheme on this platform, and it's not the interception path. There is no separate scheme to learn — the same `https://go.theavalanche.net/…` links used everywhere else (invites, QR codes) are exactly what a Project emits.
 
 This is a deliberate security choice. A JS bridge would dramatically expand the attack surface. If a JS bridge is ever added, it must be gated by a scoped permission system: the Project declares what native capabilities it needs, the user explicitly approves, and the bridge only exposes approved capabilities. 
 

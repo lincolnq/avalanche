@@ -1,6 +1,7 @@
-import { useLocation, A } from "@solidjs/router";
+import { useLocation, useNavigate, A } from "@solidjs/router";
 import type { RouteSectionProps } from "@solidjs/router";
 import type { JSX } from "solid-js";
+import { createEffect, on } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { FiSettings, FiMessageSquare, FiGlobe, FiLogOut } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
@@ -38,7 +39,26 @@ function NavLink(props: NavLinkProps) {
 }
 
 export default function MainLayout(props: RouteSectionProps): JSX.Element {
-  const { logout } = useApp();
+  const { logout, selectedConversationId } = useApp();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // When a conversation is selected programmatically while the user isn't on
+  // the Chats route — a deep link (in-webview project link or an external
+  // avalanche:///go.theavalanche.net link) or a newly created DM — switch to
+  // Chats so the selection is visible. ChatsView renders the selection from the
+  // signal; from within Chats this is a no-op. `defer` skips the mount run.
+  const onChats = () =>
+    location.pathname === "/" || location.pathname.startsWith("/chats");
+  createEffect(
+    on(
+      selectedConversationId,
+      (id) => {
+        if (id && !onChats()) navigate("/chats");
+      },
+      { defer: true }
+    )
+  );
 
   return (
     <div class="layout">

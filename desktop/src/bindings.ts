@@ -180,6 +180,22 @@ export const commands = {
 	 */
 	openExternal: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_external", { url })),
 	/**
+	 *  Open a project in an isolated webview window, intercepting in-webview
+	 *  navigations to our deep links so they open a conversation in the main app
+	 *  (parity with iOS `ProjectWebView`/`WKNavigationDelegate` and Android's
+	 *  `ProjectWebView`). The window is created here rather than from JS because a
+	 *  navigation handler is a Rust closure JS can't provide.
+	 * 
+	 *  Security: the window keeps a non-`main` label (`project-N`), so the `default`
+	 *  capability (`windows: ["main"]`) denies it every app-core command — the
+	 *  isolation invariant in desktop/CLAUDE.md is preserved. Verify empirically
+	 *  after changes: `invoke('ping')` from the project window must be rejected.
+	 * 
+	 *  `async` matters: `WebviewWindowBuilder::build` deadlocks in a *sync* command
+	 *  on Windows (see wry/webview2), so this must stay `async`.
+	 */
+	openProjectWindow: (url: string, token: string, title: string) => typedError<null, string>(__TAURI_INVOKE("open_project_window", { url, token, title })),
+	/**
 	 *  Fetch a URL and scrape its OG/meta tags + og:image bytes (A4). Lives in Rust
 	 *  because the WebView's CSP forbids external fetches (`connect-src ipc:`).
 	 *  Size-capped, timed out, and http(s)-only. Returns a text-only card when no
