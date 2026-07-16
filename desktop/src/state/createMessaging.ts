@@ -348,8 +348,17 @@ export function createMessaging(deps: MessagingDeps): Messaging {
     });
     if (changed) {
       setStore("messagesByConversation", conversationId, updated);
+      // Persist read state up to the latest message actually seen — NOT wall-clock
+      // `now`. `markMessagesRead`'s threshold is compared against each row's
+      // `sent_at` (the *sender's* timestamp). If our clock trails the sender's
+      // (e.g. this laptop slept and hasn't resynced NTP while the sender's server
+      // is ahead), a just-received message's `sent_at` can exceed our `now`, so it
+      // falls outside `sent_at <= now`, never gets marked read in the store, and
+      // reappears as unread after restart (it looked read live, in-memory only).
+      // Using the max seen `sent_at` makes this clock-skew-proof.
+      const upToSentAt = Math.max(now, ...newlyReadSentAt);
       void serviceFor(accountId)
-        .markMessagesRead(conversationId, now)
+        .markMessagesRead(conversationId, upToSentAt)
         .catch((e: unknown) => {
           console.warn("markMessagesRead failed:", e);
         });
