@@ -1,8 +1,13 @@
 # 16 — Notification Service Extension (rich, reliable iOS push)
 
-**Status:** design + Stage-1 spec for review. Not yet implemented. The memory
-feasibility experiment (Stage-0 probe) is **done and its scaffolding removed** —
-its result is recorded under "Footprint" below.
+**Status:** Stages 1–3 implemented (not yet deployed). Stage 1 (shared storage)
+is verified on device. Stages 2 (relay alert payload, behind the `APNS_PUSH_MODE`
+toggle — default `silent`) + 3 (NSE target + fetch FFI) are built and compile.
+The relay can deploy safely (default = no change); flip `APNS_PUSH_MODE=alert` to
+test the NSE on a device build, then back. Rich-banner behavior is not yet
+verified on device. Stage 4 (cross-process WAL/`busy_timeout` hardening) is still
+pending. The memory feasibility experiment (Stage-0 probe) was done and its
+scaffolding removed — its result is recorded under "Footprint" below.
 
 ## Problem
 
@@ -88,9 +93,15 @@ cross-process correctness question.
 
 ## Relay changes (`core/crates/relay`, APNs branch only)
 
-- Add an alert path alongside `send_silent`: `PushType::Alert`, `mutable-content: 1`,
-  a generic `alert` body ("New message"), and (Targeting) an opaque pseudonym in a
-  custom key. Keep priority normal/high per Apple guidance.
+- An alert path (`send_alert`) sits alongside `send_silent`: `PushType::Alert`,
+  `mutable-content: 1`, a generic `alert` body ("New message"), Priority::High, and
+  **not** `content-available` (avoids also waking the app's background handler /
+  racing the NSE).
+- **`APNS_PUSH_MODE` env toggle** selects the shape at startup: `silent` (default)
+  keeps the established content-available wakeup; `alert` sends the NSE payload.
+  Defaulting to `silent` means the new relay can be deployed with no behavior
+  change, flipped to `alert` for a live test, and flipped back — no redeploy, and
+  no risk of stranding users on the alert payload before the NSE app build ships.
 - FCM / UnifiedPush unchanged.
 - Wire/contract change to the APNs payload → coordinate with the iOS side; additive
   for other transports.
@@ -133,44 +144,48 @@ items — so the extension holds no crypto logic.
   `ShareExtension`: `type: app-extension`, embedded, own entitlements with the App
   Group + the shared keychain access group; link `AppCoreFFI.xcframework`).
 - `UNNotificationServiceExtension.didReceive`: read the account list + DB key from
-  shared storage, resolve the target account (Targeting), call the app-core fetch
-  FFI within the ~30 s budget, rewrite `bestAttemptContent` (title = sender, body =
-  message) for the triggering notification, and **schedule additional local
-  notifications** for any other new messages. `serviceExtensionTimeWillExpire` →
-  deliver the generic best-attempt.
+  shared storage, **fetch every account** (no targeting — see below), call the
+  app-core fetch FFI within the ~30 s budget, rewrite `bestAttemptContent`
+  (title = sender, body = message) for the triggering notification, and **schedule
+  additional local notifications** for any other new messages.
+  `serviceExtensionTimeWillExpire` → deliver the generic best-attempt.
 - Main-app changes: DB path + key + account-list migration to shared storage (deps
   1–3); the existing silent-push handler (`ActnetApp.swift:93`) can stay as a
   belt-and-suspenders wake but is no longer the primary path.
 
-## Targeting (decision)
+## Targeting (decision — deferred)
 
-The push must tell the NSE *which* account to fetch (a device hosts multiple
-accounts sharing one token).
+A device hosts multiple accounts sharing one token, so in principle the push
+should say *which* account to fetch. **Decision: don't target for now — the NSE
+fetches every account.** The alert push carries no hint; on receipt the NSE opens
+each account in the shared list and pulls its mailbox/groups. Simpler, and keeps
+the payload maximally content-free.
 
-- **Recommended:** the relay includes the (recipient's own) **pseudonym** in the
-  alert payload; the NSE maps pseudonym → local account via the shared account list
-  and fetches just that account. Privacy cost: Apple's push path sees an opaque,
-  rotating pseudonym alongside the token it already sees — no identity/content.
-- **Fallback:** no hint → NSE fetches all accounts (heavier; risks the 30 s / memory
-  budget).
+If the fetch-all cost ever bumps the ~30 s / memory budget (many accounts, or slow
+network), add targeting as a self-contained follow-on: the relay includes the
+recipient's own **opaque pseudonym** in the alert payload and the NSE maps it →
+local account and fetches just that one. Privacy cost then: Apple's push path sees
+a rotating pseudonym alongside the token it already sees — no identity/content.
+Nothing in Stages 2–3 precludes this later.
 
 ## Privacy analysis
 
 Today Apple sees: device token + content-free wakeup. With this change Apple's push
 path additionally sees a **generic "New message" alert** (timing that a message
-arrived) and, if Targeting is used, an **opaque pseudonym**. Still **no sender,
-no content, no ciphertext** — all fetched and decrypted on-device by the NSE. This
-is the Signal posture. Note the known forensics caveat: decrypted banner text then
-lives in iOS's notification store (`docs/signal-research/foreground-notifications.md`).
+arrived). With targeting deferred there is **no pseudonym** in the payload either.
+Still **no sender, no content, no ciphertext** — all fetched and decrypted
+on-device by the NSE. This is the Signal posture. Note the known forensics caveat:
+decrypted banner text then lives in iOS's notification store
+(`docs/signal-research/foreground-notifications.md`).
 
 ## Staged plan
 
 1. **Shared storage foundation** (deps 1–3): keychain access group, DB → App Group
    container + migration, account list → shared. Verify the app still works
    end-to-end (no NSE yet).
-2. **Relay alert payload** (APNs branch) + Targeting pseudonym.
-3. **NSE target + app-core fetch FFI** (full core — footprint resolved), rewrite
-   banner, generic fallback.
+2. **Relay alert payload** (APNs branch) — alert + `mutable-content`, no targeting.
+3. **NSE target + app-core fetch FFI** (full core — footprint resolved); fetch all
+   accounts, rewrite banner, generic fallback.
 4. **Cross-process hardening** (dep 4): WAL/busy_timeout, contention tests.
 
 ## Test plan
@@ -190,7 +205,5 @@ lives in iOS's notification store (`docs/signal-research/foreground-notification
 
 1. **Cross-process SQLite** correctness/coordination strategy (dep 4) — needs WAL +
    `busy_timeout` (not set today, `db.rs:98-107`).
-2. **Targeting:** pseudonym-in-payload (recommended) vs fetch-all.
-3. **DB migration** rollout/rollback and failure handling.
-4. Does the relay change to the APNs payload need project-owner sign-off (privacy
+2. Does the relay change to the APNs payload need project-owner sign-off (privacy
    posture shift from content-free wakeup → generic alert)?

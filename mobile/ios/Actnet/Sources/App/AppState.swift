@@ -7,22 +7,8 @@ enum ServiceMode: String, CaseIterable {
     case devServer = "Dev Server"
 }
 
-/// Minimal account info persisted to UserDefaults so we can restore on launch.
-/// `dbFilename` is just the filename (e.g. "account-34B35698.db"), resolved
-/// against the current app container's dbDir at runtime. This avoids breakage
-/// when the simulator reassigns container UUIDs between launches.
-private struct PersistedAccount: Codable {
-    let did: String
-    let displayName: String
-    let dbFilename: String
-    let servers: [PersistedServer]
-}
-
-private struct PersistedServer: Codable {
-    let id: String
-    let name: String
-    let url: String
-}
+// `PersistedAccount` / `PersistedServer` now live in `Shared/SharedAccounts.swift`
+// so the Notification Service Extension (docs/16) can read the same account list.
 
 /// Top-level app state. Tracks accounts (each backed by an AppCore instance)
 /// and routes between onboarding and the main UI.

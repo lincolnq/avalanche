@@ -30,8 +30,13 @@
 //!   `APNS_KEY_PATH` (path to the .p8 private key), `APNS_KEY_ID`,
 //!   `APNS_TEAM_ID`, and `APNS_BUNDLE_ID` (e.g. net.theavalanche.app). If
 //!   `APNS_KEY_PATH` is unset the relay still runs but APNs wakeups are logged
-//!   only. Payloads are content-free silent pushes (`content-available: 1`,
-//!   PushType::Background, Priority::Normal).
+//!   only. The payload shape is selected by `APNS_PUSH_MODE` (docs/16):
+//!   `silent` (default) sends a content-free silent wakeup (`content-available`,
+//!   PushType::Background); `alert` sends a content-free **alert +
+//!   `mutable-content`** push (PushType::Alert) carrying only a generic
+//!   "New message", which invokes the app's Notification Service Extension to
+//!   fetch + decrypt and rewrite the banner on-device. Defaulting to `silent`
+//!   lets this relay deploy without changing behavior until an operator opts in.
 //!
 //! - **fcm** — FCM HTTP v1 with a service account. We mint an OAuth2 access
 //!   token by signing a short-lived RS256 JWT (the legacy server-key API is
@@ -93,6 +98,30 @@ struct Apns {
     sandbox: Client,
     production: Client,
     bundle_id: String,
+    mode: ApnsPushMode,
+}
+
+/// Which APNs payload shape to send, selected by `APNS_PUSH_MODE` (docs/16).
+/// Lets a relay be deployed ahead of the NSE app build and flipped per-test
+/// without a redeploy: it defaults to the established silent behavior, so
+/// shipping this relay changes nothing until `APNS_PUSH_MODE=alert` is set.
+#[derive(Clone, Copy, PartialEq)]
+enum ApnsPushMode {
+    /// Content-free silent wakeup (`content-available`). Relies on the app's
+    /// background handler waking — the established (if unreliable) behavior.
+    Silent,
+    /// Visible alert + `mutable-content` that invokes the Notification Service
+    /// Extension (docs/16). Opt-in until the NSE app build has rolled out.
+    Alert,
+}
+
+impl ApnsPushMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApnsPushMode::Silent => "silent",
+            ApnsPushMode::Alert => "alert",
+        }
+    }
 }
 
 impl Apns {
@@ -113,14 +142,36 @@ impl Apns {
                 .expect("failed to build APNs client")
         };
 
-        tracing::info!(bundle = %bundle_id, "APNs clients configured (sandbox + production)");
+        // Default to the established silent wakeup so deploying this relay is a
+        // no-op until an operator opts in to the NSE alert payload (docs/16).
+        let mode = match std::env::var("APNS_PUSH_MODE").as_deref() {
+            Ok("alert") => ApnsPushMode::Alert,
+            _ => ApnsPushMode::Silent,
+        };
+
+        tracing::info!(
+            bundle = %bundle_id,
+            push_mode = mode.as_str(),
+            "APNs clients configured (sandbox + production)"
+        );
         Some(Self {
             sandbox: mk(Endpoint::Sandbox),
             production: mk(Endpoint::Production),
             bundle_id,
+            mode,
         })
     }
 
+    /// Send the wakeup shape selected by `APNS_PUSH_MODE` (see [`ApnsPushMode`]).
+    async fn send_wakeup(&self, environment: &str, device_token: &str) -> Result<(), a2::Error> {
+        match self.mode {
+            ApnsPushMode::Silent => self.send_silent(environment, device_token).await,
+            ApnsPushMode::Alert => self.send_alert(environment, device_token).await,
+        }
+    }
+
+    /// Content-free silent wakeup (`content-available`, PushType::Background).
+    /// The app's background handler must run to surface a notification.
     async fn send_silent(&self, environment: &str, device_token: &str) -> Result<(), a2::Error> {
         let client = match environment {
             "production" => &self.production,
@@ -134,6 +185,42 @@ impl Apns {
                     apns_topic: Some(&self.bundle_id),
                     apns_push_type: Some(PushType::Background),
                     apns_priority: Some(Priority::Normal),
+                    ..Default::default()
+                },
+            );
+        let resp = client.send(payload).await?;
+        tracing::debug!(code = resp.code, apns_id = ?resp.apns_id, "APNs response");
+        Ok(())
+    }
+
+    /// Send a visible **alert + `mutable-content`** push (docs/16). The
+    /// `mutable-content` flag invokes the app's Notification Service Extension,
+    /// which fetches + decrypts on-device and rewrites the banner with the real
+    /// sender and message; an app without the NSE just shows the generic body.
+    /// The payload stays content-free — a fixed "New message", no sender / text /
+    /// ciphertext.
+    ///
+    /// Deliberately **not** `content-available`: we don't want to also wake the
+    /// app's background handler. An alert push is delivered and displayed
+    /// reliably (even for a force-quit app, independent of Background App
+    /// Refresh), which the silent-wake path was not — that unreliability is the
+    /// bug this replaces. Adding `content-available` would also race the NSE
+    /// against the app's background receive on NSE builds.
+    async fn send_alert(&self, environment: &str, device_token: &str) -> Result<(), a2::Error> {
+        let client = match environment {
+            "production" => &self.production,
+            _ => &self.sandbox, // default to sandbox for unknown/missing values
+        };
+        let payload = DefaultNotificationBuilder::new()
+            .set_title("New message")
+            .set_mutable_content()
+            .set_sound("default")
+            .build(
+                device_token,
+                NotificationOptions {
+                    apns_topic: Some(&self.bundle_id),
+                    apns_push_type: Some(PushType::Alert),
+                    apns_priority: Some(Priority::High),
                     ..Default::default()
                 },
             );
@@ -563,9 +650,9 @@ async fn wakeup(
                 match platform.as_str() {
                     "apns" => {
                         if let Some(apns) = &state.apns {
-                            match apns.send_silent(&environment, &device_token).await {
+                            match apns.send_wakeup(&environment, &device_token).await {
                                 Ok(()) => {
-                                    tracing::info!(token_prefix, %environment, "sent APNs wakeup");
+                                    tracing::info!(token_prefix, %environment, mode = apns.mode.as_str(), "sent APNs wakeup");
                                     woken.push(pseudonym);
                                 }
                                 Err(e) => {

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Notification Service Extension Info.plist (docs/16). NSExtension can't be
+expressed via INFOPLIST_KEY_* build settings, so it lives here; the Apple-defined
+bundle keys are merged in at build time from GENERATE_INFOPLIST_FILE in
+project.yml. The principal class is resolved as $(PRODUCT_MODULE_NAME).NotificationService.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.usernotifications.service</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).NotificationService</string>
+	</dict>
+</dict>
+</plist>
