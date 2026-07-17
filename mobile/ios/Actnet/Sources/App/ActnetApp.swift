@@ -18,6 +18,10 @@ var isRunningInPreview: Bool {
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var appState: AppState?
+    /// A notification tapped during cold launch can fire before RootView wires
+    /// up `appState`. Stash it here; RootView flushes it once appState exists
+    /// (docs/16).
+    var pendingNotificationTarget: (conversationId: String, accountId: String)?
 
     func application(
         _ application: UIApplication,
@@ -140,11 +144,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // independently on the main actor.
         completionHandler()
         Task { @MainActor in
-            guard let conversationId, let accountId, let appState = self.appState else { return }
-            let conv = appState.conversations.first(where: { $0.id == conversationId && $0.accountId == accountId })
-            guard let conv else { return }
-            appState.selectedTab = .chats
-            appState.navigateToConversation = conv
+            guard let conversationId, let accountId else { return }
+            if let appState = self.appState {
+                appState.openConversationFromNotification(
+                    conversationId: conversationId, accountId: accountId)
+            } else {
+                // Cold launch: the tap can fire before RootView wires appState.
+                // RootView flushes this once it's available (docs/16).
+                self.pendingNotificationTarget = (conversationId, accountId)
+            }
         }
     }
 }
@@ -169,6 +177,16 @@ struct ActnetApp: App {
                     .environmentObject(appState)
                     .task {
                         appDelegate.appState = appState
+                        // Replay a notification tapped during cold launch that
+                        // arrived before appState existed (docs/16). This stashes
+                        // into appState if conversations aren't loaded yet, and
+                        // the conversation load replays it from there.
+                        if let target = appDelegate.pendingNotificationTarget {
+                            appDelegate.pendingNotificationTarget = nil
+                            appState.openConversationFromNotification(
+                                conversationId: target.conversationId,
+                                accountId: target.accountId)
+                        }
                         await appState.restoreAccounts()
                         // Cold-launch safety net for shares (docs/35): scenePhase
                         // starts at .active so its onChange won't fire on launch.

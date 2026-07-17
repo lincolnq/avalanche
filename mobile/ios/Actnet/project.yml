@@ -44,6 +44,9 @@ targets:
       # Share extension — embedded into the app bundle (docs/35).
       - target: ShareExtension
         embed: true
+      # Notification Service Extension — embedded into the app bundle (docs/16).
+      - target: NotificationServiceExtension
+        embed: true
     entitlements:
       path: Actnet.entitlements
       properties:
@@ -54,9 +57,16 @@ targets:
         # below. Debug → development (sandbox APNs, paired with Xcode runs);
         # Release → production (used by TestFlight and App Store builds).
         aps-environment: $(APS_ENVIRONMENT)
-        # Shared container for the share-extension → app image handoff (docs/35).
+        # Shared container for the share-extension → app image handoff (docs/35)
+        # and the App Group databases the NSE reads (docs/16).
         com.apple.security.application-groups:
           - group.net.theavalanche.app
+        # Shared keychain group so the Notification Service Extension can read the
+        # SQLCipher passphrase (docs/16 dep 1). $(AppIdentifierPrefix) resolves to
+        # the team prefix at build time. Must match `sharedAccessGroup` in
+        # SecureEnclaveKeyManager.swift.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)net.theavalanche.app.shared
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV
@@ -139,4 +149,51 @@ targets:
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: ../ShareExtension/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Avalanche
+
+  # Notification Service Extension (docs/16): on a content-free alert push, runs
+  # app-core to fetch + decrypt on-device and rewrite the banner with the real
+  # sender/message. Links the same static app-core the app does, and shares the
+  # App Group container (databases) + shared keychain group (DB passphrase) so it
+  # can open the accounts' stores.
+  NotificationServiceExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../NotificationServiceExtension
+        group: NotificationServiceExtension
+      # Generated UniFFI glue, shared with the app target — makes
+      # `fetchNotifications` (and the app-core types) callable here.
+      - path: ../Generated/app_core.swift
+        group: Generated
+      # SecureEnclaveKeyManager (DB key), AppGroup (container/suite), and the
+      # shared account list — all compiled into the app target too.
+      - path: ../Shared
+        group: Shared
+    dependencies:
+      # Same static-lib xcframework the app links; the .a links into the appex
+      # executable (embed: false — it's a static archive, not a framework).
+      - framework: ../AppCoreFFI.xcframework
+        embed: false
+    entitlements:
+      path: ../NotificationServiceExtension/NotificationServiceExtension.entitlements
+      properties:
+        # Must match the app so the NSE opens the same databases (docs/16 dep 2).
+        com.apple.security.application-groups:
+          - group.net.theavalanche.app
+        # Must match the app's shared keychain group so the NSE reads the DB
+        # passphrase (docs/16 dep 1); same value as SecureEnclaveKeyManager.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)net.theavalanche.app.shared
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 7FVK3RR3TV
+        PRODUCT_BUNDLE_IDENTIFIER: net.theavalanche.app.nse
+        MARKETING_VERSION: ${MARKETING_VERSION}
+        CURRENT_PROJECT_VERSION: ${CURRENT_PROJECT_VERSION}
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ../NotificationServiceExtension/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Avalanche

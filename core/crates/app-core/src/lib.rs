@@ -142,6 +142,43 @@ pub fn init_logging(filter: String) {
     }
 }
 
+/// Fetch, decrypt, persist, and ack any queued messages for the account whose
+/// SQLCipher store is at `db_path`, returning display-ready notification items.
+///
+/// This is the entry point for the iOS Notification Service Extension (docs/16):
+/// a fresh process, no running app, ~30 s budget. It opens the account's store,
+/// polls the DM mailbox and every group queue over HTTP, and drives each message
+/// through the **same `process_decrypted` path the WebSocket loop uses** — so
+/// content lands durably in local history and is acked exactly once (ack happens
+/// only after the durable write, per docs/03), identical to a foreground receive.
+/// It starts **no background tasks** (no WS reconnect / storage-sync / expiry
+/// reaper): it's a one-shot that opens, drains, and returns.
+///
+/// The returned items are the user-visible `Message` events (self-messages and
+/// blocked senders already filtered by `process_decrypted`); receipts, edits,
+/// deletes, SKDMs, and group-metadata changes are applied to the store as a side
+/// effect but are not returned. Sender/group names are resolved locally (no extra
+/// network). Errors reaching the homeserver surface as `Err`; the NSE then shows
+/// the generic best-attempt banner.
+#[uniffi::export]
+pub fn fetch_notifications(
+    db_path: String,
+    db_key: String,
+) -> Result<Vec<NotifItemFfi>, AppErrorFfi> {
+    let rt = ffi_runtime();
+    rt.block_on(async move {
+        let (_identity, store) = store::open_split(
+            Path::new(&db_path),
+            &store::DatabaseKey::from_passphrase(db_key),
+        )
+        .await
+        .map_err(AppError::from)?;
+        let core = AppCore::login_with_store(store).await?;
+        core.fetch_notifications_inner().await
+    })
+    .map_err(AppErrorFfi::from)
+}
+
 /// A Project available on the homeserver.
 #[derive(uniffi::Record)]
 #[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
@@ -501,6 +538,31 @@ pub struct DecryptedMessage {
     /// with none. The consumer persists these via `save_message` and offers a
     /// "Save contact" action (`save_shared_contact`).
     pub contacts: Vec<SharedContactFfi>,
+}
+
+/// A display-ready notification item produced by [`fetch_notifications`] for the
+/// iOS Notification Service Extension (docs/16). All fields are already resolved
+/// locally (no further FFI calls needed to render the banner).
+#[derive(uniffi::Record)]
+#[cfg_attr(feature = "specta", derive(serde::Serialize, serde::Deserialize, specta::Type))]
+#[cfg_attr(feature = "specta", serde(rename_all = "camelCase"))]
+pub struct NotifItemFfi {
+    /// The receiving account (this device's DID) — mirrors the `accountId` the
+    /// tap handler reads from a notification's `userInfo`.
+    pub account_id: String,
+    /// `"dm-{own}-{sender}"` or `"group-{gid}"` — matches the app's conversation
+    /// ids so a tap routes to the right thread.
+    pub conversation_id: String,
+    /// Resolved sender display name (local nickname → cached profile name). Empty
+    /// when no name is cached yet; the NSE falls back to a generic title.
+    pub sender_display_name: String,
+    /// The message text (best-effort UTF-8).
+    pub body: String,
+    pub is_group: bool,
+    /// Group title if this is a group message and its name is known locally.
+    pub group_title: Option<String>,
+    /// Sender's envelope timestamp (unix millis); `0` if absent.
+    pub sent_at_ms: i64,
 }
 
 /// A message from local history (persisted in SQLCipher).
@@ -5264,6 +5326,144 @@ impl AppCore {
             ..
         } = *inner;
         groups::fetch_group_messages(store, client, &server_url, &did, group_id).await
+    }
+
+    /// One-shot receive for the Notification Service Extension (docs/16). Polls
+    /// the DM mailbox and every group queue, routes each message through
+    /// `process_decrypted` (durable persist + ack, mirroring the WS loop), then
+    /// drains the emitted `Message` events into display-ready notification items.
+    /// Backs the [`fetch_notifications`] FFI. Starts no background tasks.
+    async fn fetch_notifications_inner(&self) -> Result<Vec<NotifItemFfi>, AppError> {
+        let did = self.did.clone();
+        let client = self.client.clone();
+
+        // ---- DM mailbox (mirror run_receive_loop's DM arm over an HTTP poll) ----
+        let inbound = client.fetch_messages().await?;
+        if !inbound.is_empty() {
+            for msg in &inbound {
+                // Decrypt under the inner lock; release before persisting.
+                let decrypted = {
+                    let mut inner = self.inner.lock().await;
+                    inner.decrypt_inbound(msg).await
+                };
+                match decrypted {
+                    Ok(d) => crate::messaging::process_decrypted(self, d).await,
+                    Err(e) => tracing::warn!(
+                        "[nse] failed to decrypt DM {}: {e}, acking to skip",
+                        msg.id
+                    ),
+                }
+            }
+            // Ack only after every message is durably persisted (docs/03).
+            let ids: Vec<i64> = inbound.iter().map(|m| m.id).collect();
+            let _ = client.ack_messages(&ids).await;
+        }
+
+        // ---- Group queues (per-group; fetch_group_messages acks its own rows) ----
+        let group_rows = self.store.list_groups().await.unwrap_or_default();
+        if !group_rows.is_empty() {
+            let server_url = client.server_url().to_string();
+            for row in &group_rows {
+                // Lock-free store handle (shares the one connection) keeps the
+                // group network poll off the inner lock.
+                let mut store = self.store.clone();
+                let received = match groups::fetch_group_messages(
+                    &mut store,
+                    &client,
+                    &server_url,
+                    &did,
+                    &row.group_id,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("[nse] group poll failed for {}: {e}", row.group_id);
+                        continue;
+                    }
+                };
+                for rgm in received {
+                    // Wrap the poll result into the same shape the WS group arm
+                    // hands `process_decrypted` (plaintext = ContentMessage
+                    // envelope, group_id set) so persistence is identical.
+                    let dm = DecryptedMessage {
+                        server_id: rgm.message_id,
+                        sender_did: rgm.sender_did,
+                        sender_device_id: rgm.sender_device_id,
+                        group_id: Some(rgm.group_id_b64),
+                        plaintext: rgm.plaintext,
+                        sent_at_ms: None,
+                        expire_timer_secs: 0,
+                        profile_key: None,
+                        is_request: false,
+                        attachments: Vec::new(),
+                        previews: Vec::new(),
+                        contacts: Vec::new(),
+                    };
+                    crate::messaging::process_decrypted(self, dm).await;
+                }
+            }
+        }
+
+        // ---- Drain emitted events into notification items ----
+        let group_titles = groups::local_group_titles(&self.store)
+            .await
+            .unwrap_or_default();
+        let mut items = Vec::new();
+        let mut rx = self.event_rx.lock().await;
+        while let Ok(ev) = rx.try_recv() {
+            let IncomingEvent::Message { msg } = ev else {
+                continue;
+            };
+            // process_decrypted drops blocked senders; also skip our own synced
+            // messages — we never notify ourselves.
+            if msg.sender_did == did {
+                continue;
+            }
+            let body = String::from_utf8_lossy(&msg.plaintext).to_string();
+            let (conversation_id, is_group, group_title) = match &msg.group_id {
+                Some(gid) => (
+                    format!("group-{gid}"),
+                    true,
+                    group_titles.get(gid).cloned(),
+                ),
+                None => (format!("dm-{}-{}", did, msg.sender_did), false, None),
+            };
+            let sender_display_name = self.cached_name(&msg.sender_did).await;
+            items.push(NotifItemFfi {
+                account_id: did.clone(),
+                conversation_id,
+                sender_display_name,
+                body,
+                is_group,
+                group_title,
+                sent_at_ms: msg.sent_at_ms.unwrap_or(0),
+            });
+        }
+        Ok(items)
+    }
+
+    /// Local-only display-name resolution (nickname → cached profile name), no
+    /// network — same priority as `contact_display_name`.
+    async fn cached_name(&self, did: &str) -> String {
+        let nickname = self
+            .store
+            .load_contact(did)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|c| c.nickname)
+            .unwrap_or_default();
+        if !nickname.is_empty() {
+            return nickname;
+        }
+        self.store
+            .load_contact_profile(did)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.display_name)
+            .unwrap_or_default()
     }
 
     /// Async variant of `send_group_message`. Builds a sealed-sender SSv2
