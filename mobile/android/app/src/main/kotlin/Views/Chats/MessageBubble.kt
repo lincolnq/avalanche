@@ -25,10 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -165,12 +162,18 @@ private fun BubbleColumn(
     onCopyContact: (SharedContactFfi) -> Unit = {},
     savedContactDids: Set<String> = emptySet(),
 ) {
-    var contentBounds by remember { mutableStateOf(Rect.Zero) }
+    // This bubble's global bounds, tracked so a long-press can hand the overlay
+    // a start frame. Held in a plain holder, NOT `mutableStateOf`: the global
+    // bounds change on every layout pass of the scrolling list, and writing that
+    // into snapshot state would recompose on each pass. The value is only read
+    // on long-press, so it never needs to drive recomposition. Mirrors the iOS
+    // `MessageBubble.BubbleFrameBox` fix for an infinite layout loop.
+    val boundsHolder = remember { object { var value = Rect.Zero } }
 
     Column(
         horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.onGloballyPositioned { contentBounds = it.boundsInWindow() },
+        modifier = Modifier.onGloballyPositioned { boundsHolder.value = it.boundsInWindow() },
     ) {
         // Sender name above the bubble (incoming group messages, first of a
         // run). Per-sender color so a member keeps the same color.
@@ -205,7 +208,7 @@ private fun BubbleColumn(
                 isBot = isBot,
                 isLastInRun = isLastInRun,
                 actionsEnabled = actionsEnabled && interactive,
-                onLongClick = { if (actionsEnabled && interactive) onLongPress(contentBounds) },
+                onLongClick = { if (actionsEnabled && interactive) onLongPress(boundsHolder.value) },
             )
         }
 

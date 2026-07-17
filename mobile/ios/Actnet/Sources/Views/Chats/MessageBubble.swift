@@ -1,6 +1,15 @@
 import SwiftUI
 import UIKit
 
+/// Reference-type holder for a bubble's global frame. Held in `@State` so the
+/// instance is stable across re-renders, but mutating `frame` does NOT
+/// invalidate the view — which is the whole point: the global frame changes on
+/// every layout pass, and invalidating on each change caused an infinite layout
+/// loop (see `MessageBubble.frameBox`).
+private final class BubbleFrameBox {
+    var frame: CGRect = .zero
+}
+
 struct MessageBubble: View {
     let message: Message
     let isMe: Bool
@@ -60,7 +69,15 @@ struct MessageBubble: View {
 
     /// This bubble's content frame in global coords, tracked so a long-press can
     /// hand the overlay a start position for the lift-to-center animation.
-    @State private var contentFrame: CGRect = .zero
+    ///
+    /// Held in a reference-type box, NOT `@State CGRect`: the global frame
+    /// changes on every layout pass of the scroll-tracked, bottom-anchored
+    /// `LazyVStack`, and writing that into `@State` re-dirtied the view each
+    /// pass so the layout never reached a fixed point — an infinite layout loop
+    /// that hung the app when opening a long transcript. Mutating a class field
+    /// doesn't invalidate the view, so geometry updates are free; the gesture
+    /// reads the latest value on demand.
+    @State private var frameBox = BubbleFrameBox()
 
     var body: some View {
         if showSideSpacers {
@@ -121,7 +138,10 @@ struct MessageBubble: View {
                 reactionCluster
             }
         }
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { contentFrame = $0 }
+        // Track the global frame into a reference box (no view invalidation —
+        // see `frameBox`), so a long-press can hand the overlay a start frame
+        // without turning every layout pass into a new one.
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frameBox.frame = $0 }
     }
 
     @ViewBuilder
@@ -147,7 +167,7 @@ struct MessageBubble: View {
             if actionsEnabled && interactive {
                 content.onLongPressGesture(minimumDuration: 0.35) {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    onLongPress(contentFrame)
+                    onLongPress(frameBox.frame)
                 }
             } else {
                 content
