@@ -232,6 +232,29 @@ final class AppState: ObservableObject {
         navigateToConversation = conversation
     }
 
+    /// Open the conversation a tapped notification points at (docs/16). Called
+    /// from the notification-tap handler with the `conversationId` + `accountId`
+    /// the NSE (or the in-app presenter) stamped on the banner. If the
+    /// conversation isn't in the in-memory list yet — the usual case on a cold
+    /// launch from a force-quit app, where the tap fires before
+    /// `loadConversationsFromStore` has run — the target is stashed and replayed
+    /// once the conversation list loads (see `loadConversationsFromStore`).
+    func openConversationFromNotification(conversationId: String, accountId: String) {
+        if let conv = conversations.first(where: {
+            $0.id == conversationId && $0.accountId == accountId
+        }) {
+            pendingNotificationTarget = nil
+            selectedTab = .chats
+            navigateToConversation = conv
+        } else {
+            pendingNotificationTarget = (conversationId: conversationId, accountId: accountId)
+        }
+    }
+
+    /// A notification tap that arrived before its conversation was loaded (cold
+    /// launch). Replayed by `loadConversationsFromStore` once the list is ready.
+    private var pendingNotificationTarget: (conversationId: String, accountId: String)?
+
     /// Check if a URL is a deep link for this app.
     static func isDeepLink(_ url: URL) -> Bool {
         url.host == "go.theavalanche.net"
@@ -1662,6 +1685,15 @@ final class AppState: ObservableObject {
         }
         unreadCounts = newUnread
         conversationsLoaded = true
+
+        // Replay a notification tap that arrived before its conversation was
+        // loaded (cold launch from a force-quit app). Now that the list is
+        // populated, the target resolves and navigates (docs/16).
+        if let target = pendingNotificationTarget {
+            openConversationFromNotification(
+                conversationId: target.conversationId,
+                accountId: target.accountId)
+        }
 
         // Kick off async name resolution for any conversation still showing the raw DID.
         for conv in conversations {
