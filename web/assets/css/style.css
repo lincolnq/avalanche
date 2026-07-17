@@ -137,6 +137,10 @@ a:hover { text-decoration: underline; }
 .prose a.btn { text-decoration: none; }
 /* Footnote reference/back-reference links: lighter and a touch smaller than body links. */
 .prose a.footnote-ref, .prose a.footnote-backref { font-weight: 400; font-size: 0.85em; }
+/* Keep superscript/subscript markers (e.g. footnote refs) from inflating the line
+   box — line-height: 0 stops them contributing to line height while vertical-align
+   still raises/lowers them. */
+.prose sup, .prose sub { line-height: 0; }
 
 .byline { color: var(--ink-faint); font-size: 0.9rem; margin-bottom: 1.5rem; }
 .back { margin-top: 2.5rem; }
