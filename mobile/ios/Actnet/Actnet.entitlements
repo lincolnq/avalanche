@@ -14,5 +14,9 @@
 	<array>
 		<string>group.net.theavalanche.app</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)net.theavalanche.app.shared</string>
+	</array>
 </dict>
 </plist>

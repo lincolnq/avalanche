@@ -54,9 +54,16 @@ targets:
         # below. Debug → development (sandbox APNs, paired with Xcode runs);
         # Release → production (used by TestFlight and App Store builds).
         aps-environment: $(APS_ENVIRONMENT)
-        # Shared container for the share-extension → app image handoff (docs/35).
+        # Shared container for the share-extension → app image handoff (docs/35)
+        # and the App Group databases the NSE reads (docs/16).
         com.apple.security.application-groups:
           - group.net.theavalanche.app
+        # Shared keychain group so the Notification Service Extension can read the
+        # SQLCipher passphrase (docs/16 dep 1). $(AppIdentifierPrefix) resolves to
+        # the team prefix at build time. Must match `sharedAccessGroup` in
+        # SecureEnclaveKeyManager.swift.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)net.theavalanche.app.shared
     settings:
       base:
         DEVELOPMENT_TEAM: 7FVK3RR3TV

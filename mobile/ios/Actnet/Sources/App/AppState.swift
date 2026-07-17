@@ -283,6 +283,11 @@ final class AppState: ObservableObject {
         let persisted = Self.loadPersistedAccounts()
         guard !persisted.isEmpty else { return }
 
+        // docs/16 dep 2: relocate existing databases from the app-private dir into
+        // the App Group container so the NSE can open them. Runs before any store
+        // is opened this launch; idempotent.
+        Self.migrateDatabasesToAppGroup(persisted)
+
         let svc = _service
         let dir = dbDir
 
@@ -427,7 +432,17 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Where per-account SQLCipher databases live. The App Group container
+    /// (docs/16 dep 2) so the Notification Service Extension can open the same
+    /// files; falls back to the legacy app-private dir only if the container
+    /// can't be resolved (entitlement issue), so the app never bricks.
     private var dbDir: URL {
+        AppGroup.dbDir ?? Self.legacyDbDir
+    }
+
+    /// The pre-docs/16 app-private database directory. Still the fallback, and
+    /// the source the launch-time migration moves databases out of.
+    private static var legacyDbDir: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("actnet", isDirectory: true)
     }
@@ -2635,8 +2650,29 @@ final class AppState: ObservableObject {
 
     // MARK: - Persistence helpers
 
+    /// The account list lives in the shared App Group suite (docs/16 dep 3) so the
+    /// Notification Service Extension can enumerate accounts; falls back to
+    /// `.standard` only if the suite can't be opened.
+    private static var accountsDefaults: UserDefaults {
+        AppGroup.sharedDefaults ?? .standard
+    }
+
+    /// One-time move of the account list from the app-private `.standard` defaults
+    /// into the shared suite. Idempotent: once the shared suite has the key (or
+    /// `.standard` no longer does), it's a no-op. Runs on the read path so it
+    /// happens before any consumer (including the synchronous `init` seed).
+    private static func migrateAccountListToSharedDefaults() {
+        guard let shared = AppGroup.sharedDefaults else { return }
+        if shared.data(forKey: accountsKey) == nil,
+           let legacy = UserDefaults.standard.data(forKey: accountsKey) {
+            shared.set(legacy, forKey: accountsKey)
+            UserDefaults.standard.removeObject(forKey: accountsKey)
+        }
+    }
+
     private static func loadPersistedAccounts() -> [PersistedAccount] {
-        guard let data = UserDefaults.standard.data(forKey: accountsKey) else { return [] }
+        migrateAccountListToSharedDefaults()
+        guard let data = accountsDefaults.data(forKey: accountsKey) else { return [] }
         let decoded = (try? JSONDecoder().decode([PersistedAccount].self, from: data)) ?? []
         // Heal any pre-existing corruption: an older build's non-atomic
         // persistAccount could leave the same DID stored twice. Keep the first
@@ -2651,7 +2687,7 @@ final class AppState: ObservableObject {
         existing.removeAll { $0.did == account.did }
         existing.append(account)
         if let data = try? JSONEncoder().encode(existing) {
-            UserDefaults.standard.set(data, forKey: accountsKey)
+            accountsDefaults.set(data, forKey: accountsKey)
         }
     }
 
@@ -2663,12 +2699,60 @@ final class AppState: ObservableObject {
         var existing = loadPersistedAccounts()
         existing.removeAll { $0.did == did }
         if let data = try? JSONEncoder().encode(existing) {
-            UserDefaults.standard.set(data, forKey: accountsKey)
+            accountsDefaults.set(data, forKey: accountsKey)
         }
     }
 
     private static func clearPersistedAccounts() {
-        UserDefaults.standard.removeObject(forKey: accountsKey)
+        accountsDefaults.removeObject(forKey: accountsKey)
+    }
+
+    /// docs/16 dep 2: move each persisted account's SQLCipher files — the identity
+    /// db, its `.device` sibling, and any `-wal`/`-shm`/`-journal` sidecars of both
+    /// (`store::db::device_path_for` appends `.device`) — from the legacy
+    /// app-private dir into the App Group container. Runs on launch before any
+    /// store is opened, so SQLite never sees a db without its journal. No-op when
+    /// the container can't be resolved (`AppGroup.dbDir` is nil → the app stays on
+    /// the legacy dir).
+    ///
+    /// Crash-safety invariant: **never delete a source file unless its destination
+    /// copy already exists**, and move the `.device` db *before* the identity db.
+    /// `store::open_split` rebuilds `device.db` from `identity.db` when the device
+    /// file is missing (`db.rs`), so an interrupted migration must never leave the
+    /// identity db relocated while the device db is lost — that would silently
+    /// re-derive (and wipe) the ratchet/session/sender-key state. Moving device
+    /// first and gating every delete on a present destination guarantees the
+    /// identity db only ever arrives last, as the commit marker. (App sandbox and
+    /// App Group container are on the same volume, so `moveItem` is an atomic
+    /// rename — no partial destination file.)
+    private static func migrateDatabasesToAppGroup(_ persisted: [PersistedAccount]) {
+        guard let dst = AppGroup.dbDir else { return }
+        let src = legacyDbDir
+        guard src.standardizedFileURL != dst.standardizedFileURL else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: dst, withIntermediateDirectories: true)
+        for account in persisted {
+            // Device sibling first, identity db last (see invariant above).
+            let orderedBases = [account.dbFilename + ".device", account.dbFilename]
+            for base in orderedBases {
+                for suffix in ["", "-wal", "-shm", "-journal"] {
+                    let name = base + suffix
+                    let from = src.appendingPathComponent(name)
+                    guard fm.fileExists(atPath: from.path) else { continue }
+                    let to = dst.appendingPathComponent(name)
+                    if fm.fileExists(atPath: to.path) {
+                        // Already migrated on a prior launch — drop the stale copy.
+                        try? fm.removeItem(at: from)
+                    } else {
+                        do {
+                            try fm.moveItem(at: from, to: to)
+                        } catch {
+                            print("DB migration: failed to move \(name): \(error)")
+                        }
+                    }
+                }
+            }
+        }
     }
 
 }
