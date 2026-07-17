@@ -4,10 +4,11 @@
 is verified on device. Stages 2 (relay alert payload, behind the `APNS_PUSH_MODE`
 toggle — default `silent`) + 3 (NSE target + fetch FFI) are built and compile.
 The relay can deploy safely (default = no change); flip `APNS_PUSH_MODE=alert` to
-test the NSE on a device build, then back. Rich-banner behavior is not yet
-verified on device. Stage 4 (cross-process WAL/`busy_timeout` hardening) is still
-pending. The memory feasibility experiment (Stage-0 probe) was done and its
-scaffolding removed — its result is recorded under "Footprint" below.
+test the NSE on a device build, then back. The rich banner + cold-launch tap
+routing are **verified on device**. Stage 4 (cross-process WAL/`busy_timeout`
+hardening + contention test) is **done**. The memory feasibility experiment
+(Stage-0 probe) was done and its scaffolding removed — its result is recorded
+under "Footprint" below.
 
 ## Problem
 
@@ -79,17 +80,32 @@ cross-process correctness question.
    `UserDefaults(suiteName: "group.net.theavalanche.app")` (or a small shared
    manifest file). (Related: `docs/02` "move identity list out of UserDefaults".)
 
-4. **Cross-process DB / ratchet coordination.**
+4. **Cross-process DB / ratchet coordination.** (Stage 4 — done.)
    Decrypting a message **advances the Double Ratchet and writes the store**, and
    fetch **acks** (deletes) messages server-side. The NSE and app therefore share
    *mutable crypto state*. Because they share the same DB file (dep #2), state is
-   consistent — but two processes may open it. Plan: SQLCipher in **WAL mode with a
-   generous `busy_timeout`**, keep NSE write transactions short, and confirm
-   app-core's "single connection per process" model is safe across processes (it's
-   one connection *per process*; SQLite handles inter-process locking). A push only
-   fires when the app isn't WS-connected, so app-vs-NSE contention windows are
-   narrow, but must not corrupt or double-advance. **This is the highest-risk area
-   and needs a focused test.**
+   consistent — but two processes may open it.
+   - **DB locking:** both files now open in **WAL mode with a 5 s `busy_timeout`**
+     (`store::db::apply_key`), so a reader and a writer coexist and a cross-process
+     write collision waits/retries instead of failing with `SQLITE_BUSY`. Within a
+     process all DB work is serialized on the one tokio-rusqlite connection, so the
+     only contention is app-vs-NSE. Covered by a two-connection contention test
+     (`store::db` tests).
+   - **Fetch race:** the mailbox is remove-on-**ack**, not remove-on-fetch, so if
+     the app and NSE ever poll the same message concurrently, both receive it. The
+     first to decrypt advances the ratchet, persists (idempotent by `server_id` —
+     first-write-wins), and acks; the second's decrypt then fails on the moved
+     ratchet and is skipped (logged, no duplicate row, no event). Safe, if
+     slightly wasteful. The window is naturally small — a push only fires when the
+     recipient has no live WS — but a cold-launch-from-tap can overlap an in-flight
+     NSE fetch, so this is by-design, not assumed-impossible.
+   - **iOS suspension caveat (`0xdead10cc`):** iOS force-terminates an app that is
+     suspended while holding a file lock on a file in a **shared (App Group)
+     container** — which is where the DBs now live (dep #2). Mitigation is the
+     existing discipline: keep write transactions short so a lock is essentially
+     never held across suspension. Not observed, but worth watching if suspension
+     terminations appear in crash logs; the fuller fix (close/relinquish on
+     background) is deferred.
 
 ## Relay changes (`core/crates/relay`, APNs branch only)
 
@@ -181,12 +197,13 @@ decrypted banner text then lives in iOS's notification store
 ## Staged plan
 
 1. **Shared storage foundation** (deps 1–3): keychain access group, DB → App Group
-   container + migration, account list → shared. Verify the app still works
-   end-to-end (no NSE yet).
-2. **Relay alert payload** (APNs branch) — alert + `mutable-content`, no targeting.
+   container + migration, account list → shared. **Done; verified on device.**
+2. **Relay alert payload** (APNs branch) — alert + `mutable-content`, no targeting,
+   behind the `APNS_PUSH_MODE` toggle (default `silent`). **Done.**
 3. **NSE target + app-core fetch FFI** (full core — footprint resolved); fetch all
-   accounts, rewrite banner, generic fallback.
-4. **Cross-process hardening** (dep 4): WAL/busy_timeout, contention tests.
+   accounts, rewrite banner, generic fallback. Plus cold-launch tap routing.
+   **Done; rich banner + tap verified on device.**
+4. **Cross-process hardening** (dep 4): WAL/busy_timeout + contention test. **Done.**
 
 ## Test plan
 
@@ -203,7 +220,9 @@ decrypted banner text then lives in iOS's notification store
 
 ## Open questions / decisions
 
-1. **Cross-process SQLite** correctness/coordination strategy (dep 4) — needs WAL +
-   `busy_timeout` (not set today, `db.rs:98-107`).
-2. Does the relay change to the APNs payload need project-owner sign-off (privacy
-   posture shift from content-free wakeup → generic alert)?
+1. Does the relay change to the APNs payload need project-owner sign-off (privacy
+   posture shift from content-free wakeup → generic alert)? — mitigated for now by
+   the `APNS_PUSH_MODE` toggle defaulting to `silent`.
+2. **iOS suspension / `0xdead10cc`** (dep 4 caveat): watch crash logs once the
+   alert path is live broadly; if suspension terminations appear, add
+   close/relinquish-on-background rather than relying on short transactions alone.

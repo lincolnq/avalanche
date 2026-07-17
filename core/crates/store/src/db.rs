@@ -95,11 +95,31 @@ impl DatabaseKey {
 }
 
 /// Apply the SQLCipher key to a freshly opened connection.
+/// How long a connection waits for a competing writer before returning
+/// `SQLITE_BUSY`. The only writer contention is *cross-process*: the app and the
+/// iOS Notification Service Extension (docs/16) open the same App Group DB files
+/// from separate processes. Within a process all DB work is serialized on the
+/// single tokio-rusqlite connection, so there is nothing to wait on. 5 s
+/// comfortably covers the other process finishing a short receive transaction.
+const CROSS_PROCESS_BUSY_TIMEOUT_MS: u64 = 5_000;
+
 async fn apply_key(conn: &Connection, key: &DatabaseKey) -> Result<(), StoreError> {
     let passphrase = key.0.clone();
     conn.call(move |conn| {
-        // Never interpolate the passphrase into SQL — pragma_update binds it.
+        // Key first — SQLCipher requires it before any other operation. Never
+        // interpolate the passphrase into SQL — pragma_update binds it.
         conn.pragma_update(None, "key", &passphrase)?;
+        // Cross-process concurrency (docs/16 Stage 4): the app and the NSE share
+        // these files. WAL lets a reader and a writer coexist (and generally
+        // handles multi-process access far better than the default rollback
+        // journal), and busy_timeout makes a writer that collides with the other
+        // process wait and retry instead of failing immediately. journal_mode is
+        // persisted in the DB header, so re-setting it each open is idempotent;
+        // busy_timeout is per-connection and must be set every open.
+        conn.busy_timeout(std::time::Duration::from_millis(CROSS_PROCESS_BUSY_TIMEOUT_MS))?;
+        // PRAGMA journal_mode returns the resulting mode as a row, so it can't go
+        // through pragma_update (which expects no rows) — query it instead.
+        conn.query_row("PRAGMA journal_mode=WAL", [], |_row| Ok(()))?;
         Ok(())
     })
     .await
@@ -499,5 +519,98 @@ mod migration_tests {
 
         let _ = std::fs::remove_file(&id_path);
         let _ = std::fs::remove_file(&dev_path);
+    }
+
+    /// Cross-process concurrency (docs/16 Stage 4). Two independent connections to
+    /// the *same* file model the app and the Notification Service Extension
+    /// opening the shared App Group store from separate processes. With WAL +
+    /// `busy_timeout` (set in `apply_key`), interleaved writes from both all land
+    /// — without them, the loser of each write collision would return
+    /// `SQLITE_BUSY` and drop the insert. Asserts every write survived, the DB is
+    /// not corrupted, and WAL is actually engaged.
+    #[tokio::test]
+    async fn wal_and_busy_timeout_survive_concurrent_cross_connection_writes() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("actnet-wal-{nanos}.db"));
+        let key = DatabaseKey::dev_key();
+
+        // Two separate connections (each its own tokio-rusqlite thread) to one
+        // file — the cross-process shape, since SQLite locking is at the file
+        // level regardless of whether the connections share a process.
+        let a = IdentityStore::open(&path, &key).await.unwrap();
+        let b = IdentityStore::open(&path, &key).await.unwrap();
+
+        // WAL is engaged (persisted in the header by the first open; both see it).
+        let mode: String = a
+            .conn
+            .call(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(mode, "wal");
+
+        a.conn
+            .call(|c| {
+                c.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, who TEXT NOT NULL)")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Hammer the same file from both connections concurrently.
+        let n: i64 = 50;
+        let wa = {
+            let a = a.clone();
+            tokio::spawn(async move {
+                for _ in 0..n {
+                    a.conn
+                        .call(|c| {
+                            c.execute("INSERT INTO t (who) VALUES ('a')", [])?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                }
+            })
+        };
+        let wb = {
+            let b = b.clone();
+            tokio::spawn(async move {
+                for _ in 0..n {
+                    b.conn
+                        .call(|c| {
+                            c.execute("INSERT INTO t (who) VALUES ('b')", [])?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                }
+            })
+        };
+        wa.await.unwrap();
+        wb.await.unwrap();
+
+        // Every write from both connections landed — none lost to SQLITE_BUSY.
+        let count: i64 = a
+            .conn
+            .call(|c| Ok(c.query_row("SELECT count(*) FROM t", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(count, 2 * n);
+
+        // And the database is structurally sound.
+        let integrity: String = b
+            .conn
+            .call(|c| Ok(c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+
+        drop((a, b));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
     }
 }
