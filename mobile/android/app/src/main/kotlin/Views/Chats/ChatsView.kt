@@ -39,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -407,10 +409,15 @@ private fun AccountTab(
     Column(
         modifier = Modifier
             .scale(pressScale)
-            .clip(RoundedCornerShape(14.dp))
+            // Shaped background rather than clip-then-fill: the rounded press
+            // highlight is preserved, but children may overflow the bounds —
+            // the unread badge rides above the avatar (offset y: -4) with only
+            // 2dp of headroom, and a real clip shears its top (same bug as
+            // iOS's ScrollView clip, fixed there with .scrollClipDisabled()).
             .background(
-                if (pressed) LocalAvalancheColors.current.ink.copy(alpha = 0.08f)
+                color = if (pressed) LocalAvalancheColors.current.ink.copy(alpha = 0.08f)
                 else Color.Transparent,
+                shape = RoundedCornerShape(14.dp),
             )
             .clickable(
                 interactionSource = interaction,
@@ -467,6 +474,13 @@ private fun AccountTab(
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
+                    // Tight line box to match iOS's capsule: Compose's default
+                    // line height plus Android font padding otherwise inflates
+                    // 9sp glyphs into a visibly taller pill than the iOS badge.
+                    lineHeight = 9.sp,
+                    style = LocalTextStyle.current.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    ),
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .offset(x = 9.dp, y = (-4).dp)
