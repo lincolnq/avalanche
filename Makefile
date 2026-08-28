@@ -60,6 +60,7 @@ ANDROID_SO_STAMP := $(ANDROID_JNILIBS)/arm64-v8a/libapp_core.so
 # iOS archive/ipa land in dist/).
 ANDROID_DEBUG_APK := mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_RELEASE_APK := mobile/android/app/build/outputs/apk/release/app-release.apk
+ANDROID_RELEASE_AAB := mobile/android/app/build/outputs/bundle/release/app-release.aab
 ANDROID_ABIS := arm64-v8a x86_64
 # minSdk in app/build.gradle.kts — the native API level to compile against.
 ANDROID_API := 26
@@ -96,7 +97,7 @@ APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/d
 APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
 APP_CORE_DIST := node/packages/app-core/dist/index.js
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-minify-test android-bindings dev relay relay-release server-release dev-all dev-desktop node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build desktop
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-bundle android-minify-test android-bindings dev relay relay-release server-release dev-all dev-desktop node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build desktop
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -449,6 +450,20 @@ android-release: android-bindings
 	@mkdir -p dist
 	@cp $(ANDROID_RELEASE_APK) dist/avalanche-release.apk
 	@ls -lh dist/avalanche-release.apk
+
+# Play Store app bundle (.aab): same in-memory 1Password signing flow as
+# android-release, but Gradle's bundleRelease. Upload the output in the Play
+# Console (the release key acts as the upload key under Play App Signing).
+# Output: dist/avalanche-release.aab
+android-bundle: android-bindings
+	JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" \
+		MARKETING_VERSION="$(MARKETING_VERSION)" \
+		CURRENT_PROJECT_VERSION="$(CURRENT_PROJECT_VERSION)" \
+		GRADLE_TASK=bundleRelease \
+		mobile/android/release-sign.sh
+	@mkdir -p dist
+	@cp $(ANDROID_RELEASE_AAB) dist/avalanche-release.aab
+	@ls -lh dist/avalanche-release.aab
 
 # Minified (R8 + resource-shrunk) release APK with the stripped .so, but signed
 # with the DEBUG keystore (-PdebugSignRelease). Because it's debug-signed with the

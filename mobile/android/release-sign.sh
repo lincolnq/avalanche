@@ -73,10 +73,18 @@ export RELEASE_KEY_ALIAS="$(op read "$OP_KEY_ALIAS_REF")"
 
 # --- Build (env vars consumed by app/build.gradle.kts signingConfig) ----------
 # --no-daemon: don't leave a JVM holding the credentials in memory afterward.
-./gradlew --no-daemon assembleRelease \
+# GRADLE_TASK selects the artifact: assembleRelease (APK, default — direct
+# install / sideload) or bundleRelease (.aab, what the Play Store requires).
+GRADLE_TASK="${GRADLE_TASK:-assembleRelease}"
+./gradlew --no-daemon "$GRADLE_TASK" \
   -PMARKETING_VERSION="${MARKETING_VERSION:-}" \
   -PCURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-}"
 
 echo
-echo "Signed release APK:"
-echo "  mobile/android/app/build/outputs/apk/release/app-release.apk"
+if [ "$GRADLE_TASK" = "bundleRelease" ]; then
+  echo "Signed release app bundle:"
+  echo "  mobile/android/app/build/outputs/bundle/release/app-release.aab"
+else
+  echo "Signed release APK:"
+  echo "  mobile/android/app/build/outputs/apk/release/app-release.apk"
+fi
