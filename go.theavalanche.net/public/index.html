@@ -143,6 +143,17 @@
       color: var(--ink-faint);
     }
     .foot a { color: var(--accent); }
+    .server-note {
+      font-size: 0.95rem;
+      color: var(--ink-soft);
+      margin: 0 0 1.25rem;
+    }
+    .server-note strong {
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--ink);
+      word-break: break-all;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -155,6 +166,7 @@
 
     <div class="card">
       <div id="invite-view">
+        <p class="server-note hidden" id="server-note"></p>
         <div class="qr-wrap" id="qr"></div>
         <p class="qr-caption">Scan this code from the Avalanche app to join.</p>
         <div class="url-row">
@@ -191,6 +203,33 @@
         document.getElementById("no-invite-view").classList.remove("hidden");
         return;
       }
+
+      // Best-effort peek inside the invite token: base64url-encoded JSON with
+      // single-char wire keys (s = server URL, d = inviter DID — the same
+      // format the app parses in its deep-link handler). Decoding happens
+      // entirely in the visitor's browser; nothing is sent anywhere. Any
+      // failure (old/foreign/opaque token) just leaves the generic copy.
+      try {
+        var token = path.split("/")[2];
+        var b64 = token.replace(/-/g, "+").replace(/_/g, "/");
+        while (b64.length % 4 !== 0) b64 += "=";
+        var payload = JSON.parse(atob(b64));
+        if (payload && typeof payload.s === "string" && payload.s) {
+          var host;
+          try { host = new URL(payload.s).host; } catch (e) { host = payload.s; }
+          if (host) {
+            var note = document.getElementById("server-note");
+            // textContent + a mono <strong> built via DOM — never innerHTML,
+            // the token contents are attacker-controlled.
+            note.textContent = "This invite joins the server ";
+            var em = document.createElement("strong");
+            em.textContent = host;
+            note.appendChild(em);
+            note.appendChild(document.createTextNode("."));
+            note.classList.remove("hidden");
+          }
+        }
+      } catch (e) { /* not decodable — keep the generic invite copy */ }
 
       // Render the QR of the exact URL the visitor landed on. typeNumber 0
       // auto-sizes to fit; "M" error correction balances density and

@@ -1,9 +1,9 @@
 ---
-title: "Install the iOS app (TestFlight)"
+title: "Install the iOS beta (TestFlight)"
 description: "Join the Avalanche iOS beta through Apple's TestFlight."
 ---
 
-Avalanche isn't on the App Store yet, so on iPhone and iPad you install the beta through Apple's TestFlight.
+Avalanche is [on the App Store]({{< relref "app-store-ios" >}}) — most people should install it from there. TestFlight carries beta builds ahead of each App Store release.
 
 <p><a class="btn btn-primary" href="https://testflight.apple.com/join/Cbz4KHc7" rel="noopener">Join the TestFlight beta</a></p>
 
