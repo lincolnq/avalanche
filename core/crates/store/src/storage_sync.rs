@@ -287,18 +287,16 @@ impl IdentityStore {
     /// The callback runs on the connection's blocking thread and must be cheap
     /// and non-blocking — typically just poking a `Notify`. It replaces any
     /// previously-registered hook. Returning is fine; the commit always proceeds.
-    pub async fn set_commit_hook<F>(&self, mut hook: F) -> Result<(), StoreError>
+    ///
+    /// Routed through the gate so the hook survives a background close/reopen
+    /// cycle (docs/16 §background lifecycle) — installed directly on the raw
+    /// connection it would silently vanish on the first foreground.
+    pub async fn set_commit_hook<F>(&self, hook: F) -> Result<(), StoreError>
     where
-        F: FnMut() + Send + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         self.conn
-            .call(move |conn| {
-                conn.commit_hook(Some(move || {
-                    hook();
-                    false // false = allow the commit to proceed
-                }));
-                Ok(())
-            })
+            .set_commit_hook(std::sync::Arc::new(hook))
             .await
             .map_err(StoreError::Db)
     }

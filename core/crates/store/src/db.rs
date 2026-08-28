@@ -34,20 +34,26 @@ use crate::error::StoreError;
 /// A [`Connection`] behind a suspension gate.
 ///
 /// iOS kills an app that holds a file/SQLite lock on an App Group file at the
-/// instant it suspends (`0xDEAD10CC` — docs/16 §background lifecycle). The gate
-/// lets the platform quiesce before suspension: [`suspend`](Self::suspend)
-/// parks every *new* SQLite call and waits out the in-flight one, so the
-/// process suspends holding no lock; [`resume`](Self::resume) releases parked
-/// callers. The gate is per-process — the NSE opens its own connections and is
-/// never suspended mid-work (it completes or is terminated).
+/// instant it suspends (`0xDEAD10CC` — docs/16 §background lifecycle). Merely
+/// *open* connections count: RunningBoard's termination context names the
+/// database files themselves, held by idle WAL connections with no transaction
+/// in flight (verified in the field 2026-08-26). So [`suspend`](Self::suspend)
+/// parks every *new* SQLite call, waits out the in-flight one, and then
+/// **closes the underlying connection**; the next call after
+/// [`resume`](Self::resume) reopens it transparently (re-applying the SQLCipher
+/// key and per-connection pragmas, and reinstalling the commit hook). The gate
+/// is per-process — the NSE opens its own connections and is never suspended
+/// mid-work (it completes or is terminated).
 ///
 /// Mechanics: normal calls hold a read guard for the duration of exactly one
 /// SQLite call; `suspend` flips the flag (parking new callers) and then takes
 /// the write lock, which by construction waits until the in-flight call
 /// commits. Bounded by one call + the cross-process busy timeout.
+///
+/// In-memory connections (tests) have nothing to reopen from, hold no
+/// shared-container lock, and are therefore parked but never closed.
 #[derive(Clone)]
 pub(crate) struct GatedConnection {
-    conn: Connection,
     gate: Arc<Gate>,
 }
 
@@ -56,21 +62,47 @@ struct Gate {
     suspended: tokio::sync::watch::Sender<bool>,
     /// Read-held per call; write-acquired by `suspend` to drain in-flight work.
     lock: tokio::sync::RwLock<()>,
+    /// The live connection (`None` while suspended-and-closed) plus what's
+    /// needed to bring it back.
+    slot: tokio::sync::Mutex<ConnSlot>,
+}
+
+struct ConnSlot {
+    conn: Option<Connection>,
+    /// Path + SQLCipher passphrase for reopening after a background close.
+    /// `None` for in-memory connections, which are never closed. Retaining the
+    /// passphrase in memory is a deliberate trade: it is already resident at
+    /// every open, and the alternative (re-fetching from the platform keychain
+    /// mid-resume) would put a cross-process keychain read on the first store
+    /// call after every foreground.
+    reopen: Option<(PathBuf, String)>,
+    /// Commit hook to reinstall on reopen (docs/05 §6.1 — the storage-sync
+    /// push scheduler's wake source). Hooks are per-connection state and would
+    /// otherwise be silently lost by the close/reopen cycle.
+    commit_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl GatedConnection {
-    fn new(conn: Connection) -> Self {
+    /// Wrap an open connection. `reopen` carries the file path + key for
+    /// file-backed databases so `suspend` can close and later calls reopen;
+    /// pass `None` for in-memory connections.
+    fn new(conn: Connection, reopen: Option<(PathBuf, String)>) -> Self {
         Self {
-            conn,
             gate: Arc::new(Gate {
                 suspended: tokio::sync::watch::channel(false).0,
                 lock: tokio::sync::RwLock::new(()),
+                slot: tokio::sync::Mutex::new(ConnSlot {
+                    conn: Some(conn),
+                    reopen,
+                    commit_hook: None,
+                }),
             }),
         }
     }
 
     /// Run one SQLite call on the connection's blocking thread, waiting first
-    /// if the gate is suspended. Same contract as [`Connection::call`].
+    /// if the gate is suspended and reopening the connection if a background
+    /// close intervened. Same contract as [`Connection::call`].
     pub(crate) async fn call<F, R>(&self, function: F) -> tokio_rusqlite::Result<R>
     where
         F: FnOnce(&mut rusqlite::Connection) -> tokio_rusqlite::Result<R> + Send + 'static,
@@ -92,21 +124,97 @@ impl GatedConnection {
             }
             drop(guard);
         };
-        self.conn.call(function).await
+        let conn = self.live_conn().await?;
+        conn.call(function).await
     }
 
-    /// Park new calls and wait for the in-flight one to finish. Idempotent.
+    /// The current connection, reopening after a background close. The slot
+    /// mutex makes concurrent reopen attempts collapse into one.
+    async fn live_conn(&self) -> tokio_rusqlite::Result<Connection> {
+        let mut slot = self.gate.slot.lock().await;
+        if let Some(conn) = &slot.conn {
+            return Ok(conn.clone());
+        }
+        let (path, passphrase) = slot
+            .reopen
+            .clone()
+            .expect("in-memory connections are never closed");
+        let conn = Connection::open(&path).await?;
+        apply_key(&conn, &DatabaseKey(passphrase))
+            .await
+            .map_err(|e| match e {
+                StoreError::Db(db) => db,
+                other => tokio_rusqlite::Error::Other(Box::new(other)),
+            })?;
+        if let Some(hook) = slot.commit_hook.clone() {
+            install_commit_hook(&conn, hook).await?;
+        }
+        slot.conn = Some(conn.clone());
+        Ok(conn)
+    }
+
+    /// Register (and retain, for reinstall-on-reopen) the commit hook.
+    /// Replaces any previous hook.
+    pub(crate) async fn set_commit_hook(
+        &self,
+        hook: Arc<dyn Fn() + Send + Sync>,
+    ) -> tokio_rusqlite::Result<()> {
+        // Store first so a concurrent suspend/reopen can't race an installed
+        // hook out of existence.
+        let conn = {
+            let mut slot = self.gate.slot.lock().await;
+            slot.commit_hook = Some(hook.clone());
+            slot.conn.clone()
+        };
+        match conn {
+            Some(conn) => install_commit_hook(&conn, hook).await,
+            // Suspended-and-closed: the reopen path installs it.
+            None => Ok(()),
+        }
+    }
+
+    /// Park new calls, wait for the in-flight one to finish, then close the
+    /// connection so no file lock survives into suspension. Idempotent.
     pub(crate) async fn suspend(&self) {
         self.gate.suspended.send_replace(true);
         // Write-acquire drains every read guard (in-flight call), then release
         // immediately — the flag alone keeps new callers parked.
         drop(self.gate.lock.write().await);
+        // Close file-backed connections: an idle WAL connection still holds a
+        // shared lock on the database files, and RunningBoard kills for
+        // exactly that. Even if close() reports an error the handle is
+        // consumed, the blocking thread exits, and the underlying rusqlite
+        // connection drops (= closes) with it.
+        let mut slot = self.gate.slot.lock().await;
+        if slot.reopen.is_some() {
+            if let Some(conn) = slot.conn.take() {
+                if let Err(e) = conn.close().await {
+                    tracing::warn!("store: close on suspend reported: {e:?}");
+                }
+            }
+        }
     }
 
-    /// Reopen the gate. Idempotent; parked callers proceed in wake order.
+    /// Reopen the gate. Idempotent; parked callers proceed in wake order and
+    /// the first call transparently reopens the connection.
     pub(crate) fn resume(&self) {
         self.gate.suspended.send_replace(false);
     }
+}
+
+/// Install `hook` as the connection's commit hook (docs/05 §6.1).
+async fn install_commit_hook(
+    conn: &Connection,
+    hook: Arc<dyn Fn() + Send + Sync>,
+) -> tokio_rusqlite::Result<()> {
+    conn.call(move |conn| {
+        conn.commit_hook(Some(move || {
+            hook();
+            false // false = allow the commit to proceed
+        }));
+        Ok(())
+    })
+    .await
 }
 
 /// Durable per-identity state (identity.db). See the module docs.
@@ -245,7 +353,8 @@ impl IdentityStore {
     pub async fn open(path: &Path, key: &DatabaseKey) -> Result<Self, StoreError> {
         let conn = Connection::open(path).await?;
         apply_key(&conn, key).await?;
-        let store = Self { conn: GatedConnection::new(conn) };
+        let reopen = Some((path.to_path_buf(), key.0.clone()));
+        let store = Self { conn: GatedConnection::new(conn, reopen) };
         store.migrate().await?;
         Ok(store)
     }
@@ -253,7 +362,7 @@ impl IdentityStore {
     /// Open an in-memory identity database. Useful for tests.
     pub async fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory().await?;
-        let store = Self { conn: GatedConnection::new(conn) };
+        let store = Self { conn: GatedConnection::new(conn, None) };
         store.migrate().await?;
         Ok(store)
     }
@@ -358,7 +467,8 @@ impl DeviceStore {
     ) -> Result<Self, StoreError> {
         let conn = Connection::open(path).await?;
         apply_key(&conn, key).await?;
-        let store = Self { conn: GatedConnection::new(conn), identity };
+        let reopen = Some((path.to_path_buf(), key.0.clone()));
+        let store = Self { conn: GatedConnection::new(conn, reopen), identity };
         store.migrate().await?;
         Ok(store)
     }
@@ -368,19 +478,22 @@ impl DeviceStore {
     pub async fn open_in_memory() -> Result<Self, StoreError> {
         let identity = IdentityStore::open_in_memory().await?;
         let conn = Connection::open_in_memory().await?;
-        let store = Self { conn: GatedConnection::new(conn), identity };
+        let store = Self { conn: GatedConnection::new(conn, None), identity };
         store.migrate().await?;
         Ok(store)
     }
 
     /// Quiesce both databases before process suspension (docs/16 §background
-    /// lifecycle): park all new SQLite calls and wait for the in-flight one on
-    /// each connection, so iOS never suspends this process while it holds a
-    /// lock on an App Group file (`0xDEAD10CC`). Bounded by one SQLite call
-    /// plus the cross-process busy timeout per database. Idempotent.
+    /// lifecycle): park all new SQLite calls, wait for the in-flight one, and
+    /// **close** each connection — an idle WAL connection still holds a shared
+    /// lock on its database file, and iOS kills a process suspended holding
+    /// any lock on an App Group file (`0xDEAD10CC`; RunningBoard names the DB
+    /// files explicitly, verified 2026-08-26). Bounded by one SQLite call plus
+    /// the cross-process busy timeout per database. Idempotent.
     ///
     /// Callers parked at the gate hold no locks and simply resume where they
-    /// left off after [`resume_from_background`](Self::resume_from_background).
+    /// left off after [`resume_from_background`](Self::resume_from_background);
+    /// the first call after resume transparently reopens the connection.
     pub async fn suspend_for_background(&self) {
         self.conn.suspend().await;
         self.identity.conn.suspend().await;
@@ -510,7 +623,7 @@ pub async fn open_split(
 pub async fn open_in_memory_split() -> Result<(IdentityStore, DeviceStore), StoreError> {
     let identity = IdentityStore::open_in_memory().await?;
     let conn = Connection::open_in_memory().await?;
-    let device = DeviceStore { conn: GatedConnection::new(conn), identity: identity.clone() };
+    let device = DeviceStore { conn: GatedConnection::new(conn, None), identity: identity.clone() };
     device.migrate().await?;
     Ok((identity, device))
 }
@@ -762,6 +875,69 @@ mod gate_tests {
             .unwrap()
             .unwrap();
         assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn suspend_closes_file_connection_and_call_after_resume_reopens() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("actnet-gate-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity.db");
+
+        let store = IdentityStore::open(&path, &DatabaseKey::dev_key()).await.unwrap();
+        // Install a commit hook and prove it survives the close/reopen cycle.
+        let hook_fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hook_fires.clone();
+        store
+            .set_commit_hook(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+            .await
+            .unwrap();
+        store
+            .conn
+            .call(|c| {
+                c.execute_batch("CREATE TABLE gate_probe (v INTEGER); INSERT INTO gate_probe VALUES (7)")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let fires_before = hook_fires.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(fires_before > 0, "commit hook installed but never fired");
+
+        store.conn.suspend().await;
+        // The connection is closed: nothing in this process should hold the
+        // file. (The lock itself isn't observable portably; closure is —
+        // the slot is empty, which only the reopen path can undo.)
+        assert!(store.conn.gate.slot.lock().await.conn.is_none());
+
+        store.conn.resume();
+        // First call transparently reopens; data written pre-close persists.
+        let v: i64 = store
+            .conn
+            .call(|c| Ok(c.query_row("SELECT v FROM gate_probe", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(v, 7);
+        // The reinstalled hook still fires on the reopened connection.
+        store
+            .conn
+            .call(|c| {
+                c.execute("INSERT INTO gate_probe VALUES (8)", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            hook_fires.load(std::sync::atomic::Ordering::SeqCst) > fires_before,
+            "commit hook lost across close/reopen"
+        );
+
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

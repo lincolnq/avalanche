@@ -311,10 +311,20 @@ The design ("we're going to background", per Signal):
   (bounded, 2s) for the state to leave `Connected` → suspends the store gates.
   Then the assertion is released and the process suspends holding nothing.
 - **Store gate** (`store::GatedConnection`): every SQLite call on both
-  databases holds a read guard; suspension flips a flag (parking new calls)
-  and write-acquires to drain the in-flight call. Exhaustive by construction —
-  future writers are gated automatically. Work parked mid-pipeline holds no
-  lock and resumes where it left off.
+  databases holds a read guard; suspension flips a flag (parking new calls),
+  write-acquires to drain the in-flight call, and then **closes the
+  connection**. Draining alone is not enough — a WAL-mode connection holds a
+  shared lock on its database file for its entire *open* lifetime, and iOS
+  kills for exactly that: a first fix that only drained still died at
+  17:59:13 on 2026-08-26, six seconds after a fully clean quiesce, with
+  RunningBoard's termination context naming all six idle database files. The
+  first call after resume transparently reopens (re-applying the SQLCipher
+  key and per-connection pragmas, and reinstalling the storage-sync commit
+  hook, which is per-connection state). The gate retains the DB path +
+  passphrase in memory to make that possible — a deliberate trade; the
+  passphrase is already memory-resident at every open. Exhaustive by
+  construction — future writers are gated automatically. Work parked
+  mid-pipeline holds no lock and resumes where it left off.
 - **scenePhase → `.active`**: end the assertion (if the window is still open,
   nothing was torn down — the socket never dropped); if the expiration path
   ran, `resume_from_background()` reopens the gates and reconnects.
@@ -356,11 +366,14 @@ protocol can clean up.
 6. **Background lifecycle** (see above): store suspension gate, clean WS close
    at background-task expiration, resume on activation. Fixes the `0xDEAD10CC`
    kills the App Group move introduced *and* the suppressed-push dead zone an
-   open-but-frozen socket causes. **Implemented; verified on device
-   2026-08-26** — messages 10–25s after backgrounding arrived via the live
-   socket, ~35s+ via push → NSE, matching the ~30s OS grant. Crash-free
-   confirmation (no new `Actnet-*.ips` accumulating) needs a few days of
-   normal use to call fully done.
+   open-but-frozen socket causes. Landed in two rounds: the drain-only
+   version still died (idle WAL connections hold file locks — see "Store
+   gate" above), so `suspend` now also closes the connections. The lifecycle
+   os_log trail confirmed the mechanism on device (~30s window, ~50ms
+   quiesce; messages 10–25s after backgrounding via the live socket, ~35s+
+   via push → NSE). Crash-free confirmation (no new `Actnet-*.ips`
+   accumulating) needs device re-verification of the close-on-suspend build
+   plus a few days of normal use.
 
 ## Test plan
 
