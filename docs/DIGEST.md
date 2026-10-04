@@ -105,7 +105,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   (S-02..S-04, S-08)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
   sender membership check; extend expiry. (S-14..S-16)
-- *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed on branch);
+- *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
   audience-free tokens replay across Projects. (By design, every member of a server running
   adminbot is an admin, S-29.) (S-17)
 - *Stolen device:* rotation key = permanent DID takeover; no revocation; Desktop constant key;
@@ -115,7 +115,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 
 **Register (ID, severity, gap -> fix doc):**
 - **Critical:** S-01 setup codes embedded `REGISTRATION_SHARED_SECRET`; rewriting slug to
-  `adminbot` = superuser. **Fixed on branch `lincoln/bot-signup-keys` (pending merge/deploy):**
+  `adminbot` = superuser. **fixed in code (not yet deployed):**
   per-Project reusable bot signup keys; shareable secret can't link Projects; separate
   on-box `SUPERUSER_BOOTSTRAP_SECRET`, claim-once; no raw tokens in events (purged). Rotate
   the shared secret where old setup codes were handed out (22, 24, 51).
@@ -147,7 +147,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01 done on branch)
+**Hardening order:** (1) critical and stranger-facing fixes (S-01 done)
 S-02..S-05, S-08, S-14, S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy

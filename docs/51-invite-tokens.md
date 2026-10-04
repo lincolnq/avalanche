@@ -53,7 +53,7 @@ On a **closed-registration** server (the default, `24`), a personal token does n
 
 ### Bot signup key
 
-**Built** (branch `lincoln/bot-signup-keys`). `{"s", "b": <key>}`, unsigned. Minted per Project by `POST /v1/admin/projects/{slug}/bot-signup-key` and handed out by adminbot's `/install-project` (or written to a file by manifest auto-install). Admits bot accounts only and links each to the Project that owns the key; the server finds the Project by the key's SHA-256. Reusable; minting again revokes the previous key. See `24`.
+**Built**. `{"s", "b": <key>}`, unsigned. Minted per Project by `POST /v1/admin/projects/{slug}/bot-signup-key` and handed out by adminbot's `/install-project` (or written to a file by manifest auto-install). Admits bot accounts only and links each to the Project that owns the key; the server finds the Project by the key's SHA-256. Reusable; minting again revokes the previous key. See `24`.
 
 ## Planned
 

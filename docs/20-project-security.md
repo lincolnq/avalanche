@@ -7,7 +7,7 @@
 
 A Project is a standalone service that serves a web UI (opened in an app webview) and, usually, runs bot accounts that are ordinary E2E participants. Because the homeserver has no message keys, anything that touches content or group membership goes through a visible bot. Projects authenticate users with short-lived opaque **Project tokens** minted by the homeserver. An operator installs a Project by handing adminbot a **manifest**; the server records the Project, its bots, and any **server-enforced capabilities** granted.
 
-The trust model is the Slack-workspace one: users trust their homeserver's admin, and the admin vets the Projects. Several real gaps exist today (see *Known gaps*). By design, every member of a small server running adminbot is an admin and can install Projects (S-29, `22`). The older setup-code escalation (S-01) is fixed on branch `lincoln/bot-signup-keys`.
+The trust model is the Slack-workspace one: users trust their homeserver's admin, and the admin vets the Projects. Several real gaps exist today (see *Known gaps*). By design, every member of a small server running adminbot is an admin and can install Projects (S-29, `22`). The older setup-code escalation (S-01) is fixed in code (not yet deployed).
 
 ## Current design
 

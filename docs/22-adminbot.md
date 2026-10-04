@@ -1,6 +1,6 @@
 # 22 — Adminbot
 
-> **Status:** Partial — adminbot runs on every deployment: the `#admins` group, auto-invites, an expiry cap, update checks, and manifest-based Project install are built. Rule-based routing, the full command surface, officialness, and join-event catch-up are not. The superuser bootstrap was rebuilt to close the S-01 escalation (branch `lincoln/bot-signup-keys`, pending merge). By design, every human who signs up joins `#admins` and can use admin commands (S-29).
+> **Status:** Partial — adminbot runs on every deployment: the `#admins` group, auto-invites, an expiry cap, update checks, and manifest-based Project install are built. Rule-based routing, the full command surface, officialness, and join-event catch-up are not. The superuser bootstrap was rebuilt to close the S-01 escalation (merged, not yet deployed). By design, every human who signs up joins `#admins` and can use admin commands (S-29).
 > **Last verified against code:** 2026-10-03
 
 ## Summary
@@ -25,7 +25,7 @@ The server can't see who the admins are, so something must bridge "an admin auth
 
 ### Superuser authority
 
-**Built** (branch `lincoln/bot-signup-keys`; closes S-01).
+**Built** (closes S-01).
 
 - The server seeds a reserved Project with slug `adminbot` at startup (`core/crates/server/src/main.rs` → `db::projects::ensure_adminbot_project`).
 - `AuthAdminbot` (`core/crates/server/src/middleware/auth.rs`) admits a session only if its account is linked to that Project. Authority is the link, not a DID.
