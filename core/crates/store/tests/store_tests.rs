@@ -1204,3 +1204,31 @@ async fn pending_group_invite_round_trip() {
     // A pending invite is not a joined group: it never appears in `groups`.
     assert!(store.load_group("g2").await.unwrap().is_none());
 }
+
+/// docs/04: forgetting that one device has our sender key clears that device's
+/// rows in every group and nobody else's.
+#[tokio::test]
+async fn clear_sender_key_shared_for_device_is_scoped_to_that_device() {
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    store.mark_sender_key_shared_devices("g1", "did:a", &[1, 2]).await.unwrap();
+    store.mark_sender_key_shared_devices("g2", "did:a", &[1]).await.unwrap();
+    store.mark_sender_key_shared_devices("g1", "did:b", &[1]).await.unwrap();
+
+    store.clear_sender_key_shared_for_device("did:a", 1).await.unwrap();
+
+    assert_eq!(store.sender_key_unshared_devices("g1", "did:a", &[1, 2]).await.unwrap(), vec![1]);
+    assert_eq!(store.sender_key_unshared_devices("g2", "did:a", &[1]).await.unwrap(), vec![1]);
+    assert!(store.sender_key_unshared_devices("g1", "did:b", &[1]).await.unwrap().is_empty());
+}
+
+/// The one-time 2026-10 fixup clears stale "already shared" rows exactly once:
+/// rows recorded after it has run survive later migrations.
+#[tokio::test]
+async fn sender_key_reshare_fixup_runs_once() {
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    // `open_in_memory` already migrated (fixup applied); new rows must survive
+    // another migrate.
+    store.mark_sender_key_shared_devices("g1", "did:a", &[1]).await.unwrap();
+    store.migrate().await.unwrap();
+    assert!(store.sender_key_unshared_devices("g1", "did:a", &[1]).await.unwrap().is_empty());
+}

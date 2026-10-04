@@ -137,7 +137,12 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - Block and report from an accepted conversation; view another user's profile.
 - Coalesce `fetchGroupState` and push group-state changes over the WebSocket instead of
   polling on every open (`03`).
-- Sender-key recovery after device loss: ask peers to redistribute SKDMs on demand (`04`).
+- Group messages arriving over the WebSocket without their sender key: buffer them (as the
+  HTTP path does) instead of acking and discarding (`connection.rs`, `04`).
+- Sender-key recovery on demand (Signal's retry receipts): a receiver that can't decrypt asks
+  the sender to re-share its key and re-send the message from a short send log. New message
+  type (contract change) and a ~1-day send log (privacy trade-off) — needs a design note
+  (`04`).
 - Nickname: sync via storage service; match nicknames in compose autocomplete; refuse
   perspective words ("You", "Me") as saved nicknames (`52`).
 

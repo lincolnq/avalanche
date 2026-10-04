@@ -543,6 +543,24 @@ impl DeviceStore {
                          );",
                     )?;
                 }
+                // One-time fixups, each run exactly once per database.
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS applied_fixups (name TEXT PRIMARY KEY);",
+                )?;
+                // Until 2026-10, a peer re-registering (e.g. recovering its
+                // identity) kept its device number, and nothing cleared our
+                // "already shared my sender key" rows for it, so we never
+                // re-shared and it couldn't read our group messages. The send
+                // path now clears those rows on re-registration; this clears any
+                // already-stale rows once, so every member re-shares its current
+                // key on its next send to each group.
+                let applied = conn.execute(
+                    "INSERT OR IGNORE INTO applied_fixups (name) VALUES ('reshare_sender_keys_2026_10')",
+                    [],
+                )?;
+                if applied == 1 {
+                    conn.execute("DELETE FROM sender_key_shared", [])?;
+                }
                 Ok(())
             })
             .await

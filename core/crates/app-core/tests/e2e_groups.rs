@@ -481,3 +481,78 @@ async fn buffered_group_message_recovers_when_skdm_arrives() {
         "recovered message must not surface twice"
     );
 }
+
+/// docs/04: a member the sender's cached state doesn't know about yet must
+/// still be able to read the sender's next message. Alice's cache still lists
+/// Bob as a pending invitee when she sends (she never re-fetched after Bob
+/// accepted), so her send finds its member list stale and refreshes. Her
+/// sender key must reach Bob *before* the message — previously it was
+/// distributed only to the stale list, and Bob couldn't decrypt.
+#[tokio::test]
+async fn stale_member_list_still_shares_sender_key() {
+    let url = server_url();
+    let alice = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+        .await
+        .unwrap();
+    let bob_did = bob.did_async().await;
+
+    common::introduce(&alice, &[&bob]).await;
+    let created = alice.create_group_async("stale", "", 0).await.unwrap();
+    alice.invite_member_async(&created.group_id, &bob_did, 0).await.unwrap();
+    bob.receive_messages_async().await.unwrap();
+    bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    bob.accept_invite_async(&created.group_id).await.unwrap();
+    // Deliberately no `alice.fetch_group_state_async` here: Alice's cache is stale.
+
+    let plaintext = b"first message after bob joined";
+    alice.send_group_message_async(&created.group_id, plaintext).await.unwrap();
+
+    // Bob picks up Alice's sender key (a DM), then the group message.
+    bob.receive_messages_async().await.unwrap();
+    let msgs = bob.fetch_group_messages_async(&created.group_id).await.unwrap();
+    assert_eq!(msgs.len(), 1, "bob must be able to read alice's first message");
+    assert_eq!(msgs[0].plaintext, plaintext);
+}
+
+/// The field case: a member who did *not* invite the newcomer sends with a
+/// stale cache (endorsement-mismatch branch). The inviter ships its own key
+/// with the invite, but nobody else's, so Carol's key must be distributed to
+/// Bob after her send discovers him. Carol's cache was refreshed before Bob
+/// joined, so it knows Alice but not Bob.
+#[tokio::test]
+async fn stale_member_list_with_known_members_still_shares_sender_key() {
+    let url = server_url();
+    let new = || async {
+        AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token())
+            .await
+            .unwrap()
+    };
+    let alice = new().await;
+    let bob = new().await;
+    let carol = new().await;
+    let bob_did = bob.did_async().await;
+    let carol_did = carol.did_async().await;
+
+    common::introduce(&alice, &[&bob, &carol]).await;
+    let created = alice.create_group_async("stale-2", "", 0).await.unwrap();
+    alice.invite_member_async(&created.group_id, &carol_did, 0).await.unwrap();
+    carol.receive_messages_async().await.unwrap();
+    carol.fetch_group_state_async(&created.group_id).await.unwrap();
+    carol.accept_invite_async(&created.group_id).await.unwrap();
+    // Bob joins after Carol's last refresh; Carol never re-fetches.
+    alice.invite_member_async(&created.group_id, &bob_did, 0).await.unwrap();
+    bob.receive_messages_async().await.unwrap();
+    bob.fetch_group_state_async(&created.group_id).await.unwrap();
+    bob.accept_invite_async(&created.group_id).await.unwrap();
+
+    let plaintext = b"bob should read carol";
+    carol.send_group_message_async(&created.group_id, plaintext).await.unwrap();
+
+    bob.receive_messages_async().await.unwrap();
+    let msgs = bob.fetch_group_messages_async(&created.group_id).await.unwrap();
+    let from_carol: Vec<_> = msgs.iter().filter(|m| m.plaintext == plaintext).collect();
+    assert_eq!(from_carol.len(), 1, "bob must be able to read carol's message");
+}

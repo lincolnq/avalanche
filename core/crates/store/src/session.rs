@@ -571,6 +571,29 @@ impl DeviceStore {
     /// Forget every shared-with record for `group_id`. Call when our sender key
     /// for the group is re-seeded (recovery / rotation) so all members
     /// re-receive the fresh key on the next send.
+    /// Forget that one of `recipient_did`'s devices has our sender key, in every
+    /// group. Called when that device re-registered (new registration id, e.g.
+    /// after recovering its identity): it no longer holds the keys it received
+    /// before, so the next group send must re-share ours.
+    pub async fn clear_sender_key_shared_for_device(
+        &self,
+        recipient_did: &str,
+        recipient_device_id: u32,
+    ) -> Result<(), StoreError> {
+        let recipient_did = recipient_did.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM sender_key_shared \
+                     WHERE recipient_did = ?1 AND recipient_device_id = ?2",
+                    rusqlite::params![recipient_did, recipient_device_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
     pub async fn clear_sender_key_shared(&self, group_id: &str) -> Result<(), StoreError> {
         let group_id = group_id.to_string();
         self.conn

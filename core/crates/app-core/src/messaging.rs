@@ -94,7 +94,14 @@ pub(crate) async fn ensure_session(
     let recipient_addr =
         DeviceAddress::new(AccountId::new(&recipient_sid), DeviceId::new(device_id));
 
-    if !force_refresh {
+    if force_refresh {
+        // A forced refresh means the device re-registered (new registration id,
+        // e.g. it recovered its identity) and kept its device number. It lost
+        // every sender key it had received, so forget that we shared ours with
+        // it, in every group; the next group send re-shares (docs/04). Done
+        // here so both the group path and the DM stale-device path cover it.
+        store.clear_sender_key_shared_for_device(recipient_did, device_id).await?;
+    } else {
         use libsignal_protocol::SessionStore;
         let protocol_addr = libsignal_protocol::ProtocolAddress::new(
             recipient_sid.clone(),
@@ -1045,6 +1052,40 @@ impl AppCoreInner {
         Ok(())
     }
 
+    /// Send `plaintext` to a group under our sender key. Distributes our key to
+    /// every member first; if the cached member list turns out to be stale, the
+    /// send refreshes it and we distribute again — to members we didn't know
+    /// about — before retrying once, so nobody receives a message without the
+    /// key to read it (docs/04).
+    pub(crate) async fn send_group_bytes(
+        &mut self,
+        group_id: &str,
+        plaintext: &[u8],
+    ) -> Result<Vec<i64>, AppError> {
+        let did = self.did.clone();
+        let device_id = self.device_id;
+        let server_url = self.client.server_url().to_string();
+        for refresh_on_stale in [true, false] {
+            self.distribute_sender_key_if_needed(group_id).await?;
+            let AppCoreInner {
+                ref mut store,
+                ref client,
+                ..
+            } = *self;
+            match groups::send_group_message(
+                store, client, &server_url, &did, device_id, group_id, plaintext, refresh_on_stale,
+            )
+            .await?
+            {
+                groups::GroupSendOutcome::Sent(ids) => return Ok(ids),
+                groups::GroupSendOutcome::MembershipRefreshed => continue,
+            }
+        }
+        // The second attempt runs with `refresh_on_stale` off, so it either
+        // sends or errors; it never asks for another refresh.
+        Err(AppError::Protocol("group send: membership still stale after refresh".into()))
+    }
+
     pub(crate) async fn send_group_content(
         &mut self,
         ws: Option<&net::ws::WsConnection>,
@@ -1052,13 +1093,6 @@ impl AppCoreInner {
         body: Body,
         sent_at_ms: u64,
     ) -> Result<(), AppError> {
-        // Ensure every current member has our sender key before we encrypt
-        // under it (Signal-style lazy distribution).
-        self.distribute_sender_key_if_needed(group_id).await?;
-
-        let did = self.did.clone();
-        let device_id = self.device_id;
-        let server_url = self.client.server_url().to_string();
         let profile_key = self.own_profile_key().await;
         // Stamp the disappearing-messages timer (docs/03 §5) only on real
         // messages; control/derivative bodies (receipts, reactions, edits,
@@ -1075,17 +1109,9 @@ impl AppCoreInner {
             expire_timer_secs,
         };
         let bytes = msg.encode_to_vec();
-        {
-            let AppCoreInner {
-                ref mut store,
-                ref client,
-                ..
-            } = *self;
-            groups::send_group_message(
-                store, client, &server_url, &did, device_id, group_id, &bytes,
-            )
-            .await?;
-        }
+        // Distributes our sender key (Signal-style lazy distribution), including
+        // to members found by a membership refresh, before sending.
+        self.send_group_bytes(group_id, &bytes).await?;
         // Mirror the content to my own other devices (docs/04 §5.4), keyed on the
         // group. Best-effort; never fails the original send. `group_id` is the
         // base64 server-visible id (the conversation key); carry the raw bytes so

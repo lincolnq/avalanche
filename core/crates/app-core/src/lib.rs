@@ -5595,21 +5595,9 @@ impl AppCore {
         plaintext: &[u8],
     ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().await;
-        // Mirror the production send path (`send_group_content`): ensure every
-        // current member has our sender key before sending under it.
-        inner.distribute_sender_key_if_needed(group_id).await?;
-        let did = inner.did.clone();
-        let device_id = inner.device_id;
-        let server_url = inner.client.server_url().to_string();
-        let AppCoreInner {
-            ref mut store,
-            ref client,
-            ..
-        } = *inner;
-        groups::send_group_message(
-            store, client, &server_url, &did, device_id, group_id, plaintext,
-        )
-        .await?;
+        // Same path as production (`send_group_content`): distributes our
+        // sender key to every member, including ones a membership refresh finds.
+        inner.send_group_bytes(group_id, plaintext).await?;
         Ok(())
     }
 

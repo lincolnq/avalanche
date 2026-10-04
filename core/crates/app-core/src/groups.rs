@@ -1953,6 +1953,18 @@ pub struct ReceivedGroupMessage {
 /// and a `GroupSendFullToken` over the recipient set, then POSTs to
 /// `/v1/groups/{id}/send`. Caller-supplied `plaintext` is the inner payload
 /// (typically a `ContentMessage` proto with `body = Text/Receipt/...`).
+/// Outcome of one [`send_group_message`] attempt.
+pub enum GroupSendOutcome {
+    /// Sent; the server's queued message ids.
+    Sent(Vec<i64>),
+    /// Nothing was sent: our cached member list was stale, so group state was
+    /// refreshed from the server. The caller must distribute our sender key to
+    /// the refreshed member list *before* retrying, or members we didn't know
+    /// about receive a message they can't decrypt (docs/04).
+    MembershipRefreshed,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn send_group_message(
     store: &mut store::DeviceStore,
     client: &net::Client,
@@ -1961,7 +1973,8 @@ pub async fn send_group_message(
     sender_device_id: u32,
     group_id_b64: &str,
     plaintext: &[u8],
-) -> Result<Vec<i64>, AppError> {
+    refresh_on_stale: bool,
+) -> Result<GroupSendOutcome, AppError> {
     // Master key is stable; derive it (and the per-day auth material) once. The
     // member/recipient sets may be stale, so the endorsement step below refreshes
     // group state and retries on a whole-set MAC failure.
@@ -1993,12 +2006,13 @@ pub async fn send_group_message(
     // `approve_join_request`), so unlike a DID-derived set they don't silently
     // drop members. If cached membership is stale (a member we invited has since
     // accepted server-side, or one was removed), the whole-set MAC fails with
-    // `InvalidCiphertext`; refresh group state from the server and retry once.
+    // `InvalidCiphertext`; refresh group state from the server and report it so
+    // the caller re-distributes our sender key before retrying (with
+    // `refresh_on_stale` off, so a second mismatch is an error).
     // (Historically this surfaced as "receive endorsements: unexpected ciphertext
     // type" once a group accrued unknown-DID / not-yet-synced members.)
     let (recipient_endorsements, other_dids, expiration) = {
-        let mut attempt = 0;
-        loop {
+        {
             let row = store
                 .load_group(group_id_b64)
                 .await?
@@ -2024,7 +2038,16 @@ pub async fn send_group_message(
                 .map(|m| m.did.clone())
                 .collect();
             if other_dids.is_empty() {
-                return Ok(Vec::new());
+                // Our cache says we're alone. That's also what a stale cache
+                // looks like right after we invite someone (they're still a
+                // pending invitee in our state), so check once before
+                // concluding there's nobody to send to — otherwise the message
+                // silently goes to no one.
+                if refresh_on_stale {
+                    fetch_group_state(store, client, server_url, sender_did, group_id_b64).await?;
+                    return Ok(GroupSendOutcome::MembershipRefreshed);
+                }
+                return Ok(GroupSendOutcome::Sent(Vec::new()));
             }
 
             let endo = client
@@ -2035,10 +2058,9 @@ pub async fn send_group_message(
                 .expect("system time before epoch")
                 .as_secs();
             tracing::debug!(
-                "group send: endorsing over {} members, {} addressable recipients (attempt {})",
+                "group send: endorsing over {} members, {} addressable recipients",
                 member_emis.len(),
                 other_dids.len(),
-                attempt
             );
             match crypto::groups::endorsements::receive_endorsements_by_ciphertexts(
                 &endo.response,
@@ -2057,17 +2079,16 @@ pub async fn send_group_message(
                         .filter(|(m, _)| !m.did.is_empty() && m.did != sender_did)
                         .map(|(_, e)| e)
                         .collect();
-                    break (recip, other_dids, endo.expiration_unix_seconds);
+                    (recip, other_dids, endo.expiration_unix_seconds)
                 }
-                Err(_) if attempt == 0 => {
-                    attempt += 1;
+                Err(_) if refresh_on_stale => {
                     tracing::debug!(
                         "group send: endorsement set stale at {} cached members; \
-                         refreshing group state and retrying once",
+                         refreshing group state",
                         member_emis.len()
                     );
                     fetch_group_state(store, client, server_url, sender_did, group_id_b64).await?;
-                    continue;
+                    return Ok(GroupSendOutcome::MembershipRefreshed);
                 }
                 Err(e) => {
                     return Err(AppError::Protocol(format!("receive endorsements: {e}")));
@@ -2144,7 +2165,7 @@ pub async fn send_group_message(
             },
         )
         .await?;
-    Ok(ids)
+    Ok(GroupSendOutcome::Sent(ids))
 }
 
 /// Drain queued sealed-sender group messages for one group via HTTP, run
