@@ -36,7 +36,7 @@
 }
 .accounts-identity-row:hover,
 .accounts-server-row:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }
 
 .accounts-identity-name {
@@ -60,8 +60,8 @@
 .accounts-home-badge {
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-accent);
-  background: rgba(107, 62, 80, 0.12);
+  color: var(--color-accent-text);
+  background: var(--color-accent-soft);
   border-radius: 999px;
   padding: 2px 8px;
 }
@@ -85,9 +85,9 @@
   text-align: left;
   font-size: 15px;
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   transition: background 0.15s;
 }
 .accounts-add-row:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }

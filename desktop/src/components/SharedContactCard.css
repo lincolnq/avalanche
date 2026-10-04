@@ -1,7 +1,7 @@
 /* Shared contact card (docs/35). Mirrors the message bubble's incoming/outgoing
    tones so it reads as part of the same family: incoming tone for a received
-   card, full outgoing plum for your own copy — with a light foreground on the
-   plum so text stays legible in both light and dark. */
+   card, the outgoing tone for your own copy (using the bubble-out text tokens
+   so it stays legible in both light and dark). */
 .shared-contact-card {
   position: relative;
   display: flex;
@@ -18,8 +18,7 @@
 .shared-contact-card.mine {
   background: var(--color-bubble-out);
   color: var(--color-bubble-out-text);
-  /* A mid-tone border vanishes on the plum card; use a light hairline. */
-  border-color: rgba(255, 255, 255, 0.35);
+  border-color: var(--color-bubble-out-border);
 }
 
 .shared-contact-info {
@@ -45,7 +44,7 @@
 }
 
 .shared-contact-card.mine .shared-contact-label {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--color-bubble-out-muted);
 }
 
 .shared-contact-save {
@@ -72,7 +71,7 @@
 }
 
 .shared-contact-card.mine .shared-contact-saved {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--color-bubble-out-muted);
 }
 
 .shared-contact-menu-btn {

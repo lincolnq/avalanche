@@ -67,7 +67,7 @@
   transition: background 0.15s;
 }
 .identity-copy-row:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }
 
 .identity-mono {
@@ -115,7 +115,7 @@
   transition: background 0.15s;
 }
 .identity-row-btn:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }
 
 .identity-delete {

@@ -9,7 +9,7 @@
   background: var(--color-surface);
 }
 .recipient-field:focus-within {
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-text);
 }
 
 .recipient-chip {
@@ -19,7 +19,7 @@
   max-width: 180px;
   padding: 3px 4px 3px 9px;
   border-radius: 12px;
-  background: rgba(107, 62, 80, 0.15);
+  background: var(--color-accent-soft);
   color: var(--color-text);
   font-size: 13px;
 }
@@ -44,7 +44,7 @@
   cursor: pointer;
 }
 .recipient-chip-remove:hover {
-  background: rgba(42, 22, 32, 0.12);
+  background: var(--color-divider);
   color: var(--color-text);
 }
 

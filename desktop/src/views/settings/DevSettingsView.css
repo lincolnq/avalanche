@@ -80,6 +80,6 @@
   flex-shrink: 0;
   width: 16px;
   height: 16px;
-  accent-color: var(--color-accent);
+  accent-color: var(--color-accent-text);
   cursor: pointer;
 }

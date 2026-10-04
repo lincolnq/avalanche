@@ -1,6 +1,7 @@
 import { createMemo, onCleanup, type Setter } from "solid-js";
 import type { SetStoreFunction } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isBrowserPreview } from "../dev/browserPreview";
 import {
   isPermissionGranted,
   requestPermission,
@@ -115,7 +116,7 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
   // app's lifetime; focus is purely an opportunistic reconnect trigger.
   // No-op before sign-in: the command short-circuits when there's no account.
   let focusUnlisten: (() => void) | undefined;
-  getCurrentWindow()
+  if (!isBrowserPreview) getCurrentWindow()
     .onFocusChanged(({ payload: focused }) => {
       if (focused) {
         // Push foreground-active to every account (iOS setIsAppActive loops all

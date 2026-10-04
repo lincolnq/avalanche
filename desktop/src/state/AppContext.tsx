@@ -8,6 +8,7 @@ import {
 import { createStore } from "solid-js/store";
 import { listen } from "@tauri-apps/api/event";
 import { ServiceMode } from "../services/AvalancheService";
+import { isBrowserPreview } from "../dev/browserPreview";
 import type { AppContextValue, AppStore, SessionGuards } from "./types";
 import { createServices } from "./createServices";
 import { createConversations } from "./createConversations";
@@ -26,7 +27,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     accounts: [],
     isOnboarding: true,
     isAddingAccount: false,
-    serviceMode: ServiceMode.DevServer,
+    serviceMode: isBrowserPreview ? ServiceMode.Mock : ServiceMode.DevServer,
     selectedTab: "chats",
     conversations: [],
     messagesByConversation: {},

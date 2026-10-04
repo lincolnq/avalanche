@@ -114,7 +114,7 @@
 .btn-link {
   background: none;
   border: none;
-  color: var(--color-primary);
+  color: var(--color-accent-text);
   cursor: pointer;
   font-size: inherit;
   padding: 0;

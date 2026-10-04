@@ -98,6 +98,10 @@ desktop/scripts/devctl shot /tmp/x.png          # screenshot just the app window
   Recording** permission (System Settings → Privacy & Security). The window can be on
   another Space.
 - A syntax error in an `eval` snippet shows up as a timeout, not an error message.
+- When the window is hidden or occluded, WebKit doesn't advance CSS transitions, so a
+  restyle (e.g. swapping theme tokens) can stay stuck at its old value in screenshots and
+  in `getComputedStyle`. Before restyling, disable transitions with
+  `devctl eval "const s=new CSSStyleSheet(); s.replaceSync('*{transition:none !important}'); document.adoptedStyleSheets=[...document.adoptedStyleSheets,s]; return 1"`.
 - Never ship any of this in release builds; keep the `cfg(debug_assertions)` /
   `import.meta.env.DEV` guards.
 

@@ -10,7 +10,7 @@
   outline: none;
 }
 .timer-picker:focus {
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-text);
 }
 .timer-picker:disabled {
   opacity: 0.6;

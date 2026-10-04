@@ -28,7 +28,7 @@
   transition: background 0.15s;
 }
 .settings-profile-row:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }
 
 .settings-profile-info {
@@ -75,7 +75,7 @@
   border-top: none;
 }
 .settings-row:hover {
-  background: rgba(42, 22, 32, 0.04);
+  background: var(--color-row-hover);
 }
 
 .settings-row span {

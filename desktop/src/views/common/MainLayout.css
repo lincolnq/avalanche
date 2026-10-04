@@ -8,6 +8,7 @@
 .sidebar {
   width: 64px;
   background: var(--color-sidebar);
+  border-right: 1px solid var(--color-sidebar-border);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -17,7 +18,7 @@
 }
 /* macOS: the native title bar is hidden (titleBarStyle: Overlay) and the traffic
    lights overlay the top-left of the window — i.e. over the sidebar. Widen the
-   rail so all three buttons sit inside the dark sidebar instead of spilling over
+   rail so all three buttons sit inside the sidebar instead of spilling over
    the border into the chats pane, and drop the icons below them vertically. */
 .is-macos .sidebar {
   width: 80px;
@@ -40,18 +41,18 @@
   height: 48px;
   border-radius: 12px;
   text-decoration: none;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-sidebar-fg);
   font-size: 22px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .sidebar-link:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--color-sidebar-hover);
+  color: var(--color-sidebar-fg-hover);
 }
 .sidebar-link.active {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  background: var(--color-sidebar-active);
+  color: var(--color-sidebar-fg-active);
 }
 .sidebar-label {
   font-size: 9px;
@@ -69,38 +70,18 @@
   height: 48px;
   border-radius: 12px;
   text-decoration: none;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--color-sidebar-fg);
   font-size: 20px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .sidebar-settings-link:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.75);
+  background: var(--color-sidebar-hover);
+  color: var(--color-sidebar-fg-hover);
 }
-.logout-btn {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.45);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  gap: 2px;
-  transition: background 0.15s, color 0.15s;
-}
-.logout-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.75);
-}
-.logout-label {
-  font-size: 9px;
-  letter-spacing: 0.03em;
+.sidebar-settings-link.active {
+  background: var(--color-sidebar-active);
+  color: var(--color-sidebar-fg-active);
 }
 .content {
   flex: 1;

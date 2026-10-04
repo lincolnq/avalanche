@@ -4,6 +4,7 @@ import type { Account, InviteInfo, ServerInfo } from "../models";
 import { displayHost } from "../lib/format";
 import type { Services } from "./createServices";
 import type { AppContextValue, AppStore, PersistedAccount, SessionGuards } from "./types";
+import { isBrowserPreview, previewStoreGet, previewStoreSet } from "../dev/browserPreview";
 
 export interface AccountsDeps {
   store: AppStore;
@@ -65,9 +66,26 @@ export function createAccounts(deps: AccountsDeps): Accounts {
 
   // ── Persistence helpers ───────────────────────────────────────────────────
 
+  // avalanche.json via plugin-store; a localStorage stand-in in the dev-only
+  // browser preview (no Tauri there).
+  async function loadSettings(): Promise<{
+    get<T>(key: string): Promise<T | undefined>;
+    set(key: string, value: unknown): Promise<void>;
+    save(): Promise<void>;
+  }> {
+    if (isBrowserPreview) {
+      return {
+        get: async <T,>(key: string) => previewStoreGet<T>(key),
+        set: async (key: string, value: unknown) => previewStoreSet(key, value),
+        save: async () => {},
+      };
+    }
+    return loadStore("avalanche.json");
+  }
+
   async function persistedAccounts(): Promise<PersistedAccount[]> {
     try {
-      const s = await loadStore("avalanche.json");
+      const s = await loadSettings();
       return (await s.get<PersistedAccount[]>("accounts")) ?? [];
     } catch {
       return [];
@@ -76,7 +94,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
 
   async function persistAccounts(accounts: PersistedAccount[]) {
     try {
-      const s = await loadStore("avalanche.json");
+      const s = await loadSettings();
       await s.set("accounts", accounts);
       await s.save();
     } catch {}
@@ -90,7 +108,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
 
   async function persistServerUrl(url: string) {
     try {
-      const s = await loadStore("avalanche.json");
+      const s = await loadSettings();
       await s.set("serverUrl", url);
       await s.save();
     } catch {}
@@ -105,7 +123,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
   // CloseRequested handler reads (`close_to_tray_enabled`).
   async function persistCloseToTray(on: boolean) {
     try {
-      const s = await loadStore("avalanche.json");
+      const s = await loadSettings();
       await s.set("closeToTray", on);
       await s.save();
     } catch {}
@@ -120,7 +138,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
 
   void (async () => {
     try {
-      const s = await loadStore("avalanche.json");
+      const s = await loadSettings();
       const savedServerUrl = await s.get<string>("serverUrl");
       // Service mode is no longer user-selectable — mock is a test-only affordance
       // (constructed directly in tests), not a runtime mode users pick. The live

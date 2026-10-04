@@ -36,7 +36,7 @@
   color: var(--color-text);
 }
 .recovery-console-ok {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-weight: 600;
 }
 .recovery-console-error {

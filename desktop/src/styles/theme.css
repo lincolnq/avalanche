@@ -37,37 +37,55 @@ button, input, select, textarea {
   /* Type */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
-  /* Palette (light) */
-  --color-bg: #F1ECE8;            /* app chrome surface — neutral warm greige.
-                                     Backs the window frame, chats pane, settings,
-                                     onboarding, sheets — everything that is NOT the
-                                     conversation canvas. Kept neutral (not paper) so
-                                     a non-maximized window doesn't clash with the
-                                     desktop behind it. */
-  --color-paper: #FFF1E9;         /* conversation canvas — sand100 / avPaper. The warm
-                                     "paper" texture, reserved for the message thread
-                                     (conv view, compose bar, in-thread banners). */
-  --color-text: #1F1815;          /* primary text — sand900 / avInk */
-  --color-text-secondary: #6E6258;/* muted/secondary text — sand600 / avMuted */
-  --color-sidebar: #2A1620;       /* dark sidebar / hero surfaces — plum900 (fixed) */
-  --color-accent: #6B3E50;        /* primary action / accent — plum500 (used as a fill
-                                     with #fff text, so it stays a mid-plum in both modes) */
-  --color-primary: #6B3E50;       /* alias of accent for fills (NetworkView) */
-  --color-surface: #FFF8F1;       /* inset cards / list-item backings — sand50 / avCard */
-  --color-error: #C0392B;         /* form error text — avError */
+  /* Palette (light). Desktop has its own palette, deliberately not the mobile
+     sand/paper one: desktop apps sit next to other (mostly white) windows, so the
+     content surfaces are white and the chrome only barely warm. The navigation
+     rail matches the chat list and is set off by a hairline divider (as in Signal
+     Desktop). Plum stays the brand accent. */
+  --color-bg: #FAF8F7;            /* app chrome: nav rail, chat list, settings,
+                                     onboarding — everything that is NOT the
+                                     conversation canvas */
+  --color-paper: #FFFFFF;         /* conversation canvas (thread, compose bar) */
+  --color-text: #221B1F;
+  --color-text-secondary: #75696F;
+  --color-sidebar: #FAF8F7;       /* nav rail (same as the chat list) */
+  --color-accent: #5A2E42;        /* primary action fill (with #fff text) */
+  --color-accent-text: #5A2E42;   /* accent used as a text/icon color */
+  --color-primary: #5A2E42;       /* alias of accent for fills (NetworkView) */
+  --color-surface: #FFFFFF;       /* inset cards / list-item backings */
+  --color-error: #C0392B;
   --color-offline: #F0A030;       /* offline/connecting banner — amber (fixed) */
   --color-warning-soft: rgba(240, 160, 48, 0.16); /* soft warning fill (recovery banner) */
 
-  /* Message bubbles (mirror iOS avOutgoingBubble / avIncomingBubble) */
-  --color-bubble-out: #6B3E50;        /* outgoing — plum500, fixed in both modes */
-  --color-bubble-out-text: #FFFFFF;
-  --color-bubble-in: #F4E7D9;         /* incoming — sand200 / (dark) plum800 */
+  /* Message bubbles: a pale plum tint with dark text for your own messages
+     (calmer than a solid fill on a white canvas), warm gray for theirs. */
+  --color-bubble-out: #EFE3EA;
+  --color-bubble-out-text: #2B1C24;
+  --color-bubble-out-muted: rgba(43, 28, 36, 0.65); /* secondary text on bubble-out */
+  --color-bubble-out-border: rgba(90, 46, 66, 0.18);
+  --color-bubble-in: #F3F1F0;
 
   /* Inputs / surfaces */
-  --color-input-border: #D8C8BC;  /* default text-input border */
-  --color-input-bg: #FFFFFF;      /* text-input fill */
-  --color-divider: rgba(42, 22, 32, 0.12);
+  --color-input-border: #DDD5D3;
+  --color-input-bg: #FFFFFF;
+  --color-divider: rgba(34, 27, 31, 0.08);
   --color-scrollbar: rgba(127, 127, 127, 0.4); /* readable on light + dark */
+  --color-shadow: rgba(34, 27, 31, 0.16);       /* popovers / menus / sheets */
+  --color-backdrop: rgba(34, 27, 31, 0.35);     /* modal scrim */
+
+  /* Navigation rail */
+  --color-sidebar-border: rgba(34, 27, 31, 0.10);
+  --color-sidebar-fg: #8A7C83;
+  --color-sidebar-fg-hover: #221B1F;
+  --color-sidebar-fg-active: #5A2E42;
+  --color-sidebar-hover: rgba(90, 46, 66, 0.06);
+  --color-sidebar-active: rgba(90, 46, 66, 0.12);
+
+  /* List rows (chat list) */
+  --color-row-divider: transparent;
+  --color-row-hover: rgba(90, 46, 66, 0.04);
+  --color-row-selected: rgba(90, 46, 66, 0.10);
+  --color-accent-soft: rgba(90, 46, 66, 0.10); /* tinted fills (own reaction, chips) */
 
   /* Shape */
   --radius-input: 10px;
@@ -76,21 +94,37 @@ button, input, select, textarea {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #201A1D;            /* neutral dark greige chrome (darker/greyer than
-                                       the plum paper so the frame recedes) */
-    --color-paper: #2A1620;         /* plum900 — conversation canvas */
-    --color-text: #FFF8F1;          /* sand50 */
-    --color-text-secondary: #C7B6A0;/* sand400 — sand300 is nearly ink-bright
-                                       on dark surfaces, so muted read as primary */
-    --color-sidebar: #1C0F16;       /* darker than bg, for sidebar separation */
-    /* --color-accent stays plum500: it backs #fff-text buttons, so it must not
-       lighten to plum200 (would fail contrast). */
-    --color-surface: #3C1F2D;       /* plum800 / avCard dark */
-    --color-error: #D17579;         /* rose400 / avError dark */
-    --color-bubble-in: #3C1F2D;     /* plum800 */
-    --color-input-border: #4D2939;  /* plum700 */
-    --color-input-bg: #3C1F2D;      /* plum800 */
-    --color-divider: rgba(255, 248, 241, 0.12);
+    /* Neutral near-black with a faint warm cast; plum lightens for text/icons
+       but stays mid-plum as a fill behind #fff text. */
+    --color-bg: #1C1A1B;
+    --color-paper: #141213;
+    --color-text: #F3EEF0;
+    --color-text-secondary: #A69CA0;
+    --color-sidebar: #1C1A1B;
+    --color-accent: #6B3E50;
+    --color-accent-text: #D9B3C5;
+    --color-primary: #6B3E50;
+    --color-surface: #262324;
+    --color-error: #D17579;
+    --color-bubble-out: #4A2D3B;
+    --color-bubble-out-text: #F6ECF1;
+    --color-bubble-out-muted: rgba(246, 236, 241, 0.7);
+    --color-bubble-out-border: rgba(246, 236, 241, 0.18);
+    --color-bubble-in: #2A2628;
+    --color-input-border: #3B3538;
+    --color-input-bg: #262324;
+    --color-divider: rgba(255, 255, 255, 0.08);
+    --color-shadow: rgba(0, 0, 0, 0.5);
+    --color-backdrop: rgba(0, 0, 0, 0.55);
+    --color-sidebar-border: rgba(255, 255, 255, 0.08);
+    --color-sidebar-fg: #8F868A;
+    --color-sidebar-fg-hover: #F3EEF0;
+    --color-sidebar-fg-active: #E2C4D2;
+    --color-sidebar-hover: rgba(255, 255, 255, 0.05);
+    --color-sidebar-active: rgba(226, 196, 210, 0.12);
+    --color-row-hover: rgba(255, 255, 255, 0.04);
+    --color-row-selected: rgba(255, 255, 255, 0.08);
+    --color-accent-soft: rgba(226, 196, 210, 0.12);
   }
 }
 
@@ -117,17 +151,17 @@ button, input, select, textarea {
 
 .btn-secondary {
   padding: 14px;
-  border: 1.5px solid var(--color-accent);
+  border: 1.5px solid var(--color-accent-text);
   border-radius: var(--radius-button);
   background: transparent;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
 }
 .btn-secondary:hover {
-  background: rgba(107, 62, 80, 0.08);
+  background: var(--color-accent-soft);
 }
 .btn-secondary:disabled {
   opacity: 0.45;

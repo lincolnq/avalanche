@@ -3,7 +3,7 @@ import type { RouteSectionProps } from "@solidjs/router";
 import type { JSX } from "solid-js";
 import { createEffect, on } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { FiSettings, FiMessageSquare, FiGlobe, FiLogOut } from "solid-icons/fi";
+import { FiSettings, FiMessageSquare, FiGlobe } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import "./MainLayout.css";
 
@@ -39,7 +39,7 @@ function NavLink(props: NavLinkProps) {
 }
 
 export default function MainLayout(props: RouteSectionProps): JSX.Element {
-  const { logout, selectedConversationId } = useApp();
+  const { selectedConversationId } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -76,10 +76,8 @@ export default function MainLayout(props: RouteSectionProps): JSX.Element {
               stroke="currentColor", so it inherits the link color + hover. */}
           <FiSettings size={22} aria-hidden="true" />
         </A>
-        <button class="logout-btn" onClick={logout} title="Sign out">
-          <FiLogOut size={20} aria-hidden="true" />
-          <span class="logout-label">Sign out</span>
-        </button>
+        {/* No Sign out here: it forgets every signed-in account, so it lives in
+            Settings > Developer (iOS has no user-facing sign-out at all). */}
       </nav>
       <main class="content">
         {props.children}

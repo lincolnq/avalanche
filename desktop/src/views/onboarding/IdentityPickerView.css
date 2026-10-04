@@ -44,7 +44,7 @@
   transition: background 0.12s, border-color 0.12s;
   max-width: 480px;
 }
-.ip-account-row:hover { background: rgba(107, 62, 80, 0.08); border-color: var(--color-accent); }
+.ip-account-row:hover { background: var(--color-accent-soft); border-color: var(--color-accent-text); }
 .ip-avatar {
   width: 40px;
   height: 40px;
@@ -77,8 +77,8 @@
   transition: background 0.12s, border-color 0.12s;
   max-width: 480px;
 }
-.ip-action-row:hover { background: rgba(107, 62, 80, 0.08); border-color: var(--color-accent); }
-.ip-action-new { color: var(--color-accent); }
+.ip-action-row:hover { background: var(--color-accent-soft); border-color: var(--color-accent-text); }
+.ip-action-new { color: var(--color-accent-text); }
 .ip-back {
   margin-top: 8px;
 }
