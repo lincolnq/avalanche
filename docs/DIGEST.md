@@ -24,7 +24,10 @@ Todo lists, deploy commands, SQL/proto tables and UI copy are omitted; see `02` 
   App Store install; no `/project/<t>` deep link) (00, 23).
 - **Goals.** Projects with deep auth integration; decentralization (orgs run servers, no
   single party holds everyone's data); E2E DMs/groups/channels; bots and agents as
-  first-class but always visible; Signal-grade iOS/Android/Desktop apps. Speculative: mesh,
+  first-class but always visible; Signal-grade iOS/Android/Desktop apps; **easy for
+  non-technical organizers to run a server** via the website's configure tool (one paste; the
+  canonical setup path; any config/deploy change must keep it working, secrets generated on
+  the box) (00, 42). Speculative: mesh,
   public profiles/feeds as Projects, engagement tooling (with care).
 - **Two technical principles.** Don't implement crypto (use libsignal). Make vulnerability
   classes impossible (Rust for all security-critical code). Copy Signal by default; diverge
@@ -102,17 +105,20 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   (S-02..S-04, S-08)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
   sender membership check; extend expiry. (S-14..S-16)
-- *Project operator:* setup code -> full admin; audience-free tokens replay across Projects.
-  (S-01, S-17)
+- *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed on branch);
+  audience-free tokens replay across Projects. (By design, every member of a server running
+  adminbot is an admin, S-29.) (S-17)
 - *Stolen device:* rotation key = permanent DID takeover; no revocation; Desktop constant key;
   plaintext caches of deleted media. (S-05, S-06, S-18, S-25)
 - *Page on `*.theavalanche.net`:* can request the root PRF secret (shared RP with Project
   hosting). (S-07)
 
 **Register (ID, severity, gap -> fix doc):**
-- **Critical:** S-01 setup codes embed `REGISTRATION_SHARED_SECRET`; rewriting slug to
-  `adminbot` = superuser; secret also in testbot env and in raw tokens in `server_events` ->
-  server-minted per-Project single-use enrollment tokens, parsed claims in events, purge (22, 24).
+- **Critical:** S-01 setup codes embedded `REGISTRATION_SHARED_SECRET`; rewriting slug to
+  `adminbot` = superuser. **Fixed on branch `lincoln/bot-signup-keys` (pending merge/deploy):**
+  per-Project reusable bot signup keys; shareable secret can't link Projects; separate
+  on-box `SUPERUSER_BOOTSTRAP_SECRET`, claim-once; no raw tokens in events (purged). Rotate
+  the shared secret where old setup codes were handed out (22, 24, 51).
 - **High:** S-02 profile key in delivery receipts to un-accepted requests (52); S-03
   self-declared `is_bot` bypasses request gate (54); S-04 group invites auto-accepted from
   non-blocked strangers, Reported/needs UI check (12, 03); S-05 Desktop constant SQLCipher
@@ -123,7 +129,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   S-14 WebSocket group subscribe last-writer-wins, drain deletes rows -> secret-backed
   pseudonyms (03); S-15 no sender-membership check on SKDM/group receive, no re-seed on
   removal, `announcement_only` unenforced (03); S-17 Project tokens audience-free, in query
-  string (20).
+  string (20); S-29 (accepted by design) every new human joins `#admins`, so all members
+  are admins on a young server; gap is onboarding on how to close it as the server grows (22).
 - **Medium:** S-10 readable never-pruned group history (03); S-11 exact timestamps on group
   routing tables (03); S-12 IPs persisted in Postgres rate-limit table (03); S-13 relay sees
   full pseudonym set, unauthenticated `INSERT OR REPLACE` registration (15, 41); S-16 group
@@ -135,11 +142,13 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   webview allows any navigation; Network-tab/`conversation/` links use first account (20,
   23); S-24 no server WS ping, half-open sockets suppress push (10); S-25 deleted/expired
   messages leave attachment rows/keys and plaintext caches on all platforms (35, 36); S-27
-  shared avatar/attachment blob namespace, sequential profile-avatar ids (55).
+  shared avatar/attachment blob namespace, sequential profile-avatar ids (55); S-30 bots
+  choose their own `did:local:` suffix, so `adminbot` can be squatted on a fresh server (22).
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes S-01..S-05, S-08, S-14, S-17,
+**Hardening order:** (1) critical and stranger-facing fixes (S-01 done on branch)
+S-02..S-05, S-08, S-14, S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
@@ -660,12 +669,11 @@ Store 1.2). **Reports never contain content.**
   own origin — deploy bundle serves under `/p/<slug>/` sharing the homeserver origin.
 - **Multi-server rule:** a conversation lives on one homeserver via one account; any Project
   affordance in it comes only from that server's Projects; nothing crosses accounts.
-- **Known gaps:** setup codes carry master secret (S-01); secret broadcast via join feed;
-  testbot holds secret; no audience enforcement (S-17); tokens in query string; wrong
+- **Known gaps:** no audience enforcement (S-17); tokens in query string; wrong
   identity for Network tab and `conversation/` links (first account); default unhardened
   WKWebView (S-23); officialness unsettable; self-declared bot bypass; group invites
   auto-accepted (asserted as fact here; 09 marks it Reported).
-- **Planned:** bot-enrollment tokens; mandatory `audience` on verify and mint only for
+- **Planned:** mandatory `audience` on verify and mint only for
   installed origins (additive); tokens out of query string (fragment; Proposed, owner review); identity-correct minting/routing; webview hardening (per-Project data
   store, origin lock, per-Project subdomains); checkmark from `project_bots` linkage to an
   official Project exposed on account info; manifest from well-known URL.
@@ -681,17 +689,21 @@ Store 1.2). **Reports never contain content.**
 
 Node `node:http` service: "Text Me" spawns a new ephemeral bot per tap (temp SQLCipher store,
 Claude Haiku replies or echo fallback; read receipt + reaction exercises 33) and hosts the
-OAuth demo. Gaps: holds master secret (and its bots publish it via join events); breaks once
-a gatekeeper exists; ignores `project_url`; unbounded account creation; shared `/p/` origin.
-Planned: enrollment token, check audience, split OAuth demo. Rationale: ported from Rust to
+OAuth demo. Each bot registers with testbot's bot signup key, read per spawn from
+`TESTBOT_BOT_SIGNUP_KEY_FILE` (written by adminbot's manifest install; dev falls back to the
+shared secret). Gaps: ignores `project_url`; unbounded account creation; shared `/p/` origin.
+Planned: check audience, split OAuth demo. Rationale: ported from Rust to
 TS to prove "any language on app-core" (and Node's single thread avoids the non-`Send`
 workaround); ephemeral because it's a dev tool.
 
 ### Adminbot (22) — Partial
 
 - **Superuser = link to reserved `adminbot` Project** (`AuthAdminbot`), not a DID. Admin API
-  refuses to link/unlink/install/uninstall it; **only entry is a bootstrap token naming it**.
-  Bootstrap secret honored only while no gatekeeper is installed.
+  refuses to link/unlink/install/uninstall it or mint it a signup key; **only entry is a
+  one-time claim** with `SUPERUSER_BOOTSTRAP_SECRET` (generated on the box, never shared;
+  claim-once while the Project has no linked account; independent of gatekeepers). Recovery
+  after state loss: `avalanche-reset-adminbot` (deletes old account, clears claim; fresh
+  `#admins`).
 - **`#admins` group membership is the admin roster** — E2E, so the server DB doesn't reveal
   who administers. Adminbot is the bridge between E2E authority and server privilege;
   concentration risk accepted, kept minimal, privileged commands legible in `#admins`.
@@ -703,27 +715,31 @@ workaround); ephemeral because it's a dev tool.
   but the deploy bundle runs it on the server box.
 - **Does today:** creates `#admins`; auto-invites new humans into every group where it is
   admin (promoting adminbot makes a group an onboarding target); announces bots; clamps
-  timers to 4 weeks; release check; installs manifests at startup; a few commands
-  (`/install-project`, `/list-projects` gated on fresh `#admins` membership).
-- **Join events (server Built):** `AccountJoined` with raw `invite_token` pushed to
+  timers to 4 weeks; release check; installs manifests at startup (writing each Project's bot
+  signup key to `$SHARED/bot-signup-keys/<slug>.key` if absent); a few commands
+  (`/install-project` mints/rotates and DMs the bot signup key; `/list-projects`; both gated
+  on fresh `#admins` membership at any role).
+- **Join events (server Built):** `AccountJoined {did, joined_at_ms}` (raw token no longer
+  carried; S-01) pushed to
   `accounts.read` holders, logged 30 days, catch-up endpoint. Adminbot uses only live push.
 - **`did:local:` decision (not built):** random per-server DIDs, no well-known literal, since
   clients key by DID and `did:local:adminbot` merges adminbots across servers (block one,
   block both). Rejected: `did:local:{hostname}:adminbot` (couples identity to hostname);
   client conversation-key rewriting.
-- **Gaps:** setup codes = superuser (S-01); secret via join events; bootstrap cliff when a
-  gatekeeper is installed; `/audit` ungated; no catch-up; fixed DID; stale `ADMINBOT_DIDS`
-  comment.
-- **Planned:** server-minted per-Project single-use `purpose:"bot"` enrollment tokens that
-  can't name `adminbot`; adminbot self-bootstrap via operator-only path; remove secret from
-  bot envs; parsed claims in events; gate `/audit`; catch-up; random DID; officialness;
-  uninstall/revoke.
+- **Open admin by design (S-29):** every new human joins `#admins` and admin commands check
+  membership, so everyone is an admin on a young server; intended for new orgs.
+- **Gaps:** no onboarding explaining open admin or how to close it; reserved `did:local:` names squattable
+  (S-30); `/audit` ungated; no catch-up; fixed DID; stale `ADMINBOT_DIDS` comment.
+- **Planned:** open-admin onboarding plus a way to stop auto-admin (S-29); parsed claims in events; gate `/audit`; catch-up;
+  random DID; officialness; uninstall/revoke.
 - **Speculative:** routing rules (token tags -> channels); notification hints in invites;
   fuller commands; recovery ladder; backup recovery identity.
 - **Rejected:** bot-to-bot RPC/service mesh (uptime coupling; use explicit HTTP trust edges
   if ever needed); gatekeeper commanding adminbot (token carries routing tags instead);
   signed officialness; per-admin server-verified credentials (server would accumulate the
-  roster `#admins` protects). Non-goals: general bot framework, RPC hub, federation-aware.
+  roster `#admins` protects); single-use bot tokens (testbot spawns a bot per user, so keys
+  are per-Project and reusable). Two secrets because the configure tool's first-members
+  invite is shared by design. Non-goals: general bot framework, RPC hub, federation-aware.
 
 ### Messaging extensions: core vs Project (23) — Partial
 
@@ -758,15 +774,18 @@ workaround); ephemeral because it's a dev tool.
 
 - **Built server side:** **closed registration default** (anything unrecognized = closed;
   fail-closed); admitted by a gatekeeper-signed invite (verified locally against pinned
-  Ed25519 key; **server never calls the Project**) or the bootstrap secret (only while no
-  gatekeeper). Many gatekeepers allowed. Token `base64url(JSON)` short keys; signature over
+  Ed25519 key; **server never calls the Project**), a bootstrap token (shareable
+  `REGISTRATION_SHARED_SECRET`: plain accounts only, until a gatekeeper exists, never links a
+  Project; `SUPERUSER_BOOTSTRAP_SECRET`: claims superuser once), or a Project's **bot signup
+  key** (`{s, b}`, server-minted, hash-stored, bots only, links to its Project, reusable,
+  re-mint revokes, survives gatekeeper install). Many gatekeepers allowed. Token `base64url(JSON)` short keys; signature over
   the exact claims string (no canonicalization hazard); `jti` redeemed before account creation
   (spent even if registration fails). **Token is the hand-off:** admission separate from
-  routing; routing payload rides to the join event (nothing consumes it yet).
-- **Gaps:** bootstrap escalation (S-01); raw tokens in events; `GET /v1/invites` doesn't
+  routing; join events will carry parsed routing claims (Planned; raw tokens removed).
+- **Gaps:** `GET /v1/invites` doesn't
   validate gatekeeper tokens (user creates passkey/DID before rejection); adminbot can't
-  install gatekeepers; bootstrap cliff; no gatekeeper Project exists.
-- **Planned:** enrollment tokens; parsed claims; full validation in invite GET; gatekeeper
+  install gatekeepers; no gatekeeper Project exists.
+- **Planned:** parsed claims; full validation in invite GET; gatekeeper
   install via adminbot; **the vetting Project**: anonymous form (the abuse surface),
   `#approvals` modeled on `#admins` with low-PII summaries, signed single-use invite with
   routing, delivered out of band. Notes: bearer credential over a non-E2E channel; PII
@@ -1014,10 +1033,11 @@ avatar palette (only constrains honest bots; redundant with badge; strips brandi
 `base64url(JSON)` short keys in `https://go.theavalanche.net/i/<token>` (legacy `/invite/`).
 **Personal invite** `{s, d?}` unsigned, client-generated, doubles as contact link; validation
 returns server name and a redirect to the inviter DM; does not admit on closed servers.
-**Gatekeeper token** signed (24). **Bootstrap token** `{s, k: secret, p?}` (to be replaced).
+**Gatekeeper token** signed (24). **Bootstrap token** `{s, k: secret, p?}`: shareable secret
+admits signups only; superuser secret claims `adminbot` once. **Bot signup key** `{s, b}` (24).
 Gaps: no server step; no group auto-enrollment; tokens in URL path land in landing-page logs —
 any secret-bearing future token must use the fragment; invite GET only understands personal
-tokens. Planned: enrollment tokens; `server_step_url` onboarding webview; group
+tokens. Planned: `server_step_url` onboarding webview; group
 auto-enrollment via `group_invitations` in the fragment; in-app invite creation. 51 lists
 deferred deep links through install as Speculative (see contradictions). Rationale: personal
 tokens are discovery, not access control; Projects sign, server pins and verifies locally;
@@ -1047,8 +1067,13 @@ crypto.
 release (self-updating); operator `.env` never rewritten; one git tag for all first-party
 artifacts; update halts on reconcile mismatch rather than auto-fixing; bots handled
 uniformly; Projects get Caddy `/p/<slug>/` routes. Gaps: no rollback, no pre-upgrade dump, no
-N-1 migration check, manual new secrets, relay outside bundle.
-Planned: dumps + rollback, `ensure-secret`, `/upgrade` from `#admins`. Rejected: per-file
+N-1 migration check, relay outside bundle. **Setup starts at the configure tool** (website
+"Set up your homeserver": cloud-init + first-members invite QR; must stay one-paste for
+non-technical organizers). `migrate_env_files` (install and update) appends missing env lines
+and retires secrets: generates `SUPERUSER_BOOTSTRAP_SECRET` on the box (never in the browser),
+drops the shared secret from bot envs, adds bot signup key paths. Operator commands include
+`avalanche-reset-adminbot`.
+Planned: dumps + rollback, generalized `ensure-secret`, `/upgrade` from `#admins`. Rejected: per-file
 binary swap; updater baked into cloud-init (froze boxes at provision-time logic);
 `self-update` server; per-Project upgrade logic; independent component versions;
 auto-update.

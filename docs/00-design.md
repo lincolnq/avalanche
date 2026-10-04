@@ -53,6 +53,9 @@ much care as chat polish (see `23` and `02`).
 - **E2E-encrypted DMs, groups, and announcement channels.**
 - **Bots and agents as first-class participants** within Projects, always visibly.
 - **Good Signal-style apps** on iOS, Android, and Desktop — comms first, push, polish.
+- **Easy for non-technical organizers to run a server.** An organizer with no ops
+  background should be able to stand up their org's homeserver from the website's
+  configure tool in one paste (see "Running a server" below).
 - **Speculative:** non-internet comms (mesh), public profiles/feeds as Projects, tools for
   identifying highly engaged people (with care — see the security note under Projects).
 
@@ -161,8 +164,9 @@ private identity itself.
 
 Registration is keys-only: no name, email, or phone number. A server runs in **open** or
 **closed** registration mode (closed is the default); closed servers admit only holders of a
-signed invite token from an installed gatekeeper Project, or the operator's bootstrap secret
-(`24`, `51`). Invite links (`https://go.theavalanche.net/i/<token>`) carry the server address
+signed invite token from an installed gatekeeper Project, a bootstrap token with an operator
+secret (the configure tool's first-members invite carries the shareable one), or, for a
+Project's bots, that Project's bot signup key (`24`, `51`). Invite links (`https://go.theavalanche.net/i/<token>`) carry the server address
 and optional onboarding/redirect hints; the server and its Projects decide what the token
 grants.
 
@@ -176,6 +180,20 @@ Representative flows the design must keep easy:
 
 The first is the front door, and it is not smooth today: links do not survive an App Store
 install, and there's no `/project/<t>` deep link. Fixing both is Proposed (`23`, `02`).
+
+## Running a server
+
+**The configure tool is the canonical setup path.** The website's "Set up your homeserver"
+page (`web/layouts/_default/configure.html`, `web/assets/configure/`) asks for a server URL
+and name, then generates a cloud-init to paste into a DigitalOcean droplet plus a
+first-members invite QR. The deploy bundle it fetches installs and configures everything,
+and `avalanche-update` upgrades in place (`42`).
+
+The principle: **setup must stay doable by a non-technical organizer.** No secrets to invent
+or copy around, strong defaults for every setting, one paste. Secrets that need protecting
+are generated on the server itself (for example the superuser bootstrap secret never passes
+through the browser). Any change to server config, env vars, or the deploy must keep the
+configure tool working as a one-paste setup; test it when you touch them.
 
 ## Mobile app
 

@@ -7,10 +7,13 @@ const GH_REPO = 'lincolnq/avalanche';
 // published yet). The dropdown is editable regardless.
 const DEFAULT_RELEASE_TAG = '0.1.0';
 
-// One high-entropy bootstrap secret per page load. Stable across re-renders so
-// the env file and the invite link always agree. It gates registration while
-// the server runs closed (the default) and auto-disables once a gatekeeper
-// Project is installed (see docs/24).
+// One high-entropy registration secret per page load. Stable across re-renders
+// so the env file and the invite link always agree. It lets people sign up
+// while the server runs closed (the default) and auto-disables once a
+// gatekeeper Project is installed (see docs/24). It is shareable by design and
+// grants nothing beyond signing up: it can't link a Project or claim admin
+// (docs/09 S-01). The superuser secret adminbot uses is generated on the server
+// by install.sh and never leaves it.
 const SHARED_SECRET = (() => {
   // 16 bytes = 128 bits, ample for a rate-limited bootstrap credential, and
   // keeps the invite token (and its QR) compact.
@@ -26,9 +29,9 @@ function b64url(s) {
 
 function inviteUrl(serverUrl) {
   // base64url(JSON) with single-char keys (s=server_url, k=bootstrap_secret),
-  // no padding — keeps the QR low-density. The secret lets people register
+  // no padding — keeps the QR low-density. The secret lets people sign up
   // while the server is closed; share this link/QR to onboard your first
-  // members, then install a gatekeeper to retire it.
+  // members, then install a gatekeeper to retire it. Signing up is all it does.
   const payload = JSON.stringify({s: serverUrl, k: SHARED_SECRET});
   return `https://${INVITE_DOMAIN}/i/${b64url(payload)}`;
 }

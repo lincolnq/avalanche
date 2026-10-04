@@ -207,7 +207,7 @@ ci: check clippy test-server
 # override here because the server's default targets the production state dir
 # (/var/lib/avalanche/attachments), which doesn't exist on a dev box.
 dev:
-	cd core && ACTNET_ALLOW_DEV_DB=1 ACTNET_DISABLE_IP_RATE_LIMITS=1 REGISTRATION_SHARED_SECRET=$(or $(REGISTRATION_SHARED_SECRET),CHANGEME) ATTACHMENT_BLOB_DIR=$(CURDIR)/dev-state/attachments RUST_LOG=tower_http=debug,server=debug cargo run -p server
+	cd core && ACTNET_ALLOW_DEV_DB=1 ACTNET_DISABLE_IP_RATE_LIMITS=1 REGISTRATION_SHARED_SECRET=$(or $(REGISTRATION_SHARED_SECRET),CHANGEME) SUPERUSER_BOOTSTRAP_SECRET=$(or $(SUPERUSER_BOOTSTRAP_SECRET),CHANGEME-SUPERUSER) ATTACHMENT_BLOB_DIR=$(CURDIR)/dev-state/attachments RUST_LOG=tower_http=debug,server=debug cargo run -p server
 
 db-up:
 	docker compose -f infra/docker-compose.yml up -d --wait

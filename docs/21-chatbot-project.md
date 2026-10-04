@@ -30,19 +30,16 @@ It is a dev tool, not a pattern to copy for production Projects (see *Known gaps
 
 **Replies.** Claude Haiku (`claude-haiku-4-5-20251001`) via the Anthropic API, with the conversation history and the user's display name in the system prompt. With no API key, or on an API error, the bot echoes the user's message, so local dev needs no setup.
 
-**Registration.** On a closed-registration server, bots register with a bootstrap token built from `REGISTRATION_SHARED_SECRET` (no Project link). adminbot suppresses join announcements for display name "Testbot" so `#admins` isn't flooded (`22`).
+**Registration.** Each bot registers with the testbot Project's **bot signup key**, read from `TESTBOT_BOT_SIGNUP_KEY_FILE` on every spawn (so a key written after startup, or a rotated one, is picked up). In the deploy, adminbot writes that file when it auto-installs testbot's manifest (`$SHARED/bot-signup-keys/testbot.key`, `22`). The server admits the bot and links it to the testbot Project (`24`). Local dev has no manifest install, so `dev.py` passes `REGISTRATION_SHARED_SECRET` and testbot falls back to a plain bootstrap token; the deploy never gives testbot that secret. adminbot suppresses join announcements for display name "Testbot" so `#admins` isn't flooded (`22`).
 
 ## Known gaps
 
-- **Holds the master registration secret.** Testbot is internet-facing and LLM-driven, yet holds `REGISTRATION_SHARED_SECRET`. That secret also lets anyone who holds it register into the superuser Project (`22` §Known gaps). Worse, every bot it registers publishes the raw bootstrap token, secret included, to every `accounts.read` holder and to `server_events` for 30 days (`20` §Known gaps).
-- **Stops working once a gatekeeper is installed.** The bootstrap secret is retired as soon as any `registration.gatekeeper` Project exists (`registration.rs`, `gate_registration`), so testbot bots can no longer register on such a server.
 - **Doesn't check token audience.** It ignores the `project_url` returned by `verify`, so it accepts tokens minted for other Projects (`20` §Known gaps).
 - **Unbounded account creation.** Each tap creates a permanent server account. Nothing caps taps per user.
 - **Shares the homeserver origin** under `/p/testbot/` in the deploy bundle, so it has no origin isolation from other `/p/` Projects.
 
 ## Planned
 
-- Register bots with a per-Project enrollment token (`22` §Planned) instead of the master secret, and link them to the testbot Project.
 - Check the `verify` response's `project_url` (and pass `audience` once the server supports it).
 - Split the OAuth demo from the chatbot so the example Projects stay small and copyable.
 

@@ -32,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/projects", post(install_project).get(list_projects))
         .route("/v1/admin/projects/{slug}", delete(uninstall_project))
         .route("/v1/admin/projects/{slug}/bots", post(link_bot))
+        .route("/v1/admin/projects/{slug}/bot-signup-key", post(mint_bot_signup_key))
         .route("/v1/admin/projects/{slug}/bots/{bot_did}", delete(unlink_bot))
         .route("/v1/admin/projects/{slug}/directory", put(set_directory))
         .route("/v1/admin/capabilities", post(grant_capability))
@@ -308,6 +309,28 @@ async fn link_bot(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Mint (or rotate) a Project's bot signup key (docs/24, docs/09 S-01). Returns
+/// the key as a registration token the Project's bots present at signup; it
+/// admits bot accounts and links each to this Project. Minting again replaces
+/// the stored hash, revoking the previous key. The superuser Project is
+/// refused (claimed only via the superuser bootstrap secret). The plaintext
+/// key is returned once and never stored.
+async fn mint_bot_signup_key(
+    State(state): State<AppState>,
+    _auth: AuthAdminbot,
+    Path(slug): Path<String>,
+) -> Result<Json<Value>, ServerError> {
+    use base64::prelude::*;
+    use rand::Rng;
+    let mut conn = state.db.acquire().await?;
+    let project_id = resolve_mutable_project(&mut conn, &slug).await?;
+    let raw: [u8; 32] = rand::rng().random();
+    let key = BASE64_URL_SAFE_NO_PAD.encode(raw);
+    db::bot_signup_keys::set(&mut conn, project_id, key.as_bytes()).await?;
+    let token = crate::invite_token::bot_signup_token(&state.config.server_url, &key);
+    Ok(Json(json!({ "slug": slug, "bot_signup_key": token })))
+}
+
 async fn unlink_bot(
     State(state): State<AppState>,
     _auth: AuthAdminbot,
@@ -491,8 +514,6 @@ struct EventView {
     id: i64,
     kind: String,
     did: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    invite_token: Option<String>,
     joined_at_ms: i64,
 }
 
@@ -546,7 +567,6 @@ async fn get_events(
             id: e.id,
             kind: e.kind,
             did: e.did,
-            invite_token: e.invite_token,
             joined_at_ms: e.joined_at_ms,
         })
         .collect();

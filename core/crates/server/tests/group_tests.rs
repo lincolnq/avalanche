@@ -62,6 +62,7 @@ async fn test_state() -> AppState {
         invite_domain: "go.example.test".into(),
         registration_mode: server::config::RegistrationMode::Open,
         registration_shared_secret: None,
+        superuser_bootstrap_secret: None,
         privacy_policy_url: None,
         attachment_blob_dir: std::env::temp_dir()
             .join("av-test-attachment-blobs")

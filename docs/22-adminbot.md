@@ -1,6 +1,6 @@
 # 22 — Adminbot
 
-> **Status:** Partial — adminbot runs on every deployment: the `#admins` group, auto-invites, an expiry cap, update checks, and manifest-based Project install are built. Rule-based routing, the full command surface, officialness, and join-event catch-up are not. Superuser bootstrapping has a P0 escalation bug.
+> **Status:** Partial — adminbot runs on every deployment: the `#admins` group, auto-invites, an expiry cap, update checks, and manifest-based Project install are built. Rule-based routing, the full command surface, officialness, and join-event catch-up are not. The superuser bootstrap was rebuilt to close the S-01 escalation (branch `lincoln/bot-signup-keys`, pending merge). By design, every human who signs up joins `#admins` and can use admin commands (S-29).
 > **Last verified against code:** 2026-10-03
 
 ## Summary
@@ -10,7 +10,7 @@ Adminbot is the first-party Project that administers a homeserver through chat. 
 1. **Superuser authority is membership in the reserved `adminbot` Project.** Every `/v1/admin/*` endpoint requires the caller to be a bot linked to that Project.
 2. **The `#admins` group is the admin roster.** It is an ordinary E2E group; its membership *is* the set of human administrators. The server can't read it, so the **server database doesn't reveal who has admin authority**. Humans post commands; adminbot checks the sender is in `#admins` and acts through its superuser endpoints.
 
-Adminbot is a Node/TypeScript process (`node/packages/adminbot/src/index.ts`) on `@theavalanche/app-core`. The deploy bundle runs it on the homeserver box with the master registration secret.
+Adminbot is a Node/TypeScript process (`node/packages/adminbot/src/index.ts`) on `@theavalanche/app-core`. The deploy bundle runs it on the homeserver box with the superuser bootstrap secret, which is generated on the box.
 
 ## Current design
 
@@ -25,17 +25,20 @@ The server can't see who the admins are, so something must bridge "an admin auth
 
 ### Superuser authority
 
-**Built**, with a P0 flaw (*Known gaps*).
+**Built** (branch `lincoln/bot-signup-keys`; closes S-01).
 
 - The server seeds a reserved Project with slug `adminbot` at startup (`core/crates/server/src/main.rs` → `db::projects::ensure_adminbot_project`).
 - `AuthAdminbot` (`core/crates/server/src/middleware/auth.rs`) admits a session only if its account is linked to that Project. Authority is the link, not a DID.
-- The admin API refuses to link or unlink bots on the `adminbot` Project and refuses to install or uninstall it (`routes/admin.rs`, `resolve_mutable_project`). **The only way into the superuser Project is registering with a bootstrap token that names it** (`routes/registration.rs`, `gate_registration`). A comment in `auth.rs` mentions seeding from an `ADMINBOT_DIDS` config; no such code exists.
-- On first run adminbot registers as `did:local:adminbot` with a bootstrap token `{s: server_url, k: REGISTRATION_SHARED_SECRET, p: "adminbot"}` (`AppCore.bootstrapToken`), which links it into the superuser Project.
-- The bootstrap secret is honored only while **no** `registration.gatekeeper` Project is installed (`gate_registration`). After that, only signed gatekeeper invites admit registrations.
+- The admin API refuses to link or unlink bots on the `adminbot` Project, refuses to mint a bot signup key for it, and refuses to install or uninstall it (`routes/admin.rs`, `resolve_mutable_project`). A comment in `auth.rs` mentions seeding from an `ADMINBOT_DIDS` config; no such code exists.
+- **The only way into the superuser Project is a one-time claim.** A registration presenting a bootstrap token `{s, k: SUPERUSER_BOOTSTRAP_SECRET, p: "adminbot"}` is linked into it, but only while the Project has no linked account (`routes/registration.rs`, `gate_registration`; `db::projects::link_bot_if_unclaimed`). A second claim is refused even with the right secret. The claim works whether or not a gatekeeper is installed.
+- `SUPERUSER_BOOTSTRAP_SECRET` is the operator's root credential. The deploy generates it on the box and writes it only to the server's and adminbot's env (`infra/deploy/bundle/lib/common.sh`, `migrate_env_files`). It never appears in the configure tool's output, the cloud-init, or any invite (`42`).
+- The shareable `REGISTRATION_SHARED_SECRET` (the configure tool's first-members invite) can never link a Project: any bootstrap token carrying it plus a `p` gets a 403.
+- On first run adminbot registers as `did:local:adminbot` and claims superuser with `AppCore.bootstrapToken(server, SUPERUSER_BOOTSTRAP_SECRET, "adminbot")`.
+- **Recovery.** If adminbot's state is lost, it can't re-claim on its own. The operator runs `avalanche-reset-adminbot` on the server host: it stops adminbot, runs `avalanche-server reset-adminbot` (deletes the old `did:local:adminbot` account with `db::accounts::delete_account` and clears the claim), moves the old state dir aside, and restarts adminbot, which re-registers and claims again. The new adminbot creates a fresh `#admins`; admins must be re-invited (or listed in `ADMINBOT_INITIAL_ADMINS`).
 
 ### Coordination is data-carried, not bot-to-bot
 
-Adminbot calls no other bot and exposes no API to them. Coordination rides durable data: server events, signed tokens and catch-up. Adminbot learns of new accounts from the `AccountJoined` push and can read the registering token to decide where to route people (`24`). Bots depend on the server and on signed artifacts, never on each other's uptime.
+Adminbot calls no other bot and exposes no API to them. Coordination rides durable data: server events, signed tokens and catch-up. Adminbot learns of new accounts from the `AccountJoined` push. Routing by the registering token's issuer and tags is Planned, as parsed claims carried in the event (`24`); events never carry the raw token. Bots depend on the server and on signed artifacts, never on each other's uptime.
 
 ### Deployment shape
 
@@ -52,8 +55,8 @@ That makes **off-box** operation possible and attractive: nothing public routes 
 - **Bot announcements.** New bot accounts are announced in `#admins` with a contact card, except display names in `UNANNOUNCED_BOT_NAMES` (`Testbot`).
 - **Expiry cap.** When added to a group as admin, adminbot clamps the disappearing-message timer to at most 4 weeks, treating "off" as exceeding the cap. Later timer changes are only caught by `/audit`.
 - **Update check.** Daily and at startup, it compares the deployment's `VERSION` file with the latest GitHub release and posts to `#admins` once per new release.
-- **Manifest install at startup.** Every `*.json` in `ADMINBOT_MANIFEST_DIR` (default `<dirname(state dir)>/manifests`) is installed non-interactively, auto-granting every requested permission except `registration.gatekeeper`. This is how the deploy bundle configures web Projects.
-- **State:** `ADMINBOT_STATE_DIR` holds the SQLCipher store and a `state.json` sidecar. Losing it means re-registration, which needs the old `did:local:adminbot` account row deleted server-side first.
+- **Manifest install at startup.** Every `*.json` in `ADMINBOT_MANIFEST_DIR` (default `<dirname(state dir)>/manifests`) is installed non-interactively, auto-granting every requested permission except `registration.gatekeeper`. This is how the deploy bundle configures web Projects. For each, adminbot also writes the Project's bot signup key to `<ADMINBOT_BOT_SIGNUP_KEY_DIR>/<slug>.key` (mode 0600; default `<dirname(state dir)>/bot-signup-keys`), only if that file doesn't exist yet, so restarts don't rotate it. First-party bots such as testbot read their key from there.
+- **State:** `ADMINBOT_STATE_DIR` holds the SQLCipher store and a `state.json` sidecar. Losing it means running `avalanche-reset-adminbot` (*Superuser authority*).
 
 ### Commands
 
@@ -76,7 +79,7 @@ Confirmations are typed (`yes`); the Node layer can't receive reaction events ye
 1. `POST /v1/admin/projects` — create, or update an existing slug (install is an upsert, including OAuth registration).
 2. `POST /v1/admin/capabilities` for each approved permission.
 3. `PUT /v1/admin/projects/{slug}/directory` for the manifest's `webEntries` (replace semantics, stored non-official).
-4. DM back a **setup code** for the Project's bot: a bootstrap token `{s, k: REGISTRATION_SHARED_SECRET, p: <slug>}`. A bot registering with it is linked to the Project.
+4. `POST /v1/admin/projects/{slug}/bot-signup-key` and DM back the Project's **bot signup key**. A bot registering with it is admitted (even on a closed server, even after a gatekeeper is installed) and linked to this Project. One key per Project, reusable; running `/install-project` again mints a new key and revokes the old one (`24`, `51`).
 
 It flips the reaction to a check or a cross when done. There is no `PROJECTS` env var: a Project appears in the Network tab only through a manifest install.
 
@@ -88,7 +91,7 @@ The catalog of what a Project may request and how it is enforced lives in `20-pr
 
 **Built** server-side (`routes/registration.rs`, `routes/admin.rs`, `infra/migrations/017_server_events.sql`).
 
-- **Push.** On every registration the server sends `AccountJoined { did, joined_at_ms, invite_token }` over the WebSocket to every connected session holding `accounts.read`.
+- **Push.** On every registration the server sends `AccountJoined { did, joined_at_ms }` over the WebSocket to every connected session holding `accounts.read`. The proto's `invite_token` field (3) is never populated (S-01).
 - **Durable log.** The same event is appended to `server_events` (30-day retention, swept in `server/src/tasks/mod.rs`).
 - **Catch-up.** `GET /v1/admin/events?since=<id>&kind=account_joined` (500 per page) for any bot holding `accounts.read`.
 - **Roster snapshot.** `GET /v1/admin/accounts?after=<did>` returns `{ accounts: [{did, display_name?, is_bot, created_at_ms}], next }`, gated on the same capability.
@@ -97,7 +100,7 @@ The catalog of what a Project may request and how it is enforced lives in `20-pr
 
 ### Privacy posture
 
-The server already knows every account it registers, so showing that to a bot the operator installed adds no new leak, and there is deliberately no group linkage (`03` §3.9 intact). A compromised `accounts.read` bot gets a real-time roster of joins with timing; the threat model accepts this. **Exception:** the events carry the raw `invite_token`, which today can contain the master secret (*Known gaps*). Planned: carry parsed issuer and routing claims only.
+The server already knows every account it registers, so showing that to a bot the operator installed adds no new leak, and there is deliberately no group linkage (`03` §3.9 intact). A compromised `accounts.read` bot gets a real-time roster of joins with timing; the threat model accepts this. Events never carry the raw registration token, which could contain a registration secret; migration 026 purged stored ones. When routing is built, events will carry parsed issuer and routing claims only.
 
 ### `did:local:` DID scheme
 
@@ -111,18 +114,17 @@ The server already knows every account it registers, so showing that to a bot th
 
 Security items are also in `09-security-posture.md`; todos in `02`.
 
-1. **Setup codes grant superuser (P0).** A setup code is `base64url(JSON)` containing the master `REGISTRATION_SHARED_SECRET` (`index.ts`, `performInstall`; token format in `server/src/invite_token.rs`, `BootstrapToken`). Anyone holding one, i.e. any Project operator, can decode it, set `p` to `"adminbot"`, register, and be linked into the superuser Project (`gate_registration`). That is full server admin.
-2. **The master secret leaks through join events (P0).** The raw registration token goes into `server_events` and to every `accounts.read` holder (`20` §Known gaps). Every bot registered with a setup code, or with testbot's plain bootstrap token, publishes the secret.
-3. **The secret has a silent cliff.** Installing any gatekeeper retires the bootstrap path, so new Project bots can no longer register with setup codes, and adminbot can't re-register.
-4. **`/audit` has no `#admins` check.** Anyone who can DM adminbot gets a listing of every group adminbot is in (titles, counts, timers) and triggers timer clamps.
-5. **No catch-up.** Joins while adminbot is down are never routed (*Join event API*).
-6. **Fixed `did:local:adminbot`** still merges adminbots across servers in multi-homed clients.
-7. **Stale comment:** `ADMINBOT_DIDS` in `middleware/auth.rs` describes config seeding that doesn't exist.
+1. **Open admin needs onboarding (S-29, by design).** Auto-invite targets every group adminbot admins, `#admins` included (`inviteToAdminGroups`), and `/install-project` and `/list-projects` check `#admins` membership (`requireAdminsMember`). So everyone who signs up is an admin. **This is intended:** in a new org's early days nobody needs to control who has admin, and it keeps setup effortless. It is consistent with the model above: `#admins` *is* the admin roster, and on a young server the roster is everyone. The gap is that nothing tells the operator this is happening, or when and how to close it (before sharing the invite widely, or installing a gatekeeper).
+2. **Reserved `did:local:` names can be squatted (S-30).** Bots choose their own suffix, first come first served, so on a fresh server a holder of an admission credential could register `did:local:adminbot` before adminbot does.
+3. **`/audit` has no `#admins` check.** Anyone who can DM adminbot gets a listing of every group adminbot is in (titles, counts, timers) and triggers timer clamps.
+4. **No catch-up.** Joins while adminbot is down are never routed (*Join event API*).
+5. **Fixed `did:local:adminbot`** still merges adminbots across servers in multi-homed clients.
+6. **Stale comment:** `ADMINBOT_DIDS` in `middleware/auth.rs` describes config seeding that doesn't exist.
 
 ## Planned
 
-- **Bot enrollment tokens (fixes 1–3).** The server mints per-Project, single-use, short-lived enrollment tokens (`purpose: "bot"`, redeemed through `token_redemptions` like gatekeeper invites). Adminbot requests one via a new admin endpoint and hands it out instead of a bootstrap token. They work whether or not a gatekeeper is installed, and can never name the `adminbot` Project. Adminbot bootstraps itself from an operator-only path: the shared secret, scoped by the server to the `adminbot` Project and refused once adminbot exists, or a one-shot operator command on the box. Testbot gets an enrollment token too. Then remove `REGISTRATION_SHARED_SECRET` from every bot env except adminbot's first run.
-- **Join events carry parsed claims, not raw tokens:** issuer slug, purpose and routing tags.
+- **Onboarding for open admin (S-29):** adminbot's welcome to `#admins` and the configure page explain that everyone is an admin for now and how to change it; a simple command to stop auto-inviting new members into `#admins` (e.g. `/admins closed`), and a nudge when the server grows or a gatekeeper is installed (*Known gaps* 1).
+- **Join events carry parsed claims** (issuer slug, purpose, routing tags) when routing is built.
 - **Gate `/audit`** on `#admins` membership.
 - **Use catch-up:** persist the last processed event id and drain `GET /v1/admin/events` on connect.
 - **Random `did:local:` for adminbot**, per the decision above.
@@ -136,11 +138,13 @@ Security items are also in `09-security-posture.md`; todos in `02`.
 - **Security-update awareness** beyond the version check: a curated or signed security manifest with severity-based nagging.
 - **Fuller command surface:** `/grant`, `/revoke`, `/officialize`, `/pause`, `/kick <did> from <group>`, `/add`, `/seed-into <group>`.
 - **Leave/rejoin for `#admins`** (DM a leaver a `/rejoin` path) and an **official-groups registry** to protect the reserved `#admins` title.
-- **Recovery ladder:** restart from state → rotate keys (authority is the Project link, not a key) → re-bootstrap with a fresh DID → recreate `#admins` and re-invite.
+- **Recovery ladder:** restart from state → rotate keys (authority is the Project link, not a key) → `avalanche-reset-adminbot` (built) → keep `#admins` membership across a reset instead of recreating it.
 - **Backup recovery identity** for the "every admin left" case. Today the answer is operator shell access.
 
 ## Rationale and rejected alternatives
 
+- **Two bootstrap secrets, not one (S-01).** The configure tool's first-members invite carries the registration secret and is shared by design, so that secret must grant nothing beyond signing up. Superuser needs a secret that is never shared, generated on the box, and usable once. Claim-once means a leaked superuser secret still can't add a second superuser after adminbot claims.
+- **Per-Project bot signup keys instead of setup codes.** A setup code was a bootstrap token naming a Project, so it carried the master secret and its holder could rename the Project to `adminbot`. A bot signup key is resolved server-side by its hash, so it can't choose its Project. It is reusable rather than single-use because testbot creates a new bot account for every user; a leaked key adds bots to one Project only, and re-minting revokes it.
 - **Rejected: a bot-to-bot RPC / service mesh with discovery.** It makes every bot depend on every other bot being live. Everything needed so far fits data-carried coordination. A genuinely synchronous need should be one Project calling another's ordinary HTTP API with its own auth, an explicit trust edge, not an ambient mesh.
 - **Rejected: the gatekeeper asking adminbot to add a user to channels.** Imperative cross-bot RPC; the token carries routing tags instead (`24`).
 - **Rejected: officialness as a signed attestation.** Decomposes into a plain operator-set flag (same-server only) plus an ordinary scope (`20`).

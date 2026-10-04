@@ -17,6 +17,7 @@
 pub mod abuse;
 pub mod accounts;
 pub mod attachments;
+pub mod bot_signup_keys;
 pub mod capabilities;
 pub mod challenges;
 pub mod devices;

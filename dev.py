@@ -70,6 +70,9 @@ ADMINBOT_STATE_DIR = os.path.join(REPO_DIR, "dev-state", "adminbot")
 # Bootstrap secret for dev's closed-registration server. The homeserver accepts
 # it; testbot/adminbot present it (as a bootstrap token) to register.
 DEV_SHARED_SECRET = os.environ.get("REGISTRATION_SHARED_SECRET", "CHANGEME")
+# Superuser bootstrap secret (docs/09 S-01): only adminbot uses it, to claim
+# superuser once. Kept distinct from the shareable registration secret.
+DEV_SUPERUSER_SECRET = os.environ.get("SUPERUSER_BOOTSTRAP_SECRET", "CHANGEME-SUPERUSER")
 
 
 def node_cmd(args):
@@ -396,7 +399,7 @@ def main():
         # bootstrap token. Override REGISTRATION_MODE=open for quick hacking.
         # Attachment blobs (docs/35) land under the repo-root dev-state/ tree
         # (gitignored, wiped by `make db-reset`), alongside the bots' stores.
-        env={**os.environ, "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET, "PRIVACY_POLICY_URL": privacy_policy_url, "ATTACHMENT_BLOB_DIR": os.path.join(REPO_DIR, "dev-state", "attachments")},
+        env={**os.environ, "RUST_LOG": "tower_http=debug,server=debug", "ACTNET_ALLOW_DEV_DB": "1", "ACTNET_DISABLE_IP_RATE_LIMITS": "1", "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET, "SUPERUSER_BOOTSTRAP_SECRET": DEV_SUPERUSER_SECRET, "PRIVACY_POLICY_URL": privacy_policy_url, "ATTACHMENT_BLOB_DIR": os.path.join(REPO_DIR, "dev-state", "attachments")},
     ))
 
     for project, port in project_launches:
@@ -406,8 +409,9 @@ def main():
             project["bind_env"]: f"0.0.0.0:{port}",
             "HOMESERVER_URL": os.environ.get("HOMESERVER_URL", "http://localhost:3000"),
             project["log_env"]: os.environ.get(project["log_env"], "info"),
-            # Present the bootstrap secret so the bot can register against
-            # the closed-registration dev server.
+            # Dev fallback: there's no adminbot manifest install in dev to mint
+            # a bot signup key, so Project bots register with the shareable
+            # registration secret instead (the deploy never does this).
             "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
         }
         # Tell an OAuth-login project its phone-reachable base URL so the
@@ -443,9 +447,10 @@ def main():
             "ADMINBOT_STATE_DIR": ADMINBOT_STATE_DIR,
             "ADMINBOT_DB_KEY": os.environ.get("ADMINBOT_DB_KEY", "dev-adminbot-key"),
             "ADMINBOT_LOG": os.environ.get("ADMINBOT_LOG", "info"),
-            # Bootstrap secret: registers adminbot against the closed dev server
-            # and links it into the superuser Project (it names that Project).
-            "REGISTRATION_SHARED_SECRET": DEV_SHARED_SECRET,
+            # Superuser bootstrap secret: registers adminbot against the closed
+            # dev server and claims the superuser Project (once; `make db-reset`
+            # clears the claim along with everything else).
+            "SUPERUSER_BOOTSTRAP_SECRET": DEV_SUPERUSER_SECRET,
         },
     ))
 

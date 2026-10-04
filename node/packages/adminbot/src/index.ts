@@ -40,8 +40,9 @@ import {
 
 // Reserved well-known suffix for the canonical adminbot account. This also
 // matches the server's superuser Project slug (ADMINBOT_PROJECT_SLUG), so the
-// bootstrap token below both registers the bot and links it into the superuser
-// Project — granting admin authority (docs/24).
+// bootstrap token below both registers the bot and claims the superuser Project
+// — granting admin authority (docs/24). The claim works once, and only with the
+// superuser bootstrap secret (docs/09 S-01).
 const ADMINBOT_DID_SUFFIX = "adminbot";
 const ADMINBOT_DID = `did:local:${ADMINBOT_DID_SUFFIX}`;
 const SUPERUSER_PROJECT_SLUG = "adminbot";
@@ -85,7 +86,14 @@ interface Env {
   dbKey: string;
   initialAdmins: string[];
   logLevel: string;
-  sharedSecret?: string;
+  /// The superuser bootstrap secret (SUPERUSER_BOOTSTRAP_SECRET). Used once, on
+  /// first-run registration, to claim the superuser Project (docs/09 S-01).
+  superuserSecret?: string;
+  /// Where auto-install writes each Project's bot signup key, as
+  /// `<dir>/<slug>.key` (docs/24). Defaults to a `bot-signup-keys` dir alongside
+  /// the state dir (`$SHARED/bot-signup-keys` on prod), where first-party Project
+  /// bots like testbot read their key.
+  botSignupKeyDir: string;
   /// Directory of Project manifests (`*.json`) to install non-interactively at
   /// startup (docs/22, docs/25). The deploy bundle writes one per installed web
   /// Project so a Project's directory entry + OAuth login are configured without a
@@ -119,9 +127,11 @@ function readEnv(): Env {
     dbKey: process.env.ADMINBOT_DB_KEY ?? "",
     initialAdmins,
     logLevel: process.env.ADMINBOT_LOG ?? "info",
-    // Bootstrap secret for closed-registration servers (docs/24). Required to
-    // register against a closed server; unset/ignored on an open one.
-    sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
+    // Superuser bootstrap secret (docs/24, docs/09 S-01). Needed only on first
+    // run, to register and claim superuser; ignored on re-login.
+    superuserSecret: process.env.SUPERUSER_BOOTSTRAP_SECRET || undefined,
+    botSignupKeyDir:
+      process.env.ADMINBOT_BOT_SIGNUP_KEY_DIR || join(dirname(stateDir), "bot-signup-keys"),
     // Default: a `manifests` dir alongside the state dir (`$SHARED/manifests` on
     // prod). Only used if it exists (see autoInstallManifests), so dev is a no-op.
     manifestDir: process.env.ADMINBOT_MANIFEST_DIR || join(dirname(stateDir), "manifests"),
@@ -146,11 +156,12 @@ async function loginOrRegister(env: Env): Promise<AppCore> {
   // Register on first run, re-login thereafter. app-core decides which based
   // on whether the store already holds an account (including the empty-DB-from-
   // a-failed-registration case) — adminbot only supplies the reserved DID.
-  // Bootstrap token naming the superuser Project: registers the bot (against a
-  // closed server) and links it into the superuser Project, granting admin
-  // authority. Only consulted on first-run registration; ignored on re-login.
-  const inviteToken = env.sharedSecret
-    ? AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, SUPERUSER_PROJECT_SLUG)
+  // Bootstrap token naming the superuser Project, with the superuser secret:
+  // registers the bot (against a closed server) and claims the superuser
+  // Project, granting admin authority. The server allows the claim once.
+  // Only consulted on first-run registration; ignored on re-login.
+  const inviteToken = env.superuserSecret
+    ? AppCore.bootstrapToken(env.serverUrl, env.superuserSecret, SUPERUSER_PROJECT_SLUG)
     : undefined;
   const core = await AppCore.loginOrCreateBot(
     env.serverUrl,
@@ -241,9 +252,9 @@ async function autoInstallManifests(core: AppCore, env: Env): Promise<void> {
     try {
       const manifest = await loadManifest(readFileSync(join(env.manifestDir, file), "utf8"));
       const grant = manifest.permissions.filter((p) => p !== "registration.gatekeeper");
-      const result = await performInstall(core, env, manifest, grant);
-      // lines[0] is the "Installed/updated ..." summary; later lines may include
-      // the sensitive setup code, so only the summary is logged.
+      const result = await performInstall(core, env, manifest, grant, "file");
+      // lines[0] is the "Installed/updated ..." summary; only the summary is
+      // logged (the bot signup key is written to a file, never logged).
       console.log(
         `adminbot: auto-install ${file}: ${result.ok ? "ok" : "FAILED"} — ${result.lines[0] ?? ""}`,
       );
@@ -347,7 +358,7 @@ async function handleAdminEvent(
 // server metadata (getAccountInfo populates it for bots); the contact card is a
 // structured, inline SharedContact — the same one People/compose send — carried
 // on an otherwise-text message via sendWithAttachments. If the bot registered
-// with a Project's setup code, the server has already linked its DID into that
+// with a Project's bot signup key, the server has already linked its DID into that
 // Project (registration.rs links before it fans the join out), so we name the
 // registering Project in the announcement. Failures are logged and swallowed: a
 // missed announcement must never wedge the admin-event loop.
@@ -637,8 +648,8 @@ async function requireAdminsMember(
 // bot-tool-ux skill). The project describes itself in a small manifest — its
 // codename, name, and the permissions it wants. The operator hands over that
 // manifest (pasted, or a URL adminbot fetches) and authorizes which permissions
-// to grant; adminbot creates the project, grants them, and returns a one-time
-// setup code for the project's bot.
+// to grant; adminbot creates the project, grants them, and returns the
+// project's bot signup key (docs/24).
 //
 // adminbot reacts 👀 on the trigger while the DM interview runs, then ✅ on
 // success or ❌ on failure/cancel/timeout. State is in-memory and per-sender; a
@@ -1007,18 +1018,25 @@ async function handleInstallReply(
   }
 
   endInterview(senderDid);
-  const result = await performInstall(core, env, manifest, grant);
+  const result = await performInstall(core, env, manifest, grant, "show");
   await core.sendDm(senderDid, result.lines.join("\n"));
   await setInterviewReaction(core, iv.react, result.ok ? REACT_DONE : REACT_FAILED);
 }
 
-// Create the project, grant the approved permissions, and mint the setup code.
-// A pre-existing slug (409) is non-fatal — still (re)grant + re-issue the code.
+// Create the project, grant the approved permissions, and handle its bot signup
+// key (docs/24, docs/09 S-01). A pre-existing slug (409) is non-fatal — still
+// (re)grant. `signupKey`:
+//   - "show": mint (or rotate) the key and include it in the reply — the
+//     interactive /install-project, where the operator hands it to the bot.
+//   - "file": write it to `<botSignupKeyDir>/<slug>.key` if that file doesn't
+//     exist yet — startup auto-install, where first-party bots read it. Never
+//     re-minted on restart, so the key stays stable.
 async function performInstall(
   core: AppCore,
   env: Env,
   manifest: ProjectManifest,
   grant: string[],
+  signupKey: "show" | "file",
 ): Promise<{ ok: boolean; lines: string[] }> {
   const { slug, name, url, clientId, redirectUris } = manifest;
   const lines: string[] = [];
@@ -1079,29 +1097,34 @@ async function performInstall(
     }
   }
 
-  if (env.sharedSecret) {
-    const token = AppCore.bootstrapToken(env.serverUrl, env.sharedSecret, slug);
-    lines.push(
-      "",
-      "Setup code for the project's bot (sensitive — don't share; rotate",
-      "REGISTRATION_SHARED_SECRET to revoke). Paste it into the bot's config as its",
-      "invite token and it'll sign up and link to this project automatically:",
-      token,
-    );
-  } else {
-    lines.push(
-      "",
-      "No setup secret is configured here, so I can't issue a setup code. On a",
-      "closed-registration server, set REGISTRATION_SHARED_SECRET; on an open server",
-      "the bot can sign up without one but won't auto-link to this project.",
-    );
+  const keyFile = join(env.botSignupKeyDir, `${slug}.key`);
+  if (signupKey === "show" || !existsSync(keyFile)) {
+    try {
+      const raw = await core.adminRequest("POST", `/v1/admin/projects/${slug}/bot-signup-key`, "");
+      const key = (JSON.parse(raw) as { bot_signup_key: string }).bot_signup_key;
+      if (signupKey === "show") {
+        lines.push(
+          "",
+          "Bot signup key for this project. It lets the project's bots sign up on this",
+          "server and nothing else. Paste it into the bot's config as its invite token.",
+          "Keep it private; running /install-project again replaces it (the old key",
+          "stops working):",
+          key,
+        );
+      } else {
+        mkdirSync(env.botSignupKeyDir, { recursive: true, mode: 0o700 });
+        writeFileSync(keyFile, key + "\n", { mode: 0o600 });
+      }
+    } catch (e) {
+      lines.push(`Couldn't create a bot signup key: ${(e as Error).message}`);
+    }
   }
   return { ok: true, lines };
 }
 
 // Server view of an installed Project (superuser `GET /v1/admin/projects`).
 // `bot_dids` is the set of bot accounts linked to the project — the server adds
-// a bot's DID here when it registers with that project's setup code.
+// a bot's DID here when it registers with that project's bot signup key.
 interface ProjectView {
   slug: string;
   name: string;

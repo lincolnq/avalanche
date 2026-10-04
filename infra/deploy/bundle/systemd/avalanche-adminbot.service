@@ -17,7 +17,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/avalanche/shared/adminbot-state
+ReadWritePaths=/opt/avalanche/shared/adminbot-state /opt/avalanche/shared/bot-signup-keys
 
 [Install]
 WantedBy=multi-user.target

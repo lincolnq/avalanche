@@ -19,6 +19,7 @@ Design and rationale: **`docs/42-server-upgrades.md`**.
 | `bin/avalanche-backup` | Daily operational DB backup (cron). |
 | `bin/avalanche-install-project <name>` | Add a Project to this host (dir + unit together). |
 | `bin/avalanche-remove-project <name>` | Remove a Project from this host (dir + unit together). |
+| `bin/avalanche-reset-adminbot` | Recover adminbot after its state is lost: delete the old adminbot account, clear the one-time superuser claim, and start a fresh adminbot (docs/22). |
 | `VERSION` | Stamped to the tag at release time (`0.0.0-dev` in-repo). |
 
 ## Model (summary)

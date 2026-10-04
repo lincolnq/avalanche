@@ -17,7 +17,7 @@ for design and rationale.
 
 | Path | Contents |
 |---|---|
-| `main.rs` | Load config, connect Postgres, spawn background tasks, serve. `avalanche-server migrate` applies migrations and exits — migrations never run on startup (docs/42). |
+| `main.rs` | Load config, connect Postgres, spawn background tasks, serve. `avalanche-server migrate` applies migrations and exits — migrations never run on startup (docs/42). `avalanche-server reset-adminbot` deletes the `did:local:adminbot` account and clears the one-time superuser claim, for operator recovery via `avalanche-reset-adminbot` (docs/22). |
 | `config.rs` | All configuration from env vars, each with a default (`Config::from_env`). |
 | `state.rs` | `AppState`: PgPool, config, zkgroup server secret params, sender-certificate chain, blob store, and the in-process connection maps (below). |
 | `routes/` | One module per API area, merged in `routes/mod.rs`. |
@@ -46,13 +46,13 @@ for design and rationale.
 | `push` | `/v1/push/register`, `/v1/push/unregister` | 15 |
 | `invites` | `GET /v1/invites/{token}` | 51 |
 | `projects`, `oauth` | `/v1/projects`, `/v1/project-token[/verify]`, `/v1/oauth/…` | 20, 25 |
-| `admin` | `/v1/admin/…` (projects, bots, capabilities, directory, events, accounts) | 22 |
+| `admin` | `/v1/admin/…` (projects, bots, `projects/{slug}/bot-signup-key`, capabilities, directory, events, accounts) | 22, 24 |
 | `abuse` | `POST /v1/abuse/report` | 12 |
 | `did`, `info`, `health` | `/.well-known/did/{did}`, `/v1/info`, `/healthz` | — |
 
 ### Schema
 
-Migrations live in `infra/migrations/` (`001_initial.sql` … `025_projects_oauth.sql`) and are
+Migrations live in `infra/migrations/` (`001_initial.sql` … `026_project_bot_signup_keys.sql`, 26 files) and are
 the authoritative schema. Internal `BIGINT` primary keys; the external API speaks DIDs and
 device ids. Message and blob content columns are `bytea`.
 

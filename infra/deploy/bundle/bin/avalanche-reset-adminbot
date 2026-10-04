@@ -1,0 +1,38 @@
+#!/bin/bash
+# Recover adminbot after its state is lost (docs/22, docs/09 S-01).
+#
+# Superuser can be claimed only once, so a fresh adminbot can't re-register on
+# its own. This stops adminbot, deletes the old adminbot account and clears the
+# superuser claim (via `avalanche-server reset-adminbot`), moves adminbot's old
+# state aside, and starts it again; it then re-registers and claims superuser
+# with SUPERUSER_BOOTSTRAP_SECRET. The new adminbot creates a fresh #admins
+# group: re-invite your admins, or list them in ADMINBOT_INITIAL_ADMINS.
+set -euo pipefail
+SELF="$(readlink -f "$0")"; HERE="$(dirname "$SELF")"
+# shellcheck source=../lib/common.sh
+source "$HERE/../lib/common.sh"
+
+[ -f "$ETC/avalanche.env" ] || die "run this on the server host"
+[ -f "$ETC/adminbot.env" ]  || die "adminbot is not installed on this host"
+grep -q '^SUPERUSER_BOOTSTRAP_SECRET=' "$ETC/adminbot.env" \
+  || die "adminbot.env has no SUPERUSER_BOOTSTRAP_SECRET -- run avalanche-update first"
+
+echo "This deletes the current adminbot account and its #admins group membership,"
+echo "and starts a fresh adminbot that will claim server-admin authority."
+read -r -p "Type RESET to continue: " answer
+[ "$answer" = "RESET" ] || die "aborted"
+
+systemctl stop avalanche-adminbot || true
+dburl="$(grep '^DATABASE_URL=' "$ETC/avalanche.env" | cut -d= -f2-)"
+sudo -u avalanche env DATABASE_URL="$dburl" "$CURRENT/server/avalanche-server" reset-adminbot
+
+state="$SHARED/adminbot-state"
+if [ -d "$state" ]; then
+  backup="$state.reset-$(date +%Y%m%d-%H%M%S)"
+  mv "$state" "$backup"
+  log "old adminbot state moved to $backup"
+fi
+install -d -o avalanche -g avalanche -m 750 "$state"
+
+systemctl start avalanche-adminbot
+log "adminbot reset; it will re-register and claim superuser (journalctl -u avalanche-adminbot -f)"

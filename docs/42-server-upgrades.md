@@ -7,12 +7,42 @@
 
 ## Summary
 
-A homeserver is provisioned from the configure page on the website and upgraded in place by
+**Setup starts at the configure tool, and it has to stay easy.** A big part of what Avalanche
+offers is that a non-technical organizer can run their org's homeserver. The website's "Set up
+your homeserver" page (<https://theavalanche.net/configure/>, sourced from
+`web/layouts/_default/configure.html` and `web/assets/configure/`) asks for a server URL and a
+name and generates two things:
+
+- **A cloud-init** to paste into DigitalOcean's "user data" field. It fetches the deploy bundle
+  and runs `install.sh`, which installs and configures everything with no further input.
+- **A first-members invite** (link and QR). The organizer scans it to sign up first, then
+  shares it with their first members. It carries the shareable `REGISTRATION_SHARED_SECRET`,
+  which only admits signups: it can't link a Project or grant admin (`24`, `09` S-01).
+
+What is generated where:
+
+| Secret | Where it's generated | Where it lives |
+|---|---|---|
+| `REGISTRATION_SHARED_SECRET` | In the browser, by the configure tool | Server env and the invite link (shareable by design) |
+| `SUPERUSER_BOOTSTRAP_SECRET` | On the box, by `install.sh` / `update.sh` | Server env and adminbot env only; never in the browser, cloud-init, or any invite |
+| `ADMINBOT_DB_KEY` | On the box | adminbot env |
+| Per-Project bot signup keys | By the server, minted through adminbot | `$SHARED/bot-signup-keys/<slug>.key` for first-party Projects; DM'd to the operator for others |
+
+Any change to server config, env vars, or the deploy must keep this a one-paste setup
+(root `CLAUDE.md`). Prefer generating secrets on the box, and make `install.sh` and
+`update.sh` carry existing servers forward automatically (`migrate_env_files`).
+
+**Operator commands** on the box: `avalanche-status`, `avalanche-update [TAG]`,
+`avalanche-backup`, `avalanche-install-project` / `avalanche-remove-project`, and
+`avalanche-reset-adminbot` (recover adminbot after its state is lost, `22`).
+
+A homeserver is provisioned from the configure tool and upgraded in place by
 the **deploy bundle** (`infra/deploy/bundle/`), which ships inside every release. Each
 release installs into its own immutable deployment directory, and switching versions is an
 atomic flip of a `current` symlink — the model Zulip uses. Because the updater and systemd
 units ship inside each release, they upgrade along with the binaries. `.env` files stay
-operator-owned and are never rewritten. The push relay is deployed separately (docs/41).
+operator-owned; the deploy only adds missing lines or retires a secret a component no longer
+needs (*Environment files*). The push relay is deployed separately (docs/41).
 
 ## Current design
 
@@ -24,7 +54,8 @@ The organizer tutorial and configure page live on the website:
 cloud-init (`web/assets/configure/cloudinit-template.yaml`) that installs prerequisites
 (Node, Postgres, Caddy, qrencode, ufw, persistent journald), downloads
 `av-deploy-<RELEASE_TAG>.tar.gz`, and hands off to its `install.sh` with the operator's
-inputs (`SERVER_URL`, `SERVER_NAME`, `RELEASE_TAG`, `RELAY_URL`, Project opt-ins).
+inputs (`SERVER_URL`, `SERVER_NAME`, `RELEASE_TAG`, `RELAY_URL`, `REGISTRATION_SHARED_SECRET`,
+the invite URL, Project opt-ins).
 
 ### What an upgrade changes
 
@@ -55,6 +86,8 @@ host runs the same install/update machinery over whatever it hosts.
     current -> <tag>           # the single atomic switch
   shared/                      # per-Project local state; the updater never touches it
     adminbot-state/
+    manifests/                 # first-party Project manifests adminbot installs at startup
+    bot-signup-keys/           # <slug>.key, written by adminbot, read by first-party bots (0700)
 ```
 
 Operator-owned config lives outside the trees: `/etc/avalanche/*.env` and
@@ -70,18 +103,21 @@ Operator-owned config lives outside the trees: `/etc/avalanche/*.env` and
 |---|---|
 | `install.sh` | First-time provision (called by cloud-init); idempotent. |
 | `update.sh` | `avalanche-update [TAG]` — in-place upgrade. |
-| `lib/common.sh` | Arch detection, fetch, reconcile, per-bot env. |
+| `lib/common.sh` | Arch detection, fetch, reconcile, per-bot env, `migrate_env_files`. |
 | `systemd/` | `avalanche.service`, `avalanche-adminbot.service`, `avalanche-testbot.service`. |
 | `bin/avalanche-status` | Health and inventory readout. |
 | `bin/avalanche-backup` | Daily DB backup, installed as a cron job (03:17). |
 | `bin/avalanche-install-project`, `bin/avalanche-remove-project` | Add/remove a Project on this host (deployment dir + unit + Caddy route together). |
+| `bin/avalanche-reset-adminbot` | Recover adminbot after its state is lost: stop it, run `avalanche-server reset-adminbot` (delete the old adminbot account, clear the one-time superuser claim), move the old state aside, restart (`22`). |
 
 ### Install / update contract
 
 **`install.sh`** creates `/opt/avalanche/{deployments,shared}`, builds
-`deployments/<RELEASE_TAG>/`, writes the env files and Caddyfile once (generating secrets
-such as `REGISTRATION_SHARED_SECRET` and `ADMINBOT_DB_KEY`), installs the units, points
-`current` at the tag, runs `migrate`, and starts services.
+`deployments/<RELEASE_TAG>/`, writes the env files and Caddyfile once (using the configure
+tool's `REGISTRATION_SHARED_SECRET`, generating `ADMINBOT_DB_KEY`), runs `migrate_env_files`
+(which generates `SUPERUSER_BOOTSTRAP_SECRET` on the box and writes it to the server and
+adminbot env), installs the units, points `current` at the tag, runs `migrate`, and starts
+services.
 
 **`update.sh`** (`avalanche-update [TAG]`, default: latest GitHub release):
 
@@ -92,7 +128,7 @@ such as `REGISTRATION_SHARED_SECRET` and `ADMINBOT_DB_KEY`), installs the units,
    the installed bots into a fresh `deployments/<TAG>/`; the live service keeps running. Then
    re-exec the *new* bundle's `update.sh` (self-updating updater).
 3. **Migrate.** `deployments/<TAG>/server/avalanche-server migrate`.
-4. **Flip.** Refresh units, `daemon-reload`, `ln -sfn <TAG> current`.
+4. **Flip.** Run `migrate_env_files`, refresh units, `daemon-reload`, `ln -sfn <TAG> current`.
 5. **Restart and verify.** Server first, then Projects; reload Caddy; health-check `/healthz`.
 6. **Prune.** Keep the newest 3 deployments (`PRUNE_KEEP`); never touch `shared/`.
 
@@ -106,9 +142,15 @@ Removing a Project's directory entry is still a manual adminbot step.
 
 ### Environment files
 
-`.env` files are operator-owned: written once at install, never rewritten, templated, or
-merged by the updater. Application code defaults sensibly for new optional variables; a rare
-new *required* variable is a manual step called out in release notes.
+`.env` files are operator-owned: written once at install and never templated or rewritten
+wholesale. The one exception is `migrate_env_files` (`lib/common.sh`), run by both
+`install.sh` and the updater, which may only **append a missing line** or **drop a retired
+secret**. Today it ensures `SUPERUSER_BOOTSTRAP_SECRET` in `avalanche.env` and `adminbot.env`
+(reusing an existing value so both agree), adds `ADMINBOT_BOT_SIGNUP_KEY_DIR` and
+`TESTBOT_BOT_SIGNUP_KEY_FILE`, removes `REGISTRATION_SHARED_SECRET` from `adminbot.env` and
+`testbot.env` (`09` S-01), and creates `$SHARED/bot-signup-keys`. Application code defaults
+sensibly for new optional variables; a new value that must be set goes through
+`migrate_env_files` rather than a manual step, so the configure tool stays one-paste.
 
 ### Bots and Projects: uniform handling
 
@@ -122,7 +164,7 @@ own local-store migrations backward-compatible.
   (re-run against a prior tag; the retained deployments make this tractable).
 - **No migration-compatibility (N-1) check in CI**, so nothing enforces that the previous
   binary can run against the new schema.
-- **New secrets introduced by a release** must be added by hand.
+- **New secrets introduced by a release** go through `migrate_env_files` (built for `SUPERUSER_BOOTSTRAP_SECRET`); there is not yet a general declarative mechanism.
 - **The push relay is not part of the bundle** (docs/41).
 - Upgrades are CLI-only (`ssh` + `avalanche-update`).
 
@@ -133,7 +175,7 @@ own local-store migrations backward-compatible.
 - **Rollback:** `avalanche-update --rollback` (or to a prior tag) re-points `current` at a
   retained deployment. Paired with backward-compatible (N-1) migrations, rollback is just the
   flip; for a non-reversible migration, restore the pre-upgrade dump.
-- **`ensure-secret`:** append-only, generate-once injection of a secret a new release needs.
+- **Generalize `migrate_env_files`** into a declarative list of generated secrets (`ensure-secret`), so each release adds one line.
 - **In-app upgrade:** an `#admins` `/upgrade [tag]` command via adminbot, which implies a
   `sudo`-gated wrapper adminbot can invoke.
 

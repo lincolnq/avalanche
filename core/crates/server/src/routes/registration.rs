@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 
 use crate::{
-    config::RegistrationMode,
+    config::{RegistrationMode, ADMINBOT_PROJECT_SLUG},
     db,
     error::ServerError,
     invite_token::{self, TokenError, PURPOSE_INVITE},
@@ -167,20 +167,29 @@ async fn register(
 
     // Closed-registration gating + invite-token validation (docs/24). The
     // server validates a signed gatekeeper token locally against the issuing
-    // Project's pinned key, or admits via the operator's shared secret — it
-    // never calls the Project. Fails closed. Returns an optional Project to
-    // link the new account into (a bootstrap token may name one).
-    let link_project = gate_registration(&mut conn, &state, &did, &req).await?;
+    // Project's pinned key, a bot signup key against its stored hash, or an
+    // operator secret — it never calls the Project. Fails closed. Returns an
+    // optional Project to link the new account into.
+    let link = gate_registration(&mut conn, &state, &did, &req).await?;
 
     // Create account.
     let account_id =
         db::accounts::create(&mut conn, &did, req.display_name.as_deref(), req.is_bot).await?;
 
-    // If the (secret-authorized) bootstrap token named a Project, link the new
-    // account into it. Naming the superuser Project is how the operator/adminbot
-    // bootstraps superuser authority.
-    if let Some(project_id) = link_project {
-        db::projects::link_bot(&mut conn, project_id, account_id).await?;
+    // Link the new account into its Project: a bot signup key's owner, or the
+    // superuser Project for adminbot's one-time claim (re-checked at insert).
+    match link {
+        Some(ProjectLink::Bot(project_id)) => {
+            db::projects::link_bot(&mut conn, project_id, account_id).await?;
+        }
+        Some(ProjectLink::ClaimSuperuser(project_id)) => {
+            let claimed =
+                db::projects::link_bot_if_unclaimed(&mut conn, project_id, account_id).await?;
+            if !claimed {
+                return Err(ServerError::Forbidden("superuser is already claimed".into()));
+            }
+        }
+        None => {}
     }
 
     // Store recovery blob if provided.
@@ -239,8 +248,8 @@ async fn register(
     // Announce the new account to bots holding `accounts.read`.
     // Two paths: (1) a durable append to `server_events` so a disconnected bot
     // can catch up via `GET /v1/admin/events`; (2) a best-effort live fan-out
-    // to every currently-subscribed session. The event carries the raw invite
-    // token so bots can route by its issuer + routing tags (docs/22, 24).
+    // to every currently-subscribed session. The event never carries the raw
+    // invite token — it may contain a registration secret (docs/09 S-01).
     let joined_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -248,7 +257,6 @@ async fn register(
     if let Err(e) = db::server_events::append_account_joined(
         &mut conn,
         &did,
-        req.invite_token.as_deref(),
         joined_at_ms,
     )
     .await
@@ -263,7 +271,6 @@ async fn register(
             let _ = tx.send(WsPush::AccountJoined {
                 did: did.clone(),
                 joined_at_ms,
-                invite_token: req.invite_token.clone(),
             });
         }
     }
@@ -278,33 +285,41 @@ async fn register(
     ))
 }
 
-/// Closed-registration admission + invite-token validation.
+/// Which Project (if any) a newly registered account is linked into.
+enum ProjectLink {
+    /// A Project bot admitted by that Project's bot signup key.
+    Bot(i64),
+    /// Adminbot's one-time claim of the superuser Project.
+    ClaimSuperuser(i64),
+}
+
+/// Closed-registration admission + invite-token validation (docs/24).
 ///
-/// Two credentials are accepted:
+/// Three credentials are accepted:
 ///   (a) a **signed gatekeeper token** — verified against the issuing Project's
 ///       pinned key, single-use (`jti` redeemed before account creation);
-///   (b) the **bootstrap shared secret** — the operator's setup-time root
-///       credential, honored only while no gatekeeper is installed. A bootstrap
-///       token may name a Project to link the new account into (e.g. the
-///       superuser Project).
+///   (b) a **bootstrap token** — an operator secret. The shareable registration
+///       secret admits plain accounts until a gatekeeper is installed and can
+///       never link a Project. The superuser bootstrap secret admits, and may
+///       claim the superuser Project once, while it has no linked account
+///       (docs/09 S-01);
+///   (c) a **bot signup key** — admits a bot and links it to the Project that
+///       owns the key.
 ///
 /// In `Closed` mode (the default) registration is refused unless one of these
 /// validates (fail-closed). In `Open` mode (dev) any registration is admitted,
-/// but a supplied token is still validated — and a bootstrap token may still
-/// link the account into a Project, so the operator/adminbot can claim
-/// superuser even in dev.
+/// but a supplied token is still validated, and still links as above, so
+/// adminbot can claim superuser and Project bots link even in dev.
 ///
-/// Returns the id of a Project to link the new account into (`None` if the
-/// token named none or there was no bootstrap token). The server never calls
-/// the Project.
+/// The server never calls the Project.
 async fn gate_registration(
     conn: &mut PgConnection,
     state: &AppState,
     did: &str,
     req: &RegisterRequest,
-) -> Result<Option<i64>, ServerError> {
+) -> Result<Option<ProjectLink>, ServerError> {
     let mut admitted_by_token = false;
-    let mut link_project: Option<i64> = None;
+    let mut link: Option<ProjectLink> = None;
 
     if let Some(raw) = req.invite_token.as_deref() {
         match invite_token::parse(raw).map_err(map_token_err)? {
@@ -353,39 +368,85 @@ async fn gate_registration(
                 admitted_by_token = true;
             }
 
-            // (b) Bootstrap shared secret — honored only while no gatekeeper is
-            // installed (the secret auto-disables once real vetting exists).
+            // (b) Bootstrap token — an operator-held secret (docs/24, docs/09 S-01).
             invite_token::ParsedToken::Bootstrap(boot) => {
-                let configured = state.config.registration_shared_secret.as_deref();
-                let secret_ok = configured
-                    .is_some_and(|s| invite_token::secret_eq(s, &boot.bootstrap_secret));
-                let gatekeeper_installed = db::capabilities::any_gatekeeper_exists(conn).await?;
+                let presented = boot.bootstrap_secret.as_str();
+                let is_superuser_secret = state
+                    .config
+                    .superuser_bootstrap_secret
+                    .as_deref()
+                    .is_some_and(|s| invite_token::secret_eq(s, presented));
 
-                if secret_ok && !gatekeeper_installed {
-                    admitted_by_token = true;
-                    // A bootstrap token may name a Project to land in. The admin
-                    // API can't link the superuser Project, so this secret-gated
-                    // path is the only way to bootstrap superuser authority.
-                    if let Some(slug) = boot.project.as_deref() {
-                        let project = db::projects::find_by_slug(conn, slug).await?.ok_or_else(
-                            || ServerError::Forbidden("bootstrap token names unknown project".into()),
-                        )?;
-                        link_project = Some(project.id);
+                match boot.project.as_deref() {
+                    // Naming a Project: only the superuser Project, only with the
+                    // superuser secret, and only while it is unclaimed. Project
+                    // bots use their Project's bot signup key instead.
+                    Some(slug) => {
+                        if slug != ADMINBOT_PROJECT_SLUG {
+                            return Err(ServerError::Forbidden(
+                                "bootstrap tokens cannot link a Project; use the Project's bot signup key"
+                                    .into(),
+                            ));
+                        }
+                        if !is_superuser_secret {
+                            return Err(ServerError::Forbidden(
+                                "claiming superuser requires the superuser bootstrap secret".into(),
+                            ));
+                        }
+                        let project = db::projects::find_by_slug(conn, slug)
+                            .await?
+                            .ok_or_else(|| ServerError::Internal("superuser project missing".into()))?;
+                        if !db::projects::bot_dids(conn, project.id).await?.is_empty() {
+                            return Err(ServerError::Forbidden(
+                                "superuser is already claimed (avalanche-reset-adminbot clears it)"
+                                    .into(),
+                            ));
+                        }
+                        admitted_by_token = true;
+                        link = Some(ProjectLink::ClaimSuperuser(project.id));
+                    }
+                    // Plain admission: the superuser secret always admits; the
+                    // shareable registration secret only until a gatekeeper is
+                    // installed (real vetting retires it).
+                    None => {
+                        let is_shared_secret = state
+                            .config
+                            .registration_shared_secret
+                            .as_deref()
+                            .is_some_and(|s| invite_token::secret_eq(s, presented));
+                        if is_superuser_secret
+                            || (is_shared_secret && !db::capabilities::any_gatekeeper_exists(conn).await?)
+                        {
+                            admitted_by_token = true;
+                        }
+                        // Otherwise the token doesn't admit; the mode check below
+                        // decides (Closed rejects; Open still admits).
                     }
                 }
-                // Otherwise (wrong secret, or the secret is retired because a
-                // gatekeeper is installed) the token doesn't admit and names no
-                // project. The mode check below decides the outcome: Closed
-                // rejects; Open still admits (with no Project link).
+            }
+
+            // (c) A Project's bot signup key — admits a bot and links it to the
+            // Project that owns the key. Independent of gatekeepers.
+            invite_token::ParsedToken::BotSignup(signup) => {
+                if !req.is_bot {
+                    return Err(ServerError::Forbidden(
+                        "a bot signup key admits bot accounts only".into(),
+                    ));
+                }
+                let project_id = db::bot_signup_keys::project_for_key(conn, signup.key.as_bytes())
+                    .await?
+                    .ok_or_else(|| ServerError::Forbidden("unknown or revoked bot signup key".into()))?;
+                admitted_by_token = true;
+                link = Some(ProjectLink::Bot(project_id));
             }
         }
     }
 
     match state.config.registration_mode {
-        RegistrationMode::Open => Ok(link_project),
+        RegistrationMode::Open => Ok(link),
         RegistrationMode::Closed => {
             if admitted_by_token {
-                Ok(link_project)
+                Ok(link)
             } else {
                 Err(ServerError::Forbidden(
                     "registration is closed: a valid invite token or shared secret is required"

@@ -13,6 +13,9 @@ ETC="/etc/avalanche"
 # Project manifests adminbot installs non-interactively at startup (docs/22): one
 # per installed web Project, published into the DB directory + OAuth registry.
 MANIFESTS="$SHARED/manifests"
+# Per-Project bot signup keys adminbot writes when it auto-installs a manifest
+# (docs/24): <slug>.key, read by first-party Project bots such as testbot.
+BOT_SIGNUP_KEYS="$SHARED/bot-signup-keys"
 
 log()  { echo "[avalanche] $*"; }
 warn() { echo "[avalanche] $*" >&2; }
@@ -94,9 +97,57 @@ fetch_component() {
   rm -f "$tmp"
 }
 
+# The superuser bootstrap secret (docs/24, docs/09 S-01): the root credential
+# adminbot uses, once, to claim superuser. Generated on this host and never
+# shared -- it is not in the configure tool's output or the first-members invite.
+# Reuses the value already in the server's or adminbot's env, so both agree.
+superuser_secret() {
+  local f v
+  for f in "$ETC/avalanche.env" "$ETC/adminbot.env"; do
+    [ -f "$f" ] || continue
+    v="$(grep '^SUPERUSER_BOOTSTRAP_SECRET=' "$f" | head -1 | cut -d= -f2- || true)"
+    if [ -n "$v" ]; then echo "$v"; return 0; fi
+  done
+  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
+# Append KEY=VALUE to an env file if KEY isn't set there yet. Env files are
+# operator-owned; this only ever adds a missing line.
+ensure_env_line() {
+  local f="$1" key="$2" value="$3"
+  [ -f "$f" ] || return 0
+  grep -q "^$key=" "$f" || echo "$key=$value" >> "$f"
+}
+
+# Remove KEY from an env file (used to retire a secret a component no longer
+# needs). No-op if absent.
+drop_env_line() {
+  local f="$1" key="$2"
+  [ -f "$f" ] || return 0
+  sed -i "/^$key=/d" "$f"
+}
+
+# Bring existing env files up to the current layout. Idempotent; run by both
+# install.sh and the updater, so servers installed before a change pick it up.
+#   - the server and adminbot carry the superuser bootstrap secret;
+#   - adminbot and testbot no longer carry the registration shared secret
+#     (docs/09 S-01) -- testbot registers with its bot signup key instead.
+migrate_env_files() {
+  local secret
+  secret="$(superuser_secret)"
+  ensure_env_line "$ETC/avalanche.env" SUPERUSER_BOOTSTRAP_SECRET "$secret"
+  ensure_env_line "$ETC/adminbot.env"  SUPERUSER_BOOTSTRAP_SECRET "$secret"
+  ensure_env_line "$ETC/adminbot.env"  ADMINBOT_BOT_SIGNUP_KEY_DIR "$BOT_SIGNUP_KEYS"
+  drop_env_line   "$ETC/adminbot.env"  REGISTRATION_SHARED_SECRET
+  ensure_env_line "$ETC/testbot.env"   TESTBOT_BOT_SIGNUP_KEY_FILE "$BOT_SIGNUP_KEYS/testbot.key"
+  drop_env_line   "$ETC/testbot.env"   REGISTRATION_SHARED_SECRET
+  install -d -o avalanche -g avalanche -m 700 "$BOT_SIGNUP_KEYS"
+}
+
 # Write a bot's env file (operator-owned; written once, never rewritten). This
 # is the one spot with per-bot config knowledge -- the updater itself stays
-# bot-agnostic. Requires SERVER_URL and REGISTRATION_SHARED_SECRET in scope.
+# bot-agnostic. Requires SERVER_URL in scope. Secrets and key paths are added by
+# migrate_env_files.
 write_bot_env() {
   # Separate declarations: a single `local a=.. b=$a` expands $a before local
   # assigns it (word expansion precedes the builtin), which trips `set -u`.
@@ -109,7 +160,6 @@ write_bot_env() {
       key="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
       cat > "$f" <<EOF
 ADMINBOT_SERVER_URL=$SERVER_URL
-REGISTRATION_SHARED_SECRET=$REGISTRATION_SHARED_SECRET
 ADMINBOT_STATE_DIR=$SHARED/adminbot-state
 ADMINBOT_DB_KEY=$key
 ADMINBOT_LOG=info
@@ -120,7 +170,6 @@ EOF
     testbot)
       cat > "$f" <<EOF
 HOMESERVER_URL=$SERVER_URL
-REGISTRATION_SHARED_SECRET=$REGISTRATION_SHARED_SECRET
 TESTBOT_BIND_ADDR=127.0.0.1:3001
 TESTBOT_BASE_PATH=/p/testbot/
 TESTBOT_PUBLIC_URL=${SERVER_URL%/}/p/testbot

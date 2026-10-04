@@ -92,13 +92,21 @@ pub struct Config {
     /// Whether registration is open to anyone or gated (docs/24). Set via
     /// `REGISTRATION_MODE=open|closed`; **default closed**.
     pub registration_mode: RegistrationMode,
-    /// Bootstrap shared secret. While set — and only until a gatekeeper Project
-    /// is installed — a registration presenting a matching `bootstrap_secret`
-    /// is admitted, and may name a Project (incl. the superuser Project) to be
-    /// linked into. This is the operator's setup-time root credential; it
-    /// auto-disables the moment any Project is granted `registration.gatekeeper`.
-    /// Set via `REGISTRATION_SHARED_SECRET`. Unset = no shared-secret path.
+    /// Registration shared secret. While set — and only until a gatekeeper
+    /// Project is installed — a bootstrap token presenting it is admitted as a
+    /// plain account. It is **shareable**: the configure tool puts it in the
+    /// first-members invite link. It can never link an account into a Project
+    /// (docs/24, docs/09 S-01). Set via `REGISTRATION_SHARED_SECRET`. Unset =
+    /// no shared-secret path.
     pub registration_shared_secret: Option<String>,
+    /// Superuser bootstrap secret — the operator's root credential. A bootstrap
+    /// token presenting it may link the new account into the superuser
+    /// (adminbot) Project, but only while that Project has no linked account
+    /// (claim once; `avalanche-reset-adminbot` clears it for recovery). Never
+    /// shared: the deploy writes it only to the server's and adminbot's env.
+    /// Unaffected by gatekeeper installation. Set via
+    /// `SUPERUSER_BOOTSTRAP_SECRET`; unset = superuser can't be claimed.
+    pub superuser_bootstrap_secret: Option<String>,
     /// Directory for the local-filesystem attachment blob store (docs/35). The
     /// default `/var/lib/avalanche/attachments` works out of the box on the
     /// documented deploy: the `avalanche.service` unit runs as the `avalanche`
@@ -185,6 +193,9 @@ impl Config {
                 .map(|s| RegistrationMode::from_env_str(&s))
                 .unwrap_or(RegistrationMode::Closed),
             registration_shared_secret: std::env::var("REGISTRATION_SHARED_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            superuser_bootstrap_secret: std::env::var("SUPERUSER_BOOTSTRAP_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty()),
             privacy_policy_url: std::env::var("PRIVACY_POLICY_URL").ok().filter(|s| !s.is_empty()),

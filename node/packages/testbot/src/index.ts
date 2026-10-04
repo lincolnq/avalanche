@@ -19,7 +19,7 @@
 //     own runtime behind the napi boundary).
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,7 @@ interface Env {
   bindHost: string;
   bindPort: number;
   logLevel: string;
+  botSignupKeyFile?: string;
   sharedSecret?: string;
   basePath: string;
   // OAuth login demo (docs/25).
@@ -100,8 +101,12 @@ function readEnv(): Env {
     bindPort,
     basePath,
     logLevel: process.env.TESTBOT_LOG ?? "info",
-    // Bootstrap secret for closed-registration servers (docs/24). Unset on an
-    // open server, where it isn't needed.
+    // This Project's bot signup key (docs/24), written by adminbot when it
+    // installs the testbot manifest (on prod: $SHARED/bot-signup-keys/testbot.key).
+    botSignupKeyFile: process.env.TESTBOT_BOT_SIGNUP_KEY_FILE || undefined,
+    // Local-dev fallback only: dev.py sets the registration shared secret, and
+    // there's no adminbot manifest install in dev to mint a bot signup key. The
+    // deploy never passes it (docs/09 S-01).
     sharedSecret: process.env.REGISTRATION_SHARED_SECRET || undefined,
     // The externally-reachable base URL for this service — how your PHONE
     // reaches it (e.g. "http://192.168.1.50:3001"). Used to derive the OAuth
@@ -625,6 +630,23 @@ interface ConversationMessage {
 }
 
 /**
+ * The token each ephemeral bot registers with on a closed server: this
+ * Project's bot signup key (re-read on every spawn, so a key adminbot writes
+ * after startup, or a rotated one, is picked up), else — local dev only — a
+ * plain bootstrap token from the shared secret. Undefined on an open server.
+ */
+function registrationToken(env: Env): string | undefined {
+  if (env.botSignupKeyFile) {
+    try {
+      return readFileSync(env.botSignupKeyFile, "utf8").trim();
+    } catch (e) {
+      console.error(`testbot: can't read bot signup key ${env.botSignupKeyFile}: ${(e as Error).message}`);
+    }
+  }
+  return env.sharedSecret ? AppCore.bootstrapToken(env.homeserverUrl, env.sharedSecret) : undefined;
+}
+
+/**
  * Spin up a fresh ephemeral bot account, send the opening DM to `userDid`, and
  * launch its background message loop. Returns the bot's public handle.
  */
@@ -632,11 +654,7 @@ async function spawnBot(env: Env, userDid: string): Promise<BotInfo> {
   // Throwaway SQLCipher store in a temp dir - the bot identity is meant to die
   // with the process. Empty passphrase is fine for a disposable store.
   const dbPath = join(mkdtempSync(join(tmpdir(), "actnet-testbot-")), "store.db");
-  // Present the bootstrap secret (as a plain-member token, no project) so the
-  // bot can register against a closed-registration server.
-  const inviteToken = env.sharedSecret
-    ? AppCore.bootstrapToken(env.homeserverUrl, env.sharedSecret)
-    : undefined;
+  const inviteToken = registrationToken(env);
   const core = await AppCore.createBotAccount(env.homeserverUrl, dbPath, "", "Testbot", undefined, inviteToken);
   const botDid = core.did();
   const deviceId = core.deviceId();

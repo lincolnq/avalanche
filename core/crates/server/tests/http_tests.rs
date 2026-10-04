@@ -73,6 +73,7 @@ async fn test_state_with(
         invite_domain: "go.example.test".into(),
         registration_mode,
         registration_shared_secret,
+        superuser_bootstrap_secret: Some(SUPERUSER_SECRET.to_string()),
         privacy_policy_url: None,
         attachment_blob_dir: std::env::temp_dir()
             .join("av-test-attachment-blobs")
@@ -1035,6 +1036,8 @@ async fn storage_snapshot_empty_blob_rejected() {
 
 /// The dev/test bootstrap shared secret.
 const SECRET: &str = "test-bootstrap-secret";
+/// The superuser bootstrap secret every test server is configured with.
+const SUPERUSER_SECRET: &str = "test-superuser-secret";
 
 /// Serializes the tests that depend on the *global* "is any gatekeeper
 /// installed?" state. The shared-secret bootstrap path auto-disables once any
@@ -1139,8 +1142,12 @@ async fn admin_req(
 }
 
 /// Stand up a server in the given mode with [`SECRET`] configured, seed the
-/// (empty) superuser Project the way `main.rs` does, then bootstrap a superuser
-/// by registering a bot with a bootstrap token naming the superuser Project.
+/// superuser Project the way `main.rs` does, and make a superuser: register a
+/// bot with the superuser secret, then link it into the superuser Project
+/// directly. The real claim is once-only, and the test DB is shared with the
+/// local dev environment (whose adminbot already holds the claim), so tests
+/// add a link rather than reset the claim; `superuser_claim_rules` exercises
+/// the claim itself.
 /// Returns (app, superuser_did, superuser_session_token). The superuser's DID
 /// is server-generated from a random key, so concurrent tests never collide.
 async fn setup_adminbot(
@@ -1163,12 +1170,18 @@ async fn setup_adminbot(
             .await
             .unwrap();
     }
-    let app = routes::router().with_state(state);
-    let token = bootstrap_token(SECRET, Some("adminbot"));
+    let app = routes::router().with_state(state.clone());
+    let token = bootstrap_token(SUPERUSER_SECRET, None);
     let (status, body) = register_bot(&app, Some(&token)).await;
-    assert_eq!(status, StatusCode::CREATED, "superuser bootstrap: {body:?}");
+    assert_eq!(status, StatusCode::CREATED, "superuser registration: {body:?}");
     let did = body["did"].as_str().unwrap().to_string();
     let session = body["session_token"].as_str().unwrap().to_string();
+    {
+        let mut conn = state.db.acquire().await.unwrap();
+        let account = server::db::accounts::find_by_did(&mut conn, &did).await.unwrap().unwrap();
+        let project = server::db::projects::find_by_slug(&mut conn, "adminbot").await.unwrap().unwrap();
+        server::db::projects::link_bot(&mut conn, project.id, account.id).await.unwrap();
+    }
     (app, did, session)
 }
 
@@ -1694,6 +1707,174 @@ async fn closed_registration_admission_matrix() {
     );
 }
 
+/// docs/09 S-01: only the superuser bootstrap secret can claim superuser, only
+/// once, and the shareable registration secret can never link a Project.
+///
+/// The claim rules need an unclaimed superuser Project, but the test DB is the
+/// local dev DB, whose adminbot holds the claim. So this snapshots the existing
+/// links, runs every registration with the Project empty, restores the links,
+/// and only then asserts — a failure never leaves dev adminbot unlinked.
+#[tokio::test]
+async fn superuser_claim_rules() {
+    let _guard = GATEKEEPER_LOCK.lock().await;
+    let (app, _admin_did, _admin_token) =
+        setup_adminbot(server::config::RegistrationMode::Closed).await;
+    let state = test_state_with(server::config::RegistrationMode::Closed, None).await;
+    let mut conn = state.db.acquire().await.unwrap();
+    let project_id: i64 = sqlx::query_scalar("SELECT id FROM projects WHERE slug = 'adminbot'")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    let saved: Vec<i64> =
+        sqlx::query_scalar("SELECT account_id FROM project_bots WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+    const CLEAR: &str = "DELETE FROM project_bots WHERE project_id = $1";
+    sqlx::query(CLEAR).bind(project_id).execute(&mut *conn).await.unwrap();
+
+    let reg = |secret: &str, project: Option<&str>| {
+        let token = bootstrap_token(secret, project);
+        let app = app.clone();
+        async move { register_bot(&app, Some(&token)).await.0 }
+    };
+    // Unclaimed: the shareable secret can't claim superuser (the original S-01
+    // escalation) or link any other Project; the superuser secret can't link a
+    // non-superuser Project.
+    let shared_claims = reg(SECRET, Some("adminbot")).await;
+    let shared_links_other = reg(SECRET, Some("someproject")).await;
+    let superuser_links_other = reg(SUPERUSER_SECRET, Some("someproject")).await;
+    // The superuser secret claims once; a second claim is refused.
+    let first_claim = reg(SUPERUSER_SECRET, Some("adminbot")).await;
+    let second_claim = reg(SUPERUSER_SECRET, Some("adminbot")).await;
+    // With no Project named, the superuser secret admits a plain account.
+    let plain = reg(SUPERUSER_SECRET, None).await;
+
+    // Restore the dev DB's links before asserting.
+    sqlx::query(CLEAR).bind(project_id).execute(&mut *conn).await.unwrap();
+    for account_id in saved {
+        server::db::projects::link_bot(&mut conn, project_id, account_id).await.unwrap();
+    }
+
+    assert_eq!(shared_claims, StatusCode::FORBIDDEN, "shared secret must not claim superuser");
+    assert_eq!(shared_links_other, StatusCode::FORBIDDEN, "shared secret must not link a Project");
+    assert_eq!(superuser_links_other, StatusCode::FORBIDDEN);
+    assert_eq!(first_claim, StatusCode::CREATED, "superuser secret claims an unclaimed Project");
+    assert_eq!(second_claim, StatusCode::FORBIDDEN, "superuser is claim-once");
+    assert_eq!(plain, StatusCode::CREATED);
+}
+
+/// docs/24, docs/09 S-01: a Project's bot signup key admits bots, links each to
+/// that Project, is revoked by re-minting, survives gatekeeper installation,
+/// and can't be minted for the superuser Project.
+#[tokio::test]
+async fn bot_signup_key_admits_and_links_bots() {
+    use ed25519_dalek::SigningKey;
+
+    let _guard = GATEKEEPER_LOCK.lock().await;
+    let (app, _admin_did, admin_token) =
+        setup_adminbot(server::config::RegistrationMode::Closed).await;
+
+    // The superuser Project can't have a bot signup key.
+    let (status, _) =
+        admin_req(&app, "POST", "/v1/admin/projects/adminbot/bot-signup-key", &admin_token, None)
+            .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let slug = format!("sk{}", unique_id());
+    let (status, _) = admin_req(
+        &app,
+        "POST",
+        "/v1/admin/projects",
+        &admin_token,
+        Some(serde_json::json!({ "slug": slug, "name": "Signup key test" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let mint = |app: axum::Router, token: String, slug: String| async move {
+        let (status, body) = admin_req(
+            &app,
+            "POST",
+            &format!("/v1/admin/projects/{slug}/bot-signup-key"),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "mint: {body:?}");
+        body["bot_signup_key"].as_str().unwrap().to_string()
+    };
+    let key1 = mint(app.clone(), admin_token.clone(), slug.clone()).await;
+
+    // A bot registers with the key and is linked to the Project.
+    let (status, body) = register_bot(&app, Some(&key1)).await;
+    assert_eq!(status, StatusCode::CREATED, "bot signup key must admit: {body:?}");
+    let bot_did = body["did"].as_str().unwrap().to_string();
+    // The key is reusable: a second bot also registers.
+    let (status, _) = register_bot(&app, Some(&key1)).await;
+    assert_eq!(status, StatusCode::CREATED, "bot signup key is reusable");
+
+    let (_, body) = admin_req(&app, "GET", "/v1/admin/projects", &admin_token, None).await;
+    let project = body["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["slug"] == slug.as_str())
+        .unwrap()
+        .clone();
+    assert!(
+        project["bot_dids"].as_array().unwrap().iter().any(|d| d == bot_did.as_str()),
+        "bot must be linked to the key's Project"
+    );
+
+    // Re-minting rotates: the old key stops working, the new one works.
+    let key2 = mint(app.clone(), admin_token.clone(), slug.clone()).await;
+    let (status, _) = register_bot(&app, Some(&key1)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "rotated key must be revoked");
+    let (status, _) = register_bot(&app, Some(&key2)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // An unknown key is rejected.
+    let bogus = server::invite_token::bot_signup_token("http://localhost:3000", "not-a-key");
+    let (status, _) = register_bot(&app, Some(&bogus)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Installing a gatekeeper retires the shared secret but not bot signup keys.
+    let signing = SigningKey::from_bytes(&[7u8; 32]);
+    let (status, _) = admin_req(
+        &app,
+        "POST",
+        "/v1/admin/capabilities",
+        &admin_token,
+        Some(serde_json::json!({
+            "project_slug": slug,
+            "capability": "registration.gatekeeper",
+            "gatekeeper_public_key": BASE64_STANDARD.encode(signing.verifying_key().to_bytes()),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = register_bot(&app, Some(&key2)).await;
+    assert_eq!(status, StatusCode::CREATED, "bot signup keys survive gatekeeper install");
+    let (status, _) = admin_req(
+        &app,
+        "DELETE",
+        &format!("/v1/admin/capabilities/{slug}/registration.gatekeeper"),
+        &admin_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Uninstalling the Project deletes its key.
+    let (status, _) =
+        admin_req(&app, "DELETE", &format!("/v1/admin/projects/{slug}"), &admin_token, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = register_bot(&app, Some(&key2)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "uninstall must revoke the key");
+}
+
 #[tokio::test]
 async fn account_joined_catch_up() {
     let _guard = GATEKEEPER_LOCK.lock().await;
@@ -1711,8 +1892,9 @@ async fn account_joined_catch_up() {
             .unwrap();
     drop(conn);
 
-    // A new registration appends an account_joined event.
-    let (status, body) = register_bot(&app, None).await;
+    // A new registration appends an account_joined event. Register with a
+    // token so we can check it is never echoed into the event (docs/09 S-01).
+    let (status, body) = register_bot(&app, Some(&bootstrap_token(SECRET, None))).await;
     assert_eq!(status, StatusCode::CREATED);
     let new_did = body["did"].as_str().unwrap().to_string();
 
@@ -1727,10 +1909,19 @@ async fn account_joined_catch_up() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let events = body["events"].as_array().unwrap();
-    assert!(
-        events.iter().any(|e| e["did"] == new_did),
-        "catch-up must include the new account_joined event"
-    );
+    let event = events
+        .iter()
+        .find(|e| e["did"] == new_did)
+        .expect("catch-up must include the new account_joined event");
+    assert!(event.get("invite_token").is_none(), "events must not carry raw tokens");
+    let state = test_state_with(server::config::RegistrationMode::Open, None).await;
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT invite_token FROM server_events WHERE did = $1")
+            .bind(&new_did)
+            .fetch_one(&mut *state.db.acquire().await.unwrap())
+            .await
+            .unwrap();
+    assert!(stored.is_none(), "raw tokens must not be stored");
 
     // A bot without the capability is forbidden from the catch-up endpoint.
     let (status, body) = register_bot(&app, None).await;

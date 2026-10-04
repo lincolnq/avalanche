@@ -7,14 +7,14 @@
 
 A Project is a standalone service that serves a web UI (opened in an app webview) and, usually, runs bot accounts that are ordinary E2E participants. Because the homeserver has no message keys, anything that touches content or group membership goes through a visible bot. Projects authenticate users with short-lived opaque **Project tokens** minted by the homeserver. An operator installs a Project by handing adminbot a **manifest**; the server records the Project, its bots, and any **server-enforced capabilities** granted.
 
-The trust model is the Slack-workspace one: users trust their homeserver's admin, and the admin vets the Projects. Several real gaps exist today (see *Known gaps*), the worst being that Project setup codes carry the server's master registration secret.
+The trust model is the Slack-workspace one: users trust their homeserver's admin, and the admin vets the Projects. Several real gaps exist today (see *Known gaps*). By design, every member of a small server running adminbot is an admin and can install Projects (S-29, `22`). The older setup-code escalation (S-01) is fixed on branch `lincoln/bot-signup-keys`.
 
 ## Current design
 
 ### What a Project is
 
 1. **Serves a web UI** that the app opens in a webview (`mobile/ios/Actnet/Sources/Views/Network/ProjectWebView.swift`).
-2. **Owns bot accounts** — full Signal-protocol participants with their own keys, built on `@theavalanche/app-core` (`node/packages/`).
+2. **Owns bot accounts** — full Signal-protocol participants with their own keys, built on `@theavalanche/app-core` (`node/packages/`). Its bots register with the Project's **bot signup key**, which adminbot mints at install; the key admits bots only and links each to this Project (`24` §Trust and gating model).
 
 Server-side, a Project is a row in `projects` (`slug`, `name`, `url`, optional token-signing key, optional OAuth client registration), with bots linked through `project_bots` (one Project per bot) and grants in `project_capabilities` (`infra/migrations/015_projects.sql`, `025_projects_oauth.sql`).
 
@@ -124,7 +124,7 @@ These are the only two permissions the server knows. A manifest requesting anyth
 }
 ```
 
-- `slug` — stable identifier, 2–64 chars of `[a-z0-9-]`. Bot accounts link to it and setup codes name it. `adminbot` is reserved (`routes/admin.rs`).
+- `slug` — stable identifier, 2–64 chars of `[a-z0-9-]`. Bot accounts link to it; its bot signup key admits them (`24`). `adminbot` is reserved (`routes/admin.rs`).
 - `name` (1–100 chars), `description` (optional, shown at install).
 - `url` — optional web origin; omitted for a headless bot.
 - `permissions` — requested permission ids. Default-deny: the admin approves which to grant. Non-interactive installs from `ADMINBOT_MANIFEST_DIR` auto-grant everything requested except `registration.gatekeeper`.
@@ -174,20 +174,17 @@ Manifests, labels and assets from Projects are hostile input: sanitize, length-l
 
 Security gaps are also tracked in `09-security-posture.md`; todos in `02`.
 
-1. **Setup codes contain the master registration secret (P0).** adminbot's `/install-project` hands the operator a "setup code" that is a bootstrap token `{s, k: REGISTRATION_SHARED_SECRET, p: <slug>}` (`node/packages/adminbot/src/index.ts`, `performInstall`). Anyone holding one can decode it, change `p` to `adminbot`, and register a bot that the server links into the superuser Project (`core/crates/server/src/routes/registration.rs`, `gate_registration`). Details and the planned fix are in `22` and `24`.
-2. **The master secret is broadcast through the join feed (P0).** Registration stores and pushes the raw `invite_token` to every `accounts.read` holder (`registration.rs`, `server_events.invite_token`). Every bot registered with a bootstrap token, including each ephemeral testbot bot, therefore publishes the master secret to every roster-reading Project and keeps it in `server_events` for 30 days. Manifest-dir installs auto-grant `accounts.read` when requested.
-3. **A public web Project holds the master secret.** The deploy bundle gives testbot `REGISTRATION_SHARED_SECRET` (`infra/deploy/bundle/lib/common.sh`, `write_bot_env`) so its ephemeral bots can register. A compromise of testbot (internet-facing, LLM-driven) is a compromise of server admin.
-4. **No token audience enforcement (P1).** `issue` accepts any `project_url`; `verify` requires no audience and checks none. Combined with the shared `/p/` origin, any Project can replay a user's token to another for an hour.
-5. **Tokens travel in the URL query string.** They end up in Project access logs and browser history.
-6. **Wrong identity for Projects (P1).** The Network tab mints the token from the first account on that server (`NetworkView.swift`, `openProject`), never showing which identity is used. A `conversation/<did>` deep link from any webview opens a DM from `accounts.first` (`AppState.swift`, `handleDeepLink`), so a Project on server B can start a conversation from identity A.
-7. **Webview not hardened.** iOS uses a default `WKWebView` (shared default data store, no navigation lock to the Project origin, no content restrictions). Non-deep-link navigations are all allowed.
-8. **Officialness is unsettable**, so the checkmark that `25`'s phishing mitigation and `54`'s impersonation defence rely on is always absent.
-9. **Self-declared bots bypass the message-request gate** (`core/crates/app-core/src/messaging.rs`, `SenderGate::passes`). See `54`.
-10. **Group invites appear to be auto-accepted for everyone** (S-04; the UI path is not yet confirmed). app-core accepts every `GroupContext` it receives (`messaging.rs`, the `GroupContext` branch), including from non-curated senders, so the `invites.auto-accept` scope has nothing to gate today.
+1. **Everyone is an admin on a server running adminbot (S-29, by design).** Adminbot auto-invites every new human into `#admins`, so any member can install Projects. Intended for small new orgs; operators need onboarding that tells them how to tighten it as they grow (`22`).
+2. **No token audience enforcement (P1).** `issue` accepts any `project_url`; `verify` requires no audience and checks none. Combined with the shared `/p/` origin, any Project can replay a user's token to another for an hour.
+3. **Tokens travel in the URL query string.** They end up in Project access logs and browser history.
+4. **Wrong identity for Projects (P1).** The Network tab mints the token from the first account on that server (`NetworkView.swift`, `openProject`), never showing which identity is used. A `conversation/<did>` deep link from any webview opens a DM from `accounts.first` (`AppState.swift`, `handleDeepLink`), so a Project on server B can start a conversation from identity A.
+5. **Webview not hardened.** iOS uses a default `WKWebView` (shared default data store, no navigation lock to the Project origin, no content restrictions). Non-deep-link navigations are all allowed.
+6. **Officialness is unsettable**, so the checkmark that `25`'s phishing mitigation and `54`'s impersonation defence rely on is always absent.
+7. **Self-declared bots bypass the message-request gate** (`core/crates/app-core/src/messaging.rs`, `SenderGate::passes`). See `54`.
+8. **Group invites appear to be auto-accepted for everyone** (S-04; the UI path is not yet confirmed). app-core accepts every `GroupContext` it receives (`messaging.rs`, the `GroupContext` branch), including from non-curated senders, so the `invites.auto-accept` scope has nothing to gate today.
 
 ## Planned
 
-- **Replace bootstrap setup codes** with server-minted, per-Project, single-use bot-enrollment tokens (`purpose: "bot"`); never put the master secret in anything handed to a Project; carry parsed issuer and routing claims in join events, never raw tokens (`22`, `24`).
 - **Token audience.** Additive: `verify` takes a required `audience` (the Project's `url`) and the server rejects a mismatch; `issue` only mints for origins of installed Projects. Update the reference Project to pass it.
 - **Move tokens out of the query string** (Proposed: changes the Project interface contract; owner review), e.g. into the URL fragment, which never reaches the Project's server logs.
 - **Identity scoping in the client.** Mint tokens from the account the user is viewing (and show it); route `conversation/<did>` links from a webview through the account that opened the webview.

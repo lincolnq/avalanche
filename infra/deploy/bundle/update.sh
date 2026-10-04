@@ -30,6 +30,12 @@ activate() {
     sudo -u avalanche env DATABASE_URL="$dburl" "$dep/server/avalanche-server" migrate
   fi
 
+  # Bring env files up to the current layout (adds the superuser bootstrap
+  # secret, retires the shared secret from the bots — docs/09 S-01) and expose
+  # operator commands this release adds.
+  migrate_env_files
+  ln -sfn "$CURRENT/deploy/bin/avalanche-reset-adminbot" /usr/local/sbin/avalanche-reset-adminbot
+
   # Refresh units from the new bundle, then flip the symlink (the atomic switch).
   for c in "${comps[@]}"; do
     u="$(component_unit "$c")"

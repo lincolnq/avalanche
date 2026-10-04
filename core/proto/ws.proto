@@ -143,10 +143,9 @@ message GroupDeliverAck {
 message AccountJoinedEvent {
   string did          = 1;
   int64  joined_at_ms = 2;
-  // The raw invite token the account registered with, if any. Lets a bot
-  // route based on which invite flow / gatekeeper the user came through
-  // (issuer stamp + routing tags inside the token). Absent for direct
-  // registrations. Pushed only to bots holding `accounts.read`.
+  // Deprecated: never populated. It used to carry the raw invite token, which
+  // could contain a registration secret (docs/09 S-01). Join routing will get
+  // parsed issuer/routing claims in new fields instead (docs/22).
   optional string invite_token = 3;
   reserved 4 to 10;
 }

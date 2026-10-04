@@ -67,7 +67,7 @@ When you *do* ask a real question, ask it in words anyone understands — name e
 thing by what it means to the user, and explain the minimum.
 
 - **Translate internal names.** `slug` → "codename". `capability`/`scope` →
-  "permissions". `token` → "setup code".
+  "permissions". A Project's registration `token` → "bot signup key".
 - **Offer plain choices, not raw identifiers.** Ask "Should this bot be able to
   see who's on the server? (yes/no)" instead of listing
   `accounts.read`.
@@ -167,8 +167,8 @@ Tokens, keys, and other credentials:
 - **DM them to the requester only.** Never post a secret into a shared channel —
   it lives in group history for every current and future member. (Running the
   interview in DM means secrets naturally land there.)
-- **Label them** and say how to revoke: `bootstrap token (sensitive — don't
-  share; rotate REGISTRATION_SHARED_SECRET to revoke): …`.
+- **Label them** and say how to revoke: `bot signup key for this project (keep
+  it private; running /install-project again replaces it): …`.
 - **Don't echo secrets back** in confirmations or logs.
 
 ## Discoverability & help

@@ -233,7 +233,7 @@ async fn handle_ws(
                             })),
                         }
                     }
-                    WsPush::AccountJoined { did, joined_at_ms, invite_token } => {
+                    WsPush::AccountJoined { did, joined_at_ms } => {
                         tracing::info!(
                             device_pk,
                             new_did = %did,
@@ -244,7 +244,9 @@ async fn handle_ws(
                             body: Some(Body::AccountJoined(AccountJoinedEvent {
                                 did,
                                 joined_at_ms,
-                                invite_token,
+                                // Never populated: the raw token may carry a
+                                // registration secret (docs/09 S-01).
+                                invite_token: None,
                             })),
                         }
                     }

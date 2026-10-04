@@ -46,9 +46,48 @@ async fn main() {
             tracing::info!("migrations applied");
             return;
         }
+        Some("reset-adminbot") => {
+            // Operator recovery when adminbot's state is lost (docs/22, docs/09
+            // S-01): delete the old adminbot account and clear the superuser
+            // claim, so a fresh adminbot can re-register and claim superuser
+            // once with SUPERUSER_BOOTSTRAP_SECRET. Run via the deploy bundle's
+            // `avalanche-reset-adminbot`, which also stops adminbot and moves
+            // its state aside.
+            let url = std::env::var("DATABASE_URL")
+                .expect("DATABASE_URL must be set to reset adminbot");
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(&url)
+                .await
+                .expect("failed to connect to database");
+            let mut conn = pool.acquire().await.expect("failed to acquire db connection");
+            let slug = server::config::ADMINBOT_PROJECT_SLUG;
+            if let Some(account) = db::accounts::find_by_did(&mut conn, &format!("did:local:{slug}"))
+                .await
+                .expect("account lookup failed")
+            {
+                db::accounts::delete_account(&mut conn, account.id)
+                    .await
+                    .expect("failed to delete the old adminbot account");
+                tracing::info!("deleted the old adminbot account");
+            }
+            if let Some(project) = db::projects::find_by_slug(&mut conn, slug)
+                .await
+                .expect("project lookup failed")
+            {
+                sqlx::query("DELETE FROM project_bots WHERE project_id = $1")
+                    .bind(project.id)
+                    .execute(&mut *conn)
+                    .await
+                    .expect("failed to clear the superuser claim");
+            }
+            tracing::info!("superuser claim cleared; adminbot can re-register");
+            return;
+        }
         Some(other) => {
             eprintln!("unknown subcommand: {other}");
-            eprintln!("usage: avalanche-server [migrate]");
+            eprintln!("usage: avalanche-server [migrate | reset-adminbot]");
             std::process::exit(2);
         }
         None => {}
@@ -96,9 +135,10 @@ async fn main() {
     };
 
     // Seed the pinned superuser Project (the anchor for adminbot authority).
-    // Seeded empty: a bot becomes superuser by registering with a bootstrap
-    // token that names this Project's slug while the shared secret is active
-    // (see routes::registration). Idempotent.
+    // Seeded empty: adminbot becomes superuser by registering with a bootstrap
+    // token that names this Project's slug and presents the superuser bootstrap
+    // secret, once — while the Project has no linked account (see
+    // routes::registration, docs/09 S-01). Idempotent.
     {
         let mut conn = pool.acquire().await.expect("failed to acquire db connection");
         db::projects::ensure_adminbot_project(&mut conn, server::config::ADMINBOT_PROJECT_SLUG)
@@ -110,6 +150,14 @@ async fn main() {
     // (docs/22): a Project's directory entries and its OAuth login registration
     // (docs/25) are published by adminbot's /install-project manifest into the
     // `directory_entries` / `projects` tables. Nothing is seeded at startup.
+
+    // Superuser can only ever be claimed with the superuser bootstrap secret.
+    if config.superuser_bootstrap_secret.is_none() {
+        tracing::warn!(
+            "SUPERUSER_BOOTSTRAP_SECRET is not set — adminbot cannot claim superuser on a \
+             fresh server. The deploy's install/update scripts generate it."
+        );
+    }
 
     // Warn loudly if registration is closed but no admission path is
     // configured — otherwise no one (not even the first admin) can register.

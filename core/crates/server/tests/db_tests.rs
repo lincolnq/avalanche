@@ -1348,8 +1348,8 @@ async fn server_events_append_and_fetch() {
     let pool = test_pool().await;
     let mut tx = begin_tx(&pool).await;
 
-    let id1 = server_events::append_account_joined(&mut *tx, "did:plc:ev1", Some("tok-1"), 1000).await.unwrap();
-    let id2 = server_events::append_account_joined(&mut *tx, "did:plc:ev2", None, 2000).await.unwrap();
+    let id1 = server_events::append_account_joined(&mut *tx, "did:plc:ev1", 1000).await.unwrap();
+    let id2 = server_events::append_account_joined(&mut *tx, "did:plc:ev2", 2000).await.unwrap();
     assert!(id2 > id1);
 
     // Filter to our own events rather than asserting raw counts — the shared
@@ -1360,9 +1360,7 @@ async fn server_events_append_and_fetch() {
     let e1 = window.iter().find(|e| e.id == id1).expect("ev1 present");
     let e2 = window.iter().find(|e| e.id == id2).expect("ev2 present");
     assert_eq!(e1.did, "did:plc:ev1");
-    assert_eq!(e1.invite_token.as_deref(), Some("tok-1"));
     assert_eq!(e2.did, "did:plc:ev2");
-    assert!(e2.invite_token.is_none());
 
     // fetch_since is strictly-greater-than: id1 is excluded, id2 included.
     let after = server_events::fetch_since(&mut *tx, id1, kind, 500).await.unwrap();

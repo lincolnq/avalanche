@@ -144,6 +144,7 @@ EOF
 fi
 has adminbot && write_bot_env adminbot
 has testbot  && write_bot_env testbot
+migrate_env_files   # superuser secret, bot signup key paths (docs/09 S-01)
 
 # ---- systemd units + operator commands ----
 for c in "${components[@]}"; do
@@ -156,6 +157,7 @@ ln -sfn "$CURRENT/deploy/bin/avalanche-status"          /usr/local/bin/avalanche
 ln -sfn "$CURRENT/deploy/bin/avalanche-backup"          /usr/local/sbin/avalanche-backup
 ln -sfn "$CURRENT/deploy/bin/avalanche-install-project" /usr/local/sbin/avalanche-install-project
 ln -sfn "$CURRENT/deploy/bin/avalanche-remove-project"  /usr/local/sbin/avalanche-remove-project
+ln -sfn "$CURRENT/deploy/bin/avalanche-reset-adminbot"  /usr/local/sbin/avalanche-reset-adminbot
 if has server; then
   echo '17 3 * * * root /usr/local/sbin/avalanche-backup' > /etc/cron.d/avalanche-backup
 fi

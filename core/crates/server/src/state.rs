@@ -69,10 +69,6 @@ pub enum WsPush {
     AccountJoined {
         did: String,
         joined_at_ms: i64,
-        /// The raw invite token the account registered with, if any. Carries
-        /// the issuer stamp + routing tags a bot uses to route the new member
-        /// (docs/22 join-event API, docs/24 post-join hand-off).
-        invite_token: Option<String>,
     },
     /// Durable storage changed on another of this account's devices (docs/05
     /// §8). Pushed to the account's *other* connected devices after a storage

@@ -17,12 +17,9 @@ contract changes and are blocked on that review.
 Small, contained fixes; no design work needed. Each is a bug fix, so per the root
 `CLAUDE.md` it lands on the affected platform(s) and is verified there.
 
-- Replace bootstrap "setup codes" with server-minted, per-Project, single-use bot-enrollment
-  tokens that cannot name the superuser Project; rotate `REGISTRATION_SHARED_SECRET` on
-  deployed servers afterwards (S-01, `22`, `24`).
-- Join events carry parsed issuer and routing claims, never raw tokens; purge raw tokens
-  already stored in `server_events` (S-01, `22`).
-- Remove `REGISTRATION_SHARED_SECRET` from testbot's environment (S-01, `21`).
+- **Operator action after the S-01 fix deploys:** rotate `REGISTRATION_SHARED_SECRET` on servers
+  where old setup codes were handed out (at least `av.theavalanche.net`), and re-issue each
+  Project's bot signup key with `/install-project` (S-01, `22`).
 - Stop attaching the profile key to automatic delivery receipts for un-accepted requests
   (S-02, `52`).
 - Exempt from the message-request gate only bots linked to an installed Project, not
@@ -76,6 +73,8 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   Curve25519) (`50`).
 - Gate adminbot's `/audit` on `#admins` membership (`22`).
 - Validate gatekeeper tokens fully in `GET /v1/invites` (`24`).
+- Reserve well-known `did:local:` suffixes (or stop letting bots choose them) so `adminbot`
+  can't be squatted on a fresh server (S-30, `22`).
 - Desktop link-preview fetch: reject redirects to non-public IPs, require `image/*` for
   og:image, clamp the body cap, open the validated URL (S-28, `35`).
 - Desktop Project webview: decide whether non-loopback `http:` needs a developer-mode
@@ -167,6 +166,9 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   (`51`).
 
 **Projects**
+- Open-admin onboarding (S-29, by design): tell operators every member is an admin for now and
+  how to change it; a simple command to stop auto-inviting new members into `#admins`; a nudge
+  when the server grows or installs a gatekeeper (`22`).
 - Settable officialness and the checkmark badge (`22`, `54`).
 - Gatekeeper install through adminbot; a sample gatekeeper Project (`24`).
 - Identity picker on the login consent screen; Desktop as a login authorizer (`25`).

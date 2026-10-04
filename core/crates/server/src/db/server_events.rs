@@ -3,7 +3,9 @@
 //! Append-only. Live pushes go out over the WebSocket to capability-holding
 //! bots; this table lets a bot that was disconnected recover missed events via
 //! `GET /v1/admin/events?since=<id>`. No group linkage is stored, preserving
-//! the §3.9 membership-opacity discipline.
+//! the §3.9 membership-opacity discipline. Events never carry the raw invite
+//! token the account registered with (it may contain a registration secret,
+//! docs/09 S-01); the legacy `invite_token` column is no longer written or read.
 
 use sqlx::{PgConnection, Row};
 
@@ -13,7 +15,6 @@ pub struct ServerEvent {
     pub id: i64,
     pub kind: String,
     pub did: String,
-    pub invite_token: Option<String>,
     pub joined_at_ms: i64,
 }
 
@@ -21,16 +22,14 @@ pub struct ServerEvent {
 pub async fn append_account_joined(
     conn: &mut PgConnection,
     did: &str,
-    invite_token: Option<&str>,
     joined_at_ms: i64,
 ) -> Result<i64, sqlx::Error> {
     let row = sqlx::query(
-        "INSERT INTO server_events (kind, did, invite_token, joined_at_ms)
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO server_events (kind, did, joined_at_ms)
+         VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(KIND_ACCOUNT_JOINED)
     .bind(did)
-    .bind(invite_token)
     .bind(joined_at_ms)
     .fetch_one(&mut *conn)
     .await?;
@@ -46,7 +45,7 @@ pub async fn fetch_since(
     limit: i64,
 ) -> Result<Vec<ServerEvent>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, kind, did, invite_token, joined_at_ms FROM server_events
+        "SELECT id, kind, did, joined_at_ms FROM server_events
          WHERE kind = $1 AND id > $2 ORDER BY id ASC LIMIT $3",
     )
     .bind(kind)
@@ -60,7 +59,6 @@ pub async fn fetch_since(
             id: r.get("id"),
             kind: r.get("kind"),
             did: r.get("did"),
-            invite_token: r.get("invite_token"),
             joined_at_ms: r.get("joined_at_ms"),
         })
         .collect())

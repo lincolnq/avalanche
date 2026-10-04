@@ -211,6 +211,28 @@ pub async fn link_bot(
     Ok(())
 }
 
+/// Link an account into a Project only if the Project has no linked account
+/// yet — the superuser Project's one-time claim (docs/09 S-01). A single
+/// conditional INSERT; it doesn't serialize two claims racing in the same
+/// instant, which the gate's earlier check plus the claim needing the
+/// never-shared superuser secret make moot. Returns whether the link was made.
+pub async fn link_bot_if_unclaimed(
+    conn: &mut PgConnection,
+    project_id: i64,
+    account_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "INSERT INTO project_bots (account_id, project_id)
+         SELECT $1, $2
+         WHERE NOT EXISTS (SELECT 1 FROM project_bots WHERE project_id = $2)",
+    )
+    .bind(account_id)
+    .bind(project_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 /// Remove a bot account's link to any Project. Returns whether a link existed.
 pub async fn unlink_bot(conn: &mut PgConnection, account_id: i64) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("DELETE FROM project_bots WHERE account_id = $1")

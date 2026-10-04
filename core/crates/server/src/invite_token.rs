@@ -38,10 +38,16 @@ use serde::{Deserialize, Serialize};
 /// registration path today).
 pub const PURPOSE_INVITE: &str = "invite";
 
-/// A bootstrap token: the operator's setup-time shared secret, optionally
-/// naming a Project to link the new account into (e.g. the superuser Project).
-/// Unsigned — the secret itself is the credential. Honored only while the
-/// shared secret is configured and no gatekeeper is installed (docs/24).
+/// A bootstrap token: an operator-held secret, unsigned (the secret itself is
+/// the credential). Two secrets are accepted (docs/24, docs/09 S-01):
+///
+/// - the **registration shared secret** — shareable (the configure tool puts it
+///   in the first-members invite link); admits plain accounts while no
+///   gatekeeper is installed; can never link a Project (`project` must be
+///   absent);
+/// - the **superuser bootstrap secret** — never shared; the only way to link
+///   an account into the superuser Project, and only while that Project has
+///   no linked account (claim once).
 #[derive(Debug, Deserialize)]
 pub struct BootstrapToken {
     #[allow(dead_code)]
@@ -56,18 +62,40 @@ pub struct BootstrapToken {
     pub project: Option<String>,
 }
 
-/// A registration token, in one of its two shapes.
+/// A Project's bot signup key (docs/24, docs/09 S-01): admits a bot account
+/// and links it to the Project that owns the key. The server resolves the
+/// Project from the key's hash, so the token carries no Project name.
+#[derive(Debug, Deserialize)]
+pub struct BotSignupToken {
+    #[allow(dead_code)]
+    #[serde(rename = "s")]
+    pub server_url: String,
+    #[serde(rename = "b")]
+    pub key: String,
+}
+
+/// Encode a bot signup key as a registration token: `base64url(JSON)` with
+/// `s` = server URL (so the client knows where to register) and `b` = key.
+pub fn bot_signup_token(server_url: &str, key: &str) -> String {
+    let json = serde_json::json!({ "s": server_url, "b": key });
+    BASE64_URL_SAFE_NO_PAD.encode(json.to_string())
+}
+
+/// A registration token, in one of its three shapes.
 pub enum ParsedToken {
     /// A Project-signed gatekeeper invite (verified against a pinned key).
     Gatekeeper(InviteEnvelope),
     /// The operator's shared-secret bootstrap token.
     Bootstrap(BootstrapToken),
+    /// A Project's bot signup key.
+    BotSignup(BotSignupToken),
 }
 
 /// Decode and classify a registration token. Wire keys are single-char to keep
 /// tokens (and their QR codes) compact: a signed gatekeeper envelope is
 /// recognized by its `g` (sig) / `c` (claims) fields; a bootstrap token by `k`
-/// (bootstrap_secret). Anything else is malformed.
+/// (bootstrap_secret); a bot signup token by `b` (key). Anything else is
+/// malformed.
 pub fn parse(token: &str) -> Result<ParsedToken, TokenError> {
     let bytes = BASE64_URL_SAFE_NO_PAD
         .decode(token.trim())
@@ -83,6 +111,10 @@ pub fn parse(token: &str) -> Result<ParsedToken, TokenError> {
         let boot: BootstrapToken = serde_json::from_value(value)
             .map_err(|_| TokenError::Malformed("invalid bootstrap token".into()))?;
         Ok(ParsedToken::Bootstrap(boot))
+    } else if value.get("b").is_some() {
+        let signup: BotSignupToken = serde_json::from_value(value)
+            .map_err(|_| TokenError::Malformed("invalid bot signup token".into()))?;
+        Ok(ParsedToken::BotSignup(signup))
     } else {
         Err(TokenError::Malformed("unrecognized token shape".into()))
     }
@@ -376,6 +408,12 @@ mod tests {
                 assert_eq!(b.project.as_deref(), Some("adminbot"));
             }
             _ => panic!("expected bootstrap token"),
+        }
+
+        // Bot signup: has `b` (key); round-trips through the encoder.
+        match parse(&bot_signup_token(SERVER, "k3y")).unwrap() {
+            ParsedToken::BotSignup(t) => assert_eq!(t.key, "k3y"),
+            _ => panic!("expected bot signup token"),
         }
 
         // Neither shape → malformed.
