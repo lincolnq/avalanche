@@ -1845,6 +1845,19 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     drop(inner);
                     match held {
                         Ok(Some(group_id)) => {
+                            // Read the group's name for the request row, off-lock.
+                            // Best-effort; the connect-time refresh retries.
+                            if let Ok(Some(invite)) =
+                                core.store.load_pending_group_invite(&group_id).await
+                            {
+                                match groups::peek_group_title(&core.store, &core.client, &core.did, &invite).await {
+                                    Ok(title) if !title.is_empty() => {
+                                        let _ = core.store.set_pending_group_invite_title(&group_id, &title).await;
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => tracing::debug!("[groups] couldn't read invite title: {e}"),
+                                }
+                            }
                             let _ = core.event_tx.send(IncomingEvent::GroupInvite {
                                 group_id,
                                 hosting_server_url: ctx.hosting_server_url.clone(),

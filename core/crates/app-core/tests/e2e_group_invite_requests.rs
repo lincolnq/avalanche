@@ -171,6 +171,17 @@ async fn live_stranger_invite_is_a_request_event() {
     }
     assert_eq!(seen, Some(true), "a stranger's invite is a request");
 
+    // The request row shows the group's name, read as a pending invitee.
+    let conversation_id = format!("group-{}", created.group_id);
+    let row = bob
+        .load_conversations_async()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.conversation_id == conversation_id)
+        .expect("the invite appears in the chat list");
+    assert_eq!(row.group_title.as_deref(), Some("Live invite"));
+
     let state = alice.fetch_group_state_async(&created.group_id).await.unwrap();
     assert_eq!(state.members.len(), 1, "nothing was joined automatically");
 }

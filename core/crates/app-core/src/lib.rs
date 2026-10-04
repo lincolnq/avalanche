@@ -3038,7 +3038,8 @@ impl AppCore {
                 }
                 list.push(ConversationSummaryFfi {
                     conversation_id,
-                    group_title: None,
+                    // Fetched as a pending invitee; `None` until then.
+                    group_title: invite.title,
                     last_message: None,
                     last_message_preview: None,
                     is_request: true,

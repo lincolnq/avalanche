@@ -1887,7 +1887,7 @@ class AppViewModel(
                     newConvs.add(
                         Conversation(
                             id = s.conversationId,
-                            title = "Group invitation",
+                            title = s.groupTitle?.takeIf { it.isNotEmpty() } ?: "Group invitation",
                             accountId = accountId,
                             serverUrl = serverUrl,
                             recipientDid = null,

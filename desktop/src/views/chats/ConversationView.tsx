@@ -231,7 +231,7 @@ export default function ConversationView(props: Props) {
                 {props.conversation.inviterDid
                   ? displayName(props.conversation.inviterDid, props.conversation.accountId)
                   : "Someone"}{" "}
-                invited you to a group. Join to see its messages and let its members see your name?
+                invited you to this group. Join to see its messages and let its members see your name?
               </Show>
             </p>
             <div class="request-actions">

@@ -1763,7 +1763,7 @@ final class AppState: ObservableObject {
                     // Shown as a request row until you Join or Delete it.
                     newConvs.append(Conversation(
                         id: s.conversationId,
-                        title: "Group invitation",
+                        title: s.groupTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Group invitation",
                         accountId: accountId,
                         serverUrl: serverUrl,
                         recipientDid: nil,

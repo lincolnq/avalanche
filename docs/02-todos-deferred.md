@@ -118,9 +118,8 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 ## Later: P2 planned features
 
 **Messaging**
-- Group invite requests: show the group's title in the request row (fetch state as a pending
-  invitee without storing the group), clear a deleted request on your other devices, and
-  refresh the iOS conversation title after Join (`12`, S-04).
+- Group invite requests: clear a deleted request on your other devices, and refresh the iOS
+  conversation title after Join (`12`, S-04).
 - Share your profile when you accept a message request (Signal parity): apply profile keys
   carried on any message from an accepted contact, and send yours on accept (`52`).
 - Quote-reply, once approved (`32`).

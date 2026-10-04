@@ -1051,7 +1051,7 @@ private fun GroupInviteGate(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = "$inviter invited you to a group. Join to see its messages and let its members see your name?",
+            text = "$inviter invited you to this group. Join to see its messages and let its members see your name?",
             style = MaterialTheme.typography.labelSmall,
             color = LocalAvalancheColors.current.muted,
             modifier = Modifier.fillMaxWidth(),

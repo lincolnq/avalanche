@@ -604,7 +604,7 @@ struct ConversationView: View {
     @ViewBuilder private func groupInviteGate(groupId: String, inviterDid: String?) -> some View {
         let inviter = inviterDid.map { appState.displayName(for: $0, accountId: conversation.accountId) } ?? "Someone"
         VStack(spacing: 10) {
-            Text("\(inviter) invited you to a group. Join to see its messages and let its members see your name?")
+            Text("\(inviter) invited you to this group. Join to see its messages and let its members see your name?")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

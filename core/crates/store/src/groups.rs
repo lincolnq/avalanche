@@ -586,6 +586,8 @@ pub struct PendingGroupInvite {
     pub hosting_server_url: String,
     pub inviter_did: String,
     pub invited_at: Timestamp,
+    /// The group's title, once fetched as a pending invitee.
+    pub title: Option<String>,
 }
 
 impl IdentityStore {
@@ -599,14 +601,15 @@ impl IdentityStore {
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO pending_group_invites
-                       (group_id, master_key, hosting_server_url, inviter_did, invited_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                       (group_id, master_key, hosting_server_url, inviter_did, invited_at, title)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![
                         i.group_id,
                         i.master_key,
                         i.hosting_server_url,
                         i.inviter_did,
-                        i.invited_at.as_millis()
+                        i.invited_at.as_millis(),
+                        i.title
                     ],
                 )?;
                 Ok(())
@@ -624,7 +627,7 @@ impl IdentityStore {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at
+                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at, title
                      FROM pending_group_invites WHERE group_id = ?1",
                     rusqlite::params![gid],
                     pending_invite_from_row,
@@ -641,13 +644,33 @@ impl IdentityStore {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at
+                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at, title
                      FROM pending_group_invites ORDER BY invited_at DESC",
                 )?;
                 let rows = stmt
                     .query_map([], pending_invite_from_row)?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Record a pending invite's group title once it has been fetched.
+    pub async fn set_pending_group_invite_title(
+        &self,
+        group_id: &str,
+        title: &str,
+    ) -> Result<(), StoreError> {
+        let gid = group_id.to_string();
+        let title = title.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "UPDATE pending_group_invites SET title = ?2 WHERE group_id = ?1",
+                    rusqlite::params![gid, title],
+                )?;
+                Ok(())
             })
             .await
             .map_err(StoreError::Db)
@@ -676,5 +699,6 @@ fn pending_invite_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingG
         hosting_server_url: row.get(2)?,
         inviter_did: row.get(3)?,
         invited_at: Timestamp(row.get(4)?),
+        title: row.get(5)?,
     })
 }

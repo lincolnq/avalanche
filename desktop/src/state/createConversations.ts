@@ -199,7 +199,7 @@ export function createConversations(deps: ConversationsDeps): Conversations {
         // at creation below.
         const title = isGroup
           ? s.isRequest
-            ? "Group invitation" // not joined: no group state (docs/09 S-04)
+            ? s.groupTitle || "Group invitation" // read as a pending invitee (docs/09 S-04)
             : s.groupTitle ?? "Group"
           : recipientDid === accountId
             ? "Note to Self"

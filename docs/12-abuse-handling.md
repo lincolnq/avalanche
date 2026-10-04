@@ -40,9 +40,9 @@ hostile operator who ignores reports about its own users.
   bot's invite joins; a blocked inviter's is dropped; anyone else's is held as a
   request (`pending_group_invites`, local-only) and shown with Join / Delete / Block
   (`messaging.rs` `group_invite_disposition`, `groups.rs` `hold_inbound_group_invite`).
-  Remaining: the request row doesn't show the group's title yet (the client can only
-  fetch state for a stored group), and deleting a request on one device doesn't clear
-  it on your other devices.
+  The request row shows the group's title, read from the group state as a pending
+  invitee (`groups.rs` `peek_group_title`; retried on reconnect). Remaining: deleting a
+  request on one device doesn't clear it on your other devices.
 - **Reports never leave the reporter's server** (§3), so the reportee's operator
   never hears about them.
 

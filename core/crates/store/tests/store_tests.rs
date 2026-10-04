@@ -1185,6 +1185,7 @@ async fn pending_group_invite_round_trip() {
         hosting_server_url: "https://av.example.org".into(),
         inviter_did: "did:plc:stranger".into(),
         invited_at: Timestamp(at),
+        title: None,
     };
     store.save_pending_group_invite(&invite("g1", 1000)).await.unwrap();
     store.save_pending_group_invite(&invite("g2", 2000)).await.unwrap();
@@ -1198,6 +1199,12 @@ async fn pending_group_invite_round_trip() {
         .map(|i| i.group_id)
         .collect();
     assert_eq!(listed, vec!["g2".to_string(), "g1".to_string()], "newest first");
+
+    store.set_pending_group_invite_title("g1", "Rally team").await.unwrap();
+    assert_eq!(
+        store.load_pending_group_invite("g1").await.unwrap().unwrap().title.as_deref(),
+        Some("Rally team")
+    );
 
     store.delete_pending_group_invite("g1").await.unwrap();
     assert!(store.load_pending_group_invite("g1").await.unwrap().is_none());

@@ -70,6 +70,18 @@ pub(crate) async fn reconnect_loop(weak: std::sync::Weak<AppCore>) {
                 // we're low — covers draining while offline or a missed
                 // `PrekeyLow` push. (The push handles draining while connected.)
                 crate::prekeys::replenish_if_low(&core).await;
+                // Name any group invite requests still missing their group's
+                // title (docs/09 S-04), and nudge the UI to reload the list.
+                for group_id in crate::groups::refresh_pending_invite_titles(&core.store, &core.client, &core.did).await {
+                    if let Ok(Some(invite)) = core.store.load_pending_group_invite(&group_id).await {
+                        let _ = core.event_tx.send(IncomingEvent::GroupInvite {
+                            group_id,
+                            hosting_server_url: invite.hosting_server_url,
+                            inviter_did: invite.inviter_did,
+                            is_request: true,
+                        });
+                    }
+                }
                 run_receive_loop(&core, &ws).await;
                 *core.ws.lock().expect("ws mutex poisoned") = None;
                 // Only reset backoff if the connection was actually usable.

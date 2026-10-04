@@ -2475,9 +2475,69 @@ pub async fn hold_inbound_group_invite(
             hosting_server_url: hosting_server_url.to_string(),
             inviter_did: inviter_did.to_string(),
             invited_at: Timestamp::now(),
+            title: None,
         })
         .await?;
     Ok(Some(group_id_b64_s))
+}
+
+/// Read a group's title as a pending invitee, without storing the group
+/// (docs/09 S-04): the server lets a pending invitee read group state
+/// (docs/03 §3.10), so the invite request can show the group's name. Network;
+/// call off the `inner` lock.
+pub async fn peek_group_title(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+    invite: &store::groups::PendingGroupInvite,
+) -> Result<String, AppError> {
+    let mk: [u8; 32] = invite
+        .master_key
+        .clone()
+        .try_into()
+        .map_err(|_| AppError::Protocol("master_key length != 32".into()))?;
+    let group_key = GroupKey::from_bytes(mk);
+    let public = ensure_server_params(store, client, &invite.hosting_server_url).await?;
+    let credential = ensure_credential(store, client, &invite.hosting_server_url, did, &public).await?;
+    let presentation = build_presentation_bytes(&public, &credential, &group_key)?;
+    let resp = client.get_group(&invite.group_id, &presentation).await?;
+    let plaintext = group_key.decrypt_state(&resp.encrypted_state)?;
+    let state = gproto::GroupState::decode(plaintext.as_slice())
+        .map_err(|e| AppError::Protocol(format!("decode GroupState: {e}")))?;
+    Ok(state.title)
+}
+
+/// Fetch and save the title of every pending invite that doesn't have one yet
+/// (e.g. the fetch at receipt failed, or the invite arrived over the polling
+/// path). Best-effort and off-lock; returns the group ids that gained a title.
+pub(crate) async fn refresh_pending_invite_titles(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+) -> Vec<String> {
+    let invites = match store.list_pending_group_invites().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("[groups] listing pending invites failed: {e}");
+            return Vec::new();
+        }
+    };
+    let mut updated = Vec::new();
+    for invite in invites.iter().filter(|i| i.title.is_none()) {
+        match peek_group_title(store, client, did, invite).await {
+            Ok(title) if !title.is_empty() => {
+                if store.set_pending_group_invite_title(&invite.group_id, &title).await.is_ok() {
+                    updated.push(invite.group_id.clone());
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(
+                "[groups] couldn't read title for invite {}: {e}",
+                invite.group_id
+            ),
+        }
+    }
+    updated
 }
 
 /// If `group_id` is a pending invite, promote it to a stored group so the

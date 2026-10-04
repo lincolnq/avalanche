@@ -255,7 +255,10 @@ CREATE TABLE IF NOT EXISTS pending_group_invites (
     master_key          BLOB    NOT NULL,
     hosting_server_url  TEXT    NOT NULL,
     inviter_did         TEXT    NOT NULL,
-    invited_at          INTEGER NOT NULL
+    invited_at          INTEGER NOT NULL,
+    -- The group's title, read from its state as a pending invitee; NULL until
+    -- fetched. Added to older databases by `IdentityStore::migrate`.
+    title               TEXT
 );
 
 -- Minimal contact table (docs/52-contacts-and-profiles.md). `is_curated` flips
