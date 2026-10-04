@@ -1,6 +1,5 @@
 import { createSignal, For, Match, Show, Switch } from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { FiArrowLeft, FiUser, FiUsers, FiSlash, FiTool, FiChevronRight } from "solid-icons/fi";
+import { FiUser, FiUsers, FiSlash, FiTool, FiChevronRight } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import AccountAvatar from "../../components/AccountAvatar";
 import AccountsView from "./AccountsView";
@@ -28,7 +27,6 @@ type Screen =
  */
 export default function SettingsView() {
   const { store } = useApp();
-  const navigate = useNavigate();
 
   const [stack, setStack] = createSignal<Screen[]>([{ name: "hub" }]);
   const [showBlocked, setShowBlocked] = createSignal(false);
@@ -49,15 +47,15 @@ export default function SettingsView() {
   return (
     <Switch>
       <Match when={current().name === "hub"}>
-        <div class="settings-hub">
-          <header class="settings-subheader">
-            <button class="back-btn" onClick={() => navigate("/chats")}>
-              <FiArrowLeft size={14} />Back
-            </button>
-            <h1>Settings</h1>
+        <div class="page">
+          {/* A top-level sidebar destination: no Back (iOS's Settings tab has
+              none either); the rail is the way out. */}
+          <header class="page-header" data-tauri-drag-region>
+            <h1 data-tauri-drag-region>Settings</h1>
           </header>
 
-          <div class="settings-hub-body scrollbar-thin">
+          <div class="page-body scrollbar-thin">
+          <div class="page-column settings-hub-column">
             {/* One profile row per signed-in identity (shared-inbox model — no
                 single "active" account). Each opens its identity detail, where
                 Link a device / Leave / Delete live, per-account. */}
@@ -89,6 +87,7 @@ export default function SettingsView() {
             <Show when={accounts().length === 0}>
               <p class="settings-empty"><FiUser size={14} /> No account signed in.</p>
             </Show>
+          </div>
           </div>
 
           <Show when={showBlocked()}>

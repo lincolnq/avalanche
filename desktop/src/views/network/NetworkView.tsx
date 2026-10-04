@@ -70,8 +70,12 @@ export default function NetworkView() {
   }
 
   return (
-    <div class="network-view">
-      <h2>Network</h2>
+    <div class="page">
+      <header class="page-header" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>Network</h1>
+      </header>
+      <div class="page-body scrollbar-thin">
+      <div class="page-column">
       <Show
         when={allServers().length > 0}
         fallback={
@@ -138,6 +142,8 @@ export default function NetworkView() {
           </Show>
         </div>
       </Show>
+      </div>
+      </div>
     </div>
   );
 }
