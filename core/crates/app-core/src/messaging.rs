@@ -220,6 +220,19 @@ impl SenderGate {
     }
 }
 
+/// True when a group message failed to decrypt because it's older than the
+/// sender key we hold ("message with old counter"). Sender keys only ratchet
+/// forward, so such a message can never decrypt; anything else (no key yet)
+/// may still recover when the key arrives.
+pub(crate) fn is_behind_sender_key(e: &AppError) -> bool {
+    matches!(
+        e,
+        AppError::Crypto(crypto::CryptoError::Signal(
+            libsignal_protocol::SignalProtocolError::DuplicatedMessage(..)
+        ))
+    )
+}
+
 /// What to do with an inbound group invite (docs/09 S-04, docs/12 §1). Joining
 /// publishes our membership (and profile key) to the group, so only an
 /// accepted sender gets an automatic join; anyone else's invite becomes a
@@ -547,6 +560,16 @@ impl AppCoreInner {
                         previews: Vec::new(),
                         contacts: Vec::new(),
                     });
+                }
+                Err(e) if is_behind_sender_key(&e) => {
+                    // The key we now hold has already moved past this message
+                    // (a sender key only ratchets forward), so it can never
+                    // decrypt: drop it rather than keep it for the full TTL.
+                    tracing::debug!(
+                        "[groups] dropping buffered group message from {sender_did}: \
+                         older than the sender key we hold ({e})"
+                    );
+                    let _ = self.store.delete_pending_group_ciphertext(row.id).await;
                 }
                 Err(e) => {
                     // Still no usable key for this one — leave it buffered.
@@ -2331,6 +2354,20 @@ mod tests {
         assert!(!g(false, false, true).is_request());
         // Blocked is never surfaced as a request (it's dropped / shown blocked).
         assert!(!g(false, true, false).is_request());
+    }
+
+    #[test]
+    fn only_old_counter_failures_are_permanent() {
+        use crate::error::AppError;
+        use crate::messaging::is_behind_sender_key;
+        use libsignal_protocol::SignalProtocolError;
+        let signal = |e| AppError::Crypto(crypto::CryptoError::Signal(e));
+        assert!(is_behind_sender_key(&signal(SignalProtocolError::DuplicatedMessage(5, 0))));
+        // A missing key may still arrive: keep buffering.
+        assert!(!is_behind_sender_key(&signal(SignalProtocolError::InvalidSenderKeySession {
+            distribution_id: uuid::Uuid::nil(),
+        })));
+        assert!(!is_behind_sender_key(&AppError::Protocol("other".into())));
     }
 
     #[test]
