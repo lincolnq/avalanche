@@ -384,6 +384,12 @@ export type ConversationSummaryFfi = {
 	 */
 	inviterDid: string | null,
 	/**
+	 *  For a group invite request, when the invite arrived (epoch ms). It has
+	 *  no messages, so clients use this as the row's date for sorting and
+	 *  display. `None` otherwise.
+	 */
+	invitedAtMs: number | null,
+	/**
 	 *  True for a DM with a blocked contact (docs/12 §2). The chat list routes
 	 *  these into a Blocked section. Always false for groups.
 	 */

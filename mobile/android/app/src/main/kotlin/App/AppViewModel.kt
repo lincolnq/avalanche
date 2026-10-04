@@ -1892,6 +1892,9 @@ class AppViewModel(
                             serverUrl = serverUrl,
                             recipientDid = null,
                             groupId = groupId,
+                            // No messages yet: date (and sort) the row by when the
+                            // invite arrived, so a new request shows at the top.
+                            lastMessageDate = s.invitedAtMs?.let { java.util.Date(it) },
                             isGroup = true,
                             isRequest = true,
                             inviterDid = s.inviterDid,

@@ -62,6 +62,7 @@ export function seedConversations(
       unreadCount: 0,
       isRequest: false,
       inviterDid: null,
+      invitedAtMs: null,
       isBlocked: false,
     },
     {
@@ -90,6 +91,7 @@ export function seedConversations(
       unreadCount: 0,
       isRequest: false,
       inviterDid: null,
+      invitedAtMs: null,
       isBlocked: false,
     },
     {
@@ -100,6 +102,7 @@ export function seedConversations(
       unreadCount: 0,
       isRequest: false,
       inviterDid: null,
+      invitedAtMs: null,
       isBlocked: false,
     },
     {
@@ -128,6 +131,7 @@ export function seedConversations(
       unreadCount: 0,
       isRequest: false,
       inviterDid: null,
+      invitedAtMs: null,
       isBlocked: false,
     },
   ];

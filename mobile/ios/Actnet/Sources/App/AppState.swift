@@ -1768,6 +1768,11 @@ final class AppState: ObservableObject {
                         serverUrl: serverUrl,
                         recipientDid: nil,
                         groupId: groupId,
+                        // No messages yet: date (and sort) the row by when the
+                        // invite arrived, so a new request shows at the top.
+                        lastMessageDate: s.invitedAtMs.map {
+                            Date(timeIntervalSince1970: TimeInterval($0) / 1000.0)
+                        },
                         isGroup: true,
                         isRequest: true,
                         inviterDid: s.inviterDid

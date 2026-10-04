@@ -1,3 +1,4 @@
+import { FiUsers } from "solid-icons/fi";
 import {
   createEffect,
   createMemo,
@@ -162,7 +163,13 @@ export default function ConversationView(props: Props) {
           aria-label="Conversation info"
           title="Conversation info"
         >
-          <div class="conv-header-avatar">{initials(props.conversation.title)}</div>
+          <div class="conv-header-avatar">
+            {props.conversation.isGroup && props.conversation.isRequest ? (
+              <FiUsers aria-hidden="true" />
+            ) : (
+              initials(props.conversation.title)
+            )}
+          </div>
           {props.conversation.title}
         </button>
       </div>

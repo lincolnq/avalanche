@@ -220,7 +220,9 @@ export function createConversations(deps: ConversationsDeps): Conversations {
           recipientDid,
           groupId,
           lastMessage: lastPreview,
-          lastMessageDate: s.lastMessage?.sentAtMs ?? undefined,
+          // A group invite request has no messages: date (and sort) it by when
+          // the invite arrived, so a new request shows at the top.
+          lastMessageDate: s.lastMessage?.sentAtMs ?? s.invitedAtMs ?? undefined,
           lastMessageKind: s.lastMessage?.kind ?? 0,
           lastMessageMetadata: s.lastMessage?.metadata ?? undefined,
           lastMessageSenderDid: s.lastMessage?.senderDid ?? undefined,

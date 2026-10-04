@@ -64,6 +64,7 @@ async fn stranger_invite_is_held_until_accepted() {
         .expect("the invite appears in the chat list");
     assert!(row.is_request, "a stranger's group invite is a request");
     assert_eq!(row.inviter_did.as_deref(), Some(alice_did.as_str()));
+    assert!(row.invited_at_ms.is_some(), "a request row carries its invite time");
 
     // Join: Bob becomes a member, and the request row becomes a normal group.
     bob.accept_invite_async(&created.group_id).await.unwrap();

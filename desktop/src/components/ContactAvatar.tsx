@@ -1,3 +1,4 @@
+import { FiUsers } from "solid-icons/fi";
 import { initials, avatarColorIndex } from "../lib/format";
 import { useApp } from "../state/AppContext";
 import "./ContactAvatar.css";
@@ -10,6 +11,9 @@ interface Props {
   // Optional override; when omitted, bot status is resolved reactively from the
   // context cache (getAccountInfo).
   isBot?: boolean;
+  // Show a group glyph instead of initials (a group invite request, which has
+  // no real name or photo yet).
+  groupGlyph?: boolean;
 }
 
 /**
@@ -24,7 +28,7 @@ export default function ContactAvatar(props: Props) {
 
   return (
     <div class={`contact-avatar avatar-c${avatarColorIndex(props.did)}${bot() ? " bot" : ""}`}>
-      {initials(props.name) || "?"}
+      {props.groupGlyph ? <FiUsers aria-hidden="true" /> : initials(props.name) || "?"}
     </div>
   );
 }

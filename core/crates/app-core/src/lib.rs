@@ -735,6 +735,10 @@ pub struct ConversationSummaryFfi {
     /// For a group invite request (`is_request` on a `group-` row), who invited
     /// us. `None` otherwise.
     pub inviter_did: Option<String>,
+    /// For a group invite request, when the invite arrived (epoch ms). It has
+    /// no messages, so clients use this as the row's date for sorting and
+    /// display. `None` otherwise.
+    pub invited_at_ms: Option<i64>,
     /// True for a DM with a blocked contact (docs/12 §2). The chat list routes
     /// these into a Blocked section. Always false for groups.
     pub is_blocked: bool,
@@ -3009,6 +3013,7 @@ impl AppCore {
                     last_message_preview: c.last_message_preview.map(Into::into),
                     is_request,
                     inviter_did: None,
+                    invited_at_ms: None,
                     is_blocked,
                     unread_count: c.unread_count,
                 }
@@ -3038,6 +3043,7 @@ impl AppCore {
                     last_message_preview: None,
                     is_request: true,
                     inviter_did: Some(invite.inviter_did),
+                    invited_at_ms: Some(invite.invited_at.as_millis()),
                     is_blocked: false,
                     unread_count: 0,
                 });
