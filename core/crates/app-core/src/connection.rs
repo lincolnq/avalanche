@@ -343,8 +343,15 @@ async fn run_receive_loop(core: &AppCore, ws: &net::ws::WsConnection) {
                     match inner.process_inbound_group_delivery(&delivery).await {
                         Ok(d) => Some(d),
                         Err(e) => {
+                            // A message that failed only because the sender's key
+                            // isn't installed yet has already been buffered by
+                            // `process_inbound_group_delivery`; it decrypts when the
+                            // key arrives. Anything else (sealed-sender or
+                            // certificate failure) can't be recovered. Either way
+                            // the server copy is acked.
                             tracing::warn!(
-                                "[ws] failed to process group delivery msg_id={}: {e}, acking to skip",
+                                "[ws] group delivery msg_id={} not decrypted now: {e} \
+                                 (buffered for retry if it awaits the sender's key); acking",
                                 delivery.message_id
                             );
                             None

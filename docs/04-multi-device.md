@@ -16,10 +16,11 @@ Section numbers below are cited from code (`§4`, `§4.2`, `§5.4`, `§5.5`, ...
   device number, so senders never re-shared their sender key with it (now cleared on
   re-registration in `ensure_session`, plus a one-time reset of `sender_key_shared`); and a
   sender whose cached member list was stale distributed its key only to the stale list (now
-  re-distributed after the refresh, `send_group_bytes`). Still open: a group message that
-  arrives over the WebSocket before its key is discarded rather than buffered (the HTTP path
-  buffers), and there is no "please re-send" request, so a message sent while the key was
-  missing is never recovered (Signal re-sends recent content from a short send log).
+  re-distributed after the refresh, `send_group_bytes`). A group message that arrives
+  before its key is buffered (both the WebSocket and HTTP paths) and decrypts when the key
+  arrives. Still open: there is no "please re-send" request, so a message sent while the
+  recipient's key was *lost* (not merely late) is never recovered; Signal re-sends recent
+  content from a short send log.
 - **Read state does not sync between your own devices.** `SyncRead` is applied on receive (`app-core/src/messaging.rs` `apply_sync_read`) but never sent: `mark_messages_read` (`app-core/src/lib.rs`) only writes the local store. Reading on the phone does not clear the tablet's badge.
 - **`SyncViewed` and `SyncLocalDelete` do not exist** in `core/proto/content.proto`. Only `SyncSent` (field 10) and `SyncRead` (field 11) are defined.
 - **No device list, no revocation.** The server exposes `GET /v1/accounts/{did}/devices` (`server/src/routes/accounts.rs`) but there is no client UI to see your devices and no endpoint or FFI to revoke one. A lost device keeps working until someone does a recovery that happens to replace its slot.

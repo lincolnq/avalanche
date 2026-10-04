@@ -137,8 +137,11 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - Block and report from an accepted conversation; view another user's profile.
 - Coalesce `fetchGroupState` and push group-state changes over the WebSocket instead of
   polling on every open (`03`).
-- Group messages arriving over the WebSocket without their sender key: buffer them (as the
-  HTTP path does) instead of acking and discarding (`connection.rs`, `04`).
+- Unexplained (2026-10-04): in one group on av.savethedogs.io, the phone showed one of Desktop's
+  messages live but none of Desktop's messages survived a relaunch; a fresh group made the same
+  way worked fully. The failing group was created while the phone ran an older build. If
+  incoming group messages vanish after a relaunch again, capture the phone's console
+  (filter `groups`) before relaunching (`04`).
 - Sender-key recovery on demand (Signal's retry receipts): a receiver that can't decrypt asks
   the sender to re-share its key and re-send the message from a short send log. New message
   type (contract change) and a ~1-day send log (privacy trade-off) — needs a design note
