@@ -12,6 +12,7 @@ import DisappearingMessagesPicker, {
   disappearingLabel,
 } from "./DisappearingMessagesPicker";
 import "./GroupDetailView.css";
+import { onEscape } from "../lib/onEscape";
 
 interface Props {
   conversation: Conversation;
@@ -28,6 +29,7 @@ const ROLE_MEMBER = 0;
  * admin; the server enforces the same. Mirrors the iOS `GroupDetailView`.
  */
 export default function GroupDetailView(props: Props) {
+  onEscape(() => props.onClose());
   const app = useApp();
   // This group's owning account drives every group call + the "is this me?" check.
   const accountId = (): string => props.conversation.accountId;

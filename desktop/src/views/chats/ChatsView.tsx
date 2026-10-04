@@ -1,5 +1,5 @@
-import { createSignal, createMemo, For, Show } from "solid-js";
-import { FiEdit } from "solid-icons/fi";
+import { createSignal, createMemo, For, Show, onCleanup, onMount } from "solid-js";
+import { FiEdit, FiSearch, FiX } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import ConversationRow from "../../components/ConversationRow";
 import RecoveryKeyBanner from "../../components/RecoveryKeyBanner";
@@ -8,10 +8,16 @@ import NewConversationView from "../../components/NewConversationView";
 import ConversationView from "./ConversationView";
 import "./ChatsView.css";
 
+const isMac = navigator.platform.toUpperCase().includes("MAC");
+
 export default function ChatsView() {
   const { store, loadMessagesFromStore, unreadCount, selectedConversationId, selectConversation } =
     useApp();
   const [showNew, setShowNew] = createSignal(false);
+  // Conversation search (iOS ConversationSearchView, docs/37): client-side, by
+  // title, across all accounts. On Desktop it's a field atop the chat list.
+  const [query, setQuery] = createSignal("");
+  let searchRef: HTMLInputElement | undefined;
 
   const selected = () =>
     store.conversations.find((c) => c.id === selectedConversationId()) ?? null;
@@ -28,6 +34,71 @@ export default function ChatsView() {
       (a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
     )
   );
+  const visibleConversations = createMemo(() => {
+    const q = query().trim().toLocaleLowerCase();
+    const all = sortedConversations();
+    return q ? all.filter((c) => c.title.toLocaleLowerCase().includes(q)) : all;
+  });
+
+  function open(id: string, focusComposer: boolean) {
+    const conv = store.conversations.find((c) => c.id === id);
+    if (!conv) return;
+    selectConversation(id);
+    loadMessagesFromStore(id, conv.accountId);
+    if (focusComposer) {
+      setTimeout(() => document.querySelector<HTMLTextAreaElement>(".compose-input")?.focus(), 0);
+    }
+  }
+
+  function clearSearch() {
+    setQuery("");
+    searchRef?.blur();
+  }
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      clearSearch();
+    } else if ((e.key === "Enter" || e.key === "ArrowDown") && visibleConversations().length > 0) {
+      e.preventDefault();
+      open(visibleConversations()[0].id, true);
+      setQuery("");
+    }
+  }
+
+  // Desktop keyboard shortcuts (no mobile equivalent): Cmd/Ctrl+K or F search,
+  // Cmd/Ctrl+N new message, Alt+Cmd/Ctrl+Up/Down previous/next conversation
+  // (Signal Desktop's binding), or plain Alt+Up/Down outside text fields (in a
+  // text field that moves the caret by paragraph on macOS).
+  function onGlobalKey(e: KeyboardEvent) {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "f")) {
+      e.preventDefault();
+      searchRef?.focus();
+      searchRef?.select();
+    } else if (mod && !e.shiftKey && !e.altKey && e.key === "n") {
+      e.preventDefault();
+      setShowNew(true);
+    } else if (
+      e.altKey &&
+      !e.shiftKey &&
+      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      (mod || !(e.target instanceof HTMLElement && e.target.closest("input, textarea")))
+    ) {
+      const list = visibleConversations();
+      if (list.length === 0) return;
+      e.preventDefault();
+      const i = list.findIndex((c) => c.id === selectedConversationId());
+      const next =
+        i < 0 ? 0 : e.key === "ArrowUp" ? Math.max(0, i - 1) : Math.min(list.length - 1, i + 1);
+      open(list[next].id, true);
+      document
+        .querySelector(`.conversation-list > :nth-child(${next + 1})`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
+  }
+  onMount(() => window.addEventListener("keydown", onGlobalKey));
+  onCleanup(() => window.removeEventListener("keydown", onGlobalKey));
 
   return (
     <div class="chats-split">
@@ -46,19 +117,43 @@ export default function ChatsView() {
             class="chats-new-btn"
             onClick={() => setShowNew(true)}
             aria-label="New message"
-            title="New message"
+            title={isMac ? "New message (⌘N)" : "New message (Ctrl+N)"}
           >
             <FiEdit size={18} />
           </button>
+        </div>
+        <div class="chats-search">
+          <FiSearch size={14} class="chats-search-icon" aria-hidden="true" />
+          <input
+            ref={searchRef}
+            class="chats-search-input"
+            type="text"
+            placeholder="Search"
+            aria-label="Search conversations"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={onSearchKey}
+            spellcheck={false}
+          />
+          <Show
+            when={query()}
+            fallback={<kbd class="chats-search-hint">{isMac ? "⌘K" : "Ctrl K"}</kbd>}
+          >
+            <button class="chats-search-clear" onClick={clearSearch} aria-label="Clear search">
+              <FiX size={13} />
+            </button>
+          </Show>
         </div>
         <RecoveryKeyBanner />
         <OfflineBanner />
         <div class="conversation-list scrollbar-thin">
           <For
-            each={sortedConversations()}
+            each={visibleConversations()}
             fallback={
               <div class="empty-state">
-                No conversations yet. Join a server to get started.
+                {query().trim()
+                  ? `No conversations match "${query().trim()}".`
+                  : "No conversations yet. Join a server to get started."}
               </div>
             }
           >
@@ -66,10 +161,7 @@ export default function ChatsView() {
               <ConversationRow
                 conversation={conv}
                 selected={selectedConversationId() === conv.id}
-                onSelect={(id) => {
-                  selectConversation(id);
-                  loadMessagesFromStore(id, conv.accountId);
-                }}
+                onSelect={(id) => open(id, false)}
               />
             )}
           </For>

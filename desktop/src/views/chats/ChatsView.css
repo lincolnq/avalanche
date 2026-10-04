@@ -29,6 +29,65 @@
   align-items: center;
   gap: 8px;
 }
+/* Search field atop the chat list (iOS ConversationSearchView's role). */
+.chats-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 10px 12px 6px;
+  flex-shrink: 0;
+}
+.chats-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+.chats-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 34px 0 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--color-row-selected);
+  color: var(--color-text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chats-search-input::placeholder {
+  color: var(--color-text-secondary);
+}
+.chats-search-input:focus {
+  background: var(--color-input-bg);
+  border-color: var(--color-accent-text);
+}
+.chats-search-hint {
+  position: absolute;
+  right: 8px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+.chats-search-input:focus ~ .chats-search-hint {
+  display: none;
+}
+.chats-search-clear {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-divider);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
 .chats-new-btn {
   display: inline-flex;
   align-items: center;

@@ -5,6 +5,7 @@ import type { Conversation } from "../models";
 import { initials } from "../lib/format";
 import DisappearingMessagesPicker from "./DisappearingMessagesPicker";
 import "./ConversationInfoView.css";
+import { onEscape } from "../lib/onEscape";
 
 interface Props {
   conversation: Conversation;
@@ -19,6 +20,7 @@ interface Props {
  * shape; the group equivalent is GroupDetailView.
  */
 export default function ConversationInfoView(props: Props) {
+  onEscape(() => props.onClose());
   const app = useApp();
   const accountId = props.conversation.accountId;
   const recipientDid = props.conversation.recipientDid;

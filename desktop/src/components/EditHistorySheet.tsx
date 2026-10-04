@@ -5,6 +5,7 @@ import type { Conversation, Message } from "../models";
 import type { MessageRevisionFfi } from "../services/AvalancheService";
 import { formatTime } from "../lib/format";
 import "./EditHistorySheet.css";
+import { onEscape } from "../lib/onEscape";
 
 interface Props {
   conversation: Conversation;
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default function EditHistorySheet(props: Props) {
+  onEscape(() => props.onClose());
   const app = useApp();
   const [revisions, setRevisions] = createSignal<MessageRevisionFfi[]>([]);
   const [loading, setLoading] = createSignal(true);

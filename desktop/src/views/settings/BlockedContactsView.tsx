@@ -3,12 +3,14 @@ import { FiX } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { ContactRowFfi } from "../../services/AvalancheService";
 import "./BlockedContactsView.css";
+import { onEscape } from "../../lib/onEscape";
 
 interface Props {
   onClose: () => void;
 }
 
 export default function BlockedContactsView(props: Props) {
+  onEscape(() => props.onClose());
   const app = useApp();
   // Aggregated across all accounts; each row carries its owning accountId so an
   // unblock routes to the right account's core.

@@ -5,6 +5,7 @@ import type { ContactRowFfi } from "../services/AvalancheService";
 import RecipientTokenField from "./RecipientTokenField";
 import NameGroupView from "./NameGroupView";
 import "./NewConversationView.css";
+import { onEscape } from "../lib/onEscape";
 
 interface Props {
   onClose: () => void;
@@ -17,6 +18,7 @@ interface Props {
  * NameGroup step). Mirrors the iOS `ComposeMessageView`.
  */
 export default function NewConversationView(props: Props) {
+  onEscape(() => props.onClose());
   const app = useApp();
   // Which identity starts this conversation. Defaults to the first account; a
   // picker (below) lets the user choose when more than one is signed in — mirrors

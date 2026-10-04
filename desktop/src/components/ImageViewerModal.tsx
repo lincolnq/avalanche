@@ -3,6 +3,7 @@ import { TbOutlineX, TbOutlineChevronLeft, TbOutlineChevronRight } from "solid-i
 import { useApp } from "../state/AppContext";
 import type { AttachmentFfi } from "../bindings";
 import "./ImageViewerModal.css";
+import { onEscape } from "../lib/onEscape";
 
 interface Props {
   // All image attachments in the conversation, in timeline order.
@@ -92,10 +93,10 @@ export default function ImageViewerModal(props: Props) {
   });
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") props.onClose();
-    else if (e.key === "ArrowLeft") prev();
+    if (e.key === "ArrowLeft") prev();
     else if (e.key === "ArrowRight") next();
   }
+  onEscape(() => props.onClose());
   onMount(() => window.addEventListener("keydown", onKey));
   onCleanup(() => {
     disposed = true;
