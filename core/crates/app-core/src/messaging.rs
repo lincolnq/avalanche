@@ -210,6 +210,28 @@ impl SenderGate {
     }
 }
 
+/// The automatic delivery receipt sent back for an inbound DM (docs/31). It
+/// goes to every un-blocked sender, including an un-accepted request (docs/12
+/// §1), but carries our profile key only to an accepted (curated) contact:
+/// the key decrypts our display name and avatar, so a stranger who DMs us must
+/// not get it until we accept (docs/09 S-02). Pass the sender's
+/// `SenderGate::is_curated`; self-declared bots don't count as accepted.
+pub(crate) fn delivery_receipt(
+    sent_at_ms: i64,
+    sender_is_curated: bool,
+    own_profile_key: Vec<u8>,
+) -> ContentMessage {
+    ContentMessage {
+        body: Some(Body::Receipt(ReceiptMessage {
+            r#type: receipt_message::Type::Delivery as i32,
+            timestamps: vec![sent_at_ms as u64],
+        })),
+        timestamp_ms: 0,
+        profile_key: if sender_is_curated { own_profile_key } else { Vec::new() },
+        expire_timer_secs: 0,
+    }
+}
+
 impl AppCore {
     /// Whether a name fetch for `did` is allowed right now, per the persisted
     /// per-outcome throttle (docs/52 §"Client-side rate limiting"). `None`
@@ -1274,18 +1296,11 @@ impl AppCoreInner {
                             }
                             let is_request = !is_self && gate.is_request();
                             // Auto-send delivery receipt — allowed even for an
-                            // un-accepted request (docs/12 §1), DM only; never to self.
+                            // un-accepted request (docs/12 §1), DM only; never to
+                            // self. Carries our profile key only if accepted.
                             if let (Some(ts), false) = (sent_at, is_self) {
                                 let own_profile_key = self.own_profile_key().await;
-                                let delivery = ContentMessage {
-                                    body: Some(Body::Receipt(ReceiptMessage {
-                                        r#type: receipt_message::Type::Delivery as i32,
-                                        timestamps: vec![ts as u64],
-                                    })),
-                                    timestamp_ms: 0,
-                                    profile_key: own_profile_key,
-                                    expire_timer_secs: 0,
-                                };
+                                let delivery = delivery_receipt(ts, gate.is_curated, own_profile_key);
                                 let _ = self
                                     .send_dm(ws, &raw.sender_did, &delivery.encode_to_vec(), None)
                                     .await;
@@ -1595,6 +1610,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             // `touch_contact` / `set_pending_request`.
             let mut is_request = false;
             let mut is_self = false;
+            let mut is_curated = false;
             if decrypted.group_id.is_none() {
                 let inner = core.inner.lock().await;
                 // A DM from your own identity is note-to-self (or a synced
@@ -1607,24 +1623,18 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                     return;
                 }
                 is_request = !is_self && gate.is_request();
+                is_curated = gate.is_curated;
             }
 
             // Auto-send delivery receipt to the sender — DM only, never to self.
+            // Carries our profile key only if the sender is accepted (S-02).
             // Group delivery receipts would fan out per-recipient and aren't part
             // of the group read-tracking model yet.
             if let (Some(ts), None, false) = (sent_at, decrypted.group_id.as_deref(), is_self) {
                 let ws = core.ws.lock().expect("ws mutex poisoned").clone();
                 let mut inner = core.inner.lock().await;
                 let own_profile_key = inner.own_profile_key().await;
-                let delivery = ContentMessage {
-                    body: Some(Body::Receipt(ReceiptMessage {
-                        r#type: receipt_message::Type::Delivery as i32,
-                        timestamps: vec![ts as u64],
-                    })),
-                    timestamp_ms: 0,
-                    profile_key: own_profile_key,
-                    expire_timer_secs: 0,
-                };
+                let delivery = delivery_receipt(ts, is_curated, own_profile_key);
                 let _ = inner
                     .send_dm(ws.as_ref(), &decrypted.sender_did, &delivery.encode_to_vec(), None)
                     .await;
@@ -2212,6 +2222,26 @@ mod tests {
         assert!(!g(false, false, true).is_request());
         // Blocked is never surfaced as a request (it's dropped / shown blocked).
         assert!(!g(false, true, false).is_request());
+    }
+
+    #[test]
+    fn delivery_receipt_withholds_profile_key_from_strangers() {
+        use crate::messaging::delivery_receipt;
+        use crate::proto::receipt_message;
+        let key = vec![7u8; 32];
+        // docs/09 S-02: an un-accepted sender (a message request, or a
+        // self-declared bot) gets the receipt but not our profile key.
+        let to_stranger = delivery_receipt(1234, false, key.clone());
+        assert!(to_stranger.profile_key.is_empty(), "profile key must not go to strangers");
+        match to_stranger.body {
+            Some(Body::Receipt(r)) => {
+                assert_eq!(r.r#type, receipt_message::Type::Delivery as i32);
+                assert_eq!(r.timestamps, vec![1234]);
+            }
+            other => panic!("unexpected body: {other:?}"),
+        }
+        // An accepted contact gets it.
+        assert_eq!(delivery_receipt(1234, true, key.clone()).profile_key, key);
     }
 
     #[test]

@@ -100,9 +100,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   group membership. [timing only; nothing more together] (S-13)
 - *Public PLC log:* signup server forever, every rotation; recovery GET tests which servers
   hold a DID. (S-06, S-07, S-19, S-20)
-- *Stranger with your DID:* your profile key via delivery receipt; can add you to groups;
-  self-declared bots skip requests; attachment URLs leak your IP. [nothing until accept]
-  (S-02..S-04, S-08)
+- *Stranger with your DID:* can add you to groups; self-declared bots skip requests;
+  attachment URLs leak your IP. [nothing until accept] (S-03, S-04, S-08; S-02 fixed)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
   sender membership check; extend expiry. (S-14..S-16)
 - *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
@@ -119,7 +118,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   per-Project reusable bot signup keys; shareable secret can't link Projects; separate
   on-box `SUPERUSER_BOOTSTRAP_SECRET`, claim-once; no raw tokens in events (purged). Rotate
   the shared secret where old setup codes were handed out (22, 24, 51).
-- **High:** S-02 profile key in delivery receipts to un-accepted requests (52); S-03
+- **High:** S-02 (fixed) profile key in delivery receipts to un-accepted requests (52); S-03
   self-declared `is_bot` bypasses request gate (54); S-04 group invites auto-accepted from
   non-blocked strangers, Reported/needs UI check (12, 03); S-05 Desktop constant SQLCipher
   key (61); S-06 rotation key on every device and in link bundle, sole rotation key (50
@@ -147,8 +146,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01 done)
-S-02..S-05, S-08, S-14, S-17, S-30,
+**Hardening order:** (1) critical and stranger-facing fixes (S-01, S-02 done)
+S-03..S-05, S-08, S-14, S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
@@ -516,7 +515,7 @@ learns nothing.
   contacts holding his profile key can deliver sealed or fetch prekeys. Strangers make an
   **identified, signed, rate-limited first contact** that lands as a message request. A server
   may refuse first contact (closed community). **Consequence: profile keys must go only to
-  accepted contacts** (S-02 must be fixed first).
+  accepted contacts** (S-02, now fixed).
 - Sender certificate trust root comes with card/invite or is fetched and pinned (open:
   server-issued vs identity-key-signed certs).
 - **Move notice** `{did, new_servers, issued_at}` signed by identity key to contacts; old
@@ -627,7 +626,7 @@ Store 1.2). **Reports never contain content.**
 - **Profile abuse (Planned):** client name filter, profile reports, forced reset.
 - **Never build:** content reporting/hashes, report button in accepted conversations, global
   ban list, client ML moderation, on-device scanning (legal conflict), "who reported me".
-- Gaps: self-declared bot bypass (S-03); profile key to requesters (S-02); stranger group
+- Gaps: self-declared bot bypass (S-03); stranger group
   invites ungated (S-04); reports don't leave reporter's server. Open: group abuse, Project
   abuse, appeals, cross-server aggregation.
 
@@ -841,7 +840,8 @@ workaround); ephemeral because it's a dev tool.
 
 Per-message `read_at` (also starts disappearing timers); unread derived (can't drift);
 scroll-visibility marking. Delivery receipts auto-sent on every inbound DM (including
-requesters, leaking the profile key, S-02); read receipts only to curated contacts.
+requesters, but carrying the profile key only to accepted contacts, S-02); read receipts only
+to curated contacts.
 Gaps: no setting (recommend Signal default on with per-identity toggle — **decision
 needed**); no debounce; group read receipts mostly suppressed (co-members uncurated; decide
 whether groups get them, gate on membership); `SyncRead` never sent; receipt send under core
@@ -987,8 +987,8 @@ reactions as feed messages.
 - **Fetch throttle decided in core and persisted** by last outcome (improves on Signal's
   in-memory LRU). Profile GET returns identical 404s (no existence leak). Nickname > profile
   name > truncated DID; nickname never erases the real name.
-- **Gaps:** **profile key to un-accepted requesters via delivery receipt (P0 here; S-02
-  High in 09)**; self-declared bot bypass (P1); no `profile_version` liveness; profile fetch
+- **Gaps:** accepting a request doesn't share your profile (requester learns your name on
+  your first message; S-02 itself fixed); self-declared bot bypass (S-03); no `profile_version` liveness; profile fetch
   under core lock.
 - Planned: `profile_version` envelope field (additive contract); favorites/notes/nickname UI;
   `preferred_identity`; cross-identity contact backup under a recovery-derived key;

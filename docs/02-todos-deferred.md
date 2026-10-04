@@ -20,8 +20,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - **Operator action after the S-01 fix deploys:** rotate `REGISTRATION_SHARED_SECRET` on servers
   where old setup codes were handed out (at least `av.theavalanche.net`), and re-issue each
   Project's bot signup key with `/install-project` (S-01, `22`).
-- Stop attaching the profile key to automatic delivery receipts for un-accepted requests
-  (S-02, `52`).
 - Exempt from the message-request gate only bots linked to an installed Project, not
   self-declared `is_bot` (S-03, `54`).
 - Route group invites from non-curated senders through the request gate; confirm current UI
@@ -124,6 +122,8 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 ## Later: P2 planned features
 
 **Messaging**
+- Share your profile when you accept a message request (Signal parity): apply profile keys
+  carried on any message from an accepted contact, and send yours on accept (`52`).
 - Quote-reply, once approved (`32`).
 - Read-receipt preference toggle and send debounce (`31`).
 - `profile_version` on the envelope, for profile liveness (`52`).

@@ -1,6 +1,6 @@
 # 52 — Contacts and profiles
 
-> **Status:** Partial — contact rows with curation, blocking, message requests, and a local nickname; encrypted profiles (display name + avatar); the persisted per-outcome fetch throttle; contact and profile-key sync via the storage service. Not built: `profile_version` liveness, favorites, notes, `removed_at`, `preferred_identity` as a stored field, contact backup, profile-key rotation, cross-server profile proxying. One urgent privacy gap (profile key to strangers, S-02).
+> **Status:** Partial — contact rows with curation, blocking, message requests, and a local nickname; encrypted profiles (display name + avatar); the persisted per-outcome fetch throttle; contact and profile-key sync via the storage service. Not built: `profile_version` liveness, favorites, notes, `removed_at`, `preferred_identity` as a stored field, contact backup, profile-key rotation, cross-server profile proxying. The profile key no longer goes to strangers (S-02 fixed).
 > **Last verified against code:** 2026-10-03
 
 ## Summary
@@ -195,7 +195,7 @@ Substrate profiles and Project profiles are separate systems. A Project that nee
 
 ## Known gaps
 
-1. **Profile key sent to un-accepted request senders (S-02, High; P0 in `02`).** On every inbound DM — including from an un-accepted, un-curated stranger — app-core auto-sends a delivery receipt that carries the recipient's own profile key (`messaging.rs`, the auto-delivery-receipt block in the DM receive path, ~lines 1276–1291). Anyone who knows a user's DID can send one message and decrypt that user's real display name and avatar. Signal withholds the profile key until the user accepts. Fix: send the delivery receipt with an empty `profile_key` (or no receipt) unless the sender is curated.
+1. **Accepting a request doesn't share your profile.** Fixed (S-02): the automatic delivery receipt now carries your profile key only to accepted contacts (`messaging.rs` `delivery_receipt`), so a stranger who DMs you no longer learns your name. Remaining gap: accepting sends nothing, and clients ignore profile keys on receipts anyway, so the person you accept learns your name only when you first message them. Signal shares your profile on accept; doing the same needs a receive-side change (apply a profile key carried on any message from an accepted contact) plus a send on accept.
 2. **Self-declared bots bypass message requests (S-03, High; P0 in `02`).** `SenderGate::passes` admits `is_curated || is_bot`, and `is_bot` comes from the sender's server account record, which the account sets for itself at registration (`server/src/routes/registration.rs`, `req.is_bot`). Any spammer can register as a bot and skip the request gate. Fix: bot exemption only for bots whose `official` flag is server-vouched on the user's own server (`54`), or drop the exemption.
 3. **No profile liveness (P2).** No `profile_version`; see above.
 4. **`fetch_and_cache_profile` holds the core lock across the network** (`lib.rs:fetch_and_cache_profile` takes `inner`). Lift the fetch out of the lock (`core/CLAUDE.md`).
