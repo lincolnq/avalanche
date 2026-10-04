@@ -220,3 +220,25 @@
 }
 .send-btn:hover { opacity: 0.75; }
 .send-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* Full-window drop target while dragging files over the app. */
+.compose-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-backdrop);
+  pointer-events: none;
+}
+.compose-drop-card {
+  padding: 28px 40px;
+  border: 2px dashed var(--color-accent-text);
+  border-radius: 16px;
+  background: var(--color-paper);
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: 0 12px 40px var(--color-shadow);
+}

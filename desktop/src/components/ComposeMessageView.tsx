@@ -176,6 +176,68 @@ export default function ComposeMessageView(props: Props) {
     const file = e.currentTarget.files?.[0];
     e.currentTarget.value = ""; // allow re-picking the same file
     if (!file) return;
+    await stageFile(file);
+  }
+
+  // Pasted or dropped images stage exactly like a picked file. Only images, to
+  // match the picker (accept="image/*"); anything else is ignored.
+  async function stageImages(files: File[]) {
+    for (const f of files.filter((f) => f.type.startsWith("image/"))) {
+      await stageFile(f);
+    }
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    if (props.editingMessage) return;
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return; // plain text paste: let the textarea handle it
+    e.preventDefault();
+    void stageImages(files);
+  }
+
+  // Drag-and-drop anywhere over the window while a conversation's composer is
+  // mounted (requires the main window's dragDropEnabled: false, so the webview
+  // receives HTML5 drop events instead of Tauri's native handler).
+  const [dragging, setDragging] = createSignal(false);
+  let dragDepth = 0;
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  function onDragEnter(e: DragEvent) {
+    if (!hasFiles(e) || props.editingMessage) return;
+    dragDepth++;
+    setDragging(true);
+  }
+  function onDragLeave(e: DragEvent) {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) setDragging(false);
+  }
+  function onDragOver(e: DragEvent) {
+    if (!hasFiles(e) || props.editingMessage) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }
+  function onDrop(e: DragEvent) {
+    dragDepth = 0;
+    setDragging(false);
+    if (!hasFiles(e) || props.editingMessage) return;
+    e.preventDefault();
+    void stageImages(Array.from(e.dataTransfer?.files ?? []));
+    inputRef?.focus();
+  }
+  onMount(() => {
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+  });
+  onCleanup(() => {
+    window.removeEventListener("dragenter", onDragEnter);
+    window.removeEventListener("dragleave", onDragLeave);
+    window.removeEventListener("dragover", onDragOver);
+    window.removeEventListener("drop", onDrop);
+  });
+
+  async function stageFile(file: File) {
     setUploading(true);
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
@@ -311,6 +373,11 @@ export default function ComposeMessageView(props: Props) {
 
   return (
     <div class="compose-row-wrap">
+      <Show when={dragging()}>
+        <div class="compose-drop-overlay">
+          <div class="compose-drop-card">Drop images to attach</div>
+        </div>
+      </Show>
       <Show when={props.editingMessage}>
         <div class="compose-editing-bar">
           <span>Editing message</span>
@@ -397,6 +464,7 @@ export default function ComposeMessageView(props: Props) {
               resizeTextarea();
             }}
             onKeyDown={handleKeyDown}
+            onPaste={onPaste}
             disabled={sending()}
           />
           {!sending() && (
