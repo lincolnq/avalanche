@@ -28,7 +28,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   for S-14, `03`).
 - Project tokens: mandatory audience on `verify`; mint only for installed Project origins
   (S-17, `20`).
-- Clamp group message expiry server-side as DMs already do (S-16, `03`).
 
 ## Next: P1 correctness and important gaps
 

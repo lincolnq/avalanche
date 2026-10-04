@@ -863,8 +863,21 @@ async fn send_group_message(
     Ok(Json(SendGroupMessageResponse { message_ids }))
 }
 
+/// How long the server keeps a queued group message. A sender may ask for a
+/// shorter or longer window, but only within the server's bounds, exactly as
+/// for DMs (`routes/messages.rs`); otherwise a sender could make the server
+/// retain group messages past its retention backstop (docs/09 S-16).
 fn clamp_group_expiry(config: &crate::config::Config, requested: Option<i64>) -> i64 {
-    requested.unwrap_or(config.message_expiry_secs)
+    clamp_expiry(
+        requested,
+        config.message_expiry_secs,
+        config.message_expiry_min_secs,
+        config.message_expiry_max_secs,
+    )
+}
+
+fn clamp_expiry(requested: Option<i64>, default: i64, min: i64, max: i64) -> i64 {
+    requested.map(|s| s.clamp(min, max)).unwrap_or(default)
 }
 
 // ── GET /v1/groups/{id}/messages (presentation-auth) ─────────────────────────
@@ -1501,5 +1514,20 @@ impl ServerError {
     /// from a probe with a non-member credential.
     fn not_found_or_forbidden() -> Self {
         ServerError::NotFound
+    }
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::clamp_expiry;
+
+    #[test]
+    fn group_expiry_is_clamped_like_dms() {
+        let (default, min, max) = (30 * 86400, 300, 30 * 86400);
+        let clamp = |r| clamp_expiry(r, default, min, max);
+        assert_eq!(clamp(None), default, "default when unspecified");
+        assert_eq!(clamp(Some(3600)), 3600, "in-range request honored");
+        assert_eq!(clamp(Some(10 * 365 * 86400)), max, "capped at max");
+        assert_eq!(clamp(Some(1)), min, "raised to min");
     }
 }
