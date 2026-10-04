@@ -26,8 +26,12 @@ update its row here and the subsystem doc's Known gaps in the same change.
   database. It should not yield contacts, group memberships, message history, or real names.
   Users should be able to carry on elsewhere.
 - **Surveillance of membership** — membership lists are targeting data for activists. Limit
-  what any party (server operator, relay, other servers, the public) can learn about who is
-  in which org or group, and limit linking a person across servers and identities.
+  what any party (relay, other servers, the public, a seized server) can learn about who is
+  in which org or group, and limit linking a person across servers and identities. **The
+  live operator of your own homeserver is inside the trust boundary:** it's your org (`00`),
+  and it can see group membership whenever a group has activity, as Signal's server can.
+  Group membership is a hard requirement **at rest** (a seized server or its logs), not
+  against the live operator.
 - **Hostile participants** — strangers who know your identifier, malicious group members,
   malicious or careless Projects.
 - **Device seizure** — limited: disappearing messages bound what a seized, unlocked phone
@@ -62,7 +66,7 @@ These properties are implemented and are what the rest of the system relies on:
 | Adversary | Learns today | Intended | Main gaps |
 |---|---|---|---|
 | **Seized homeserver (database at rest)** | Which DIDs are registered; the encrypted profile and group blobs; up to 30 days of undelivered DM rows, each carrying the sender's account (co-membership via SKDM and invite bursts); group change history that is readable JSON with pseudonyms and link passwords, never pruned, exact timestamps; about an hour of IP addresses tied to anonymous group sends and token issuance; raw invite tokens in `server_events`. | DIDs and ciphertext only. | S-09, S-10, S-11, S-12 |
-| **Live homeserver operator** | All of the above in real time, plus: who is online; IP addresses; account-to-pseudonym-to-group links while connected (accepted, `03` §3.7); the full identified DM graph on this server (no sealed sender for 1:1). | Social graph within its own org (accepted), but not group membership. | S-09 (sealed sender for DMs is the main fix) |
+| **Live homeserver operator** | All of the above in real time, plus: who is online; IP addresses; account-to-pseudonym-to-group links while connected (`03` §3.7); **every group's full membership whenever someone sends to it**, since each send lists recipients' IDs, unsalted hashes of their DIDs (`03` §3.11); the full identified DM graph on this server (no sealed sender for 1:1). | Social graph and group membership within its own org (accepted: the operator is your org). Nothing of this written to disk or logs. | S-09; `03` §3.9 rule 6 (no logging of send recipients, test-enforced) |
 | **Push relay operator** | Every device's DM pseudonym and all of its group pseudonyms (registered as one batch), and wakeup timing. One relay serves every server. | Pseudonym timing only. | S-13 |
 | **Relay and homeserver together** | Device to DM pseudonym to account, and device to group pseudonyms to groups: full group membership. | Nothing beyond each alone. | S-13 |
 | **The public (PLC log)** | Every DID's genesis operation, which commits to the **signup server URL**, plus every later key rotation, all permanent. Also the recovery-blob endpoint lets anyone with a DID test which servers hold it. | DID-to-server association optional. | S-06, S-07; Proposed identity changes (`50`) |
@@ -94,7 +98,7 @@ code on 2026-10-03; "Reported" means found in review but not independently confi
 | S-11 | Medium | Exact timestamps on `group_state_history` and `group_member_pseudonyms` (§3.9 rule 5). | `db/groups.rs:456` | Verified | Day-align or drop (`03`) |
 | S-12 | Medium | Raw IPs persisted in Postgres `ip_rate_limit_counters` (about an hour) for anonymous group sends and token issuance, linkable by minute. | `routes/groups.rs:528,633,727`, `db/ip_rate_limits.rs` | Verified | In-memory, keyed counters (`03`) |
 | S-13 | Medium | The relay sees each device's full pseudonym set; relay registration is an unauthenticated `INSERT OR REPLACE`. | `app-core/src/lib.rs` ~3205, `relay/src/main.rs:556` | Verified | Register pseudonyms separately and unlinkably; authenticate registration; pseudonyms backed by a secret (`15`, `41`) |
-| S-14 | High | WebSocket group subscription is last-writer-wins with no ownership check, and draining acknowledges and deletes rows; members can see each other's pseudonyms in change history. A member can silently take over another's group delivery. | `routes/websocket.rs:398-423`, `routes/groups.rs:480-498` | Verified | Pseudonym backed by a secret (the server stores a hash; subscribe presents the preimage); interim: refuse to steal a live subscription (`03`) |
+| S-14 | High | WebSocket group subscription is last-writer-wins with no ownership check, and draining acknowledges and deletes rows; members can see each other's pseudonyms in change history. A member can silently take over another's group delivery. | `routes/websocket.rs:398-423`, `routes/groups.rs:480-498` | Verified | Secret-backed pseudonyms (`03` Proposed, pending review). A cheaper interim that refuses another account's takeover only blocks the live hijack, not draining while the victim is offline |
 | S-15 | High | Clients install SKDMs and decrypt group messages without checking that the sender is a member, and Sender Keys aren't re-seeded when someone is removed; `announcement_only` isn't enforced on receive. | `messaging.rs:1319,1766,1802` | Verified (exploitability of injection reported) | Membership checks on receive; re-seed on removal; enforce announcement-only (`03`) |
 | S-16 | Medium | Group message expiry was not clamped by the server, so a sender could extend server retention. | `routes/groups.rs` `clamp_group_expiry` | Fixed in code (not yet deployed) | Clamped to the same bounds as DMs; unit-tested (`03`) |
 | S-17 | High | Project tokens have no audience: `verify` is unauthenticated and audience-free, and `issue` accepts any `project_url`. A token for one Project is valid at another. Tokens also travel in the URL query string. | `routes/projects.rs:72-124` | Verified | Mandatory audience on verify; mint only for installed origins; move tokens out of the query string (`20`) |
@@ -137,6 +141,9 @@ Pending project-owner review; not to be implemented until approved:
 - **Federation** (`13`): servers never talk to each other; clients deliver to a recipient's
   server under sealed sender, authorized by delivery keys that only contacts hold, with
   identified, rate-limited first contact for strangers.
+- **Secret-backed group pseudonyms** (`03` Proposed): a device holds a secret for each group
+  pseudonym and the server stores only its hash, so nobody else can subscribe to it. Fixes
+  S-14 (and part of S-10 and S-13) without linking pseudonyms to accounts at rest.
 
 ## Audit readiness
 

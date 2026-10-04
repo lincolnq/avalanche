@@ -1,7 +1,7 @@
 # 03 — Groups
 
 > **Status:** Partial — action-bound groups are built end to end (zkgroup credentials, encrypted state, sealed-sender sends, invites, link joins, roles, avatars, disappearing messages). The §3.9 membership-opacity property has real gaps (below), the §9 invariant tests do not exist, and cross-server casual groups (§6) and mesh (§7) are not built.
-> **Last verified against code:** 2026-10-03
+> **Last verified against code:** 2026-10-04
 
 ## Summary
 
@@ -14,11 +14,16 @@ credential. This is Signal's private-group design with the homeserver as the
 credential issuer.
 
 The design goal is that **a seized server does not yield group memberships**
-(§3.9). The server-side group tables mostly hold that property. The traffic around
-them does not yet: invites and Sender Key distribution travel as identified DMs,
-the DM queue records sender accounts, group-change history is server-readable and
-never pruned, and the relay plus the server together can correlate pseudonyms. See
-Known gaps and `09-security-posture.md`.
+(§3.9): membership is protected **at rest**. It is **not** hidden from whoever
+operates the server live: every group send lists each recipient's ID, an unsalted
+hash of their DID, so the server learns the full membership of any group that has
+activity (§3.11). That is accepted by design, as in Signal: the operator is your
+org, which the trust model already trusts with your social graph (`00`). The
+server-side group tables mostly hold the at-rest property. The data around them
+does not yet: invites and Sender Key distribution travel as identified DMs, the DM
+queue records sender accounts, group-change history is server-readable and never
+pruned, and the relay plus the server together can correlate pseudonyms. See Known
+gaps and `09-security-posture.md`.
 
 Background: Chase, Perrin, Zaverucha 2019, *The Signal Private Group System*;
 libsignal at the pinned commit (`rust/zkgroup`, `rust/zkcredential`).
@@ -29,6 +34,13 @@ Verified against code on 2026-10-03 unless marked otherwise. Security items are
 also tracked in `09-security-posture.md`; fixes are in `02`.
 
 **Membership opacity (§3.9)**
+- **A live operator sees membership (accepted).** Each group send carries every
+  recipient's service ID (`SHA-256("actnet-did-to-uuid-v1" ‖ did)`, unsalted;
+  `crypto/src/groups/group_key.rs` `did_to_uuid`) paired with their EMI
+  (`net/src/groups.rs` `GroupSendRecipient`). The server holds every registered DID,
+  so it can match them exactly. Not stored today; §3.9 rule 6 and its test keep it
+  that way. Hiding recipients from a live operator would need an anonymous send
+  (Speculative) and still leaves receive-side IP correlation.
 - **Identified DM plane leaks co-membership.** `GroupContext` invites and
   `SenderKeyDistribution` messages go out as ordinary identified DMs
   (`app-core/src/messaging.rs` `send_dm`), and the DM queue stores
@@ -80,9 +92,6 @@ also tracked in `09-security-posture.md`; fixes are in `02`.
   it (sealed sender) and app-core never checks it on receive.
 
 **Server checks**
-- **Group message expiry is unclamped.** `clamp_group_expiry` is
-  `requested.unwrap_or(default)` (`routes/groups.rs:866`); DMs clamp to the
-  configured min/max (`routes/messages.rs:133`). A sender can set any retention.
 - **No per-group rate limit** (`group_policy.rate_limit_per_minute` does not exist)
   and **no per-recipient send budget** (zkgroup endorsement tokens expire; they do
   not count uses).
@@ -302,17 +311,20 @@ the relay holds `(pseudonym → device token)`.
 
 Squatting is a known gap (above).
 
-### 3.8 Message expiry — Built (server clamp missing)
+### 3.8 Message expiry — Built
 
 The disappearing-messages timer lives in the encrypted group state; the server never
 learns it. Clients stamp it on each outgoing group message and the local reaper
 deletes on schedule (§5). Independently, the server deletes each undelivered queue
 row after its expiry (default 30 days, Signal's number) via the
-`group_message_expiry` task. **The server is supposed to be unable to extend
-retention past the backstop; today the group send endpoint doesn't clamp the
-sender-supplied expiry** (Known gaps).
+`group_message_expiry` task. The server can't be made to extend retention past the
+backstop: the group send endpoint clamps the sender-supplied expiry to the same
+bounds as DMs (`clamp_group_expiry`, fixed 2026-10; S-16).
 
 ### 3.9 Schema discipline for membership opacity — Partial
+
+Scope: this is an **at-rest** property — a seized server, or its logs. A live
+operator can see membership (§3.11, Known gaps); that is accepted.
 
 The property "a seized server does not yield group memberships" holds *structurally*
 — because the server never holds the group key — **only if** the server keeps no
@@ -324,11 +336,15 @@ auxiliary data linking DIDs to groups. Rules:
    rate counters are fine).
 4. Presentation verification logs counts only, never identifiers or EMIs.
 5. Timestamps on group routing rows are day-aligned or omitted.
+6. Recipient service IDs seen during a group send, and their pairing with EMIs, are
+   never logged or persisted. They identify every member (§3.11). Enforced by the
+   `group_send_handler_logs_nothing` test (`server/src/routes/groups.rs`): the send
+   handler contains no logging at all.
 
 Server-side group-management operations that need DID ↔ group lookup ("remove DID X
 from all groups") are not available; they must be client-driven.
 
-**Status.** Rules 1–4 hold in the current schema and code. Rule 5 is violated by
+**Status.** Rules 1–4 and 6 hold in the current schema and code. Rule 5 is violated by
 `group_state_history.created_at` and `group_member_pseudonyms.created_at`. More
 importantly, these rules only cover the group tables. The property as stated is
 undercut by:
@@ -392,9 +408,16 @@ pinned root, then Sender-Key decrypt.
 **Layer 2, endpoint.** `POST /v1/groups/{id}/send` takes **no Authorization header**;
 it authenticates with one `GroupSendFullToken` over the recipient ServiceId set.
 The server parses the envelope, resolves each recipient EMI to its device pseudonyms,
-verifies the token against the ServiceIds (it never sees DIDs), enqueues one
-`group_message_queue` row per device, live-pushes or relay-wakes, and logs nothing
-identifying. Rate limiting is per IP (stored — Known gaps).
+verifies the token against the ServiceIds, enqueues one `group_message_queue` row per
+device, live-pushes or relay-wakes, and logs nothing (§3.9 rule 6). Rate limiting is
+per IP (stored — Known gaps).
+
+**What the server learns.** The *sender* is hidden. The *recipients* are not: each
+ServiceId is `UUID(did)`, an unsalted hash the server can compute for every DID it
+has registered, so the server learns the group's full membership, paired with EMIs,
+from any send. Signal makes the same trade (sender hidden, recipients known). The
+protection that remains is at rest: queue and routing rows are keyed by pseudonym and
+EMI, never by account, and nothing stored maps them to DIDs.
 
 **Layer 3, network:** out of scope.
 
@@ -527,8 +550,9 @@ each defense; don't take it on faith.
 
 ## 9. Invariant tests — Planned
 
-**None of these tests exist today** (`core/crates/server/tests/` has only
-`db_tests.rs`, `group_tests.rs`, `http_tests.rs`). The earlier plan listed eight AST-
+**These tests don't exist yet** (`core/crates/server/tests/` has only `db_tests.rs`,
+`group_tests.rs`, `http_tests.rs`), except the no-logging check for the send handler
+(§3.9 rule 6), which is a unit test in `server/src/routes/groups.rs`. The earlier plan listed eight AST-
 and regex-based audits; three of them catch most drift for little cost:
 
 1. **Migration schema audit.** Every column on a group table has an annotation, no
@@ -549,14 +573,12 @@ on the §8 review checklist.
 - **Sealed sender for 1:1 and SKDM traffic** (Signal parity), with delivery keys
   derived from the profile key (`13`, `52`). The biggest single fix for §3.9:
   removes the identified invite/SKDM signature and `sender_account_id`.
-- **Pseudonym with a secret.** The server stores `H(secret)`; a device presents the
-  preimage to subscribe, pick up offline messages, and register with the relay. Keep
-  pseudonyms out of member-visible actions. Fixes squatting without an account link.
+- **Pseudonym with a secret** — now written up under Proposed.
 - **Client-side membership rules:** accept SKDMs and group messages only from DIDs in
   the cached member list (re-fetch state on an unknown sender); re-seed your own
   Sender Key when a member is removed; drop non-admin posts in announcement-only
   groups.
-- **Server fixes:** clamp group message expiry like DMs; prune history to 256
+- **Server fixes:** prune history to 256
   revisions; day-align or drop the exact timestamps; move IP rate limits in-memory;
   make history actions opaque to the server where it doesn't need them (pseudonyms,
   link password).
@@ -565,8 +587,57 @@ on the §8 review checklist.
 - Scheduled pseudonym rotation (§3.7).
 - The three invariant tests (§9).
 
+## Proposed
+
+Pending project-owner review; not to be implemented until approved.
+
+### Secret-backed group pseudonyms (fixes S-14)
+
+**Problem.** Anyone may subscribe to any pseudonym, and members can read each other's
+pseudonyms from the change history, so a member can silently take over another
+member's group delivery and, if the victim is offline, drain and delete their queued
+messages (Known gaps, `09` S-14).
+
+**Design.**
+- When a device creates a group pseudonym, it also generates a random 32-byte
+  `pseudonym_secret`. It registers `(pseudonym, H(pseudonym_secret))` with the server
+  (in the `promote_pending_members` / `push_binding` action, in place of the bare
+  pseudonym). The server stores only the hash on the `group_member_pseudonyms` row.
+- Every operation that acts on a pseudonym presents the secret: `SubscribeGroupPseudonyms`
+  carries `(pseudonym, secret)` pairs, offline pickup and ack likewise, and relay
+  registration too (so the relay can't be pointed elsewhere, `09` S-13). The server
+  hashes and compares, and ignores entries that don't match.
+- Change history and member-visible actions no longer carry pseudonyms at all (a
+  pseudonym is server routing data, not something members need), which also fixes
+  part of S-10.
+- The secret is device-local: each device of an account has its own pseudonym and
+  secret, which also enables per-device group delivery (`04`).
+
+**What it keeps.** The server still never links a pseudonym to an account at rest:
+the secret is random, and its hash says nothing about who holds it.
+
+**Contract changes.** New fields on the group-change and WebSocket subscribe frames;
+a schema column; relay registration changes. Old clients send bare pseudonyms: for a
+transition, the server accepts a bare subscribe only for pseudonyms registered
+without a secret, and refuses it for pseudonyms that have one, so upgraded members are
+protected as soon as they re-register (every member re-registers on its next
+reconcile or rotation).
+
+**Rejected alternatives.**
+- *Route group delivery by account, like Signal.* Removes pseudonyms entirely, but
+  undelivered group messages would then be stored per account, so a seized database
+  would show which accounts have pending messages in which group.
+- *Refuse a subscribe held by another account (interim).* Blocks only the live hijack;
+  an attacker subscribing while the victim is offline still drains their queue.
+
 ## Speculative
 
+- **Anonymous group send.** The sender proves group membership with an anonymous
+  credential presentation instead of listing recipients, and the server fans out to
+  the group's stored pseudonyms itself, so a live operator never learns recipients.
+  Receive-side IP and timing correlation would still let a determined operator link
+  members, so it only pays off alongside an anonymizing transport. Revisit only if
+  serving users who can't trust their own server operator becomes a goal.
 - Guest access for users without an account on the hosting server.
 - MLS in place of Sender Keys, behind the scheme-agnostic interface.
 - Very large channels — see `08`.
@@ -590,4 +661,4 @@ on the §8 review checklist.
 - **Claim-squatting defense: "deliver to all claimers, rely on decryption failure"**
   was chosen over "reject subscribe for pseudonyms the account doesn't own" because
   the latter needs an account → group link (rule 1). Neither was built; the
-  pseudonym-with-secret plan above replaces both.
+  secret-backed pseudonym proposal above replaces both.

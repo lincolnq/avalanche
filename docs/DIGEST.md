@@ -103,7 +103,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - *Stranger with your DID:* attachment URLs leak your IP; group invites now wait as
   requests. [nothing until accept] (S-08; S-02..S-04 fixed)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
-  sender membership check; extend expiry. (S-14..S-16)
+  sender membership check. (S-14, S-15; S-16 expiry fixed)
 - *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
   audience-free tokens replay across Projects. (By design, every member of a server running
   adminbot is an admin, S-29.) (S-17)
@@ -126,14 +126,14 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   pointers fetched from any host, no size cap, under core lock (35); S-09 identified DM plane
   (SKDMs, invites, `sender_account_id`) undercuts group opacity -> sealed sender (03, 13);
   S-14 WebSocket group subscribe last-writer-wins, drain deletes rows -> secret-backed
-  pseudonyms (03); S-15 no sender-membership check on SKDM/group receive, no re-seed on
+  pseudonyms (03 Proposed, pending review); S-15 no sender-membership check on SKDM/group receive, no re-seed on
   removal, `announcement_only` unenforced (03); S-17 Project tokens audience-free, in query
   string (20); S-29 (accepted by design) every new human joins `#admins`, so all members
   are admins on a young server; gap is onboarding on how to close it as the server grows (22).
 - **Medium:** S-10 readable never-pruned group history (03); S-11 exact timestamps on group
   routing tables (03); S-12 IPs persisted in Postgres rate-limit table (03); S-13 relay sees
   full pseudonym set, unauthenticated `INSERT OR REPLACE` registration (15, 41); S-16 group
-  expiry unclamped (03); S-18 no device list/revocation; `/link` `/replace` don't check
+  expiry unclamped (03, fixed); S-18 no device list/revocation; `/link` `/replace` don't check
   identity key, non-transactional, PLC fetch without timeout (04, 50); S-19 unauthenticated
   `GET /v1/recovery/{did}` returns device IDs (50); S-20 genesis op publishes signup server
   (50 Proposed); S-21 device linking with no confirmation code (2025 Signal phishing pattern)
@@ -146,8 +146,13 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-04 done)
-S-05, S-08, S-14, S-17, S-30,
+**Group membership scope:** protected at rest (a seized server or its logs) — the hard
+requirement. Not hidden from the live operator: every group send lists recipients' IDs
+(unsalted DID hashes), as in Signal; accepted because the operator is your org (03 §3.9,
+§3.11). Send-path logging is forbidden and test-enforced (03 §3.9 rule 6).
+
+**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-04, S-16 done)
+S-05, S-08, S-14 (Proposed design), S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay

@@ -24,8 +24,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   for existing databases (S-05, `61`).
 - Attachments: restrict download hosts to known homeservers, cap reads at the pointer's size,
   don't auto-download for un-accepted senders, and fetch off the core lock (S-08, `35`).
-- Refuse a group subscribe that would steal a pseudonym held by another live socket (interim
-  for S-14, `03`).
 - Project tokens: mandatory audience on `verify`; mint only for installed Project origins
   (S-17, `20`).
 
@@ -47,8 +45,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - Client-side group checks: accept SKDMs and group messages only from cached members, re-seed
   your own Sender Key when a member is removed, enforce `announcement_only` on receive (S-15,
   `03`, `32`).
-- Pseudonyms backed by a secret: server stores a hash, subscribe and relay registration present
-  the preimage; keep pseudonyms out of member-visible change history (S-14, S-13, `03`, `15`).
 - Prune group history to the 256-revision ring; keep pseudonyms and link passwords out of
   server-readable history; day-align `created_at` columns (S-10, S-11, `03`).
 - Move IP rate-limit counters out of Postgres into memory (S-12, `03`).
@@ -109,6 +105,8 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - **OIDC-conformant "Sign in with Avalanche"** as the main developer story (`25`).
 - **Project tokens out of the URL query string** (`20`).
 - **Quote-reply** via `reply_to{author, sent_at, unsurfaced}` (`32`; additive proto field).
+- **Secret-backed group pseudonyms** — closes S-14 (members hijacking each other's group
+  delivery), and part of S-10/S-13 (`03` Proposed).
 - **Group/DM flag on `ConversationSummaryFfi`** so clients stop parsing `conversation_id`
   prefixes (`07`).
 - **Validate `conversation/<did>` deep links** before creating a conversation row (S-28; all

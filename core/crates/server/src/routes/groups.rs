@@ -1518,6 +1518,38 @@ impl ServerError {
 }
 
 #[cfg(test)]
+mod send_logging_tests {
+    /// docs/03 §3.9 rule 6: the group-send handler sees every recipient's
+    /// service ID (an unsalted hash of their DID) paired with their encrypted
+    /// member ID. Logging any of it would let the server's logs rebuild group
+    /// membership at rest, so the handler logs nothing at all.
+    #[test]
+    fn group_send_handler_logs_nothing() {
+        let src = include_str!("groups.rs");
+        let start = src
+            .find("async fn send_group_message(")
+            .expect("send_group_message handler not found");
+        let rest = &src[start..];
+        // The handler ends where the next top-level item begins.
+        let end = rest[1..]
+            .find("\nasync fn ")
+            .into_iter()
+            .chain(rest[1..].find("\nfn "))
+            .chain(rest[1..].find("\npub "))
+            .min()
+            .map(|i| i + 1)
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        for forbidden in ["tracing::", "println!", "eprintln!", "dbg!", "log::"] {
+            assert!(
+                !body.contains(forbidden),
+                "send_group_message must not log ({forbidden} found); see docs/03 §3.9 rule 6"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod expiry_tests {
     use super::clamp_expiry;
 
