@@ -45,9 +45,8 @@ All Rust core calls flow: `Solid → invoke() → src-tauri/src/lib.rs → app-c
 The frontend's event loops (`state/createEventLoops.ts`) call `nextEvents()` in a loop,
 plus a connection-state loop calling `waitForConnectionStateChange()` — one of each **per
 signed-in account**. On the Rust side these two app-core methods are native `async`
-exports, so the Tauri commands should simply `.await` them (no `spawn_blocking`, no parked
-thread). **Known breakage:** `src-tauri/src/lib.rs` still wraps them in `spawn_blocking`
-as if they were sync, which no longer compiles (docs/61). Each loop serializes its own
+exports, so the Tauri commands simply `.await` them (no `spawn_blocking`, no parked
+thread). Each loop serializes its own
 calls; events queue in app-core's channel between polls; the consumer initiates every
 fetch, so there is no registration race.
 

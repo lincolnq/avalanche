@@ -681,11 +681,11 @@ fn send_group_message(
         .map_err(|e| e.to_string())
 }
 
-/// Async so it runs off the main thread. `app_core.next_events()` blocks until
-/// decrypted events arrive (WebSocket push via app-core's MPSC channel), so it
-/// must not run on the main thread — that would freeze the WebView. We clone the
+/// `app_core.next_events()` is a native async export that parks on app-core's
+/// event channel until decrypted events arrive, so it is awaited directly — no
+/// `spawn_blocking`, no parked thread (root CLAUDE.md pattern 4). We clone the
 /// `Arc<AppCore>` out of `State` *before* awaiting (a `State` reference cannot be
-/// held across an await point) and run the blocking call on the blocking pool.
+/// held across an await point).
 #[tauri::command]
 #[specta::specta]
 async fn next_events(
@@ -693,9 +693,7 @@ async fn next_events(
     account_id: String,
 ) -> Result<Vec<app_core::IncomingEvent>, String> {
     let app = get_app(&state, &account_id)?;
-    tauri::async_runtime::spawn_blocking(move || app.next_events().map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    app.next_events().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1042,9 +1040,8 @@ fn connection_state(state: tauri::State<'_, AppState>, account_id: String) -> Re
     Ok(get_app(&state, &account_id)?.connection_state())
 }
 
-/// Async + `spawn_blocking` for the same reason as `next_events`: this parks on
-/// `ffi_runtime().block_on(rx.changed().await)` until the connection state
-/// changes, so it must not run on the main thread or it freezes the WebView.
+/// Awaited directly for the same reason as `next_events`: a native async
+/// export that parks until the connection state changes.
 /// `startConnectionLoop` long-polls this concurrently with the event loop.
 #[tauri::command]
 #[specta::specta]
@@ -1054,12 +1051,9 @@ async fn wait_for_connection_state_change(
     last: app_core::ConnectionState,
 ) -> Result<app_core::ConnectionState, String> {
     let app = get_app(&state, &account_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.wait_for_connection_state_change(last)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.wait_for_connection_state_change(last)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Groups ────────────────────────────────────────────────────────────────────

@@ -11,11 +11,11 @@ export const commands = {
 	sendDm: (accountId: string, recipientDid: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_dm", { accountId, recipientDid, plaintext, sentAtMs })),
 	sendGroupMessage: (accountId: string, groupId: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_group_message", { accountId, groupId, plaintext, sentAtMs })),
 	/**
-	 *  Async so it runs off the main thread. `app_core.next_events()` blocks until
-	 *  decrypted events arrive (WebSocket push via app-core's MPSC channel), so it
-	 *  must not run on the main thread — that would freeze the WebView. We clone the
+	 *  `app_core.next_events()` is a native async export that parks on app-core's
+	 *  event channel until decrypted events arrive, so it is awaited directly — no
+	 *  `spawn_blocking`, no parked thread (root CLAUDE.md pattern 4). We clone the
 	 *  `Arc<AppCore>` out of `State` *before* awaiting (a `State` reference cannot be
-	 *  held across an await point) and run the blocking call on the blocking pool.
+	 *  held across an await point).
 	 */
 	nextEvents: (accountId: string) => typedError<IncomingEvent[], string>(__TAURI_INVOKE("next_events", { accountId })),
 	saveMessage: (accountId: string, msg: StoredMessageFfi) => typedError<null, string>(__TAURI_INVOKE("save_message", { accountId, msg })),
@@ -91,9 +91,8 @@ export const commands = {
 	validateInvite: (token: string) => typedError<InviteInfo, string>(__TAURI_INVOKE("validate_invite", { token })),
 	connectionState: (accountId: string) => typedError<ConnectionState, string>(__TAURI_INVOKE("connection_state", { accountId })),
 	/**
-	 *  Async + `spawn_blocking` for the same reason as `next_events`: this parks on
-	 *  `ffi_runtime().block_on(rx.changed().await)` until the connection state
-	 *  changes, so it must not run on the main thread or it freezes the WebView.
+	 *  Awaited directly for the same reason as `next_events`: a native async
+	 *  export that parks until the connection state changes.
 	 *  `startConnectionLoop` long-polls this concurrently with the event loop.
 	 */
 	waitForConnectionStateChange: (accountId: string, last: ConnectionState) => typedError<ConnectionState, string>(__TAURI_INVOKE("wait_for_connection_state_change", { accountId, last })),

@@ -77,8 +77,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   setting (it currently sends the token in cleartext to any `http:` host) (`20`).
 
 **Reliability and correctness**
-- Desktop doesn't compile: await the now-async app-core calls (`desktop/src-tauri/src/lib.rs`
-  ~696, ~1059) (`61`).
 - Server-side WebSocket ping with idle timeout, so half-open sockets stop suppressing push
   (S-24, `10`, `34`).
 - Cancellation path for parked `next_events` / `wait_for_connection_state_change`, so logout

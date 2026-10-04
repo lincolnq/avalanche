@@ -1097,7 +1097,7 @@ dev/prod, authenticated registration.
 - **Desktop (61) — Partial.** Tauri 2 + Solid; Rust commands over `app-core`; TS owns the event
   loops; left sidebar instead of tabs; Project pages in IPC-isolated `WebviewWindow`. **Phrase
   is the credential (sanctioned divergence)**; 56 is the passkey path. Gaps: **constant DB key
-  (S-05)**; **bridge doesn't compile**; no Project login, avatars, account tabs, search, QR
+  (S-05)**; no Project login, avatars, account tabs, search, QR
   scanning; plain JSON metadata. **Rationale:** Tauri over Electron (OS-patched webview vs
   bundled Chromium; Rust links app-core like mobile; small footprint on cheap, replaceable
   hardware). Solid for the only privileged webview (small dependency tree); rejected

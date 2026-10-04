@@ -71,11 +71,6 @@ DID, and restores the account later. Details and load-bearing invariants are in
   effectively unencrypted at rest against anyone who can read the app-data directory. Fix:
   generate a random key per install and store it in the OS credential store (macOS Keychain,
   Windows Credential Manager/DPAPI, Linux Secret Service). See docs/09.
-- **The Tauri bridge does not compile against current `app-core`.** `next_events` and
-  `wait_for_connection_state_change` became native async exports, but
-  `src-tauri/src/lib.rs` (`next_events`, `wait_for_connection_state_change` commands) still
-  calls them inside `spawn_blocking` as if synchronous (`cargo check` fails with E0599). They
-  should simply be awaited.
 - **No Project login** ("Sign in with Avalanche", docs/25): desktop can't act as the
   authorizer, though desktop *users* can authorize from their phone.
 - **No avatar setting, account tabs, or conversation search** (iOS and Android have them).
