@@ -1,132 +1,92 @@
 # mobile/ — iOS and Android apps
 
-## Platform Parity Rule
+## Platform parity
 
-**Any feature added or changed on iOS must be implemented on Android in the same
-session. Any feature added or changed on Android must be implemented on iOS.**
+iOS is the reference implementation; Android mirrors it screen for screen. The parity rule
+itself (and its bug-fix exception) is in the root `CLAUDE.md`. Track feature parity in
+**`docs/62-feature-parity.md`** — the single parity matrix. `docs/60-android-implementation.md`
+holds Android implementation notes, not a tracker.
 
-iOS is the reference implementation. Android must match it feature-for-feature.
-When in doubt about behavior, check the iOS source.
+The end-to-end workflow for a new FFI method (Rust → bindings → iOS → Android → Desktop) is
+in the root `CLAUDE.md` ("UniFFI / Mobile Workflow"); `/new-ffi-method <name>` scaffolds it.
+This file covers only the mobile-specific parts.
 
-The same rule applies across all three platforms — see the root parity rule in
-`CLAUDE.md` and `desktop/CLAUDE.md` for Desktop.
+---
 
-Use `docs/60-android-implementation.md` as the parity tracking document — update
-the `[ ]` / `[x]` checkboxes as each component is completed.
+## FFI calling rules (both platforms)
+
+- **Sync exports** (the default) block on app-core's global Tokio runtime. Call them off the
+  main thread: iOS `Task.detached { try core.method() }.value`, Android
+  `withContext(Dispatchers.IO) { core.method() }`.
+- **Long-wait exports are native async** — `nextEvents()` and
+  `waitForConnectionStateChange()`. `await` them directly (Swift `try await`, Kotlin suspend).
+  **Never** wrap them in `Task.detached` or `Dispatchers.IO`, and never add a sync export that
+  can block indefinitely (root `CLAUDE.md`, pattern 4).
+- All FFI types must be UniFFI-compatible: `String`, `i64`, `bool`, `Vec<T>`, `Option<T>`,
+  custom Record/Enum. Never hold an async lock across the FFI boundary.
+- Views never call `AppCore` directly — always through the service protocol/interface
+  (`AppCoreProtocol` on iOS, `ActnetService` on Android), which has a mock for previews/tests.
 
 ---
 
 ## iOS
 
-The iOS app is a Swift/SwiftUI project under `mobile/ios/Actnet/`.
-
-### Build commands
+Swift/SwiftUI project under `mobile/ios/` (app target `Actnet/`, plus
+`NotificationServiceExtension/`, `ShareExtension/`, and `Shared/` App Group code).
 
 ```bash
-make ios      # incremental: regenerates UniFFI bindings + XCFramework + Xcode project, then builds
-make xcode    # prepare bindings + xcframework + xcodeproj for an already-open Xcode (no xcodebuild)
-make bindings # regenerate UniFFI Swift/Kotlin glue only (no xcframework)
+make ios      # incremental: UniFFI bindings + XCFramework + Xcode project, then build
+make xcode    # prepare bindings + xcframework + xcodeproj for an already-open Xcode
+make bindings # regenerate UniFFI Swift/Kotlin glue only
 ```
 
-`make ios` does the minimum necessary work based on file dependencies — it is safe to run on every change.
-
-### Adding a new feature (UniFFI / Mobile Workflow)
-
-The full cycle for a feature that involves new Rust logic exposed to iOS:
-
-1. Add the Rust FFI method to `core/crates/app-core/src/lib.rs` (sync, `#[uniffi::export]`)
-2. Add to `AppCoreProtocol` in `mobile/ios/Actnet/Sources/Services/ActnetService.swift`
-3. Stub in `mobile/ios/Actnet/Sources/Services/MockActnetService.swift`
-4. Call from `AppState.swift` via `Task.detached { try core.methodName() }.value`
-5. `make ios` to rebuild
-
-Use `/new-ffi-method <name>` to scaffold all four steps as a single command (see `.claude/commands/new-ffi-method.md`).
-
-### FFI constraints (do not violate)
-
-- FFI exports must be **synchronous** — they block on a global tokio runtime (`OnceLock<Runtime>`)
-- All FFI types must be UniFFI-compatible: `String`, `i64`, `bool`, `Vec<T>`, `Option<T>`, custom Record/Enum
-- Never hold an async lock across an FFI boundary
-- Tests use `_async` variants of FFI methods to avoid blocking the test runtime
-
-### AppCoreProtocol pattern
-
-`ActnetService.swift` defines `AppCoreProtocol` — the interface the app uses. All FFI methods go here. `MockActnetService.swift` provides a stub implementation for SwiftUI previews and tests. Never call `AppCore` directly from views — always go through the protocol.
-
-### Key source files
+`make ios` does the minimum work based on file dependencies; it's safe to run on every change.
 
 | File | Purpose |
 |---|---|
 | `Sources/Services/ActnetService.swift` | `AppCoreProtocol` definition + live implementation |
+| `Sources/Services/AppCoreProtocol+Defaults.swift` | Default implementations for protocol methods |
 | `Sources/Services/MockActnetService.swift` | Stub for previews/tests |
-| `Sources/App/AppState.swift` | Top-level observable state, calls FFI via `Task.detached` |
-| `project.yml` | XcodeGen project definition (source of truth for Xcode project) |
+| `Sources/App/AppState.swift` | Top-level observable state; one core per account in `cores` |
+| `Sources/Utils/AvalancheColors.swift` | Semantic color tokens (use these, not system colors) |
+| `project.yml` | XcodeGen project definition (source of truth for the Xcode project) |
 
 ---
 
 ## Android
 
-The Android app is a Kotlin/Jetpack Compose project under `mobile/android/`.
-
-### Build commands
+Kotlin/Jetpack Compose project under `mobile/android/`. Implementation notes:
+`docs/60-android-implementation.md`.
 
 ```bash
-make android            # full build: bindings + native libs, then Gradle builds the debug APK
-make android-bindings   # prep only: regenerate Kotlin UniFFI glue + cross-compile
-                        # libapp_core.so per ABI into app/src/main/jniLibs/ (no Gradle).
-                        # The Android analog of `make xcode`.
+make android            # bindings + native libs, then Gradle builds the debug APK
+make android-bindings   # prep only: Kotlin UniFFI glue + per-ABI libapp_core.so into
+                        # app/src/main/jniLibs/ (no Gradle). The Android analog of `make xcode`.
 ```
 
-`make android` does the minimum necessary work based on file dependencies — the
-Rust cross-compile only reruns when Rust sources change. Gradle needs a JDK 17+;
-the Makefile falls back to Android Studio's bundled JBR if `JAVA_HOME` is unset.
+The Rust cross-compile only reruns when Rust sources change. Gradle needs JDK 17+ (the
+Makefile falls back to Android Studio's bundled JBR if `JAVA_HOME` is unset). The core is
+consumed as UniFFI-generated Kotlin in `mobile/android/Generated/` plus `libapp_core.so`
+loaded via JNA — not an AAR. Both are gitignored build artifacts.
 
-The Rust core is consumed directly (UniFFI-generated Kotlin in `mobile/android/Generated/`
-as a source dir + `libapp_core.so` in `jniLibs/`, loaded via JNA), not packaged as
-an AAR. Both `Generated/` and `jniLibs/` are gitignored build artifacts.
-
-### FFI constraints (same as iOS, different syntax)
-
-- All UniFFI calls from Kotlin must use `withContext(Dispatchers.IO) { core.method() }`
-- The WebSocket loop runs in `viewModelScope` coroutines, cancelled when ViewModel is cleared
-- Min SDK: 26 (Android 8.0)
-
-The SQLCipher DB key is `"dev-placeholder-key"` until Android Keystore integration lands.
-
-See `docs/60-android-implementation.md` for the full parity map and implementation phases.
+- Per-account event and connection loops run in `viewModelScope` and are cancelled when the
+  ViewModel clears.
+- SQLCipher DB keys come from the Android Keystore (`KeystoreKeyManager`).
+- Min SDK 26 (Android 8.0).
 
 ---
 
-## Visual Reference: Screenshots
+## Visual reference
 
-`docs/screenshots/` contains iOS simulator screenshots organized by screen name
-(e.g. `splash.png`, `chats-list.png`, `conversation.png`). When implementing a
-screen on Android or Desktop, use the matching screenshot as a visual reference
-if it exists. If it doesn't exist, derive the layout from the iOS source alone —
-screenshots are optional, not required.
+`docs/screenshots/` is the place for iOS simulator screenshots by screen name (it currently
+holds only a README). When porting a screen, use a matching screenshot if one exists;
+otherwise derive the layout from the iOS source.
 
-Screenshots are only capturable on macOS with the iOS simulator. Contributors on
-Windows or Linux skip this step entirely.
+## Adding or changing a screen (checklist)
 
----
-
-## Adding a New Screen (checklist)
-
-Before closing any branch that adds or changes mobile UI:
-
-- [ ] iOS SwiftUI view created/updated in `mobile/ios/`
-- [ ] Android Compose screen created/updated in `mobile/android/`
-- [ ] AppState (iOS) and AppViewModel (Android) updated consistently
-- [ ] New model fields added to both `.swift` and `.kt` data classes
-- [ ] `docs/60-android-implementation.md` parity table updated
-- [ ] *(macOS only)* Screenshot taken and saved to `docs/screenshots/<screen-name>.png`
-
-## Adding a New FFI Method (checklist)
-
-1. Add Rust method to `core/crates/app-core/src/lib.rs` (`#[uniffi::export]`, sync)
-2. `make bindings` — regenerates Swift + Kotlin glue
-3. Add to `AppCoreProtocol` in `ActnetService.swift` and stub in `MockActnetService.swift`
-4. Add to `ActnetService` interface in Kotlin and stub in `MockActnetService.kt`
-5. Call from `AppState.swift` via `Task.detached`
-6. Call from `AppViewModel.kt` via `withContext(Dispatchers.IO)`
-7. Update Desktop simultaneously (see `desktop/CLAUDE.md`)
+- [ ] iOS SwiftUI view created/updated
+- [ ] Android Compose screen created/updated (and Desktop — see `desktop/CLAUDE.md`)
+- [ ] `AppState` (iOS) and `AppViewModel` (Android) updated consistently
+- [ ] New model fields added to both `.swift` and `.kt` types
+- [ ] Styled with design tokens on both platforms (root `CLAUDE.md`, "Design-check")
+- [ ] `docs/62-feature-parity.md` updated

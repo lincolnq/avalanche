@@ -1,170 +1,132 @@
-# Contacts and profiles
+# 52 — Contacts and profiles
 
-> **Status: partially implemented.** A minimal slice of the contact row is in
-> place: a local `contacts` table (`core/crates/store/src/contacts.rs`) with
-> `did`, `is_curated`, `last_interaction_at`; `list_contacts` /
-> `touch_contact` FFI on `AppCore`; auto-population on send-DM (curating),
-> group invite (curating), inbound DM and inbound group message
-> (non-curating); People / Other sectioning wired into the iOS compose
-> autocomplete (`ComposeMessageView.swift`). The existing
-> `contact_profiles` table still owns cached display names and profile
-> keys; this doc's `contact row` is the union of the two until they merge.
->
-> Not yet implemented: `profile_version` push-style liveness,
-> conversation-open dormancy fetch, message-request gating, blocking,
-> nicknames / notes / favorites / `photo_override`, `preferred_identity`,
-> `learned_route_server`, `safety_number_verified_at`, contact backup,
-> federated profile proxying. Treat the rest of this document as a target.
+> **Status:** Partial — contact rows with curation, blocking, message requests, and a local nickname; encrypted profiles (display name + avatar); the persisted per-outcome fetch throttle; contact and profile-key sync via the storage service. Not built: `profile_version` liveness, favorites, notes, `removed_at`, `preferred_identity` as a stored field, contact backup, profile-key rotation, cross-server profile proxying. One urgent privacy gap (profile key to strangers, S-02).
+> **Last verified against code:** 2026-10-03
 
-Goal: Users have sole and persistent ownership of their "contact book": their contact roll, nicknames, and personal notes about people they talk to on Avalanche:
+## Summary
 
-- I should be able to set my display name and profile picture, and anyone who messages me sees that by default.
-- A user who knows Alice should be able to say "I want to message Alice" and have that be a natural and simple thing, like it is in Signal or texting, while defaulting to doing the 'right thing' in the background in almost all instances. 
-- I should be able to nickname pseudonomous people privately in my contacts, and expect those nicknames not to be shared or leaked beyond my device. And I should be able to view a contact's display name even if I have them nicknamed, since I might need to introduce them to someone else someday by their display name rather than my nickname.
-- My contact book exists beyond the servers that I'm a member of, and beyond the identities that I have chosen to share with others; but it helps me by remembering how I message people so I don't accidentally de-anonymize myself. If I lose access to any of my identities, I should still be able to restore my contact book and reestablish contact with my contacts under other identities.
+Users own their contact book: who they know, what they call people, who they've blocked. It lives on the device (synced across the identity's devices by the storage service, `05`), never as a server-side relationship graph. Each user publishes an **encrypted profile** (display name, avatar) that only holders of their **profile key** can read; the key rides inside E2E messages. Contacts are per identity in storage and unified across identities at query time in the UI.
+
+Code: `core/crates/store/src/contacts.rs` (`contacts` table), `contact_profiles` and `account_info_cache` (`store/src/schema.rs`), `core/crates/app-core/src/profile.rs` (blob format), `messaging.rs` (`SenderGate`, `handle_inbound_profile_key`, `sync_contact_avatar`), `lib.rs` (`block_contact`, `accept_request`, `refresh_contact_profile`, `fetch_and_cache_profile`, `save_shared_contact`), sync adapters in `app-core/src/storage_sync.rs` (`ContactAdapter`, `ContactProfileAdapter`).
+
+Goals:
+
+- I set my display name and picture once; anyone I message sees them.
+- "Message Alice" is natural and does the right thing in the background, including picking the right one of my identities.
+- I can privately nickname people, and still see their real display name (I may need to introduce them by it).
+- My contact book outlives any one server or identity.
 
 ## Design principles
 
-1. **Interaction-driven, like Signal and iMessage.** There is no separate Contacts app or "Add to contacts" gesture. The list of "people I know" surfaces from interaction: anyone you've nicknamed, noted, or DM'd is in the People list, sorted by recency. Everyone else the client has seen — group co-members, senders of unaccepted requests, DIDs whose profile we've cached — exists in the table but doesn't appear in the People list, only in search. Nicknames, notes, and favorites are deliberate curation gestures.
-2. **Default to Signal for the technical model.** The encrypted-profile blob, profile-key distribution via messages, message-request gate, and federation primitives all match Signal — its crypto and protocol design have been validated repeatedly and we should not reinvent them. UX similarities to Signal flow downstream from the Gmail-shaped principle and the underlying protocol shape, not from a desire to mirror Signal's UI.
-3. **Server never sees plaintext profile data.** Display names, avatars, and bios are encrypted with a per-user profile key, distributed only to people the user chooses to share with. A seized server yields encrypted blobs and a list of DIDs — not a membership roster with real names. This is the load-bearing protection for activist users.
-4. **Contacts are local-only.** Client-side state. The server has no "contact list" concept. Individual fields (profile keys) travel inside encrypted messages, but the relationship graph is not server-side.
-5. **One contact book, identity-aware.** Contacts live in a single unified table across all the user's identities, not per-identity. This matches the goal: the contact book exists *beyond* any one identity. Each contact has a `preferred_identity` field — the user's default sender for this contact — populated at add-time from the active identity and user-editable thereafter. That field is what prevents accidental de-anonymization: tapping "message Alice" sends from her `preferred_identity`, not from whichever identity is foregrounded. Nicknames, notes, and photo overrides are person-level and visible under any of the user's identities. **Caveat:** this means an unlock of the app exposes the merged contact book to whoever has the device. We do not currently ship per-identity unlock (a PIN per identity, etc.); if we ever do, revisit the storage decision then.
-6. **Per-DID, not per-conversation.** A contact identifies a peer DID. Conversations reference contacts; contacts don't enumerate conversations. A contact can exist for a DID you share no conversation with.
-7. **Two profile layers.** The substrate profile (name, avatar, bio) is encrypted and distributed via profile keys. Project profiles (attendee directory fields, team roles) are separate — collected by the Project, scoped to the Project, explicitly consented to. Different systems, different purposes.
+1. **Interaction-driven, like Signal and iMessage.** No "Add to contacts" gesture. "People I know" surfaces from deliberate interaction (DMing, accepting, saving a shared contact). Everyone else the client has seen (group co-members, request senders) exists in the table but only appears in search.
+2. **Default to Signal for the technical model.** Encrypted profile blob, profile-key distribution via messages, message-request gate.
+3. **Server never sees plaintext profile data.** A seized server yields encrypted blobs and a list of DIDs, not a roster with real names. This is the load-bearing protection for activist users.
+4. **Contacts are local-only.** The server has no contact-list concept.
+5. **One contact book, identity-aware.** The user sees one book across all identities. **As built**, each identity has its own `contacts` table (in its `IdentityStore`, `06`), and the UI merges them at query time (iOS `AppState.AccountContact` carries the set of identities that know a DID). The acting identity for a new conversation defaults to the identity that most recently talked to that contact. *Caveat:* unlocking the app exposes the merged book to whoever holds the device; there is no per-identity unlock.
+6. **Per-DID, not per-conversation.** A contact identifies a peer DID.
+7. **Two profile layers.** The substrate profile (encrypted, key-gated) is separate from any Project profile (collected by and scoped to a Project, `20`).
 
 ## The contact record
 
-Anything that makes the client aware of a DID — receiving a DM, sharing a group, fetching a profile — creates or touches a single row. There's one row per DID, holding whatever the system has learned plus whatever the user has added.
+Anything that makes the client aware of a DID — a DM, a shared group, a profile fetch — creates or touches one row per DID.
 
 ### What a row holds
 
-- `**did`** — the peer's identifier. Primary key.
-- `**profile_key`** — 32-byte symmetric key learned from an inbound message; enables you to decrypt this contact's profile blob from the server.
-- `**display_name**`, `**profile_fetched_at**` — cache of the decrypted profile blob (can refresh from the server with `profile_key)`.
-- `**cached_profile_version**` — the `profile_version` value (see envelope) that the cached blob was decrypted from. Used to detect change: when an inbound message carries a different version, refetch.
-- `**is_curated**` — bool. Set the first time the user does anything deliberate with this row: sending a DM, accepting a request, favoriting, adding a nickname, writing a note, etc. This is the flag for "the user knows this person", meaning e.g. they appear in the People list.
-- `**is_favorite**` — bool, 'stars' the contact so they appear first
-- `**is_blocked**` — bool, see `12-abuse-handling.md`.
-- `**has_pending_request**` — true if there's an inbound first-time DM. Set on inbound, cleared on Accept / Delete / Send / Block / Report.
-- `**nickname**` — user-set private display-name override.
-- `**notes**` — user-set free-form private notes.
-- `**photo_override**` — user-set private image,  displayed in place of the contact's own avatar.
-- `**preferred_identity**` — which of the user's identities is the default sender for this contact. Set on first interaction; user-editable. The de-anonymization guard: tapping "message" sends from `preferred_identity`, not from whichever identity is foregrounded.
-- `**learned_route_server**` — cache of outbound routing destination. See `13-federation.md` - "Learned route".
-- `**last_interaction_at**` — sort/recency.
-- `**safety_number_verified_at**` (future) — out-of-band identity verification.
+*Built* (`contacts` table, per identity):
 
-### What `is_curated` drives
+- **`did`** — primary key.
+- **`is_curated`** — "the user knows this person." Set by any deliberate gesture; sticky.
+- **`last_interaction_at`** — recency sort.
+- **`is_blocked`** — see `12`.
+- **`has_pending_request`** — an un-accepted inbound first-time DM.
+- **`nickname`** — private local name ("the name I know them by"). Set today only by saving a shared contact card (`35`); there is no rename UI yet. Not synced across devices yet.
 
-The flag is the single source of truth for "the user knows this person." It drives:
+*Built, separate tables:* `contact_profiles` (`did`, decrypted `display_name`, `profile_key`, `fetched_at`); `account_info_cache` (bots: `display_name`, `is_bot`); `avatar_cache` (device-local decrypted avatars, `55`); `profile_fetch_state` (throttle, below).
 
-- **People list** — rows where `is_curated AND NOT removed_at AND NOT is_blocked`, sorted by `last_interaction_at`.
-- **Message-request gate** — inbound from `is_curated` rows passes; everyone else hits the request UI (unless `is_blocked`, in which case it's dropped post-decrypt).
-- **Backup** — every `is_curated` row, plus every `is_blocked` row (so blocks survive). Everything else rebuilds from interaction on a new identity.
-- **Search "primary" section** — `is_curated`. "Other" section — every other row in the table.
+*Planned fields:* `is_favorite`, `notes`, `photo_override`, `removed_at`, `first_sent_at`, `cached_profile_version`, `safety_number_verified_at`. *Proposed (depends on `13`):* `learned_route_server`.
 
-Blocking and removal are orthogonal flags that override visibility but don't change curation: a row stays `is_curated` even after being blocked or removed, so we remember the relationship existed. It just doesn't appear in the People list while one of those overrides is set.
+### What is_curated drives
+
+The single source of truth for "the user knows this person." Built uses:
+
+- **Message-request gate** — inbound from a curated sender delivers normally; anyone else is a request (`SenderGate`, `messaging.rs`); blocked senders are dropped after decryption. **Exception: senders whose account record says `is_bot` also pass** — see *Known gaps*.
+- **Read receipts** — only sent to curated senders (`send_read_receipt`).
+- **Search / compose sectioning** — "People" = curated, "Other" = everyone else.
+
+Planned uses: a standalone People list; contact backup (curated + blocked rows).
+
+Blocking is orthogonal to curation: a row stays curated after being blocked, so the relationship is remembered.
 
 ### What changes a row
 
-Deliberate user gestures flip `is_curated = true` (sticky) and do their own thing. Non-deliberate events (inbound, group co-membership) never flip `is_curated`.
+Deliberate gestures set `is_curated = true` (sticky). Non-deliberate events never do.
 
-- **Receive DM** — create row if missing. If `is_curated`, deliver normally. Else, set `has_pending_request = true` (or drop if `is_blocked`).
-- **Send DM** — create row if missing. Set `is_curated = true` and `first_sent_at` (if null). Clear `has_pending_request`. Refused locally if `is_blocked`.
-- **Accept request** — clear `has_pending_request`, send a delivery receipt (which counts as a send and so sets `is_curated` + `first_sent_at`).
-- **Delete request** — clear `has_pending_request`. Row stays as profile cache.
-- **Report Spam and Block** — set `is_blocked = true`, clear `has_pending_request`, forward report.
-- **Block** (from anywhere) — set `is_blocked = true`.
-- **Unblock** — set `is_blocked = false`.
-- **Favorite / unfavorite** — toggle `is_favorite`. First time favorited sets `is_curated = true`.
-- **Set / change nickname, note, or photo override** — write the field. First non-null write sets `is_curated = true`. Clearing the field later does NOT unset `is_curated`.
-- **Remove from People** — set `removed_at`. Clear `is_favorite`. `is_curated` stays set. Row stays in the table.
-- **Hard delete** — drop the row. Future inbound creates a fresh row with no history.
-- **Group co-membership** — create row if missing, populate profile cache when keys arrive. No flag changes. Co-members are not auto-curated.
-- **Profile fetch / key receipt** — update `profile_key`, `display_name`, `profile_fetched_at`. No flag changes.
+- **Receive DM** — create row if missing. Curated → deliver. Else set `has_pending_request` (or drop if blocked).
+- **Send DM** — create row, curate, clear `has_pending_request`. Refused locally if blocked.
+- **Accept request** — clear `has_pending_request`, curate.
+- **Delete request** — clear `has_pending_request`; delete the conversation's local history. Row stays as profile cache.
+- **Report** (`12`) — set `is_blocked`, clear `has_pending_request`, file the report.
+- **Block / Unblock** — toggle `is_blocked`.
+- **Save a shared contact card** (`35`) — set `nickname`, curate.
+- **Group co-membership** — create row if missing; no flag changes. Co-members are not curated.
+- **Profile fetch / key receipt** — update `contact_profiles`; no flag changes.
 
-### More about `preferred_identity`
+*Planned:* favorite, note, photo override, nickname edit (curate on first non-empty write); "Remove from People" (`removed_at`); hard delete.
 
-Storing the identity you are talking to someone with is fairly important since we want to help prevent our users accidentally messaging someone with the wrong identity and unmasking themselves. The way we do this is just by storing one of our own identities on each contact row.
+### Which identity to message from
 
-But `preferred_identity` references can stale: A homeserver being down for a long time, logging out on a device, and moving to a new device that hasn't signed in to the relevant identity all could leave the field pointing at something not currently usable to send.
+*Built:* a conversation is bound to exactly one of the user's identities by construction (`37`). For a *new* conversation, the compose flow picks the identity that most recently talked to the chosen contact and lets the user change it (`ComposeMessageView.swift`).
 
-Conversations are read-only if the preferred identity is unavailable at the time you open them, but you can override it at the conversation level: the read-only status is surfaced via a banner which explains the situation; if you tap it you are offered the option to send using a different identity or offered the option to recover the correct identity. Somewhere in settings there's a way to update preferred identity for all contacts with a given identity configured.
-
-There is also some nuance once groups are introduced: let's assume you own identities A and B. You've indicated your preferred identity with C is B, but if you were added to a group with C under identity A, you need to be sending messages to that group as A. So it demonstrates that groups also need to track preferred identity separate from contacts.
+*Planned:* persist an explicit `preferred_identity` per contact (user-editable), with a repair flow when it points at an identity no longer on the device. Groups bind their own identity (the one that joined), independent of any contact's preference.
 
 ## The substrate profile
 
-The encrypted profile blob is what the cached `display_name` is decrypted from.
-
 ### Contents
 
-For stage 4, the profile contains only `display_name` (required, set at account creation). Future fields use the same blob with no schema version — unknown fields are ignored by older clients:
-
-- `avatar` (URL to an encrypted attachment + decryption key)
-- `bio` (short text)
-- `bio_emoji` (single emoji)
+*Built:* JSON `{ display_name, avatar_version?, avatar_digest? }` (`profile::ProfilePlaintext`). Unknown fields are ignored by older clients, so no schema version. Avatar bytes live out-of-band (`55`). *Planned:* `bio`.
 
 ### Profile key
 
-A 32-byte random symmetric key generated at account creation. Stored alongside the identity's identity keys in the local SQLCipher DB. The profile key is the single secret that controls who can read your profile.
-
-It does NOT rotate when you update your profile. It only rotates when you want to revoke access (e.g., after blocking someone), which forces re-distribution to all remaining contacts. Profile key rotation is out of scope for stage 4.
+A 32-byte random key generated at account creation, stored in the identity store. It does **not** rotate on profile edits. *Planned:* rotation for revocation (e.g. after blocking), which forces redistribution to remaining contacts.
 
 ### Encrypted blob
 
-The profile is JSON, encrypted with the profile key using AES-256-GCM, uploaded to the homeserver as opaque bytes. The user's client maintains a monotonic `profile_version` counter (uint64) alongside the blob — incremented on every profile update. When the user changes their display name: increment the counter, re-encrypt with the same key, re-upload, replacing the old blob.
-
-The version counter is what recipients use to detect that the blob has changed; see "Liveness via `profile_version`" below.
+AES-256-GCM under the profile key, `nonce(12) ‖ ciphertext+tag`, uploaded as opaque bytes (`PUT /v1/profile`). Display-name change → re-encrypt with the same key, re-upload.
 
 ### Profile key and version distribution
 
-The outer `ContentMessage` envelope carries two profile fields:
+*Built:* `ContentMessage.profile_key = 17` rides the outer envelope. App-core attaches the sender's own profile key to outgoing DMs, group messages, delivery receipts, and read receipts (`own_profile_key`). Recipients cache it in `contact_profiles` when the embedder calls `fetch_and_cache_profile` (iOS does this on every inbound message carrying a key).
 
-- `profile_key` (32 bytes) — the key needed to decrypt the sender's profile blob. Stable; only changes on rare rotation events (e.g., revocation after blocking, deferred for stage 4).
-- `profile_version` (uint64, varint-encoded) — the sender's current profile-version counter. Changes whenever the sender edits their profile.
+**Not built:** `profile_version`. It is not in `content.proto` (fields 19–30 are reserved). Without it, a recipient only learns a profile changed when it refetches.
 
-Both fields ride on the outer envelope, not inside any body variant, so they accompany every message type (text, receipts, typing, etc.). Following Signal's model, both are included only for recipients the sender has chosen to share their profile with — for stage 4 that's everyone they DM.
-
-Recipients cache `profile_key` once and rarely have to update it. They compare `profile_version` against `cached_profile_version` on every incoming message; mismatch triggers a refetch (see below).
-
-**Invite tokens** carry the inviter's profile key and current version in their payload. When the new user registers and the auto-DM is created, they can immediately fetch and decrypt the inviter's profile. After that, both fields travel with regular messages. Invite tokens also carry the inviter's plaintext display name as a UX fallback so the invite-acceptance screen can show "Alice invited you" before any server communication.
+*Planned:* invite tokens carry the inviter's profile key so the auto-DM can render the inviter's name immediately (check `51` for the current token contents).
 
 ### Liveness via `profile_version`
 
-Profile changes propagate push-style, via the version field in inbound messages:
-
-- Sender updates profile → counter increments.
-- Sender's next outbound message carries the new `profile_version`.
-- Recipient sees `profile_version` differs from `cached_profile_version` → refetch the blob, decrypt with the `profile_key`, update cache and UI.
-
-For active conversations (DM or group), this means profile changes propagate within roughly one message round-trip in either direction. The recipient never has to ask "did this change?" — the answer is in the next message they receive from the sender, or in the next delivery receipt from a recipient they sent to.
-
-For dormant contacts (nobody has sent or received in a while), version signal doesn't arrive. That's what the opportunistic fetch covers; see below.
+*Status: Planned.* Add `profile_version` (uint64) to the envelope; a sender bumps it on every profile edit; a recipient whose cached version differs refetches. This is the primary liveness path in Signal and makes the conversation-open fetch a fallback. Until then, liveness comes only from the conversation-open refresh and cold-cache renders below, so a name or avatar change can take arbitrarily long to reach a contact who doesn't open the conversation.
 
 ## Fetching profiles
 
 ### When the client fetches
 
-There are two server endpoints a client hits to learn a name, and they cover disjoint DID sets:
+Two endpoints, disjoint DID sets:
 
-- **Encrypted profile blob** (`get_profile`) — for **humans**. Decrypted client-side with the contact's `profile_key`. This is the substrate profile described above.
-- **Public account record** (`get_account_info`) — for **bots**. Humans publish no plaintext name server-side, so this returns a name only for bot accounts. Cached locally in `account_info_cache` (display name + `is_bot`) so bot DM titles and hexagon avatars resolve offline.
+- **Encrypted profile blob** (`get_profile`, authenticated, `404` for both "no such DID" and "no blob") — humans; decrypted client-side.
+- **Public account record** (`get_account_info`) — bots; humans publish no plaintext name. Cached in `account_info_cache` so bot names and hexagon avatars (`54`) resolve offline.
 
-Both are governed by the same trigger + throttle policy below. A given DID is reachable through exactly one of them (a human has a profile blob and no useful account record; a bot is the reverse), so a single per-DID throttle key covers both without cross-talk.
+*Built triggers:*
 
-Triggers, in order of how often they fire:
+1. **Conversation open** — `refresh_contact_profile` refetches if the throttle allows.
+2. **Inbound profile key** — `fetch_and_cache_profile` when a message carries a key that differs from the cache.
+3. **Cold-cache render** — the name resolver fetches, subject to the throttle.
 
-1. **Version mismatch on inbound** — an inbound message carries a `profile_version` that differs from `cached_profile_version` (or there's no cached profile yet). Fetch the blob, decrypt with `profile_key`, update cache. This is the primary path and handles all active contacts sending messages into any group you're in. Driven by genuine evidence of change, so it bypasses the rate limit below.
-2. **Dormant-contact opportunistic fetch** — when the user opens a conversation, refetch if the throttle permits (see below). This is the safety net for contacts who changed their profile during a long silent period — nothing in the message stream signaled it.
-3. **Cold-cache render** — UI needs to render a name for a contact/bot with no cached name. Fetch, subject to the throttle.
+*Planned trigger:* version mismatch on inbound (needs `profile_version`), bypassing the throttle.
 
-No daily background sweep. The version-in-envelope mechanism makes one unnecessary for active contacts; the conversation-open dormancy fetch covers the inactive ones at the moment the user actually cares.
+No daily background sweep.
 
 ### Client-side rate limiting
 
-Modeled on Signal's `ProfileFetcher` (`docs/signal-research/profile-key-transmission.md` §"Caching and Rate Limiting"). The decision is keyed on the **outcome of the last attempt**, not a single flat interval — a negative outcome (not-found, not-authorized) is cached just like a success, which is what stops an unnameable DID from re-fetching on every render:
+*Status: Built.* Modeled on Signal's `ProfileFetcher`. The decision is keyed on the **outcome of the last attempt**:
 
 | Last outcome | Skip window |
 |---|---|
@@ -175,150 +137,92 @@ Modeled on Signal's `ProfileFetcher` (`docs/signal-research/profile-key-transmis
 | Rate limited | 5 min |
 | Other failure | 30 min |
 
-**Persisted across launches.** Signal's cache is an in-memory LRU that dies on app kill; ours stores `(did → last_attempt_at, outcome)` in SQLCipher (`profile_fetch_state`), so relaunching the app and reopening the same chat is a local no-op rather than a fresh server round-trip. This is a deliberate improvement over Signal — our in-memory name caches reset every launch, so an un-persisted throttle would re-fetch everything on each cold start.
+**Persisted across launches** in `profile_fetch_state` — an improvement over Signal's in-memory LRU, since our in-memory name caches reset every launch. **Decided in core**, not the client: the UI calls on every conversation appear; core no-ops when fresh. Shared with node bots.
 
-**Decided in core, not in the client.** The "should I actually hit the server?" gate lives in app-core (`refresh_contact_profile`, `get_account_info`, the name resolver), reading the persisted throttle. The UI keeps calling on every conversation `onAppear`; core no-ops when the entry is fresh. This mirrors Signal's split (the view controller always fetches in `viewDidAppear`; `ProfileFetcher` decides to skip) and keeps the policy shared with the node bots and unit-testable.
-
-- **In-flight dedup:** only one fetch in flight at a time per DID, regardless of trigger.
-- **Group-open fan-out:** opening a group resolves member names through the same throttle; fetches are shuffled and spaced (~100 ms) rather than fired in a simultaneous burst (Signal's `ProfileFetcher.swift:294-323`).
-- **Negative-row hygiene:** a failed/empty bot lookup records a throttle *outcome*, it does not write an empty-name row into `account_info_cache` — the cache holds only rows carrying a real name or `is_bot`.
-
-Version-mismatch fetches (trigger 1) don't get a separate rate limit — they're driven by genuine evidence of change, so suppressing them would defeat their purpose.
+- **In-flight dedup:** one fetch per DID at a time.
+- **Group-open fan-out:** member name fetches are shuffled and spaced (~100 ms).
+- **Negative-row hygiene:** a failed/empty bot lookup records a throttle outcome; it never writes an empty-name row into `account_info_cache`.
 
 ### Authoritative storage and cross-server fetches
 
-Across the federation, the **discovery server** for a DID (the server published in PLC) is authoritative for the profile blob. Profile upload (`PUT`) is meaningful only on the discovery server — that's where the canonical blob lives. Migrating discovery servers re-uploads to the new one.
+*Built (single server):* the profile blob lives on the account's homeserver; `GET /v1/profile/{did}` is authenticated and returns an identical `404` for "no such account" and "no blob", so an authenticated caller can't use it to confirm membership.
 
-Profile fetch (`GET`) is satisfiable on **any** server the requester is authenticated to. The serving server resolves the DID, federates the fetch to the discovery server, and returns the response to the requester. There is **no server-side profile cache** — each fetch federates fresh. PLC resolution (DID → discovery-server URL) may be cached server-side with a multi-hour TTL since PLC documents are public and signed.
+*Planned / depends on `13`:* the discovery (home) server is authoritative for the blob. Under server-to-server federation, any server would proxy the fetch to the discovery server with no server-side cache, bounded by per-(account, target) and per-(server, server) rate limits. Under the Proposed client-side federation (`13`), the client fetches directly from the contact's home server instead — simpler, and no server learns who is looking up whom on another server. Either way the profile fetch should not reveal local membership; prekey fetches remain the harder membership-leak problem (`13`).
 
-A 200 from server X says only "X was willing and able to fetch this profile," nothing about whether the target DID is a local member of X. All servers behave identically for all DIDs.
-
-#### Federation abuse controls
-
-Without a server cache, the serving server is a pure proxy for arbitrary federation traffic. Bound with:
-
-- Per-(local-account, target-DID) rate limit on profile fetches.
-- Per-(serving-server, discovery-server) outbound rate limit on federated fetches — prevents one server from being used to flood another with profile probes.
-
-Reuses the federation rate-limit primitives in `13-federation.md`; no new mechanism.
-
-#### Membership confirmation more broadly
-
-The proxy-any-DID property closes the profile-fetch leak (200 carries no info about local membership) but does NOT plug the broader membership-confirmation problem. Prekey lookups are still per-server (`13-federation.md`) and the timing and error shape of a federated prekey fetch can still differentiate "this DID is on server X" from "this DID is elsewhere." Profiles are easier to make membership-blind because the blob is global user state; prekeys are inherently per-server. Closing the prekey leak is tracked in `00-design.md` and `13-federation.md`, not here.
-
-#### Discovery-server seizure
-
-If the discovery server is seized or offline, new profile fetches for affected users fail until the user migrates discovery servers (`13-federation.md` "Discovery-server migration"). Client-side caches keep working with the last-fetched blob; affected users just stop receiving updates until migration completes.
-
-We considered per-member-server replication (each server the user joins holds its own copy, updates fan out client-side) for better seizure resilience. Rejected: duplicates the prekey-distribution complexity for state that changes orders of magnitude less often, and the seizure window is bounded by the user's ability to migrate, which is the same recovery path as for the DID document itself.
+If the authoritative server is seized or down, new fetches fail until the user migrates; cached profiles keep working.
 
 ## Subsystem interactions
 
-### Message requests (`12-abuse-handling.md` §1)
+### Message requests (`12` §1)
 
-The gate passes iff `is_curated`. Everyone else lands in the request UI. Any deliberate gesture (send, accept, favorite, nickname, note, photo override) flips `is_curated`, so the gate auto-resolves once the user has expressed any intent about the person.
+The gate passes iff curated (or `is_bot`, see gaps). A request shows Accept / Delete / Report. Accept curates; Delete wipes the local conversation.
 
-### Blocking (`12-abuse-handling.md` §2)
+### Blocking (`12` §2)
 
-Sets `is_blocked = true`. The separate `blocked_dids` table described there folds into this — same key space, no reason to have two tables of DIDs the user has a relationship with. Blocking a DID you've never interacted with creates a row with `is_blocked = true` and nothing else set.
+`is_blocked` on the contact row; there is no separate `blocked_dids` table. Blocking a never-seen DID creates a bare row. Settings shows a Blocked list on iOS, Android, and Desktop.
 
 ### Multi-device sync
 
-Row mutations (favorite, block, nickname edit, removal, etc.) sync across the user's own devices via a `ContactRowUpdate` sync envelope variant. Same path as `BlockListUpdate` in `12-abuse-handling.md` §2; replaces it. Out of scope until multi-device sync exists; the data model is forward-compatible.
+*Built:* contact rows (`did`, `is_curated`, `is_blocked`, …) and contact profiles (name + profile key) sync across the identity's devices through the storage service (`05`, `ContactAdapter` / `ContactProfileAdapter`), last-writer-wins per record. `nickname` is not carried yet.
 
 ## Backup and survival
 
-The contact book is a separate concern from any one identity. Per the goal, it exists *beyond* the servers the user is a member of and *beyond* the identities they've taken on. The mental model is Gmail: contacts are user-owned and survive everything else.
+*Status: Planned.* The goal (the Gmail mental model): the contact book survives loss of any one identity or server. Today it survives device loss via each identity's storage-service records (`05`), but not loss of the identity itself.
 
-Concretely:
-
-- **One unified backup blob** across all the user's identities — matches the unified storage model. Encrypted under a key derived from the recovery passphrase (distinct from any identity-key blob), so curation state can be restored independently of any one identity. If a user loses an identity, they restore and re-establish under a new identity.
-- **Backed-up rows:** every `is_curated` row, plus every `is_blocked` row (so blocks survive even without curation). Pure profile-cache and group-co-member rows are not backed up — they rebuild from interaction.
-- **Backed-up fields per row:** `profile_key` (load-bearing — without it, no name resolution post-restore), `is_curated`, hand-edited fields, `is_favorite`, `is_blocked`, `removed_at`, `first_sent_at`, `preferred_identity`. Cached `display_name` is nice-to-have, not load-bearing.
-- **After restore**, `preferred_identity` references may point at lost identities — surface a one-time "pick a new default identity" UI to repair.
-- **Format is stable JSON or protobuf** so the user can also export to another app.
-
-Implementation deferred (see `02-todos-deferred.md`).
+Planned shape: one encrypted backup across all of the user's identities, under a key derived from the recovery secret, containing curated and blocked rows with their profile keys and hand-edited fields, in a stable exportable format. After restore, any per-contact identity preference pointing at a lost identity triggers a one-time repair prompt.
 
 ## UI rendering
 
 ### How names render
 
-The primary name shown for a contact is:
+1. Local nickname, else
+2. Cached profile display name (or account-record name for bots), else
+3. A truncated DID.
 
-1. The user-set nickname if set, otherwise
-2. The cached profile `display_name`, otherwise
-3. `"Unknown"` or truncated DID as placeholder.
-
-The nickname does NOT erase the profile display name. In any contact-detail surface (contact card, conversation header tap-to-expand, etc.) the underlying display name remains visible as a secondary line. This matters because the user may need to introduce the contact to someone else by their actual display name — "tell Alice I said hi" — even when the user privately calls them something else.
+A nickname never erases the display name; contact-detail surfaces show the underlying name as a secondary line.
 
 ### Surfaces
 
-- **People list.** Rows where `is_curated AND NOT removed_at AND NOT is_blocked`. Sorted by `last_interaction_at`, with favorites pinned. This is the closest thing to a "contacts list" the app has, but it's really a recent-interactions list.
-- **Conversation list.** Each row shows the contact's cached display name (or "Unknown").
-- **Message bubbles.** Incoming messages show the sender's cached display name. In 1:1 DMs this is redundant with the conversation header but consistent.
-- **Settings → Your Profile.** See current display name; edit it (re-encrypts and re-uploads); future avatar and bio.
-- **Settings → Privacy → Blocked.** Rows where `is_blocked`.
+*Built:* conversation list and bubbles show cached names; Settings → identity → edit display name and avatar (`55`); Settings → Blocked; compose/search sectioned into People and Other. *Planned:* a standalone People list with favorites pinned.
 
 ### Search
 
-Search returns two sections:
-
-1. **People** — rows where `is_curated`. Matched against nickname, profile `display_name`, notes, and DID prefix.
-2. **Other** — every other row in the table. Matched against profile `display_name` and DID prefix only; user-editable fields are usually empty.
-
-There's no explicit "Save to contacts" affordance; any curation gesture (send, favorite, nickname, note) flips `is_curated` and moves the row from Other into People. The Other section exists primarily so the user can find someone they've seen in a group and start a conversation with them.
-
-Rows where `removed_at` is set don't appear in either search section unless an inbound request raises them in the request UI with the re-grooming warning.
+*Built (compose):* two sections — **People** (curated) and **Other** (everything else), matched on name; DIDs only when the query starts with `did:`.
 
 ## How this extends to Projects
 
-When Projects arrive (stage 6+), the substrate profile mechanism doesn't change. Projects interact with it through scoped permissions:
+Substrate profiles and Project profiles are separate systems. A Project that needs a user's name either learns it through the messaging channel (its bot receives the user's profile key like any other contact) or collects its own fields with the user's consent and stores them in its own tables (`20`).
 
-1. A Project (e.g., Attendee Directory) asks users to share their profile with the Project during onboarding.
-2. The user consents. Their profile key is shared with the Project's bot via the normal encrypted channel (the bot is a group member).
-3. The bot fetches and decrypts the user's profile blob, caching the result in Project-scoped storage.
-4. The Project displays the cached name in its directory UI.
+## Known gaps
 
-Alternatively, a Project can collect its own fields ("Organization," "Role," "Dietary restrictions") that don't exist in the substrate profile. These are Project-owned data, stored in the Project's tables, visible only to that Project's members.
+1. **Profile key sent to un-accepted request senders (S-02, High; P0 in `02`).** On every inbound DM — including from an un-accepted, un-curated stranger — app-core auto-sends a delivery receipt that carries the recipient's own profile key (`messaging.rs`, the auto-delivery-receipt block in the DM receive path, ~lines 1276–1291). Anyone who knows a user's DID can send one message and decrypt that user's real display name and avatar. Signal withholds the profile key until the user accepts. Fix: send the delivery receipt with an empty `profile_key` (or no receipt) unless the sender is curated.
+2. **Self-declared bots bypass message requests (S-03, High; P0 in `02`).** `SenderGate::passes` admits `is_curated || is_bot`, and `is_bot` comes from the sender's server account record, which the account sets for itself at registration (`server/src/routes/registration.rs`, `req.is_bot`). Any spammer can register as a bot and skip the request gate. Fix: bot exemption only for bots whose `official` flag is server-vouched on the user's own server (`54`), or drop the exemption.
+3. **No profile liveness (P2).** No `profile_version`; see above.
+4. **`fetch_and_cache_profile` holds the core lock across the network** (`lib.rs:fetch_and_cache_profile` takes `inner`). Lift the fetch out of the lock (`core/CLAUDE.md`).
 
-The architectural point: substrate profiles and Project profiles are separate systems. The substrate profile is your identity to your contacts (encrypted, key-gated). A Project profile is what you've explicitly chosen to share with a specific Project. No migration between them — they coexist.
+## Planned
 
-## Open questions
+- Fix gaps 1–4.
+- `profile_version` in the envelope (contract change: additive proto field).
+- Favorites, notes, nickname editing UI, People list, `removed_at`.
+- Persisted per-contact identity preference.
+- Contact backup across identities.
+- Profile-key rotation on revocation.
+- Safety-number verification UI.
 
-2. **Where does `learned_route_server` actually live?** (a) Contact row as described, or (b) per-conversation so group co-members get route hints independent of any 1:1 contact relationship. Group routing is mostly per-server already (action-bound groups live on one server). **Recommendation: (a), accept that contact-less group co-members don't get learned-route optimization.** Revisit if cross-server casual-group messaging becomes hot.
-3. **Project-introduced people.** When a Project bot introduces two members, the introduced DID gets a row (profile cache populated) but `is_curated` stays false — the user has to do something deliberate to make them appear in the People list. Directory-style Projects may want a stronger "this is your team, here are everyone's contact details" surface — probably implemented as a bulk "favorite all" gesture inside the Project. Confirm UX shape when we design concrete Projects.
-4. **Contact merging.** If I know two DIDs are really the same person, can I collapse them into one entry? The current model treats every DID as its own row; same person under two DIDs shows up as two People list entries. Merging adds a two-level shape (a person record with 1..N DID rows) and meaningful complexity. Deferred until we have user evidence that the unmerged model creates real toil.
+## Proposed
 
-## Stage 4 implementation scope
+- **Delivery keys from the profile key** (part of the Proposed client-side federation in `13`): derive a delivery key from the profile key so only contacts can send sealed deliveries. Makes gap 1's fix structural — a profile key is a sending capability, so it obviously can't go to strangers.
 
-Build:
+## Speculative
 
-- [done] Profile key generation at account creation
-- [done] Encrypted profile blob (display name only) upload at registration
-- [done] Profile upload/fetch endpoints
-- [done] Profile key included in outgoing messages
-- [done] Profile key in invite tokens
-- [partial] The contact row with the fields and predicates described above (no state enum) — minimal slice: `did`, `is_curated`, `last_interaction_at` in `core/crates/store/src/contacts.rs`. `nickname`, `notes`, `photo_override`, `preferred_identity`, `learned_route_server`, `safety_number_verified_at`, `has_pending_request`, `is_blocked`, `is_favorite`, `removed_at`, `first_sent_at`, `cached_profile_version` not yet added.
-- [partial] Row creation wired into receive, send, group co-membership, profile-key receipt — DM send / inbound DM / inbound group message / group invite all touch the row; profile-key receipt still only writes to `contact_profiles` (not `contacts`), and group co-membership doesn't yet auto-create rows on `fetch_group_state`.
-- [not started] Migration of `blocked_dids` callers to `is_blocked` (no blocking table exists yet)
-- [not started] `profile_version` counter on outbound profile updates and in the `ContentMessage` envelope; fetch + decrypt on version mismatch; conversation-open dormancy fetch (~1 week threshold); local cache on the contact row
-- [done] Per-outcome fetch throttle persisted in `profile_fetch_state` (success/not-found/etc. skip windows), shared by the human-profile and bot account-record fetch paths, decided in app-core. `account_info_cache` for offline bot-name/`is_bot` resolution; write gated on `is_bot || name present`.
-- [done] Edit display name in iOS settings
-- [done] Show cached names in conversation list and message bubbles
-- [not started] Nicknames, notes, favorites — the user-edit gestures are headline goals; ship the editing UX with the contact row
-- [partial] People list surface (rows where `is_curated`) and search across all known rows with "People" / "Other" sectioning — sectioning is implemented in the compose autocomplete; standalone People list surface is not yet built.
+- **Contact merging** (one person, several DIDs). Deferred until there's evidence the unmerged model causes real toil.
+- **Project-introduced people** — a bulk "save everyone on my team" gesture inside a directory-style Project.
 
-Defer:
+## Rationale and rejected alternatives
 
-- Avatar and bio fields
-- Profile key rotation (for revocation use case)
-- Versioned profile fetches (Signal's credential-authenticated fetch)
-- Unidentified access / sealed sender for profile fetches
-- Federated profile proxying (start with single-server, light up cross-server fetches when federation lands)
-- `learned_route_server` and `discovery_server_hint` caches (wire as federation routing lands)
-- `ContactListUpdate` multi-device sync envelope
-- Contact backup format
-- Safety-number verification UI
-- `photo_override` image-handling pipeline (field reserved on the contact record)
-
+- **Per-member-server profile replication** — rejected: duplicates prekey-distribution complexity for state that changes rarely; seizure recovery is the same as for the DID (migrate).
+- **A separate `blocked_dids` table** — folded into `is_blocked` on the contact row: same key space.
+- **A daily background profile sweep** — rejected: version-in-envelope plus conversation-open refresh covers it without background traffic.
+- **In-memory fetch throttle (Signal)** — improved on: persisted, because our name caches reset each launch.
+- **Per-row identity marking in the inbox** — rejected in `37`: the conversation is the context.

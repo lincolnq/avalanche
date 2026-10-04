@@ -1,270 +1,111 @@
-# Project Login ("Sign in with Avalanche")
+# 25 — Project Login ("Sign in with Avalanche")
 
-This document specifies how a user signs in to a Project with their Avalanche
-account: proving they control a DID **and** hold an authenticated account on a
-given homeserver, so the Project can bind a web/session identity to that DID
-(and then DM them / add them to groups through its bot).
+> **Status:** Built on iOS and Android with the server endpoints: OAuth 2.0 auth-code + PKCE (same device) and the RFC 8628 device grant (phone authorizes a desktop browser). Desktop as an authorizer is not built. OIDC conformance is **Proposed**.
+> **Last verified against code:** 2026-10-03
 
-It builds directly on the Project-token model in `20-project-security.md`; read
-that first. This doc adds only the *login ceremony* — issuance and the two
-front-ends — on top of the existing token/verify machinery.
+## Summary
 
-## What login proves (v1 scope)
+A Project can sign a user in with their Avalanche account. Login proves the user controls a DID **and** holds an authenticated account on a given homeserver, so the Project can bind its own web session to that DID and then reach the user through its bot. It is layered on Project tokens (`20-project-security.md`): the **app is the authorization endpoint**, the **homeserver is the token endpoint**, and the **access token is a Project token**, so Projects resolve the DID with the existing `GET /v1/project-token/verify`. No JWT, no signing key, no new introspection endpoint.
 
-**Membership = "an authenticated account exists on this homeserver."** That fact
-is already established by the existing auth gate: to obtain any homeserver
-credential a device must complete the challenge-response in
-`10-server-implementation.md` (sign a server nonce with the Ed25519 identity
-key), and only then can it mint a Project token. So a valid token already proves
-*"controls this DID and holds a registered, authenticated account here."* Login
-surfaces that proof to a Project in an OAuth-standard shape; it invents no new
-server-side membership state.
+## Current design
 
-Explicitly **out of scope for v1** (see *Non-goals*): any notion of "good
-standing" beyond account existence (there is no suspension/ban concept on the
-server today), roles, group-membership claims, pseudonymous/anonymous
-disclosure, and offline (signed-credential) verification. The default and only
-disclosure tier here is the **real DID**, because the common integration is a
-bot that must DM the user and add them to groups (`20` scopes `dm.initiate`,
-`invites.auto-accept`).
+### What login proves
 
-## Trust model
+**"An authenticated account exists on this homeserver."** Minting any Project token already requires a session obtained through challenge-response with the identity key, so a token proves "controls this DID and has a registered, authenticated account here". Login presents that in an OAuth shape and adds no new server membership state.
 
-Unchanged from `20`: the homeserver admin approves ("installs") every Project,
-so a Project is inside the user's trust chain. Login therefore does **not**
-introduce a per-scope runtime consent prompt (that would re-litigate the admin's
-decision — `20` *Project permissions*). What login *does* add is a **consent
-screen**, but its meaning is narrower: it is the user's act of *choosing to sign
-in to this Project as this identity*, not an approval of scopes. The granted
-capabilities are shown for legibility only.
+The disclosed identity is always the **real DID**. Out of scope: "good standing" (the server has no ban concept), roles, group-membership claims, pseudonymous disclosure, offline verification.
 
-## OAuth 2.0 mapping
+### Trust model
 
-Login is OAuth 2.0, so Projects can use off-the-shelf OAuth client libraries:
+As in `20`: the admin installed the Project, so it is in the user's trust chain, and there is no per-scope prompt. The login **consent screen** means "sign in to this Project as this identity". Granted permissions are shown for legibility only.
 
-- **Authorization endpoint** = the **Avalanche app** (native consent), reached
-  by a Universal Link / App Link (`https://<invite_domain>/authorize?...`). There
-  is deliberately **no server-rendered login page** — that would put a web UI and
-  a broader surface on the homeserver, against the `20` "keep the server small"
-  posture.
-- **Token endpoint** = the homeserver (`POST /v1/oauth/token`).
-- **Access token** = a **Project token** (opaque; reuses `project_tokens`), so
-  the Project resolves the DID via the existing, unchanged
-  `GET /v1/project-token/verify`. No new introspection endpoint, no JWT, no
-  signing key.
+### OAuth 2.0 mapping
 
-Two front-ends share this one back-end (consent + issue + verify):
+- **Authorization endpoint = the Avalanche app**, reached by the Universal Link / App Link `https://go.theavalanche.net/authorize?…` (the AASA and App Links files already wildcard all paths). The link carries the standard parameters plus `server_url`, naming the homeserver to authorize against. There is no server-rendered login page.
+- **Token endpoint = the homeserver** (`POST /v1/oauth/token`).
+- **Access token = a Project token** (`project_tokens` row, audience = the Project's `url`), ~1 hour.
 
-### A. Same-device — Authorization Code + PKCE (RFC 6749 + RFC 7636)
+#### A. Same device — Authorization Code + PKCE (RFC 6749 + RFC 7636)
 
-For a user whose browser is on the same device as the app (a phone browser, or
-later a desktop with the app installed).
+The Project redirects to the `authorize` link with `client_id`, `redirect_uri`, `state` and `code_challenge` (S256). The app validates the client against the homeserver, shows consent, and calls `POST /v1/oauth/authorize-code` (session-auth), which binds a code to the account, challenge, client and redirect URI. The app opens `redirect_uri?code=…&state=…`. The Project backend exchanges the code plus verifier at `POST /v1/oauth/token` for `{ access_token, token_type, expires_in, auth_time }`, then calls `verify`. PKCE makes an intercepted code useless.
 
-```
-Project            Browser                 Avalanche app            Homeserver
-  │  build authorize URL                        │                       │
-  │  (client_id, redirect_uri, state,           │                       │
-  │   code_challenge=S256(verifier))            │                       │
-  │────"Sign in"────▶│                          │                       │
-  │                  │── universal link ───────▶│  validate client_id + │
-  │                  │                          │  redirect_uri ───────▶│
-  │                  │                 CONSENT (sign in as Alice?)       │
-  │                  │                          │  POST /oauth/authorize-code
-  │                  │                          │  (session-auth, +challenge)
-  │                  │                          │──────────────────────▶│
-  │                  │                          │◀──── { code } ────────│
-  │                  │◀ open redirect_uri?code=&state= ─│                │
-  │  exchange: POST /oauth/token                │                       │
-  │  (grant=authorization_code, code, verifier, redirect_uri, client_id)│
-  │────────────────────────────────────────────────────────────────────▶
-  │◀──── { access_token, token_type, expires_in, auth_time } ───────────│
-  │  GET /v1/project-token/verify?token=access_token → { did } ─────────▶│
-```
+#### B. Cross-device — Device Authorization Grant (RFC 8628)
 
-PKCE closes the redirect-interception hole: the `code` is useless without the
-`code_verifier`, which never leaves the Project backend.
+For a user at the Project's site in a desktop browser without the Avalanche desktop app. The Project calls `POST /v1/oauth/device_authorization` and renders a QR of `verification_uri_complete`, which is the same `authorize` Universal Link with the user code embedded. The phone opens it, shows consent with an **"another device"** warning, and calls `POST /v1/oauth/device/approve` (session-auth). The Project polls `/v1/oauth/token` (`authorization_pending`, `slow_down`, then the token). No secret reaches the desktop. That is why this doesn't reuse the device-linking ECDH mailbox (`04` §4): there's no key material to protect in transit.
 
-### B. Cross-device — Device Authorization Grant (RFC 8628)
+### Server surface
 
-The mobile-first headline case: the user is at the Project's site in a **desktop
-browser** and has **no Avalanche desktop app**. They authorize with their phone.
-
-```
-Project            Desktop browser          Phone (app)            Homeserver
-  │  POST /oauth/device_authorization (client_id, scope) ───────────────▶
-  │◀ { device_code, user_code, verification_uri,                         │
-  │    verification_uri_complete, expires_in, interval } ────────────────│
-  │  render QR(verification_uri_complete) ──▶│                           │
-  │                  │        scan QR ───────▶│ (opens app; same         │
-  │                  │                        │  authorize universal link)│
-  │                  │                 CONSENT ("signing in on ANOTHER   │
-  │                  │                  device — only continue if you    │
-  │                  │                  started this yourself")          │
-  │                  │                        │ POST /oauth/device/approve│
-  │                  │                        │ (session-auth, user_code) │
-  │                  │                        │──────────────────────────▶ binds
-  │  poll: POST /oauth/token (grant=device_code, device_code) ──────────▶│ account,
-  │◀ { error: "authorization_pending" } … then { access_token, … } ─────│ mints token
-```
-
-The QR encodes the **same** `authorize` Universal Link as front-end A (with the
-device/user code embedded), so a phone-camera scan opens the app directly and the
-app's own QR scanner parses the same string — one code path. **No secret ever
-reaches the desktop**; the desktop/Project only ever holds the opaque
-`device_code` (polled server-to-server) and the final access token, which is
-audience-bound to `project_url` and useless without the Project backend. This is
-why we deliberately do **not** reuse the device-linking ECDH mailbox handshake
-(`04` §4) — there is no key material to protect in transit here.
-
-## Session lifetime & re-authentication
-
-The login ceremony is a **point-in-time identity bootstrap**, not an ongoing
-session. Once the Project has resolved the DID it establishes **its own** session
-(cookie); the platform imposes **no expiry** on that session. A Project that
-wants a permanent "never sign in again" cookie is free to keep one — exactly like
-any "Sign in with X" relying party.
-
-Consequences, stated so Projects design correctly:
-
-- The OAuth artifacts are short-lived (auth `code` ~60s; `access_token` = a
-  Project token, ~1h) and exist only to *establish* identity. A Project must
-  trade them for its own durable session immediately, not treat the access token
-  as its long-term session.
-- **Membership is asserted as-of-login.** With a permanent Project session, the
-  "authenticated account exists" fact is checked once and never re-checked. For
-  v1 this is a non-issue (there is no ban/revocation concept to propagate). *If*
-  a future "good standing" feature lands, a Project wanting continuous
-  enforcement (auto-logout on ban) must re-run the flow periodically or consume a
-  future revocation signal — a permanent cookie by definition will not notice.
-- **Re-authentication is always Project-initiated, never platform-forced.** When
-  a Project does re-prompt, same-device paths keep it frictionless; the QR/phone
-  ceremony only recurs if the desktop session expired *and* the user is back on
-  desktop. Practical advice: set a long Project session so the QR ceremony is
-  rare.
-- The token/verify responses include an optional **`auth_time`** (unix seconds,
-  when the user last proved identity) so a Project can implement its own max-age /
-  step-up policy without any platform-side session management. Refresh tokens are
-  intentionally not provided (a login does not need them).
-
-## Client registration
-
-A Project registers as an OAuth client at **admin-install time** by declaring the
-fields below in its **install manifest** (docs/20, docs/22). They land on the
-Project's `projects` row (`oauth_client_id`, `oauth_redirect_uris`; audience =
-the Project's existing `url`) and `find_client` resolves an incoming login
-request against that row — a Project *is* the registry.
-
-- `clientId` — stable public identifier used in authorize/token/device requests.
-  **Unique across Projects** (a manifest cannot claim another Project's client id
-  to hijack its login resolution); a duplicate fails the install. By convention
-  it is the Project's **domain** (e.g. `beagle.example.org`) — a namespace the
-  Project already controls, so collisions are self-avoiding — but this is a
-  recommendation, not a validation rule (any unique string is accepted).
-- `redirectUris` — exact-match allowlist for front-end A's `redirect_uri`
-  (no open redirect; a `redirect_uri` not on the list is rejected). Only
-  meaningful alongside `clientId`.
-
-Both are **self-declared and self-constraining** — they only ever affect this
-Project's own login flow — so they carry no separate admin approval gesture; they
-ride along with the install the admin already authorizes (shown for legibility).
-The **`official`** verified-badge bit (`54`) is the exception: it is never
-self-declared, stays operator-only, and lives on the Project's directory entry.
-
-There is **no client secret**: same-device is a public client protected by PKCE,
-and the device grant relies on the high-entropy `device_code` returned only to
-the initiating client (RFC 8628 public-client mode).
-
-## Server surface
-
-New endpoints (all under `/v1/oauth`); see `config.rs` for TTLs.
+`core/crates/server/src/routes/oauth.rs`, migration `022_oauth_grants.sql`.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `POST /oauth/authorize-code` | session (`AuthDevice`) | App mints an auth code post-consent, bound to account + `code_challenge` + `client_id` + `redirect_uri`. |
-| `POST /oauth/device_authorization` | none (client) | Start a device grant; returns `device_code`/`user_code`/QR link/`interval`. |
-| `POST /oauth/device/approve` | session (`AuthDevice`) | App approves a `user_code`/`device_code` post-consent; binds account and mints the token. |
-| `POST /oauth/token` | none (client) | Exchange (`authorization_code`) or poll (`device_code`) → `{ access_token, token_type, expires_in, auth_time }`. |
+| `POST /v1/oauth/authorize-code` | session | App mints an auth code after consent |
+| `POST /v1/oauth/device_authorization` | none (IP rate-limited) | Start a device grant |
+| `POST /v1/oauth/device/approve` | session | App approves a device grant and mints the token |
+| `POST /v1/oauth/token` | none (IP rate-limited) | Exchange or poll → `{ access_token, token_type, expires_in, auth_time }` |
 
-`access_token` is a `project_tokens` row, so `GET /v1/project-token/verify` is
-unchanged. The token endpoint returns **RFC-shaped error bodies**
-(`{"error":"authorization_pending"|"slow_down"|"expired_token"|"access_denied"|"invalid_grant"|"invalid_client"}`,
-HTTP 400) rather than the generic `ServerError` responses, per the OAuth specs.
+The token endpoint returns RFC-shaped errors (`authorization_pending`, `slow_down`, `expired_token`, `access_denied`, `invalid_grant`, `invalid_client`, HTTP 400). Lifetimes are configurable (`OAUTH_AUTH_CODE_LIFETIME_SECS`, `OAUTH_DEVICE_CODE_LIFETIME_SECS`, `OAUTH_DEVICE_POLL_INTERVAL_SECS`); expired grants are swept by the background task.
 
-### Data model
+`oauth_grants` holds both grant kinds behind a `grant_type` discriminator: code (primary key), optional `user_code`, `client_id`, `project_url`, optional `redirect_uri` and PKCE challenge, `scope`, nullable `account_id`, status (`pending` / `approved` / `consumed` / `denied`), the minted access token, `auth_time`, and timestamps. Auth codes are single-use. The table links `account_id` to `client_id` only, the same account↔Project linkage `project_tokens` already has, so `03` §3.9 is unaffected.
 
-One new table `oauth_grants` (migration `022`) holding both grant kinds behind a
-`grant_type` discriminator: the opaque `code` (PK; the device_code or auth code),
-optional short `user_code`, `client_id`, `project_url`, optional `redirect_uri`,
-optional PKCE `code_challenge`/`code_challenge_method`, `scope`, nullable
-`account_id` (set on approval), `status` (`pending`|`approved`|`consumed`|`denied`),
-nullable `access_token` (the minted Project token, set on approve/exchange),
-`created_at`, `expires_at`, `last_polled_at` (for `slow_down`). Auth codes are
-single-use (`status → consumed` on exchange). A GC task deletes expired rows,
-alongside the existing token-expiry sweeps.
+`auth_time` is returned by the **token** endpoint only, not by `verify`.
 
-The table carries `account_id` + `client_id` only — the same, already-accepted
-`account ↔ Project` linkage that `project_tokens` has (`20` "what the homeserver
-knows"). No group or DID-set linkage, so the `03` §3.9 membership-opacity
-discipline is unaffected.
+### Client registration
 
-## Client surface (app = authorization endpoint)
+A login-capable Project declares `clientId` and `redirectUris` in its install manifest (`20` §The manifest document); they land on its `projects` row (`oauth_client_id` UNIQUE, `oauth_redirect_uris`), and `find_client` resolves requests against it. A duplicate `client_id` fails the install, so one manifest can't hijack another Project's login. There is no client secret: same-device is a public client protected by PKCE; the device grant relies on the high-entropy `device_code`.
 
-- The existing deep-link routers (iOS `AppState.handleDeepLink`, Android
-  `AppViewModel.handleDeepLink`) gain an `authorize` route parsing the OAuth
-  params + target `server_url`. The `go.theavalanche.net` AASA/App Links already
-  wildcard all paths, so no entitlement/manifest change is needed.
-- A **consent screen** names the Project (+ `official` badge, `54`), the identity
-  being used (`display_name @ server`), and the granted capabilities for
-  legibility. On the device-grant path it additionally warns *"You're signing in
-  on another device — only continue if you started this yourself."*
-- The **device-grant QR** is scanned with the existing QR scanner (`04` §4);
-  short `user_code` entry is the copy-paste fallback.
-- Two FFI methods drive the authed calls: `oauth_issue_code(...)` (front-end A)
-  and `oauth_approve_device(...)` (front-end B). Both are per-account-context: the
-  app selects the account matching the request's `server_url`.
-- **No account on the requested homeserver → a structured, catchable failure**
-  (`NoAccountOnServer { server_url }`) that the app (or a Project) can hook to an
-  invitation/onboarding flow. Onboarding itself is out of scope here.
+### Client surface
+
+- iOS `AppState.handleAuthorizeDeepLink` and Android `AppViewModel.handleDeepLink` parse the `authorize` route. Cold-launch links are staged until accounts are restored.
+- The consent screen (`ProjectLoginConsentView.swift`) names the Project and its checkmark (resolved from the homeserver's directory by `client_id`), the identity being used, and on the device path the "another device" warning.
+- FFI: `oauth_issue_code` and `oauth_approve_device` (`core/crates/app-core/src/lib.rs`).
+- No account on the requested homeserver → a structured `noAccountOnServer` failure the UI surfaces.
+
+### Session lifetime
+
+Login is a **point-in-time identity bootstrap**. The Project then keeps its own session, and the platform imposes no expiry on it. Consequences: trade the access token for your own session immediately; membership is asserted as of login and never re-checked (harmless today, with no ban concept); re-authentication is always Project-initiated. Use `auth_time` for your own max-age policy. No refresh tokens.
+
+## Known gaps
+
+- **The checkmark is always absent.** It comes from the directory's `official` flag, which nothing sets (`20` §Officialness). The consent screen's anti-phishing badge is inert.
+- **Identity choice.** The app uses the first account on the requested server (`handleAuthorizeDeepLink`). A user with two identities on one server can't choose, and isn't told which identity is used unless they read the consent screen.
+- **Project name resolution** depends on the Project having a directory entry; a login-only Project without `webEntries` shows no verified name.
+- **Desktop app as authorizer** is not built. Desktop registers an `avalanche://` OS handler (`desktop/src-tauri/tauri.conf.json`) but has no `authorize` route. Desktop users are served by flow B from their phone. This is a noted exception to the parity rule.
+- **Audience** is recorded but not enforced by `verify` (`20` §Known gaps).
+
+## Planned
+
+- An identity picker on the consent screen when several identities are on the requested server.
+- Show the checkmark once officialness is settable (`22` §Planned).
+- `verify` with a required `audience` (`20` §Planned).
+
+## Proposed
+
+**OIDC conformance as the primary developer story.** Needs project-owner review; it reverses the earlier non-goal.
+
+Most campaign tools (event signup sites, CRMs, anything on NextAuth, Auth0 or a stock OIDC library) can add an OIDC provider without custom code, but cannot easily add a bespoke OAuth flow that ends in a custom `verify` call. Making login OIDC-conformant turns "integrate with Avalanche" into a configuration step:
+
+- **Discovery:** `/.well-known/openid-configuration` on the homeserver, listing the existing endpoints (authorization endpoint = the app's `authorize` link).
+- **`id_token`:** a JWT signed by a per-homeserver key, with `sub` = DID, `iss` = the homeserver URL, `aud` = `client_id`, `auth_time`, `nonce`. This introduces the server signing key `20` avoided; the cost is one key with a published JWKS, and the opaque access token plus `verify` stay as they are.
+- **`userinfo`:** returns `sub` and, only with consent, a display name.
+- **Scope `openid`** gates the above; existing non-OIDC Projects are unaffected (additive).
+
+Paired with the messenger-bot idea in `23` §Speculative, a campaign gets identity and messaging from Avalanche without hosting Signal state.
+
+## Speculative
+
+- Desktop app as authorizer (needs an `authorize` route in the desktop deep-link handler).
+- "Good standing" claims and a revocation signal for continuous enforcement.
+- Pseudonymous per-Project identities for webview-only Projects (`20`).
+- Offline, signed-credential verification.
 
 ## Cross-device consent phishing
 
-The one genuinely new threat (shared by every scan-to-login flow): an attacker
-shows the victim a QR that authorizes the *attacker's* session; the victim scans
-and approves, logging the attacker in as the victim. The phone cannot verify
-where the desktop is. Mitigations (bounding, not eliminating):
+The one new threat, shared by every scan-to-login flow: an attacker shows the victim a QR that authorizes the *attacker's* desktop session; the victim approves and logs the attacker in as themselves. Mitigations bound it without eliminating it: consent copy that says this signs in **on another device** and to continue only if you started it; the Project's checkmark (inert until officialness ships); short code TTLs; IP rate limits on starting a grant and on the token endpoint; approval requires a logged-in session; and a bounded blast radius (one admin-installed Project, a scoped token, no key material).
 
-- The consent screen states plainly that this signs in **on another device** and
-  to continue only if the user started it.
-- The Project's `official` badge is shown so a spoofed/unknown Project is legible.
-- Short `device_code`/`user_code` TTL (a couple minutes), rate-limited; the QR
-  carries the high-entropy `device_code` so there is no brute-forceable typed
-  value (the human `user_code` gets tighter limits per RFC 8628).
-- Blast radius is already bounded: one admin-approved Project, a scoped token, no
-  key material, and a point-in-time assertion.
+## Rationale and rejected alternatives
 
-## Platform scope / parity
-
-- **iOS** (reference) and **Android** implement the deep-link route, consent
-  screen, QR entry, and the two FFI calls in the same change (mobile parity rule).
-- **Desktop app: deferred.** The Avalanche desktop app registers no deep-link
-  handler today, so it cannot be an authorizer without new infrastructure. Desktop
-  *users* are fully served by front-end B (authorize from the phone), so nothing
-  is blocked. "Desktop app as login authorizer" (and its prerequisite, a desktop
-  deep-link handler that would also serve invite/conversation links) are tracked
-  in `02-todos-deferred.md`. This is a deliberate, noted exception to the
-  three-platform parity rule, justified by the missing prerequisite and the fact
-  that the feature works *from* desktop via the phone.
-
-## Non-goals (follow-on work)
-
-- Any "good standing" / suspension / role / group-membership claim (v1 =
-  "authenticated account exists").
-- Offline / signed-credential / `.well-known`-rooted verification; pseudonymous
-  or anonymous (zkgroup) disclosure tiers.
-- OIDC conformance (`id_token`, discovery document, `userinfo`/`sub`) — Projects
-  call `verify`. Revisit only if a Project ecosystem wants drop-in OIDC libraries.
-- Refresh tokens (a login does not need them).
-- The invitation/onboarding handler for the no-account case (only the structured
-  failure is in scope).
-- Avalanche desktop app as an authorizer, and the desktop deep-link handler it
-  requires.
+- **Rejected: a server-rendered login page.** It would put a web UI and a broader attack surface on the homeserver, against `20`'s "keep the server small". The app is the natural authorization endpoint.
+- **Rejected: reusing the device-linking mailbox for cross-device login.** Nothing secret crosses devices, so plain RFC 8628 suffices.
+- **Access token = Project token**, so Project verification is unchanged and one verify path serves both webviews and login.
+- **No refresh tokens.** Login bootstraps the Project's own session; it doesn't need them.

@@ -1,19 +1,24 @@
-# Project Security Model
+# 20 — Project Security Model
 
-This document describes the security model for Projects — standalone services that serve web UIs and operate bot accounts on the avalanche platform.
+> **Status:** Partial — Project tokens, the manifest install, two server-enforced capabilities, the DB-backed directory, and OAuth login are built. The client-honored scope catalog, Project surfaces in conversations, token audience enforcement, and pseudonymous identity are not.
+> **Last verified against code:** 2026-10-03
 
-## What a Project is
+## Summary
 
-A Project is a standalone service that:
+A Project is a standalone service that serves a web UI (opened in an app webview) and, usually, runs bot accounts that are ordinary E2E participants. Because the homeserver has no message keys, anything that touches content or group membership goes through a visible bot. Projects authenticate users with short-lived opaque **Project tokens** minted by the homeserver. An operator installs a Project by handing adminbot a **manifest**; the server records the Project, its bots, and any **server-enforced capabilities** granted.
 
-1. **Serves a web UI** that the mobile app opens in a webview.
-2. **Owns bot accounts** that are full Signal protocol participants — they register on the homeserver, hold their own identity keys, and send/receive encrypted messages like any other account.
+The trust model is the Slack-workspace one: users trust their homeserver's admin, and the admin vets the Projects. Several real gaps exist today (see *Known gaps*), the worst being that Project setup codes carry the server's master registration secret.
 
-Because all groups and DMs are E2E encrypted, any Project that touches message content or manages group membership **must** operate through bot accounts. The homeserver cannot mediate these operations — it doesn't have keys. This means every non-trivial Project follows the same pattern: a standalone service with bots.
+## Current design
 
-## Trust model
+### What a Project is
 
-### The trust chain
+1. **Serves a web UI** that the app opens in a webview (`mobile/ios/Actnet/Sources/Views/Network/ProjectWebView.swift`).
+2. **Owns bot accounts** — full Signal-protocol participants with their own keys, built on `@theavalanche/app-core` (`node/packages/`).
+
+Server-side, a Project is a row in `projects` (`slug`, `name`, `url`, optional token-signing key, optional OAuth client registration), with bots linked through `project_bots` (one Project per bot) and grants in `project_capabilities` (`infra/migrations/015_projects.sql`, `025_projects_oauth.sql`).
+
+### Trust model
 
 ```
 User trusts their homeserver admin
@@ -21,263 +26,88 @@ User trusts their homeserver admin
     → User implicitly trusts that Project
 ```
 
-This is analogous to a Slack workspace admin installing apps. The admin is the gatekeeper; users trust the admin's judgment.
+Actors:
 
-### Who are the actors?
+- **User** — has an account on the homeserver, opens Project UIs.
+- **Operator / admins** — decide which Projects are installed, through adminbot (`22-adminbot.md`).
+- **Project service** — a separate process (and usually a separate origin) that serves web pages and runs bots.
+- **Bot accounts** — registered on the homeserver, visible to every group member, holding their own keys.
 
-- **User**: has an account on the homeserver, uses the mobile app, opens Project UIs.
-- **Homeserver admin**: controls which Projects are available, configures them.
-- **Project service**: a standalone process that serves web pages and operates bot accounts. Runs in the admin's trust domain (same server, same infrastructure).
-- **Bot accounts**: registered on the homeserver by the Project service. Visible to all group members. Hold their own Signal keys.
-- **Attacker**: anyone not in the trust chain — other users, external actors, compromised services.
+**What the homeserver learns from Projects:** that a user asked for a token for a given `project_url` (`project_tokens` rows: `account_id`, `project_url`), and which accounts completed an OAuth login to which client (`oauth_grants`). It does not see webview traffic, which goes directly between the webview and the Project.
 
-### What the homeserver knows
+**What a Project learns:** the DID of any user whose token it verifies; the decrypted content its bots receive; whatever users submit through its UI. It cannot see conversations its bots are not in, other Projects' data, or the app's local store or keys.
 
-The homeserver sees routing metadata (who messages whom, when, device IPs) but cannot read message content. This is unchanged by Projects — bot accounts are just accounts from the homeserver's perspective.
+**Bot visibility is a design invariant: a bot's presence in a group is always visible to all members.** There is no silent observer mode.
 
-The homeserver also knows which users have requested Project tokens (via `POST /v1/project-token`), revealing that the user opened a specific Project. It does not see what the user does within the Project after that — all subsequent traffic goes directly between the webview and the Project service.
+### Authentication: homeserver-issued Project tokens
 
-### What a Project knows
-
-A Project sees:
-- The DID of users who interact with it (from verified Project tokens).
-- The decrypted content of messages its bots receive (the bot has keys).
-- Whatever state users provide through its web UI (form submissions, location data, etc.).
-
-A Project cannot see:
-- Messages in groups/DMs where it has no bot.
-- Other Projects' data.
-- The user's local database, keys, or conversations.
-
-Bot visibility is a critical design invariant: **a bot's presence in a group is always visible to all members.** There is no silent observer mode. If a Project is reading your messages, you can see its bot in the member list.
-
-## Authentication: homeserver-issued Project tokens
-
-### The problem
-
-The Project serves a web UI and an HTTP API. The mobile app opens the web UI in a webview. The Project needs to know the user's identity (DID) in a way that can't be spoofed. DIDs are public identifiers — anyone who knows a DID could call the Project's API and impersonate that user.
-
-**Attack scenarios without authentication:**
-- **Spam**: call the chatbot's `text-me` endpoint with a victim's DID, flooding them with bot messages.
-- **Impersonation**: sign someone up for a team, upload fake location data as them, trigger actions on their behalf.
-- **Resource exhaustion**: create thousands of bots by hitting the API repeatedly.
-
-### The solution: opaque tokens with a verification endpoint
-
-The homeserver is already the auth authority. Before opening a Project webview, the app requests a short-lived, Project-scoped token from the homeserver. The Project verifies this token with the homeserver before acting on any request.
-
-### Flow
+**Built** (`core/crates/server/src/routes/projects.rs`, `infra/migrations/002_project_tokens.sql`).
 
 ```
-Mobile App                    Homeserver                   Project Service
-    │                              │                              │
-    │  POST /v1/project-token      │                              │
-    │  Auth: Bearer <session>      │                              │
-    │  { project_url: "..." }      │                              │
-    │─────────────────────────────▶│                              │
-    │  { token: "x9f2k..." }      │                              │
-    │◀─────────────────────────────│                              │
-    │                              │                              │
-    │  Open webview: project_url/?token=x9f2k...                  │
-    │─────────────────────────────────────────────────────────────▶│
-    │                              │                              │
-    │                              │  GET /v1/project-token/verify│
-    │                              │  ?token=x9f2k...             │
-    │                              │◀─────────────────────────────│
-    │                              │  { did: "did:plc:abc",       │
-    │                              │    project_url: "..." }      │
-    │                              │─────────────────────────────▶│
-    │                              │                              │
-    │                     200 OK (web page / API response)        │
-    │◀────────────────────────────────────────────────────────────│
+App                           Homeserver                    Project
+ │ POST /v1/project-token        │                              │
+ │ (session auth) {project_url}  │                              │
+ │──────────────────────────────▶│                              │
+ │◀──── { token, expires_at } ───│                              │
+ │ open webview: project_url/?token=…                           │
+ │─────────────────────────────────────────────────────────────▶│
+ │                               │ GET /v1/project-token/verify │
+ │                               │◀─────────────────────────────│
+ │                               │── { did, project_url } ─────▶│
 ```
 
-### Homeserver implementation
+- `POST /v1/project-token` (session-authenticated): 32 random bytes, base64url, stored with the caller's `account_id` and the **caller-supplied** `project_url`, default TTL 1 hour (`PROJECT_TOKEN_LIFETIME_SECS`). Expired rows are swept by the background task (`server/src/tasks/mod.rs`).
+- `GET /v1/project-token/verify?token=…` (unauthenticated): returns `{ did, project_url }` or 401.
+- Tokens are multi-use for their lifetime.
+- The webview reads the token from the URL and sends it as `Authorization: Bearer` on API calls. The Project verifies it with one HTTP call and may cache `token → DID` for a few minutes.
+- An OAuth access token (`25-project-login.md`) **is** a Project token, so the same `verify` serves both.
 
-**New table:**
-```sql
-CREATE TABLE project_tokens (
-    token       TEXT PRIMARY KEY,
-    account_id  BIGINT NOT NULL REFERENCES accounts(id),
-    project_url TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at  TIMESTAMPTZ NOT NULL
-);
-```
+| Property | Value |
+|---|---|
+| Format | Opaque random 32 bytes, base64url |
+| TTL | 1 hour (configurable) |
+| Multi-use | Yes |
+| Audience | Stored and returned by `verify`, **not enforced** by the server (see *Known gaps*) |
+| Revocation | Delete the row |
+| Identity disclosed | Always the real DID |
 
-**`POST /v1/project-token`** (authenticated — existing session token middleware):
-- Input: `{ "project_url": "http://localhost:3001" }`
-- Generate 32 random bytes, base64url encode.
-- Store in `project_tokens` with the user's account ID and 1-hour expiry.
-- Return: `{ "token": "x9f2k...", "expires_at": "..." }`
+### Webview: no bridge, deep links out
 
-**`GET /v1/project-token/verify?token=x9f2k...`** (unauthenticated):
-- Look up token in `project_tokens`.
-- If valid and not expired: join with `accounts` to get DID, return `{ "did": "did:plc:abc", "project_url": "http://localhost:3001" }`.
-- If invalid or expired: return 401.
+**Built** on iOS, Android and Desktop. A Project page runs in a standard sandboxed webview (`WKWebView` / `WebView` / Tauri window). There is **no JS bridge**: input is URL parameters, output is navigation to an intercepted deep link.
 
-Add expired-token cleanup to the existing background garbage-collection task.
+**Canonical deep-link form: `https://go.theavalanche.net/<action>/<arg>`.** Each platform's navigation delegate matches the `go.theavalanche.net` host, cancels the navigation and routes it into the app's deep-link handler (iOS `ProjectWebView.swift` → `AppState.handleDeepLink`). Because interception is by host match, it does not depend on Universal Links firing inside the app's own webview. Routes handled today: `conversation/<did>`, `i/<token>` (legacy `invite/<token>`), and `authorize?…` (`25`). Any intercepted link also dismisses the webview, which is how a page "closes" itself. Webviews must not emit a custom scheme: although Desktop registers `avalanche://` with the OS for external launches (`desktop/src-tauri/tauri.conf.json`), the webview path is the host-matched HTTPS form.
 
-### Token properties
+Webview chrome always shows the Project name, so users can tell a Project view from native UI.
 
-| Property | Value | Rationale |
-|----------|-------|-----------|
-| Format | Opaque (random 32 bytes, base64url) | No crypto libraries needed on the Project side |
-| TTL | 1 hour | Long enough for a webview session; short enough to limit leaked-token damage |
-| Multi-use | Yes | The webview makes many API calls per session |
-| Scoped to Project URL | Yes (stored, for future enforcement) | Prevents cross-Project token reuse |
-| Revocation | Delete from table | Trivial with opaque tokens |
+### Project permissions (admin-granted scopes)
 
-### How the web page uses the token
+The governing rule: **permissions are declared by the Project in its manifest and granted by the admin at install time**, default-deny, one permission per concrete capability. There is **no per-user runtime scope prompt.** Prompts would re-litigate the admin's decision and train reflexive "Allow"; for identity they would be theatre, since the admin's own server already knows the DID.
 
-1. The webview opens `http://project-url/?token=x9f2k...`.
-2. The web page's JavaScript reads the token from the URL query parameter.
-3. On all subsequent API calls, the page includes it as `Authorization: Bearer x9f2k...`.
-4. The token appears in the URL once (initial page load). This is acceptable — the URL is not shared or logged outside the app.
+What the user does see:
 
-### How the Project verifies the token
+- The **login consent screen** (`25`) — the user's act of signing in to this Project as this identity. Permissions are shown for legibility; it is not a scope approval.
+- **First-use signposts** (Planned, with the surfaces in `23`) — an informational, attributed "you're opening <Project>" notice, not a grant.
 
-On each API request:
-1. Read the token from the `Authorization: Bearer` header.
-2. Call `GET http://homeserver:3000/v1/project-token/verify?token=<token>`.
-3. If 200: proceed with the DID from the response.
-4. If 401: reject the request.
+Capabilities that only *look* like permissions are consented by the user's own action: sharing a profile is sharing the profile key in a message; disclosing a message to a long-press action is the tap.
 
-The Project can cache `token → DID` mappings for a few minutes to avoid a round-trip on every request. The token is valid for an hour, so caching for 5 minutes is safe.
+All permission ids share one dot-separated `namespace.action` space, so a manifest's `permissions` array is homogeneous.
 
-**For Project developers, the entire auth implementation is one HTTP call.** No crypto, no JWT parsing, no shared secrets.
+#### Server-enforced capabilities
 
-### Why opaque tokens (not JWT)
-
-- No signing key to manage or distribute to Projects.
-- No JWT library needed on the Project side.
-- Revocation is trivial (delete from DB).
-- The verification round-trip adds negligible latency for web UI interactions.
-- Can upgrade to JWT later without changing the external flow — the token format is opaque to the Project either way.
-
-### Why not proxy through the homeserver
-
-An alternative design: the homeserver acts as a reverse proxy for Projects, forwarding requests with an `X-User-DID` header. This eliminates the three-legged auth flow.
-
-We chose **not** to do this because:
-
-- **Metadata exposure**: the homeserver would see all Project traffic (form submissions, location data, page views). The design is optimized for server seizure — the homeserver should learn as little as possible.
-- **Plaintext channel**: the proxy introduces a new path where user data flows through the homeserver in plaintext. Encrypted DMs are opaque to the server; Project web traffic through a proxy would not be.
-- **Blast radius**: a single session token would grant access to messaging AND all Projects. Scoped Project tokens limit exposure.
-- **Attack surface**: the homeserver stays a focused messaging server, not a general-purpose reverse proxy.
-- **Single point of failure**: the homeserver doesn't need to handle Project web traffic.
-
-The three-legged approach keeps the homeserver small. The only new surface is two endpoints (issue and verify tokens).
-
-## Threat: webview capabilities
-
-### What the webview can do
-
-The Project's web page runs in a `WKWebView` (iOS) / `WebView` (Android). Standard webview sandboxing applies:
-
-**Can:**
-- Execute arbitrary JavaScript.
-- Make network requests to any origin (fetch, XHR, WebSocket).
-- Store data in cookies and localStorage (scoped to the webview's origin).
-- Display any UI (HTML/CSS).
-
-**Cannot:**
-- Access the device filesystem.
-- Access the native app's data (SQLCipher DB, keys, conversations).
-- Call native APIs (no JS bridge — through Stage 6 the design stays bridgeless: URL params in, deeplinks out; see `23-messaging-extensions.md`).
-- Access other Projects' webview storage (origin isolation).
-
-### Risks and mitigations
-
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| Project tracks user activity | Low | DID is already public; this is expected behavior. Users choose to open a Project. |
-| Project phones home with DID | Low | Same as above. The trust chain assumes the admin vetted the Project. |
-| Project phishes user (mimics native UI) | Medium | Webview has visible chrome/header identifying it as a Project view, not native app UI. The user always knows they're in a webview. |
-| XSS in Project's web page | Medium | The Project's problem, not the platform's. The webview sandbox limits blast radius — XSS can't escape to the native app. |
-| Project serves malicious JS that exploits webview engine | Low | Keep OS/webview up to date. Standard platform security. |
-
-### No JS bridge (for now)
-
-The web page has no bridge to the native app. All actions go through the Project's own HTTP backend, which then operates through bot accounts. The way the web page gets the user back to the app is by navigating to a deep link, which the app intercepts.
-
-**Canonical deep-link form — always use `https://go.theavalanche.net/<action>/<arg>`.** A Project webview that wants to open a conversation, invite, or other app destination navigates to a URL on the `go.theavalanche.net` host — e.g. `https://go.theavalanche.net/conversation/<did>`, `https://go.theavalanche.net/i/<token>`. The client's webview intercepts navigations to that host **by host match in its navigation delegate** on all three platforms (iOS `WKNavigationDelegate`, Android `WebViewClient`, desktop Tauri `on_navigation`), cancels the navigation, and routes it into the app's deep-link handler. Because interception is by host in the delegate, it does **not** depend on Universal Links / App Links firing (which are unreliable from inside an app's own webview) — the HTTP navigation is caught directly. **Do not emit a custom URL scheme (`avalanche://`/`theavalanche://`) from a webview:** it isn't a registered, working scheme on this platform, and it's not the interception path. There is no separate scheme to learn — the same `https://go.theavalanche.net/…` links used everywhere else (invites, QR codes) are exactly what a Project emits.
-
-This is a deliberate security choice. A JS bridge would dramatically expand the attack surface. If a JS bridge is ever added, it must be gated by a scoped permission system: the Project declares what native capabilities it needs, the user explicitly approves, and the bridge only exposes approved capabilities. 
-
-## Messaging-extension surfaces (Stage 6+)
-
-`23-messaging-extensions.md` is the catalog of surfaces by which Projects extend messaging, and where the core-vs-Project line falls. This section records their **security posture**; it does not repeat the mechanics.
-
-First, the boundary. Most features `23` discusses are **core, not Project** — reactions, `@`-mentions, simple polls, generic link unfurling, live location. These sit **outside the Project trust boundary**: there is no Project API to them, and a Project can neither read, mediate, nor inject them. A member bot sees reactions/replies/messages in a conversation it belongs to *exactly as any member does* (the visible-bot model above) — that is the only way a Project touches them, and it grants no new capability. "Lightweight bot actions" (react ✅ to approve) ride on this and add nothing to the attack surface.
-
-The genuinely Project-facing surfaces, and what each newly exposes:
-
-| Surface (see `23`) | New disclosure / trust | Mitigation |
-|---|---|---|
-| **Entry points** (`+` menu, message long-press) | A registered entry point is an attributed label that could phish ("Verify your account"); a message-action discloses *that one message* to the Project | Entries visibly attributed to their Project; admin vetting; message-action disclosure is per-message, consent-gated by the tap (signpost on first use per Project) |
-| **Participant entry points** (member long-press, `participant.context-on-action`) | Discloses a *third party's* DID + the fact they're in this group + the actor's intent to act on them — the membership linkage §3.9 protects | **Bot-membership-gated**: renders only where the Project's bot is already a visible group member, which already holds the roster (DIDs cleartext in the encrypted blob, `03` §3) — so the tap adds only the actor's *intent*, no new membership fact. Attributed; consent-gated by the tap; groups only. A bot-free (webview-only) Project is ineligible for this surface |
-| **Magic links** (self-authenticating Project links, shareable in messages) | Tapping silently mints and hands the clicker's identity token to the Project; a sender-chosen, per-share context turns a shared link into a who-clicked / social-graph beacon | The link carries no credential — the clicking device mints a Project-scoped token at tap time, and **only for Projects on the clicker's own vetted allowlist** (no open-redirect: a non-vetted URL gets no token); first-use-per-Project signpost; identity tier (`identity.magic-links` + pseudonymous default) bounds what's disclosed |
-| **Webview I/O** (URL params in, deeplinks out) | The return-content deeplink makes the client fetch a webview-chosen URL (SSRF/privacy) and proposes a message/attachment the user then sends | **No bridge** = no native API surface; the fetch is https-only, size-capped, origin-allowlisted (sender-side, like on-device unfurl); return-content is **proposed, never sent silently**; conversation posts go through the bot server-side. Inbound params never carry E2E data |
-| **Slash-command manifest** | A bot advertises commands; autocomplete text is Project-supplied (mild phishing via misleading descriptions) | No bridge and no new wire format — a slash command is a plain message the bot reads (it's a member; expected). Attributed to the bot; manifest vetted by the admin |
-| **Custom emoji / reaction asset pack** | Project-supplied images in the reaction picker (offensive content; remote-load tracking; oversized assets) | Fetched/cached like attachments (no per-render remote load), size-capped, admin-vetted |
-| **Rich text authored by bots** | Link spans can spoof (display text ≠ destination) | Core substrate, not a granted scope — any account may use body ranges and the client renders them for all messages; gated only at render time by the anti-spoof rule from `35-attachments.md` (show the real URL) and the fixed inline style set |
-
-The recurring theme: every Project-facing surface is an **explicit, attributed, consent-gated handoff**, and none grant a Project access to conversation content it isn't already a member of. The privacy-sensitive primitives stay in core, out of reach.
-
-## Project permissions (admin-granted scopes)
-
-A Project's capabilities are governed by a set of **scopes** it declares in its manifest. The trust chain above already delegates the gatekeeping decision to the admin, so scopes are granted by the **admin at install time** — not re-approved per-user at runtime. This is the mobile-OS manifest model minus the runtime prompts: the Project declares the capabilities it may exercise, the admin sees the full set when installing and vets it, and the grant is default-deny, least-privilege, one scope per concrete capability.
-
-A runtime user-consent layer is deliberately **not** added for own-homeserver Projects. It would re-litigate a decision the trust chain hands to the admin, train users to reflexively tap "Allow," and — for identity specifically — be partly theatre, since the admin-run homeserver already knows the user's DID. (The genuine exception is a guest/remote Project whose admin is *not* in the user's trust chain; that needs explicit user-level gating and is covered under *multiple homeservers and client-visible Project surfaces* above, deferred to Stage 9.)
-
-Several capabilities that *look* like permissions are consented in-band by the user's own action and need no scope-plus-prompt: sharing your profile is sharing your profile key over the encrypted channel (`52-contacts-and-profiles.md`); sharing location is the tap; disclosing a message to a long-press action is the tap; a bot DMing you is already bounded by the message-request gate and the visible-bot invariant. The manifest declares the *capability*; the user's natural action supplies the rest.
-
-### The scopes
-
-All permission ids share one **dot-separated `namespace.action` namespace** — the scopes below and the server-enforced capabilities further down are drawn from the same space, so a manifest's `permissions` array is homogeneous. (Do not introduce a second separator; an earlier draft split them with `:` vs `.`, which made two very similar-looking things gratuitously inconsistent.)
-
-**Identity — who the Project learns you are**
-
-- `identity.pseudonymous` — the homeserver constructs a per-(user, Project) pseudonymous token instead of revealing the real DID. The default. Only meaningful for some Projects — see *Identity is derived from the scope set* below.
-- `identity.real-did` — the Project receives the user's real, global DID. For Projects that must tie a user to their contacts (e.g. an attendee directory).
-- `identity.magic-links` — the client will construct an identifying token when a link to this Project is tapped from anywhere in the app (inside a message, not just the Network-tab launcher). This makes a Project-issued link self-authenticating wherever it's pasted. The shared link itself carries no credential; the clicking device injects a Project-scoped token when clicked, and only for Projects on the clicker's own vetted allowlist (the no-open-redirect rule: a launcher may only open its owning Project). Combines with the identity tier above.
-- `profile.read` — the Project's bot receives profile keys to decrypt users' substrate profiles (display name, avatar, bio); see `52-contacts-and-profiles.md`.
-
-**Messaging reach — how the Project's bots can contact you**
-
-- `dm.initiate` — a bot may send unsolicited DMs. Already rate-limited like any account and lands in the recipient's message-request gate.
-- `dm.bypass-request` — DM without hitting the message-request gate. Escalated: skips the user's spam filter.
-- `invites.auto-accept` — the client auto-accepts group invites from this bot without prompting the user (with an "Added by <bot> · Leave group" indicator for legibility). Client-honored and sensitive — it silently adds the user to a group — so admin-granted with care. **Same-server only:** a federated guest never auto-accepts invites from a server it doesn't have an account on; there it's a manual accept. This is what the old "officialness" concept gated; it is now an ordinary scope.
-
-There is no separate "officialness" trust primitive. The ✓ **verified badge** a client shows next to a Project's bot is a *presentation flag*, not a scope: the bot's public account record (`get_account_info` → `account_info_cache`, `52-contacts-and-profiles.md`) carries an `official` bit set when the operator installs the Project, and the client renders the badge wherever it already draws the bot. The trust is the trust chain — you believe your own homeserver over its authenticated connection — so no signature is involved, and (like the scope above) it is meaningful same-server only.
-
-**Client surfaces — what the Project may render in the app** (treated as untrusted input; see *multiple homeservers* above)
-
-- `surface.compose` — register a `+`-menu entry that opens the Project's webview as a compose helper.
-- `surface.slash-commands` — advertise a command manifest for `/` autocomplete.
-- `surface.emoji` — contribute custom emoji / reaction assets.
-- `message.context-on-action` — receive a specific message as context when the user invokes a long-press action. Per-invocation; the tap is the disclosure.
-- `participant.context-on-action` — register a long-press entry on a **group member** and receive that member's DID as context when the user invokes it (e.g. "flag this member", "assign to team"). Groups only. Per-invocation; the tap is the disclosure. Unlike `surface.compose`, it is **bot-membership-gated** — it renders only in groups where the Project's bot is already a visible member, so the target's DID + group membership are already known to the bot and the tap discloses only the invoking user's *intent* (see *Client surfaces* appearance rules and the §3.9 note below). Role-gating (admin-only entries) is enforced Project-side via the bot's own view of the actor's role.
-
-### Server-enforced capabilities
-
-The scopes above are **client-honored** — the app decides whether to render a surface, auto-accept an invite, mint an identity token. A second group of permissions gate the **server's own facilities** — things most accounts cannot touch — and so are enforced by the homeserver, not the client. These are the *operator authority* made concrete (see *The model* above: "access to the server's own resources → server-enforced capability").
-
-They live in the same dot-separated namespace and are requested in the same manifest `permissions` array; the only difference is where the check runs.
+**Built** (`core/crates/server/src/db/capabilities.rs`, `routes/admin.rs`). These gate the server's own facilities, so the server enforces them. Grants are validated against a known set, stored in `project_capabilities (project_id, capability, granted_at, granted_by)`, and resolved per bot as *account → Project → capability*. A bot in the reserved `adminbot` Project is a superuser and implicitly holds every capability (`22`).
 
 | Capability | What it grants |
-| --- | --- |
-| `accounts.read` | Read the server's account roster (`GET /v1/admin/accounts`, DID-paginated) and receive the account join/leave feeds — live over the WebSocket (`AccountJoinedEvent`) and via the catch-up endpoint `GET /v1/admin/events`. One view permission over "who is on this server," for a Project that displays e.g. an attendee list or routes new members into channels. See `22-adminbot.md` §Join event API. |
-| `registration.gatekeeper` | Construct invite tokens the server accepts under closed registration. Held by any number of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. See `24-vetted-onboarding-project.md`. |
+|---|---|
+| `accounts.read` | The account roster (`GET /v1/admin/accounts`, DID-paginated) and the account-joined feed, live over the WebSocket and via catch-up `GET /v1/admin/events` (30-day retention). See `22-adminbot.md` §Join event API. |
+| `registration.gatekeeper` | Mint signed invite tokens the server accepts under closed registration. Granting it pins the Project's Ed25519 signing key. See `24-vetted-onboarding-project.md`. |
 
-Unlike client-honored scopes, server-enforced capabilities are validated against a **known set** (a typo can't create a dangling permission) and stored server-side in `project_capabilities (project_id, capability, granted_at, granted_by)`. `granted_by` is always adminbot's DID — the grant endpoints accept only adminbot — but the record is kept so a later audit can cross-reference which human admin's `#admins` chat command authorized it. Authority resolves per bot account: *account → Project → capability*, except a bot in the pinned adminbot Project is a superuser and implicitly holds every capability (see `22-adminbot.md`). A bot without `accounts.read` cannot learn who is on the server by any server-mediated mechanism.
+These are the only two permissions the server knows. A manifest requesting anything else installs, but the unknown grant fails.
 
-**Privacy posture.** The server already knows every account it registered, so disclosing the roster to a bot the operator explicitly installed adds no new leak — the bot is a privileged participant of the same trust domain as the operator. There is deliberately no group linkage in any of this (the join feed and roster carry account identity only), preserving the §3.9 membership-opacity discipline. A compromised `accounts.read` bot gets a real-time roster of everyone who joins, including timing; the threat model accepts this.
+**Privacy posture.** The server already knows every account it registered, so showing the roster to a bot the operator installed adds no new leak; there is deliberately no group linkage (`03` §3.9 intact). A compromised `accounts.read` bot gets a real-time roster of joins with timing; the threat model accepts this. The join feed also carries the raw registration token, which today is a serious leak (see *Known gaps*).
 
-### The manifest document
+#### The manifest document
 
-The manifest is the artifact the admin's tooling reads at install time to learn what a Project *is* and what it's requesting — so the operator **authorizes** rather than retypes it (`22-adminbot.md`, `/install-project`). It is a small JSON document the Project supplies:
+**Built.** The manifest is what the operator's tooling reads at install time so the operator **authorizes** rather than retypes (`22-adminbot.md`, `/install-project`).
 
 ```json
 {
@@ -294,180 +124,119 @@ The manifest is the artifact the admin's tooling reads at install time to learn 
 }
 ```
 
-- `slug` — the Project's stable identifier on this homeserver, 2–64 chars of `[a-z0-9-]`. It *is* the Project's identity: bot accounts link to it and a setup/bootstrap token names it (`24-vetted-onboarding-project.md`). Declared, not derived from the name, so two like-named Projects can't collide.
-- `name` — human-facing display name (1–100 chars).
-- `description` — optional one-line summary, shown to the admin at install.
-- `url` — optional; the Project's web origin, for a webview Project. Omitted for a headless bot.
-- `permissions` — the permission ids it requests, drawn from the single dot-separated namespace above: any of the client-honored *scopes* and/or the *server-enforced capabilities* (`accounts.read`, `registration.gatekeeper`). **Default-deny** — the admin approves which to grant; anything unlisted is never granted. The manifest declares a *request*, not authority; the grant is the admin's act, recorded server-side.
-- `webEntries` — optional; the web pages this Project publishes in the client **Network tab** (the project directory, `GET /v1/projects`). Each entry is `{name, url, description?}`. The admin reviews them at install; they are stored server-side in the `directory_entries` table (replace-semantics per Project, `ON DELETE CASCADE` on uninstall) and are **always non-official** (officialness is server-vouched, never self-declared — `54-bots-and-verification.md`). Untrusted input: capped at 10 entries, `http(s)`-only URLs, name ≤100 and description ≤280 chars, trimmed, control-chars rejected. A directory entry surfaces its Project's OAuth `client_id` (below) by inheriting it via a join — the value is not copied onto the entry.
-- `clientId` / `redirectUris` — optional; the Project's **OAuth "Sign in with Avalanche"** registration (`25-project-login.md`). They land on the Project's `projects` row (the token audience is the Project's `url`), which is what `find_client` resolves a login request against. `clientId` is a stable public identifier, **unique across Projects** (a duplicate fails the install, so a manifest cannot claim another Project's login client). By convention it is the Project's **domain** (e.g. `beagle.example.org`) — a namespace the Project already controls, so collisions are self-avoiding and the value reads sensibly on the consent screen. This is a recommendation, not a validation rule (any unique string is accepted); `redirectUris` is the exact-match allowlist for the same-device flow (≤5, `http(s)`-only, only meaningful with a `clientId`). Both are **self-declared and self-constraining** (they only affect this Project's own login), so they carry no separate admin gesture beyond the install itself. The `official` verified-badge bit is the exception — never self-declared, operator-only.
+- `slug` — stable identifier, 2–64 chars of `[a-z0-9-]`. Bot accounts link to it and setup codes name it. `adminbot` is reserved (`routes/admin.rs`).
+- `name` (1–100 chars), `description` (optional, shown at install).
+- `url` — optional web origin; omitted for a headless bot.
+- `permissions` — requested permission ids. Default-deny: the admin approves which to grant. Non-interactive installs from `ADMINBOT_MANIFEST_DIR` auto-grant everything requested except `registration.gatekeeper`.
+- `webEntries` — optional Network-tab pages, stored in `directory_entries` with replace semantics and `ON DELETE CASCADE`. Untrusted input: at most 10 entries, `http(s)` URLs, name ≤ 100 and description ≤ 280 chars, control characters rejected. Always stored non-official.
+- `clientId` / `redirectUris` — optional OAuth registration (`25`), stored on the `projects` row. `clientId` is unique across Projects (a duplicate fails the install); by convention it is the Project's domain. `redirectUris` is an exact-match allowlist (≤ 5). Both are self-declared and only affect this Project's own login.
 
-The manifest is **untrusted input** (Project-authored): sanitize and length-limit its strings, homoglyph-guard the name, and attribute every resulting surface to its `(server, Project)` — exactly as for the client-visible manifests under *multiple homeservers* above.
+The manifest is untrusted, Project-authored input: sanitize and length-limit strings and always attribute resulting surfaces to their `(server, Project)`. It is delivered out-of-band today (pasted into adminbot, or written to the manifest directory by the deploy bundle).
 
-Delivery today is **out-of-band**: the operator pastes the manifest (or a URL) into adminbot's `/install-project` flow. A future iteration serves it at a well-known Project URL the tooling fetches directly — the schema is identical either way.
+#### Identity is derived from the scope set, not chosen freely
 
-### Identity is derived from the scope set, not chosen freely
+Today every Project token reveals the user's **real DID**. A pseudonymous per-(user, Project) identity is only coherent for a Project that touches the user solely through its webview: any Project that talks to the user through a bot learns the real DID through the messaging channel anyway. So there are two archetypes:
 
-`identity.pseudonymous` is only meaningful for a Project that touches the user **solely through the token/webview channel**. If the project communicates with the user via a bot, the Project will learn their identity.
+- **Webview-only Projects** (compose helpers, read-only pages, landing pages) could be pseudonymous. Not built (*Speculative*).
+- **Bot-bearing Projects** are always real-DID.
 
-The identity tier is thus a *consequence* of the interaction model, not an independent toggle. Two archetypes fall out: **webview-only Projects** (compose helpers, read-only destinations, link landing pages), which can be pseudonymous, and **bot-bearing Projects**, which are always real-DID.
+#### Officialness
 
-### Sharing profile through the auth flow (future extension)
+There is no signed "official" trust primitive. The intended signal is a plain, operator-set `official` flag shown as a checkmark. In code today the flag exists only on `directory_entries` (`024_directory_entries.sql`), no write path ever sets it true, and account records carry no official flag (`routes/accounts.rs` returns `is_bot` only). So **no bot ever shows a checkmark**, and the login consent screen's badge is always off. See `54-bot-presentation.md` and *Planned*.
 
-Today a Project obtains a user's substrate profile (display name, avatar, bio) the same way any account does: the profile key rides on messages, so a Project learns it only through its bot — a DM the user sent it, or a group the bot is a member of (`52-contacts-and-profiles.md`). The `profile.read` scope above is the *permission* to decrypt what arrives that way; it is not a separate delivery channel.
+### Threat: malicious bot behavior
 
-This leaves a gap for **webview-only / backend Projects that have no bot in the user's conversations** but need to render the user's real profile — e.g. a web forum you sign into with your Avalanche identity, where your posts should appear with your display name and avatar. Such a Project is real-DID by nature (a persistent identity across posts), so it is not a pseudonymous case; it simply has no message channel over which the profile key would otherwise arrive.
+A bot is a full account. It can DM users, be added to groups, and keep whatever it decrypts. Mitigations in place: bot visibility in member lists; bot accounts render with distinct chrome (`54`); the same rate limits as any account. Bot status (`is_bot`) is self-declared at registration, so it is a label, not a guarantee (`54`).
 
-The client is present in the project-token auth flow — it generates the token before opening the webview — so it can supply the profile key at that point.
+### Threat: Project-to-Project isolation
 
-For **bot-bearing** Projects this extension adds little — their bot already receives the profile key over the message channel. It matters specifically for the webview/backend-only archetype.
+- **Separate processes and storage.** Projects share no database or memory.
+- **Separate bot accounts.** A bot belongs to at most one Project (`project_bots` primary key).
+- **Origin isolation in webviews** for cookies and storage, provided each Project has its own origin. Projects behind the deploy bundle's Caddy share the homeserver origin under `/p/<name>/` paths (testbot: `/p/testbot/`), so they share an origin and therefore cookies and storage.
+- **Tokens are not audience-isolated.** A Project that receives a user's token can replay it to another Project for up to an hour; the victim Project accepts it unless it checks the `project_url` returned by `verify`, which the reference testbot does not (`node/packages/testbot/src/index.ts`, `verifyProjectToken`).
 
-## Threat: malicious bot behavior
+### Threat: multiple homeservers and client-visible Project surfaces
 
-### The problem
+Multi-account is shipped (`53`), so the client routinely holds accounts on several homeservers at once, each with its own admin and its own vetted Projects. Trust does not pool across them: server A's admin vouches only for A's Projects.
 
-A bot is a full account with its own keys. Once registered, it can:
-- Send DMs to any user on the homeserver.
-- Be added to groups (by an admin or through the Project framework).
-- Accumulate and exfiltrate decrypted message content.
+**Rule: a conversation lives on exactly one homeserver via one account, and any Project affordance shown in it comes only from that homeserver's Projects.** No surface, token or manifest may cross accounts. Today the only Project surfaces are the Network tab and deep links, and both have identity-scoping bugs (see *Known gaps*). When conversation surfaces from `23` arrive, each must be tagged with its `(account, server, Project)` and shown only there:
 
-### Mitigations
+| Affordance | Appears in |
+|---|---|
+| Slash autocomplete, in-conversation entries (bot-backed) | only conversations where that Project's bot is a member |
+| Participant long-press entries | only groups where that Project's bot is a member |
+| Compose helpers ("+" entries, no bot) | conversations of the account whose server installed the Project |
+| Custom emoji packs | conversations of the installing account's server |
 
-**Bot visibility:** Bots are visible in every group they join. Users can see which bots are present and can leave groups with bots they don't trust. There is no hidden observer mode.
+Manifests, labels and assets from Projects are hostile input: sanitize, length-limit, homoglyph-guard names, size-cap and pre-fetch assets (no per-render remote loads), and never let a surface pose as native UI.
 
-**Bot account marking:** Bot accounts should be distinguishable from human accounts. The homeserver can mark accounts as bot-owned (a flag set at registration time by the Project). The mobile app displays this clearly in the member list and conversation view.
+## Known gaps
 
-**Rate limiting:** The homeserver applies the same rate limits to bot accounts as human accounts. A bot that spams messages gets throttled or suspended like any other account.
+Security gaps are also tracked in `09-security-posture.md`; todos in `02`.
 
-**Scope limitations (future):** In the full Project framework (Stage 6), bots would operate under scoped permissions — a bot might be allowed to read messages in specific groups but not send unsolicited DMs. For now, bots are just accounts with no special restrictions beyond the rate limits that apply to all accounts.
+1. **Setup codes contain the master registration secret (P0).** adminbot's `/install-project` hands the operator a "setup code" that is a bootstrap token `{s, k: REGISTRATION_SHARED_SECRET, p: <slug>}` (`node/packages/adminbot/src/index.ts`, `performInstall`). Anyone holding one can decode it, change `p` to `adminbot`, and register a bot that the server links into the superuser Project (`core/crates/server/src/routes/registration.rs`, `gate_registration`). Details and the planned fix are in `22` and `24`.
+2. **The master secret is broadcast through the join feed (P0).** Registration stores and pushes the raw `invite_token` to every `accounts.read` holder (`registration.rs`, `server_events.invite_token`). Every bot registered with a bootstrap token, including each ephemeral testbot bot, therefore publishes the master secret to every roster-reading Project and keeps it in `server_events` for 30 days. Manifest-dir installs auto-grant `accounts.read` when requested.
+3. **A public web Project holds the master secret.** The deploy bundle gives testbot `REGISTRATION_SHARED_SECRET` (`infra/deploy/bundle/lib/common.sh`, `write_bot_env`) so its ephemeral bots can register. A compromise of testbot (internet-facing, LLM-driven) is a compromise of server admin.
+4. **No token audience enforcement (P1).** `issue` accepts any `project_url`; `verify` requires no audience and checks none. Combined with the shared `/p/` origin, any Project can replay a user's token to another for an hour.
+5. **Tokens travel in the URL query string.** They end up in Project access logs and browser history.
+6. **Wrong identity for Projects (P1).** The Network tab mints the token from the first account on that server (`NetworkView.swift`, `openProject`), never showing which identity is used. A `conversation/<did>` deep link from any webview opens a DM from `accounts.first` (`AppState.swift`, `handleDeepLink`), so a Project on server B can start a conversation from identity A.
+7. **Webview not hardened.** iOS uses a default `WKWebView` (shared default data store, no navigation lock to the Project origin, no content restrictions). Non-deep-link navigations are all allowed.
+8. **Officialness is unsettable**, so the checkmark that `25`'s phishing mitigation and `54`'s impersonation defence rely on is always absent.
+9. **Self-declared bots bypass the message-request gate** (`core/crates/app-core/src/messaging.rs`, `SenderGate::passes`). See `54`.
+10. **Group invites appear to be auto-accepted for everyone** (S-04; the UI path is not yet confirmed). app-core accepts every `GroupContext` it receives (`messaging.rs`, the `GroupContext` branch), including from non-curated senders, so the `invites.auto-accept` scope has nothing to gate today.
 
-## Threat: Project-to-Project isolation
+## Planned
 
-### The problem
+- **Replace bootstrap setup codes** with server-minted, per-Project, single-use bot-enrollment tokens (`purpose: "bot"`); never put the master secret in anything handed to a Project; carry parsed issuer and routing claims in join events, never raw tokens (`22`, `24`).
+- **Token audience.** Additive: `verify` takes a required `audience` (the Project's `url`) and the server rejects a mismatch; `issue` only mints for origins of installed Projects. Update the reference Project to pass it.
+- **Move tokens out of the query string** (Proposed: changes the Project interface contract; owner review), e.g. into the URL fragment, which never reaches the Project's server logs.
+- **Identity scoping in the client.** Mint tokens from the account the user is viewing (and show it); route `conversation/<did>` links from a webview through the account that opened the webview.
+- **Webview hardening.** A non-persistent or per-Project data store, navigation locked to the Project's origin plus an allowlist, and per-Project origins in the deploy bundle (subdomains, not `/p/` paths).
+- **Provenance from installation.** Show the checkmark for a bot linked (via `project_bots`) to an installed Project the operator marked official, exposed on the account-info response. This makes the existing linkage the server-vouched signal `54` needs.
+- **Manifest from a well-known URL**, same schema.
 
-If multiple Projects run on the same homeserver, can one Project interfere with another?
+## Proposed
 
-### Mitigations
+- **OIDC-conformant "Sign in with Avalanche" as the main developer story.** See `25` §Proposed. Needs project-owner review.
 
-**Separate processes:** Each Project is a standalone service. They share no state, no memory, no database. They communicate only through the homeserver's public API.
+## Speculative
 
-**Separate bot accounts:** Each Project's bots are distinct accounts. One Project cannot control another Project's bots.
+**Client-honored scopes.** None are implemented; the server rejects them as unknown capabilities. Kept as the vocabulary for the surfaces in `23`:
 
-**Origin isolation in webviews:** Each Project's web UI runs on a different origin (different host/port). Webview storage (cookies, localStorage) is isolated per origin.
+- Identity: `identity.pseudonymous` (per-Project pseudonym; webview-only Projects), `identity.real-did`, `identity.magic-links` (the tapping device mints a token for a vetted Project's link), `profile.read`.
+- Messaging reach: `dm.initiate`, `dm.bypass-request` (escalated: skips the request gate), `invites.auto-accept` (same-server only; meaningful only once invites stop auto-accepting for everyone).
+- Client surfaces: `surface.compose`, `surface.slash-commands`, `surface.emoji`, `message.context-on-action`, `participant.context-on-action` (bot-membership-gated; see `23`).
 
-**Scoped tokens:** A Project token issued for Project A cannot be verified by Project B — the token is scoped to a specific `project_url`, and the verification response includes this URL so the Project can check it matches.
+**Security posture of conversation surfaces** (if they are built; mechanics in `23`):
 
-**No shared API surface:** Projects have no way to discover or interact with each other except through the same mechanisms available to any user (sending messages, looking up DIDs).
-
-## Threat: multiple homeservers and client-visible Project surfaces
-
-Two developments make this bigger than the original "guest access is a Stage-9 federation problem" framing:
-
-1. **Multi-account is here now.** Per `53-multi-account-ux.md`, a user can be logged into several homeservers at once, each a first-class account. So the client routinely **holds and renders Project surfaces from multiple trust domains simultaneously** — this is a normal state, not a deferred edge case.
-2. **Projects now expose client-visible surfaces.** Per `23-messaging-extensions.md`, Projects advertise **slash-command manifests, entry-point labels/icons, custom-emoji packs, and bot-authored rich text** — data and assets the *client* parses and renders, not just bot messages a bot sends. That is a new surface reaching the client.
-
-These two compound: client-rendered, Project-authored content, sourced from several servers of differing trust, shown side by side in one app.
-
-### Three relationships, each × every homeserver you're on
-
-- **Your homeserver's Projects (vetted).** Admin-vetted, full trust per the trust chain above — but you now have *one such chain per homeserver you hold an account on*. Trust does not pool across them: server A's admin vouches for A's Projects only.
-- **Guest on a remote homeserver (Stage 9, deferred).** You participate in a Project/group on a server where you have **no account**, via a guest credential. That admin is not in your trust chain → untrusted.
-- **No relationship → no reach.** A Project you've never encountered cannot project anything into your client; surfaces are gated (next).
-
-### Gating: client-visible surfaces follow bot visibility / explicit invocation
-
-The core invariant — *a Project only sees a conversation where its bot is a visible member* — extends to **what a Project can render in your client**. A Project may project UI into the client only where it has a **visible bot member** of that conversation (in-conversation slash autocomplete, entry points) or where the **user explicitly invoked** it (a compose helper like Giphy). A foreign Project cannot inject a slash command, entry point, or emoji into a conversation it isn't a member of. The new surfaces are therefore bounded by the same per-conversation visible-membership rule that already bounds message access.
-
-### Appearance scope — where each affordance can show up
-
-Bot-membership gates the bot-backed surfaces, but a **compose helper has no bot** (Giphy is invoked from "+", not a member of anything), so its appearance must be defined explicitly. The rule: **a conversation lives on exactly one homeserver via one account, and the affordances available in it come only from *that homeserver's* Projects.** Switching to a different account's conversation swaps the affordance set; nothing bleeds across accounts or servers.
-
-| Affordance | Appears in | Scope |
+| Surface | New disclosure | Mitigation |
 |---|---|---|
-| Slash autocomplete, in-conversation entry points (bot-backed) | only conversation(s) where that Project's **bot is a member** | per-conversation (⊂ one account) |
-| Participant long-press entries (`participant.context-on-action`) | only group(s) where that Project's **bot is a member** | per-conversation (⊂ one account) |
-| Compose helpers / "+" entries (no bot — Giphy, meme maker) | the **"+" menu of conversations on the account/homeserver where the Project is installed** | per-account |
-| Custom emoji / reaction packs | the **reaction picker in conversations on the installing account's homeserver** | per-account |
-| Bot-posted content & rich text | wherever that **bot is a member** | per-conversation |
+| Entry points ("+", message long-press) | An attributed label that could phish; a message action discloses that one message | Visible attribution; admin vetting; per-tap disclosure |
+| Participant long-press | A third party's DID plus the actor's intent | Only where the Project's bot is already a member (it already holds the roster), so only intent is new |
+| Magic links | Tapping mints the clicker's token; a per-share context id is a who-clicked beacon | No credential in the link; mint only for vetted Projects; coarse context ids |
+| Return-content deep link | Client fetches a Project-chosen URL | https-only, size-capped, allowlisted, never auto-sent |
+| Slash manifests, emoji packs | Project-authored strings and images | Attributed, sanitized, pre-fetched and size-capped |
 
-**The motivating example:** Giphy installed on homeserver A → its "+" entry appears in your **account-A** conversations only. Composing in an account-B (homeserver B) conversation shows server B's helpers, **not** A's Giphy — B's admin never vetted it, and the affordance does not follow you across servers. A pure compose-helper leaks little even if it did bleed (Giphy would see only "account A opened me, picked GIF X," never the B conversation), but per-account scoping keeps trust attribution clean and the "+" menu predictable. A cross-account "use everywhere" opt-in could be offered later — explicit and attributed, never a silent default.
+**Profile sharing through the auth flow.** A webview-only Project with no bot (e.g. a forum) has no channel for the user's profile key. The client could pass it during token minting.
 
-### Scoping & isolation (needed now — Stage 6 / multi-account, not Stage 9)
+**Guest access to remote Projects.** Superseded in spirit by client-side federation (`13`): a user holds an account on each server whose Projects they use. If guests return, they get no client-visible surfaces from the remote server by default.
 
-This work lands with multi-account, ahead of federation:
+**A JS bridge.** Only behind its own scoped-permission system with explicit user approval.
 
-- **Per-(account, server, conversation) scoping.** Every client-visible surface is tagged with where it came from and shown only there. A Project on server A must never appear in — or influence the rendering of — a conversation belonging to account B. No global, co-mingled command palette or entry-point list spanning accounts.
-- **Per-account fetch.** Manifests, entry-point lists, and emoji packs sync over the **owning account's own connection**. Server A's Projects must learn nothing about account B's activity, and the client must not leak one account's state to another.
-- **Manifests are untrusted input.** Command names/descriptions, entry-point labels, and emoji names/assets are Project-authored strings and binaries the client displays. Treat them as hostile: sanitize and length-limit text; guard against homoglyph/Unicode spoofing in command and Project names; size-cap and lazily fetch assets (no per-render remote load → no tracking beacon); rate/size-limit manifest sync (DoS); and **always attribute a surface to its (server, Project)** so one Project can't impersonate another or pose as native/system UI.
+## How to design a Project today
 
-### Guest access (Stage 9, still deferred — but sharper now)
+1. **Pick the interaction model.** Webview-only or bot-bearing. Bot-bearing Projects are real-DID.
+2. **Request only what you need.** Most Projects need no server capability. `accounts.read` is for rosters and join routing.
+3. **Verify every token server-side** with `GET /v1/project-token/verify`, act only on the returned DID, and **check that the returned `project_url` is yours** until the server enforces audience.
+4. **Keep magic-link-style links credential-free**, and avoid per-recipient context ids that work as beacons.
+5. **Run on your own HTTPS origin**, keep your own storage, and don't log message content or pass DIDs around.
+6. **Attribute your UI** and never imitate native or system UI.
 
-When the user is a *guest* on a remote homeserver (no account there), the remote admin isn't in the trust chain, so on top of the scoping above:
+## Rationale and rejected alternatives
 
-- Guest sessions get **reduced or no client-visible surface** from remote Projects — at most, surfaces the user explicitly opts into, clearly marked "remote / not vetted by your admin."
-- A **guest credential** issued by the user's own homeserver vouches "valid user" without exposing the real DID; the homeserver-as-proxy / pseudonymous-DID option keeps the remote Project from learning identity.
-- The remote Project accepts the credential and grants scoped access; the UX makes the remote, untrusted nature explicit.
-
-## How to design your Project
-
-A short walkthrough for building a Project against this model. The running example is an **Event RSVP Project**: an organizer pastes a "RSVP to the offsite" link into a group, members tap it to open a webview and respond, and a bot posts the running tally back into the group.
-
-### 1. Pick your interaction model first
-
-Everything downstream follows from one question: **does your Project talk to users through a bot, or only through a webview?**
-
-- **Webview-only** (compose helpers, read-only dashboards, link landing pages) — no bot is a member of any conversation. These can stay pseudonymous.
-- **Bot-bearing** — a bot sends/receives messages or sits in a group. The bot necessarily learns the real DID through the messaging channel, so identity is effectively `real-did` no matter what you request (see *Identity is derived from the scope set*).
-
-RSVP is bot-bearing (the tally bot posts into a group), so it's a real-DID Project. Decide this before anything else — it makes `identity.pseudonymous` incoherent for you, and you shouldn't claim it.
-
-### 2. Choose the minimum scopes
-
-Default-deny: request only what a concrete feature needs, and be ready to justify each to the admin who installs you. For RSVP:
-
-- `identity.real-did` — to attribute each RSVP to its author.
-- `identity.magic-links` — so the organizer's pasted "RSVP here" link self-authenticates the tapper without a separate login.
-- `profile.read` — to show attendee display names in the tally. (Prefer a **Project-owned profile field** — `52-contacts-and-profiles.md` — if all you need is a name you collect yourself; that avoids holding the all-or-nothing substrate profile key.)
-
-What RSVP does **not** need: `dm.bypass-request` (it has no reason to skip the spam gate), `surface.slash-commands`, `surface.emoji`. Leave them out. (The bot posting the tally into the group is handled by an admin/organizer adding the bot as a visible member — that's group membership, not a manifest scope.)
-
-### 3. Handle identity and auth
-
-- **Verify every token server-side.** On each API call, take the `Bearer` token and call `GET /v1/project-token/verify`; act on the returned DID, never on a client-supplied one. This is the whole auth implementation — one HTTP call (see *Authentication*). Cache `token → DID` for a few minutes.
-- **If you issue magic links, keep them credential-free.** The shared link is an identity-free pointer (`project-url` + your own context id, e.g. `?event=offsite`); the clicking device mints the Project-scoped token at tap time. Never bake a per-user token into a link a user will paste — that leaks their credential to everyone in the chat.
-- **Mind the beacon.** A unique-per-recipient context id in a shared link lets you learn the DID of everyone who taps it, tagged by who shared it — a who-clicked / social-graph probe. Use a coarse context where you can, and don't retain the correlation longer than the feature needs.
-
-### 4. Deployment considerations
-
-- **You run in the admin's trust domain.** A Project is installed and configured by the homeserver admin (the trust chain). Coordinate the install — the admin vets your manifest (scopes) and registers your bot accounts.
-- **Distinct origin, HTTPS only.** Serve web traffic from your own host/port (webview origin isolation depends on it) over HTTPS.
-- **Bots are full accounts.** They register on the homeserver and hold their own Signal keys; store those keys/secrets server-side. Your bots are rate-limited like any account.
-- **Bring your own storage.** Projects share no database; persist your state (RSVPs, event config) in your own DB. Other Projects can't reach it, and you can't reach theirs.
-- **Stateless front, no homeserver proxy.** Webview ↔ Project traffic goes directly, not through the homeserver — so your availability and scaling are yours to own.
-
-### 5. Security considerations
-
-- **Treat all inbound params as untrusted.** The only way you should know who someone is is to verify their token with the homeserver.
-- **Honor the server-seizure posture.** The platform is built so the homeserver learns as little as possible; don't undermine it — don't log user messages, don't send DIDs around, collect only the fields the feature needs.
-- **Attribute your UI.** Your webview must carry visible Project attribution and must not impersonate native/system UI (anti-phishing).
-- **XSS is yours to prevent.** The sandbox limits blast radius to your own webview, but an XSS still endangers the data users submit to you.
-
-## Summary: what we build now
-
-For the chatbot Project (and the first iteration of the Project model):
-
-1. **Homeserver Project token endpoints** — `POST /v1/project-token` and `GET /v1/project-token/verify`. Opaque tokens, 1-hour TTL, stored in DB.
-2. **Project verifies tokens** on all API calls via one HTTP call to the homeserver. No unauthenticated actions.
-3. **No JS bridge.** Web pages talk to their own backends only.
-4. **Bot accounts marked as bots** at registration time. Displayed distinctly in the mobile app.
-5. **Visible webview chrome.** Users always know when they're in a Project webview vs. native UI.
-6. **Origin isolation.** Each Project on a different origin.
-
-Items deferred:
-- Scoped permissions for bots and the full Project permission manifest (Stage 6) — designed in *Project permissions (admin-granted scopes)* above.
-- Messaging-extension surfaces — entry points, slash-command manifests, custom-emoji packs, bot rich text — and their scopes (Stage 6); see `23-messaging-extensions.md` and *Messaging-extension surfaces* above.
-- Webview return-content via intercepted deeplink + sender-side fetch — **no JS bridge** (Stage 6); specced in `23-messaging-extensions.md`.
-- Per-(account, server, conversation) scoping and isolation of client-visible Project surfaces, and treating Project manifests as untrusted input (Stage 6, with multi-account); see *Threat: multiple homeservers and client-visible Project surfaces* above.
-- Token scoping enforcement on verify endpoint (v2).
-- Profile sharing for webview-only Projects — profile key or profile snapshot supplied via the auth flow, for backend Projects with no bot in the user's conversations; see *Sharing profile through the auth flow* above.
-- Guest access to remote Projects, incl. reduced client-visible surface and pseudonymous credentials (Stage 9).
+- **Opaque tokens, not JWT.** No signing key to distribute, no JWT library on the Project side, trivial revocation; the verify round-trip is cheap for web UI traffic. The format is opaque to Projects, so it can change later.
+- **Rejected: reverse-proxying Projects through the homeserver with an `X-User-DID` header.** It would put all Project traffic (forms, locations) through the server in plaintext, widen the blast radius of a session token, and turn the server into a general proxy. The three-legged flow keeps the server small.
+- **Admin-granted, not runtime-prompted, permissions** (see *Project permissions*).
+- **One dot-separated permission namespace.** An earlier draft split scopes and capabilities with different separators, which made two near-identical concepts gratuitously inconsistent.
+- **Rejected: officialness as a signed attestation.** Earlier drafts had adminbot or the server sign periodically re-issued official-bot attestations. It decomposes into a plain operator-set flag (same-server only) plus an ordinary scope; no signing, no recurring signer.
+- **No in-feed interactive widgets** (`23`): the webview is the single interaction surface.

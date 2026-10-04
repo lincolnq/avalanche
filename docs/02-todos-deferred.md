@@ -1,114 +1,249 @@
-# Deferred TODOs
+# 02 — Todo list and roadmap
 
-## Security / protocol
-- Project auth-token delivery: the token is passed to project webviews as a query parameter (`?token=`, matching iOS), so it lands in the project server's access logs, can leak via `Referer`, and persists in history. A URL hash fragment avoids that but is invisible to server-rendered projects. Decide a leak-resistant scheme that still works server-side (hash for client-only projects, a header/POST handshake, or short-lived single-use tokens) **with the project owner**, and apply it across all platforms + the project interface contract at once.
-- Consider / discuss: desktop Project webview `http:`-host policy. `isAllowedProjectUrl` (`desktop/src/views/network/ProjectWebView.tsx`) now allows `http:`/`https:` to **any** host — the loopback-only `http:` rule was dropped so local-dev transports (e.g. a laptop's Tailscale URL) work, matching iOS/Android which impose no allowlist at all. Trade-off: a Project served over plain `http:` on a *remote* host now sends the `?token=` query param in cleartext (interceptable); Tailscale `http:` is fine because it's WireGuard-encrypted, but the guard can't distinguish the two from the URL. Open question raised in PR #9 review (`discussion_r3500361937`): should non-loopback `http:` be gated behind an explicit desktop "developer mode" setting (keep an https/loopback-only default for normal users), or folded into the broader token-delivery hardening above? Desktop-only decision — mobile has no guard; the `javascript:`/`file:`/`data:` scheme block stays regardless.
-- Link-preview OG fetch hardening — Desktop (`fetch_link_preview` in `desktop/src-tauri/src/lib.rs`): the fetch validates only the URL scheme (`is_web_url`), so it has no SSRF guard — `reqwest` follows redirects to loopback / private / link-local hosts (`127.0.0.1`, `192.168.x`, `169.254.169.254`). Blast radius is bounded: previews are fetched only for URLs in the local user's *own* compose draft (received messages are never auto-fetched), so the realistic vector is a public URL that 30x-redirects to an internal host. Add a redirect-policy/host filter that rejects non-public IPs. Same command: the og:image fetch stores the response bytes with no `Content-Type` check (any 200 body becomes `image_bytes`) — require `image/*`. Also: `read_body_capped` checks the cap only after appending each chunk, so peak memory is `cap + chunk_size` (clamp the appended slice to the remaining budget), and `open_external` passes the original (untrimmed) string to `open::that` rather than the validated/trimmed form. Desktop-only (iOS uses `LPMetadataProvider`).
-- Attachment disk cache hardening — Desktop (`download_attachment` in `desktop/src-tauri/src/lib.rs`): decrypted attachment plaintext is written to `app_cache_dir/attachments/<id>` in **cleartext** (outside the SQLCipher-encrypted store) and is never cleaned up on logout / identity deletion — a privacy regression vs. the encrypted DB. Add cache teardown to the logout / `delete_identity` path (and consider encrypting cached blobs). Separately, the disk-cache-**hit** path (`std::fs::read`) returns the cached bytes with no digest check, whereas `app_core::download_attachment` verifies bytes against the pointer digest before decrypting — re-verify on cache hit, or accept (local-disk tamper only, low severity). Confirm whether iOS's cache has the same properties.
-- Deep-link `conversation/<did>` accepts an unvalidated DID (all clients — iOS reference behaves the same): `handleDeepLink` opens a DM for any non-empty path segment with zero validation — `findOrCreateDMConversation` fabricates a client-side conversation keyed on the raw string (iOS `AppState.swift` `handleDeepLink` `case "conversation"`, Desktop `handleDeepLink`/`findOrCreateDMConversation` in `desktop/src/state/createConversations.ts`, Android equivalent). Since `avalanche://` (Desktop) and the `go.theavalanche.net` universal link (iOS) can both be triggered by untrusted web content, a hostile link can spam the chat list with arbitrary empty conversations. Blast radius is bounded — local UI state only, no server call or crypto session, and the title falls back to the raw/truncated DID so it can't spoof a known contact's name — but the input should be validated (well-formed `did:plc:`/`did:local:` shape, and ideally gate on a resolvable identity or known contact before creating the row). This changes deep-link behavior across all three platforms (a cross-platform behavior contract), so design on iOS first per the parity rule and land iOS + Android + Desktop together with maintainer sign-off.
+> **Status:** Living document. Rebuilt 2026-10-03 from a full review of the docs against the
+> code; the previous backlog's open items are carried over below.
+> **Last verified against code:** 2026-10-03
 
-## Build samples of the following projects
-- $ Gatekeeper project + onboarding flow (see 24-vetted-onboarding-project); the infra should be there but there's no project yet. `#approvals` group, approve/decline review flow, invite tokens.
-- $ Chatbot to answer questions
-- $ Full participant CRM project: list everyone who has signed up & oversee them
-- $ Training modules inside CRM: browse to the training site via Network tab, complete modules
+One line per item: what, then the doc that holds the detail. Security items carry their
+`09` register ID. Delete an item when it ships (don't strike it through); if it changes a
+contract, it needs owner review first (root `CLAUDE.md`).
 
-## Mobile app
-- FFI async migration, step 2 (core + all clients): the two indefinitely-waiting FFI methods (`next_events`, `wait_for_connection_state_change`) are now native UniFFI async exports so platform listener loops suspend instead of parking a thread (Swift's fixed-width cooperative pool deadlocked at 3 accounts — 2 blocked threads per account). The rest of the surface still blocks a cooperative-pool / Dispatchers.IO thread for the duration of each call. Follow-up: (a) migrate `Send`-safe methods (pure store reads like `load_messages`/`load_conversations`, net calls) to async export incrementally; (b) for the non-`Send` libsignal crypto paths (`send_dm`, group sends), move to an actor thread — a dedicated thread running a tokio `LocalSet` owns the non-`Send` state, exported `async fn`s send a request over a channel and await a `oneshot` reply — which would retire the sync-export pattern entirely. Rule in the meantime: never add a sync FFI export that can block indefinitely.
-- WATCH: iOS "share a photo into a chat" (docs/35) ships via an **unsanctioned** technique — the share extension launches the app by walking the responder chain to the `UIApplication` and calling `openURL:options:completionHandler:` (the non-deprecated selector; the old `openURL:` is force-failed on iOS 18). Apple officially disallows extensions launching their container app (only Today widgets may), so this could break on a future iOS and carries a (theoretical) App Store review risk — third-party apps like Bluesky ship the same trick. If it ever breaks, the fallbacks are: post a local notification to hand off (Apple's suggested path), or move to the App-Group shared DB so the extension sends directly (the same foundation that would also enable `INSendMessageIntent` share suggestions). Also note: the App Group (`group.net.theavalanche.app`) needs the capability provisioned on both the app and extension App IDs, and the open is a no-op on the Simulator (device-only).
-- Mobile app 'console': nerdly scrolling log which appears during long loads and debugging tools (currently everything is fast so maybe not needed)
-- Written-down recovery phrase alternative to passkey (generate memorable phrase, encrypt recovery blob with it, cache derived key in Secure Enclave)
-- Delivery receipts — auto-send on message receive (see docs/31-read-tracking.md, Stage D)
-- Read receipt user preference toggle (send_read_receipts setting)
-- Scroll position: remove invisible "bottom" anchor hack in ConversationView (Color.clear spacer) when scroll position saving is implemented
-- Scroll-to-first-unread on open (iOS + Android): currently best-effort and usually lands at the bottom, because opening a conversation marks its messages read (`markAllMessagesRead` on transcript load) before the scroll-to-first-unread logic reads `readAtMs`. To make it reliable, capture the first-unread index from the freshly loaded transcript *before* marking read, and scroll to that. Affects both platforms (iOS `.onChange(of: messages.count)` / `.task(id:)`, Android `LaunchedEffect(messageCount)` / the onAppear scroll effect).
-- Account switcher UI for multi-account support
-- My QR Code screen uses `accounts.first` — should use the active/selected account once multi-account is implemented
-- Consider whether we should hit `validateInvite` endpoint during 'compose recipient' scan/paste for a server invite token.
-- Coalesce/throttle `fetchGroupState`: opening a group conversation, then group-info, then returning each triggers a full `GET /v1/groups/{id}` (ConversationView's `refreshGroupTitle` on every `onAppear` + GroupDetailView on open). Add a short freshness TTL (skip the network refetch if the local group state was refreshed within ~N seconds) and have the conversation view read the cached group title rather than always fetching. Best paired with server-side group-state change push (Server) so the cache can be trusted between changes.
-- Linked-device management screen (all platforms): list an account's active devices and allow revoking one. No FFI exists to enumerate or revoke devices yet — needs a server endpoint + `app-core` method first. Today the UI only *initiates* a link.
-- Disappearing messages — keep the conversation when all its messages expire (all clients; needs app-core change): once a DM's messages are all reaped, `load_conversations` stops returning it and clients drop the row entirely, so the chat disappears. Expected (Signal) behavior is that the now-empty conversation persists. Requires `load_conversations` to return conversations that still exist (contact + expiry settings) even with zero messages, or a deliberate client-side retention mechanism.
-- Disappearing messages — system message on DM timer change (all clients; needs app-core change): changing a DM's timer surfaces no visible chat event on either side — `set_conversation_timer` sends a `proto::TimerChange` that `messaging.rs` handles as a silent control message ("no visible chat event surfaced"). Groups already emit an `ExpiryChanged` system event (kind 15); DMs should get the equivalent ("X set disappearing messages to N" / "turned off disappearing messages"). Requires app-core to insert a local system message on `set_conversation_timer` and on inbound `TimerChange`, then all three UIs render it. iOS does not do this today either.
-- Disappearing messages — Android does not implement expiry at all (Android only; iOS + Desktop done): Android has no `IncomingEvent::MessagesExpired` handling and no reaper-driven timeline refresh, so reaped messages linger on screen until the conversation is reopened. iOS (`AppState.reloadMessagesIfLoaded` on `.messagesExpired`) and Desktop (`reloadMessagesIfLoaded` in `desktop/src/state/createMessaging.ts`) both full-replace the affected conversation's timeline from the store (which filters `expire_at`) on the event. Android's send path must also persist the disappearing timer with each message (iOS/Desktop save `expireTimerSecs` on every delivery state — `sending`/`sent`/`failed` — so the reaper expires the sender's own copy and a store reload never drops or resurrects rows). Wire `messagesExpired` in `AppViewModel`, persist `expireTimerSecs` on send, and reload on the event.
-- Block/report from an accepted conversation (all clients; new cross-platform feature — iOS doesn't have it): today you can only block a contact while they're a pending message request (the request gate). Once accepted, there is no in-conversation way to block/report them — iOS only calls `reportAndBlock` from the request gate (`Chats/ConversationView.swift`), and Desktop matches. Add an entry point (a conversation-header overflow menu, or the profile screen below) exposing Block/Report on all platforms. Design on iOS first per the parity rule, then mirror to Android + Desktop.
-- View another user's profile (all clients; new cross-platform feature — iOS doesn't have it): there is no screen to view another user's profile (display name, DID, bot badge, shared groups, etc.) from a DM header or a group member row. iOS's DM header isn't tappable and `getAccountInfo`/`AccountInfoFfi` is unused in any user-facing view; only your own identity (`Settings/IdentityDetailView`) is shown. A contact/profile detail view is the natural home for the block/report action above. Design on iOS first per the parity rule, then mirror to Android + Desktop.
-- Signal-style long-press reaction/actions overlay — Desktop port (iOS + Android done): iOS and Android replace the native context menu with a custom overlay (dimmed backdrop, floating reaction bar with the 6 quick emoji + a "+" that opens a full emoji picker, the message rendered as a focal copy that lifts from its position to screen-center, action list below) — see `mobile/ios/Actnet/Sources/Views/Chats/MessageActionsOverlay.swift` / `EmojiPickerView.swift` / `EmojiData.swift` and the Android equivalents `mobile/android/app/src/main/kotlin/Views/Chats/MessageActionsOverlay.kt` / `EmojiPicker.kt` / `EmojiData.kt`. Desktop: build the same overlay/picker, but the "+" reaction affordance is revealed on **hover** (not long-press), matching Signal desktop and the existing hover toolbar in `MessageBubble.tsx`. Port `EmojiData` verbatim so the picker's categories/keywords stay identical across platforms.
-- Reaction picker: recents row — Desktop port (iOS + Android done): iOS (`EmojiRecents`, `UserDefaults`-backed) and Android (`EmojiRecents`, `SharedPreferences`-backed) record recently-used reaction emoji (device-local) and show them as a "Recently Used" row atop the full picker; recorded whenever a reaction is added (quick bar or picker). Port to Desktop (localStorage). Consider also surfacing recents in the reaction bar itself (all platforms) as a later enhancement.
-- Shared contact cards — remaining follow-ups (feature now shipped on iOS, Android, and Desktop; docs/35): (a) the contact `nickname` ("the name I know them by") is currently **local-only** — wire it into the contact storage-sync adapter so it roams across the identity's devices (docs/52); (b) `saveSharedContact` uses a synchronous FFI blocking call — no `_async` variant exists, so it's asserted only at the store level in tests, not e2e. (c) Desktop's "copy contact → paste" uses an in-app clipboard signal (`src/lib/contactClipboard.ts`) rather than the OS pasteboard, since the webview can't carry a private clipboard MIME type — copied contacts don't survive across app restarts or into other apps (iOS/Android use the real pasteboard).
-- Compose autocomplete doesn't match nicknames (all clients; lands with the docs/52 nickname UI): the composer's query filter matches the cached profile `displayName` (`ContactRowFfi.displayName`), but rows *render* the nickname-aware resolved name — so a contact with a local nickname ("the name I know them by") won't match a search for that nickname. Fix when nicknames get an editing UI: filter against the same nickname → profile → account resolution the row renders (Android `ComposeMessageView.matchesQuery` / picker-sheet filter; iOS `ComposeMessageView` has the same mirrored filter; Desktop likewise). Doc 52 §Search already specifies the target: People matched against nickname, profile display_name, notes, and DID prefix.
-- Perspective-word guard on contact-name writes (core change): an early pre-guard build could copy your own group-member row as a contact card named "You" (the copy paths now use `resolvedName`, guarded since the sharing feature landed); saving such a card persisted `nickname="You"` on the peer's `contacts` row, and the nickname wins the display-name merge (`app-core` `contact_display_name`, nickname → profile → account) — so the peer rendered as "You" everywhere while the real profile name sat intact underneath (confirmed in the field on 2026-08-02). What remains: a **save-time guard** — `save_shared_contact` ignores perspective words ("You"/"you"/"Me"/"me") as nicknames (and consider the same reserved-word check in `set_display_name`) so a stale-build card or future regression can't re-poison. (Existing poisoned rows were repaired manually on the affected test devices; no shipped migration.)
+**Priorities:** **P0** security, fix now · **P1** correctness or important gap ·
+**P2** planned feature · **P3** cleanup. Items under "Awaiting owner review" are Proposed
+contract changes and are blocked on that review.
 
-## Privacy / identity
-- De-anonymization guard for compose: implement `preferred_identity` (docs/52 §"More about `preferred_identity`") so the composer defaults the sending identity per-contact instead of using the foregrounded one. Depends on the unified, cross-identity contact book (today contacts are siloed in each identity's SQLCipher DB, so `preferred_identity` is degenerate). Also covers founding a group/DM on a chosen (non-home) server: `create_group` currently always uses the account's pinned client server (`app-core` `create_group` → `inner.client.server_url()`), and the Name Group screen's server picker gates non-home options until this lands. Groups need their own preferred-identity tracking separate from contacts (docs/52 §"More about `preferred_identity`").
-- Consider allowing `did:local:` DIDs for human (non-bot) accounts, not just bots. Allowing `did:local:` for humans would let small orgs run a homeserver without publishing identities globally.
-- Random `did:local:` for all bots (drop the fixed `adminbot` literal) — DECIDED direction (`docs/22` §"`did:local:` DID scheme", `docs/37` invariant), implementation deferred + needs sign-off. Root cause: the client's per-identity `IdentityStore` keys every DID-scoped table (contacts/profiles/conversations/`message_history`) by DID and assumes DIDs are globally unique; `did:local:adminbot` is the *same literal on every server*, so a multi-homed user merges the two servers' adminbots into one row (block/nickname/DMs all collide). Fix at the identity layer, not client scoping: adminbot registers **without** the fixed suffix (`node/packages/adminbot/src/index.ts` `ADMINBOT_DID_SUFFIX`) so it gets `did:local:{random}` (`core/.../registration.rs` already generates this when no suffix is given); operator records the generated DID into `ADMINBOT_DID`. Includes a **client migration** for rows already stored under `did:local:adminbot`. Role discovery ("which DID is this server's adminbot?" without the literal) is deferred (`docs/22` Open questions). Host-scoped DIDs (`did:local:{host}:adminbot`) and client-side conversation-key rewriting both considered and rejected.
-- PLC directory privacy: the DID document currently includes the homeserver URL as a service endpoint, which means anyone can resolve a DID and learn which server a user is on. For small servers this effectively leaks group membership. Consider removing the homeserver URL from the PLC document entirely and relying on out-of-band discovery (invite links, contact exchange). The PLC document would only contain the identity key for verification.
-- DID update operation for key rotation after recovery (submit new signing key to PLC directory, signed by rotation key)
-- Re-encrypt and re-upload recovery blob to all servers when joining a new server (update server list). Currently `update_recovery_blob` only writes to the primary; the auto-refresh on group join inherits that limit.
-- Implement the no-blob recovery fallback (docs/50-identity-auth-recovery.md §"Recovering an identity after device loss", step 9). Today `recover_from_blob` errors out if the homeserver can't return a blob; the planned fallback generates a fresh identity key, submits a PLC update replacing the old verification method (signed by the rotation key), and re-registers without the blob's server list — user manually re-enters servers later.
-- Sender-key recovery after device loss: when a recovered device can't decrypt group messages that other members sent under previous Sender Keys, prompt those peers (via a `DecryptionErrorMessage`-style nudge) to redistribute SKDMs. Without this, group history across the recovery boundary is unreadable until peers happen to rotate or send something new. **Substrate landed:** undecryptable group messages are now buffered locally (`pending_group_ciphertext`) and retried automatically when the sender's SKDM arrives (`groups::buffer_undecryptable_group_content` + `AppCoreInner::retry_pending_group_ciphertext`), which already covers the new-member SKDM-ordering case. What remains here is the *resend-on-demand nudge* for keys that never arrive (a peer redistributes on request), plus recovery of messages received *before* buffering was in place.
-- Consider whether we want to bother moving the persisted identity list out of UserDefaults into a Secure-Enclave-keyed SQLCipher `manifest.db`. Today the list of identities (own DID, display name, server URLs, db filename) lives in UserDefaults, which is encrypted at rest by the device data-protection class but not by a user-controlled key. An attacker pulling the iOS sandbox snapshot gets the list of homeservers the user is on plus their own DIDs — enough to link the device to specific orgs. The contact graph and message history are not exposed (they're inside the SQLCipher per-identity DBs) so it's maybe not that important. A small manifest DB keyed from the Secure Enclave (same approach as the per-identity DBs) could list the other DBs while closing this particular loophole.
-- Contact list backup: we're interested in persisting the user's contacts separately from their identity keys, in hopes that if they lose identity keys at least they can reestablish contact with the people they were previously communicating with under a new ID. The contacts aren't that sensitive, but the tricky bit is that each of your contact is attached to one of your own identities and we don't want to mix them up. You might also want to be able to manually export your contacts list in some standard format that can be processed by other apps too.
+## Now: P0 security
 
-## Crypto / protocol
-- Bot edit-history suppression + revision capping (docs/36): recipients currently store a prior-body revision for every inbound edit. The spec says bot-authored messages should retain no edit history (a live-tally bot editing hundreds of times would bloat every recipient's device). Add a cheap local is-bot check on the receive path (or a per-message revision cap) once high-frequency bot editing is in use.
-- Receive-side edit/delete window clamping (docs/36): the authorship rule is enforced on receive (security-critical), but the 24h/30-day windows are only enforced by the sending UI today. Add defense-in-depth clamping of out-of-window inbound edits / FOR_EVERYONE deletes.
-- Legacy raw-text group messages decode heuristically on receive (`process_decrypted` tries `ContentMessage::decode`, falls back to raw text). All new group messages carry the envelope; the fallback only matters for messages sent before this migration. Pre-launch there are none, so the heuristic is effectively dead code — drop the fallback (require the envelope) once there's confidence no pre-migration group messages remain in any store.
+Small, contained fixes; no design work needed. Each is a bug fix, so per the root
+`CLAUDE.md` it lands on the affected platform(s) and is verified there.
 
-## Server
-- Auto-uninstall a web Project's directory entry on `avalanche-remove-project` (follow-up to retiring the `PROJECTS` env, docs/22/42). Install is fully automated now: the deploy writes a manifest per web Project into `$SHARED/manifests` and adminbot installs them at startup (`ADMINBOT_MANIFEST_DIR`), so `avalanche-install-project` publishes the Project's directory entry + OAuth login without a manual step. The gap is removal: `avalanche-remove-project` drops the manifest and stops re-installing it, but adminbot's startup auto-install only *installs* present manifests — it never *uninstalls* a Project whose manifest disappeared, so the DB `directory_entries` row (and `projects` row) lingers until someone runs an adminbot uninstall. Close it: have adminbot reconcile — uninstall any DB Project (created via auto-install) that no longer has a manifest — or have `avalanche-remove-project` trigger an adminbot `/uninstall-project`.
-- Re-engineer the `admin_list_accounts` server test (currently `#[ignore]`). It asserts a freshly-registered DID is in the *first page* of `GET /v1/admin/accounts`, but the endpoint is paginated with a default limit and the shared dev DB accumulates committed accounts across runs, so the fresh DID eventually falls off page one and the test flakes (passes in isolation; surfaced when the manifest-directory PR added a few more committed accounts). Make it isolation-robust — e.g. paginate with `after=` up to the new DID, or scope the assertion to accounts created within the test — then remove the `#[ignore]`.
-- Adminbot routing config (docs/22): map an `AccountJoinedEvent`'s invite-token issuer + routing tags → channels (declarative rules), now that the event carries `invite_token`.
-- Adminbot node bot: consume the catch-up endpoint `GET /v1/admin/events?since=` on reconnect (events are now persisted in `server_events`); today it only acts on live WS pushes.
-- Future `bots.provision` capability + `purpose = "bot"` registration tokens (docs/24 end state — bots sign up with a token signed by their Project). The token format already carries `purpose` and the redemption table is generic, so this is additive: add the capability string, a `purpose == "bot"` admission arm, and auto-link the new bot to the issuing Project via the token's `iss`.
-- Per-device group push bindings (concurrent multi-device group receive). Today `member_credentials(group_id, encrypted_member_id, group_push_pseudonym)` holds one pseudonym per (group, account-member EMI) and `rotate_member_pseudonym` replaces it — so two active devices of one account clobber each other's binding and only the last to register gets group fan-out. Needs per-device pseudonyms (multiple per EMI), fan-out delivering each member's slice to all their devices, and possibly sender-side fanout changes. Gates moving group keys out of the recovery blob for the multi-device case (Privacy/identity).
-- WS liveness: server-side ping + idle timeout. The server never probes its WebSocket connections — `routes/websocket.rs` only removes a device from `ws_connections` when the socket's read loop ends, and the client keepalive is foreground-only. A connection left by a *crashed or frozen* client therefore lingers in the live map, and since `routes/messages.rs` skips the relay push for devices with a live WS entry, every message sent to that device in the window gets neither WS delivery nor a push wakeup — silently delayed notifications. The client-side background teardown (docs/16 §background lifecycle) closes sockets on *clean* suspension, but only a server-side probe can reap sockets left by crashes. Add a periodic server→client WS ping with an idle timeout (~60–90s) that closes dead connections and removes them from the map, so the push path engages.
-- Push group-state changes (membership/title/policy) over the WebSocket. Today the only WS group frames are message fan-outs; clients learn of state changes by polling `fetch_group_state` on navigation. A "group changed" push would let clients trust cached state and stop polling on every open (see the `fetchGroupState` coalescing item under Mobile app).
+- Replace bootstrap "setup codes" with server-minted, per-Project, single-use bot-enrollment
+  tokens that cannot name the superuser Project; rotate `REGISTRATION_SHARED_SECRET` on
+  deployed servers afterwards (S-01, `22`, `24`).
+- Join events carry parsed issuer and routing claims, never raw tokens; purge raw tokens
+  already stored in `server_events` (S-01, `22`).
+- Remove `REGISTRATION_SHARED_SECRET` from testbot's environment (S-01, `21`).
+- Stop attaching the profile key to automatic delivery receipts for un-accepted requests
+  (S-02, `52`).
+- Exempt from the message-request gate only bots linked to an installed Project, not
+  self-declared `is_bot` (S-03, `54`).
+- Route group invites from non-curated senders through the request gate; confirm current UI
+  behavior first (S-04, `12`, `03`).
+- Desktop: replace the constant SQLCipher key with an OS-keychain-backed key, with migration
+  for existing databases (S-05, `61`).
+- Attachments: restrict download hosts to known homeservers, cap reads at the pointer's size,
+  don't auto-download for un-accepted senders, and fetch off the core lock (S-08, `35`).
+- Refuse a group subscribe that would steal a pseudonym held by another live socket (interim
+  for S-14, `03`).
+- Project tokens: mandatory audience on `verify`; mint only for installed Project origins
+  (S-17, `20`).
+- Clamp group message expiry server-side as DMs already do (S-16, `03`).
 
-## Infra
-- Right now foreground apps poll the server every minute for storage updates; implement something that reduces this poll rate -- probably proactive sync of some sort. Part of multi-device implementation.
-- No cancellation path for app-core's blocking receive APIs, so an authenticated WebSocket can linger after logout. `next_events()` (`core/crates/app-core/src/lib.rs`) blocks on `event_rx.recv().await` and only returns when an event arrives or the channel closes; the channel closes only when every `event_tx` clone is dropped, i.e. when `AppCore` is dropped. But a caller must hold the core alive to make the call (desktop: `spawn_blocking(move || app.next_events())`; iOS: `Task.detached { try core.nextEvents() }`), so while a poll is parked over a quiet connection the core cannot be dropped — logout / mode-switch sets the platform's core reference to `None` but the parked call keeps the old core, reconnect task, and authenticated WS alive until the next event wakes it. Same applies to `wait_for_connection_state_change()` (`rx.changed().await`). Affects all clients that run the poll loop (desktop today; iOS once a quiet-connection logout hits it; Android once it wires the loop). Desktop's `clear_session` comment currently overstates this as "die on drop." Fix belongs in app-core: expose a cancellation path the parked `recv()`/`changed()` selects on (shutdown signal), or a bounded poll timeout so the call returns periodically and rechecks a cancel flag; then have each client invoke it on logout.
-- In-place server upgrades (see [`42-server-upgrades.md`](42-server-upgrades.md)). **Phase 1:** rewrite `avalanche-update` to be tag + tarball based and cover the bots (download `av-{server,adminbot,testbot}-$TARGET` for a release tag, migrate, swap all installed components, restart, rollback; stamp the tag into `bootstrap.env` and show it in `avalanche-status`). The shipped updater is still bare-binary/server-only. **Phase 2:** the `av-deploy-<tag>.tar.gz` deploy-bundle model — move the systemd units / Caddyfile / env templates / scripts into `infra/deploy/bundle/`, add the artifact to `release.yml`, thin the configure-page cloud-init down to "fetch bundle + run install.sh", and have `update.sh` refresh the infra glue. **Phase 3:** `#admins` `/upgrade [tag]` command (docs/22) so operators upgrade from inside the app.
+## Next: P1 correctness and important gaps
 
-## Project-wide
-- Mass rename: rename repo, update bundle IDs, update all remaining `actnet` references in code and docs to `avalanche`
-- Group/DM discriminator on the FFI: `ConversationSummaryFfi` (`core/crates/app-core/src/lib.rs`) carries no group/DM flag, so every client re-derives it from the `conversation_id` prefix (`group-` vs `dm-`) — iOS `AppState.groupId(from:)`, Android `groupIdFromConversationId` in `AppViewModel`, Desktop `isGroupSummary` in `desktop/src/state/helpers.ts`. Add an `is_group: bool` to the struct, populated at the `load_conversations` build site from the `MessageTarget` core already branches on (`lib.rs:250-251`), alongside `is_request` / `is_blocked`, then drop the prefix parsing in all three clients. Cross-platform FFI change — do as a focused follow-up post-desktop-merge (raised in PR #9 review, `discussion_r3500344919`).
-- Optional: user-friendly desktop ↔ desktop device linking. QR linking covers every phone↔desktop case (desktop shows a QR, phone scans), but not two camera-less desktops — neither can scan, and the pairing string (`av1.<mailbox>.<session>.<ephemeral_pub>`, `core/crates/app-core/src/provisioning.rs`) is ~130 chars, far too long to transcribe. Making it pleasant needs a protocol rework: shorten the human-transferred secret to a short code (server-allocated public nameplate + client-CSPRNG-generated word secret, à la Magic Wormhole) and move the ephemeral-pubkey exchange onto a PAKE (SPAKE2) rendezvous on the mailbox, authenticated by the short code — one online guess per session, backed by single-use / short-TTL / rate-limited rendezvous, so ~16–24 bits suffices. Cross-platform protocol + mailbox-server change (`provisioning.rs` + nameplate allocation/relay); design on iOS first per the parity rule. Not a priority (raised in PR #9 review, `discussion_r3500350772`).
-- Desktop: unify the chat-list preview builder. The preview string (body, else `attachmentPlaceholder`, then 100-char truncation + ellipsis) is open-coded at three sites with drifted behavior: `sendOptimistic` (`desktop/src/state/createMessaging.ts`) never truncates, and `handleIncomingMessage` uses the unicode "…" while `applyInboundEdit` uses ASCII "..." (both `desktop/src/state/createEventLoops.ts`). Extract one `conversationPreview(body, attachments)` helper (natural home `desktop/src/lib/format.ts`, next to `attachmentPlaceholder`) and call it from all three. Pre-existing drift, surfaced during the AppContext split review.
-- Desktop: `resetSession` (`desktop/src/state/createAccounts.ts`) clears each `SessionGuards` member individually with no compile-time link to the `SessionGuards` interface (`desktop/src/state/types.ts`), so a future guard added to the interface and wired through the factories can silently survive logout. Add a `resetGuards(guards)` helper co-located with the type so the clear list lives with the definition.
-- Desktop (UI): make the left sidebar read as one continuous full-height bar under a unified title bar (like Signal Desktop). Symptom exists on all platforms — the window uses the default OS title bar (`desktop/src-tauri/tauri.conf.json` sets no `titleBarStyle`/`decorations`), so the OS draws an opaque title strip above the content and the sidebar (`nav.sidebar` in `desktop/src/views/common/MainLayout.tsx` + `MainLayout.css`, already a full-height single-color 64px rail) is pushed below it, looking cut off at the top with a mismatched bar above. **macOS (cheap, do first — ~1h core, ~½ day polished):** set the window `titleBarStyle: "Transparent"` + `hiddenTitle: true` so content runs under the title bar and the traffic lights float over the sidebar; bump the sidebar `padding-top` (~40px) so the top nav clears them; make that top strip a `data-tauri-drag-region`; collapse the padding in fullscreen (traffic lights hide); add a 1px divider between sidebar and main pane; give the content-pane view headers a draggable top strip so they don't butt flush to the window edge. **Windows/Linux (separate, bigger, optional):** `titleBarStyle`/`hiddenTitle` are macOS-only, so matching the edge-to-edge look there needs frameless (`decorations: false`) + a custom HTML title bar with its own window controls and per-WM handling (fragile on Linux) — and a native title bar is more expected there, so weigh whether it's worth doing at all.
+**Security hardening (needs some design, mostly within existing contracts)**
+- Give the passkey RP a dedicated domain that serves nothing else; move Project hosting off
+  `*.theavalanche.net` paths (S-07, `50`, `20`).
+- Authenticate and rate-limit `GET /v1/recovery/{did}`; stop returning `device_ids` (S-19,
+  `50`).
+- Device-link confirmation code shown on both screens, plus a "new device linked" notice on
+  all devices (S-21, `04` §4.3).
+- Device list and revocation, with a server endpoint and FFI (S-18, `04` §9).
+- `/link` and `/replace`: require the identity's existing identity key, run in a transaction,
+  IP rate-limit before the PLC fetch; add timeouts to all PLC fetches; make the PLC URL
+  configurable (S-18, `04`, `10`).
+- Recovery revokes the identity's whole device set on every server, not one slot on the
+  primary (`04` §7).
+- Client-side group checks: accept SKDMs and group messages only from cached members, re-seed
+  your own Sender Key when a member is removed, enforce `announcement_only` on receive (S-15,
+  `03`, `32`).
+- Pseudonyms backed by a secret: server stores a hash, subscribe and relay registration present
+  the preimage; keep pseudonyms out of member-visible change history (S-14, S-13, `03`, `15`).
+- Prune group history to the 256-revision ring; keep pseudonyms and link passwords out of
+  server-readable history; day-align `created_at` columns (S-10, S-11, `03`).
+- Move IP rate-limit counters out of Postgres into memory (S-12, `03`).
+- Authenticate relay registration; register pseudonyms so the relay can't link a device's
+  full set (S-13, `15`, `41`).
+- Delete attachment and link-preview rows and cached plaintext when a message is tombstoned,
+  deleted for me, or expires; encrypt or clear plaintext attachment caches on all platforms
+  (S-25, `35`, `36`).
+- Separate the avatar and attachment blob namespaces; salt profile-avatar ids (S-27, `55`).
+- Storage sync: keep dirty local edits on pull, retain unknown-type payloads, bind record
+  versions against server rollback (S-22, `05`).
+- Webviews: origin-locked navigation and per-Project data stores; Network tab and
+  `conversation/` deep links use the correct identity (S-23, `20`, `23`).
+- Fix the identity key's multicodec in DID documents (published as Ed25519, actually
+  Curve25519) (`50`).
+- Gate adminbot's `/audit` on `#admins` membership (`22`).
+- Validate gatekeeper tokens fully in `GET /v1/invites` (`24`).
+- Desktop link-preview fetch: reject redirects to non-public IPs, require `image/*` for
+  og:image, clamp the body cap, open the validated URL (S-28, `35`).
+- Desktop Project webview: decide whether non-loopback `http:` needs a developer-mode
+  setting (it currently sends the token in cleartext to any `http:` host) (`20`).
 
-- Cross-platform "one link" for deep links (web landing-page redirect): a published `https://go.theavalanche.net/<action>/<arg>` link (e.g. `conversation/<did>`, `i/<token>`) opens the app natively only on mobile (Universal Links / App Links). Desktop OSes route URLs to a native app **only via the custom `avalanche://` scheme** (`tauri-plugin-deep-link`, `desktop/src-tauri/tauri.conf.json` `schemes: ["avalanche"]`), never `https:`, so an https deep link clicked on desktop — or on mobile without the app installed — dead-ends in the browser. Fix with the standard Slack/Zoom pattern: render a small landing page on the Hugo site (`web/`) at the deep-link paths (`/conversation/`, `/i/`, `/authorize`) that detects platform and fires `avalanche://<action>/<arg>` (with an app-store fallback when no app is installed). Mobile-with-app never sees the page (the universal link intercepts first), so one published `https://` link works everywhere. Behavior gap noted while writing `web/content/docs/network_tab.md`.
+**Reliability and correctness**
+- Desktop doesn't compile: await the now-async app-core calls (`desktop/src-tauri/src/lib.rs`
+  ~696, ~1059) (`61`).
+- Server-side WebSocket ping with idle timeout, so half-open sockets stop suppressing push
+  (S-24, `10`, `34`).
+- Cancellation path for parked `next_events` / `wait_for_connection_state_change`, so logout
+  actually closes the authenticated socket (`07`).
+- Connection-state Layer 2: outage tiers so a dead server stops pinning the banner and stops
+  hammering reconnect (`34`).
+- Build the no-blob recovery path, or stop promising it (`50`).
+- "Add a server" with an existing identity must actually register on that server (`53`, `30`).
+- Send `SyncRead` to your own devices (`31`, `04`).
+- Per-conversation mute (`37`).
+- CI: add `cargo audit`/`cargo deny`, app-core end-to-end tests, and iOS, Android, relay, and
+  bot builds (`01`).
+- Adminbot consumes the event catch-up endpoint on reconnect (`22`).
+- Re-enable the `admin_list_accounts` server test (currently `#[ignore]`d because pagination
+  makes it flaky on a shared dev DB) (`10`).
 
-- Project login (`docs/25-project-login.md`) follow-ons — deferred beyond the v1 "Sign in with Avalanche" flow:
-  - Desktop app as a login authorizer: the desktop deep-link handler now exists (`tauri-plugin-deep-link` + single-instance argv forwarding in `desktop/src-tauri/src/lib.rs`, forwarding `avalanche://` / `go.theavalanche.net` URLs to the frontend `handleDeepLink`; `conversation/<did>` and `i/<token>` are wired). What remains: handle the `authorize` deep link in the desktop `handleDeepLink` + show the consent screen + call the OAuth issue/approve commands, so a same-device desktop-browser login can be approved in the desktop app (rather than only via phone-QR). Deliberate parity-rule exception in v1 (`docs/25` Platform scope / parity).
-  - "Good standing" beyond account existence: no server-side account status/suspension concept exists (`accounts` has no status column). A future feature could add one and surface it in the login assertion (+ a revocation/introspection signal for Projects that want continuous, not point-in-time, enforcement — `docs/25` Session lifetime).
-  - OIDC conformance (`id_token` / discovery doc / `userinfo`+`sub`) so Projects can use drop-in OIDC libraries instead of calling `verify`; revisit only if an ecosystem wants it (`docs/25` Non-goals).
+## Awaiting owner review: Proposed contract changes
 
-## Big milestones (not yet started)
-- First-party Projects: channel directory, team assignment, action-day map, Q&A bot, collab docs, engagement tracking
-- Federation: server-to-server protocol, cross-server DMs, full DID portability (PLC directory), guest access
-- Calls: voice and video (VoIP)
-- Public profiles: client-owned profile blobs (display name, avatar, bio) pushed to servers
+- **Identity root** — random root key wrapped under each unlock method (passkey, backup-domain
+  passkey, recovery phrase); priority-ordered PLC rotation keys with the top key never stored
+  (S-06) (`50` Proposed).
+- **Unpublished identity** — self-certifying private identifier; `did:plc` becomes an opt-in
+  public link (S-20) (`50` Proposed).
+- **Sealed sender for 1:1 and SKDM traffic, with delivery keys** — the largest privacy win
+  (S-09) and the base for federation (`03`, `13`, `52`).
+- **Client-side federation** — servers never talk to each other; clients deliver to the
+  recipient's server (`13`). Resolve how abuse-report forwarding works without
+  server-to-server calls (`12`).
+- **Acquisition path** — `/project/<t>` deep links that survive App Store install, and opaque
+  per-conversation launch handles passed to Project webviews (`23`).
+- **OIDC-conformant "Sign in with Avalanche"** as the main developer story (`25`).
+- **Project tokens out of the URL query string** (`20`).
+- **Quote-reply** via `reply_to{author, sent_at, unsurfaced}` (`32`; additive proto field).
+- **Group/DM flag on `ConversationSummaryFfi`** so clients stop parsing `conversation_id`
+  prefixes (`07`).
+- **Validate `conversation/<did>` deep links** before creating a conversation row (S-28; all
+  platforms).
 
-## Mesh Fallback / BitChat protocol (optional — implement only after core features are stable)
+## Later: P2 planned features
 
-See `docs/14-bitchat-fallback.md` for the full design. BLE mesh transport as a fallback when the homeserver is unreachable.
+**Messaging**
+- Quote-reply, once approved (`32`).
+- Read-receipt preference toggle and send debounce (`31`).
+- `profile_version` on the envelope, for profile liveness (`52`).
+- Edits and deletes: recipient-side window and cap, hold out-of-order ops, previews on edits,
+  no stored revisions for bot edits, Desktop 24h window (`36`).
+- Reactions: notifications, who-reacted sheet, drop on expiry (`33`).
+- Send queue: outbound messages persist and drain on reconnect; network-path monitoring;
+  403 (membership revoked) handling (`34`).
+- Disappearing messages: keep an empty conversation when all messages expire; system message
+  on DM timer change; Android expiry handling (reaper refresh, persist timer on send).
+- Scroll to the first unread message on open (capture the index before marking read).
+- Block and report from an accepted conversation; view another user's profile.
+- Coalesce `fetchGroupState` and push group-state changes over the WebSocket instead of
+  polling on every open (`03`).
+- Sender-key recovery after device loss: ask peers to redistribute SKDMs on demand (`04`).
+- Nickname: sync via storage service; match nicknames in compose autocomplete; refuse
+  perspective words ("You", "Me") as saved nicknames (`52`).
 
-## Push Notifications
+**Groups**
+- `modify_policy` / `modify_description` FFI and UI: invite links, join policy,
+  announcement-only (`03`).
+- Scheduled 7-day group pseudonym rotation (`03` §3.7).
+- Per-device group push bindings, so multiple devices of one account all receive group
+  traffic (`03`, `04`).
+- Report forwarding and the enforcement ladder (`12`).
 
-### 4. Testing & privacy
-- [ ] Verify relay payloads contain zero user-identifiable content
-- [ ] Verify relay logs contain only pseudonyms + timestamps
-- [ ] Pseudonym rotation grace period test
-- [ ] APNs/FCM sandbox integration test
+**Identity, devices, accounts**
+- Register an existing identity on a second server; recovery blob written to all servers
+  (`53`, `06`).
+- Trust-store sync adapter (`05`, `06`).
+- Drop group keys from the recovery blob; enforce `MAX_RECOVERY_BLOB` (`05`).
+- Reachability rows, remove-from-device, change home server (`53`).
+- Desktop passkey bridge via external browser (`56`).
+- Random `did:local:` for adminbot, with client migration (`22`).
+- `preferred_identity`: compose defaults the sending identity per contact; groups and DMs can
+  be founded on a chosen server (`52`).
+- My QR Code and other single-identity screens use the active identity, not
+  `accounts.first` (`53`).
+- Server onboarding step webview; group auto-enroll from invites carried in the URL fragment
+  (`51`).
 
-### NSE follow-ups (iOS)
-- [ ] Request `com.apple.developer.usernotifications.filtering` from Apple (account-holder action; justification: E2EE messenger, placeholder suppression — same grant Signal ships in `SignalNSE-AppStore.entitlements`). When granted: add the key to the NSE entitlements in `project.yml`, flip `NotificationService.hasFilteringEntitlement` to true, re-run the docs/16 Stage 5 device checks. This unlocks full Signal-parity presentation (suppressed placeholder, zero stray "New message" banners in bursts).
-- [ ] Lost-push detection (Signal's APNs token-health check, adapted). With the Stage-5 fail-silent NSE (docs/16), a dead APNs token or broken NSE means silent misses with no signal anywhere. Detection is fully client-local: the app and NSE record "push arrived at T" in shared App Group storage on every push; on app launch, if the mailbox fetch drains messages whose age implies pushes should have arrived in a window with none recorded, presume the token dead and re-register via the existing `register_push_token` FFI. Only count messages delivered by mailbox fetch, not live-WS (the relay doesn't push when a WS is up). No new server surface.
-- [ ] NSE badge count: Signal completes the suppressed placeholder push with badge-only content carrying the unread count. Needs an unread-count FFI callable from the NSE; deferred so Stage 5 stays presentation-only.
+**Projects**
+- Settable officialness and the checkmark badge (`22`, `54`).
+- Gatekeeper install through adminbot; a sample gatekeeper Project (`24`).
+- Identity picker on the login consent screen; Desktop as a login authorizer (`25`).
+- Adminbot routing rules (invite-token issuer and tags to channels) (`22`).
+- Adminbot reconciles removed manifests (uninstall Projects whose manifest is gone) (`22`).
+- Sample Projects: gatekeeper/onboarding, Q&A bot, participant CRM with training modules.
 
-### UnifiedPush follow-ups (degoogled Android)
-- [ ] No-distributor keepalive: persistent foreground-service WebSocket for degoogled phones with no UnifiedPush distributor installed (today such devices get push only while the app is foregrounded). Needs a foreground-service notification + lifecycle/battery design.
-- [ ] Distributor picker UI: when multiple UnifiedPush distributors are installed and none is saved, the app currently registers none (auto-picks only when exactly one is present). Add a settings picker / first-run prompt.
-- [ ] Consider UnifiedPush.unregister() on logout (in addition to the relay-side pseudonym deregistration) so the distributor drops the endpoint promptly.
+**Push**
+- Apple filtering entitlement (requested), then the suppressed-placeholder NSE path (`16`).
+- Lost-push detection and token re-registration (`16`).
+- NSE badge count (`16`).
+- UnifiedPush: distributor picker, no-distributor foreground keepalive, unregister on logout
+  (`15`).
+- Privacy checks: relay payloads and logs contain only pseudonyms; rotation grace-period test;
+  APNs/FCM sandbox test (`15`).
+
+**Platforms**
+- Android: avatar setting, killed-process push sync, recovery-key banner (`60`, `62`).
+- Desktop: Project login, avatars, account tabs, search, QR scanning, image paste,
+  long-press reaction overlay and recents (`61`, `62`).
+- Cross-platform "one link": a web landing page that forwards `go.theavalanche.net` links to
+  the desktop app or the app store (`23`).
+
+**Architecture and ops**
+- Actor-model app-core: one thread owns libsignal state, async exports, retire the global
+  `Mutex<AppCoreInner>` (`07`).
+- Generate the Tauri and napi bindings from the UniFFI surface, or at least fail CI when an
+  export is unbound (`07`).
+- Relay in the deploy bundle; separate dev and prod relays (`41`).
+- Upgrades: rollback, pre-upgrade database dumps, N-1 migration checks, `/upgrade` from
+  `#admins` (`42`).
+- Storage sync: reduce the one-minute foreground poll (`05`).
+
+## P3 cleanup
+
+- Fix stale code comments: `ADMINBOT_DIDS` in `middleware/auth.rs`; comments citing
+  `docs/35` for content now in `52` (`groups.rs:2596`, `lib.rs:2133`) or the nonexistent
+  `docs/35-profiles.md`; `recover_from_blob` comment about the profile key.
+- The three realistic §3.9 invariant tests: migration annotations, forbidden columns, send
+  handler without an auth extractor (`03` §9).
+- Negative-path end-to-end tests for groups (expired certificate, bad token) (`03`).
+- Verify clients skip unknown `ContentMessage` variants (`08`).
+- Async recovery end-to-end test harness with a PLC stub (`05`).
+- Testbot: check `project_url` on verify; split the OAuth demo out (`21`).
+- Neutral passkey labels, so a vault search doesn't link personas (`50`).
+- Record the production `APNS_PUSH_MODE` somewhere authoritative (`16`).
+- Split `desktop/src-tauri/src/lib.rs`; unify Desktop's chat-list preview builder; add a
+  `resetGuards` helper for Desktop session guards.
+- Desktop: unified full-height sidebar under a transparent macOS title bar.
+- Drop the legacy raw-text group message decode fallback once no pre-envelope messages remain.
+- Remove the invisible bottom-anchor spacer in iOS `ConversationView` when scroll position
+  saving lands.
+- Persisted identity list: consider a Secure-Enclave-keyed manifest DB instead of
+  UserDefaults (iOS), and Keystore-keyed equivalents on Android and Desktop.
+- Consider validating a scanned or pasted server invite during compose (`51`).
+- Mass rename `actnet` → `avalanche` (repo, bundle IDs, relay paths).
+- `.claude/commands/update-feature-parity.md` and `track-upstream-ios-parity-gaps.md` still
+  describe emoji cells; update to the plain-word matrix in `62`.
+- Watch: the iOS share extension launches the app via an unsanctioned responder-chain
+  `openURL:` call; fallbacks if it breaks are a local notification or App Group shared-DB
+  sends (`35`).
+
+## Speculative
+
+Kept for direction; no commitment.
+
+- Calls (1:1 WebRTC; group via an SFU with insertable-streams E2E) (`01`).
+- Large broadcast channels (`08`), full threading model (`32`), chat-organization tab model
+  (`37`).
+- Mesh fallback over BLE (`14`).
+- Project-to-Project federation (`13`).
+- Messenger-bot HTTP API Project, `create-avalanche-project` scaffold, offline-capable Project
+  webviews (`23`).
+- Trust scoring for federation abuse (`12`).
+- Client-assigned record versions so every server is a dumb mirror for storage sync (`05`).
+- Contact-list backup independent of identity keys; export in a standard format (`52`).
+- `did:local:` identities for humans on private servers (largely subsumed by the Proposed
+  unpublished identity, `50`).
+- Short-code (PAKE) device linking for two camera-less desktops (`04`).
+- First-party Projects listed in `00`.

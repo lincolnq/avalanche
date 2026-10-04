@@ -64,7 +64,11 @@ guard is live) must be justified against this rule before merge.
 2. `/new-db-module <entity>` — scaffold DB layer (see `.claude/commands/new-db-module.md`)
 3. `/new-route <name>` — scaffold route + register in `routes/mod.rs` (see `.claude/commands/new-route.md`)
 4. Add rate limiting if the endpoint is writable or fetchable (see `middleware/rate_limit.rs`)
-5. `make ci` before opening PR
+5. Add the route to the API table in `docs/10-server-implementation.md`
+6. `make ci` before opening PR
+
+The server is single-instance by design (in-process WS/subscription maps in `state.rs`);
+don't add state that assumes otherwise without discussing it (docs/10).
 
 Common pitfalls:
 - Forgetting `.merge()` in `routes/mod.rs`

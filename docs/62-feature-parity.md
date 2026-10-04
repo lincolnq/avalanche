@@ -1,91 +1,111 @@
-# Feature Parity Matrix
+# 62 — Feature parity matrix
 
-Tracks which user-facing features are implemented on each client platform. Update this file when implementing a feature on any platform.
+> **Status:** Built — the single source of truth for which user-facing features exist on
+> which client. Re-baselined against the code on the verified date.
+> **Last verified against code:** 2026-10-03
 
-**Platforms:**
-- **iOS** — Swift/SwiftUI, UniFFI bindings (`mobile/ios/`)
-- **Android** — Kotlin/Jetpack Compose, UniFFI bindings (`mobile/android/`) — not started · see [`docs/60-android-implementation.md`](60-android-implementation.md)
-- **Desktop** — Tauri + Solid/TypeScript (`desktop/`) — messaging/groups/contacts/device-linking implemented · see [`docs/61-desktop-implementation.md`](61-desktop-implementation.md)
-- **Bots/Node** — napi-rs bindings (`node/packages/app-core/`) — used by adminbot
+This is the **only** parity tracker; docs/60 (Android) and docs/61 (Desktop) hold platform
+implementation notes, not tables. Update this file in the same change that adds, removes, or
+changes a feature on any platform.
 
-Status: ✅ done · 🚧 partial · ⬜ not started · n/a not applicable
+**Platforms:** iOS (`mobile/ios/`, reference implementation) · Android (`mobile/android/`) ·
+Desktop (`desktop/`, Tauri) · Bots (`node/packages/`, napi `@theavalanche/app-core`).
 
-## Identity & accounts
+**Cell values:** **Yes** — built · **Partial** — see note · **No** — not built ·
+**n/a** — not applicable to the platform. For Bots, "Yes" means a shipped bot uses it;
+"API" means the napi surface exposes it but no shipped bot uses it.
 
-| Feature | iOS | Android | Desktop | Bots/Node |
+## Identity and accounts
+
+| Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
-| Create account (passkey PRF) | ✅ | ⬜ | n/a | n/a |
-| Create account (no passkey, bot flow) | n/a | n/a | n/a | ✅ |
-| Create account (recovery-phrase credential) | ⬜ | ⬜ | ✅ | n/a |
-| Login (re-open existing store) | ✅ | ⬜ | ✅ | ✅ |
-| Account recovery from blob | ✅ | ⬜ | ✅ | ⬜ |
-| Written-down recovery phrase | ⬜ | ⬜ | ✅ | ⬜ |
-| DID display / copy | ✅ | ⬜ | ✅ | n/a |
-| Link a new device (pairing code) | ✅ | ⬜ | ✅ | n/a |
-| Multi-account switcher | ⬜ | ⬜ | 🚧 | n/a |
+| Create account with passkey (PRF) | Yes | Yes | No (by design, docs/61) | n/a |
+| Create account with recovery phrase | Yes | Yes | Yes (only path) | n/a |
+| Bot account (`did:local:`) | n/a | n/a | n/a | Yes |
+| Recover account (passkey or phrase → blob) | Yes | Yes | Yes (phrase) | n/a |
+| Link a new device (pairing code / QR) | Yes | Yes | Yes | n/a |
+| Several accounts at once, one merged inbox | Yes | Yes | Yes | n/a |
+| Per-account tabs in the chat list (docs/37) | Yes | Yes | No | n/a |
+| Set own avatar | Yes | No | No | No |
+| Set display name | Yes | Yes | Yes | Yes |
+| Recovery-key reminder banner | Partial (inert stub) | Partial (hardcoded off) | Partial (inert stub) | n/a |
 
-## Messaging — direct messages
+## Messaging (DMs and groups)
 
-| Feature | iOS | Android | Desktop | Bots/Node |
+DMs and groups share one send path in app-core; rows apply to both unless noted.
+
+| Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
-| Send DM | ✅ | ⬜ | ✅ | ✅ |
-| Receive DM (poll) | ✅ | ⬜ | ✅ | ✅ |
-| Receive DM (live WebSocket) | ✅ | ⬜ | ✅ | ✅ |
-| Delivery receipts (send) | ⬜ | ⬜ | ✅ | ⬜ |
-| Read receipts (send) | ⬜ | ⬜ | ✅ | ⬜ |
-| Message history (load stored) | ✅ | ⬜ | ✅ | ⬜ |
-| Conversation list with unread counts | ✅ | ⬜ | ✅ | ⬜ |
-| Reactions / edit / delete | ✅ | ⬜ | ✅ | ⬜ |
-| Attachments + link previews | ✅ | ⬜ | ✅ | ⬜ |
-| Fullscreen image viewer (tap, zoom, page) | ✅ | ⬜ | ✅ | n/a |
-| Disappearing-message timers | ✅ | ⬜ | ✅ | ⬜ |
-| Clickable links (open in browser) | ✅ | ⬜ | ✅ | ⬜ |
-| Multi-device sync (linked devices) | ✅ | ⬜ | ✅ | n/a |
+| Send / receive text (live WebSocket + catch-up) | Yes | Yes | Yes | Yes |
+| Delivery and read receipts (sent by app-core) | Yes | Yes | Yes | Yes (delivery) |
+| Local history, conversation list, unread counts | Yes | Yes | Yes | API |
+| Reactions, edit, delete-for-everyone | Yes | Yes | Yes | Yes (reactions) |
+| Image attachments + full-screen viewer | Yes | Yes | Yes | Yes (send) |
+| Link previews (sender-generated) | Yes | Yes | Yes | No |
+| Shared contact cards | Yes | Yes | Yes | No |
+| Disappearing-message timers | Yes | Yes | Yes | Yes (group expiry) |
+| Paste image from clipboard | Yes | Yes | No | n/a |
+| Share an image in from another app | Yes (share extension) | Yes (`ACTION_SEND`) | n/a | n/a |
+| Conversation search | Yes | Yes | No | n/a |
+| Own-device sync of sent messages and read state (docs/04) | Partial | Partial | Partial | n/a |
+| Quote-reply / threads (docs/32) | No | No | No | No |
+| Per-conversation mute | No | No | No | n/a |
 
-## Messaging — groups
+Own-device sync is Partial everywhere: sent transcripts sync, but read state is applied when
+received and never sent (docs/04).
 
-| Feature | iOS | Android | Desktop | Bots/Node |
+## Groups
+
+| Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
-| Create group | ✅ | ⬜ | ✅ | ✅ |
-| Invite member | ✅ | ⬜ | ✅ | ✅ |
-| Accept invite | ✅ | ⬜ | ✅ | ⬜ |
-| Decline invite | ✅ | ⬜ | ✅ | ⬜ |
-| Send group message | ✅ | ⬜ | ✅ | ⬜ |
-| Receive group messages (poll) | ✅ | ⬜ | ✅ | ⬜ |
-| Receive group messages (live WebSocket) | ✅ | ⬜ | ✅ | ⬜ |
-| Promote / remove member (admin) | ✅ | ⬜ | ✅ | ⬜ |
-| Join via invite link | ✅ | ⬜ | ✅ | ⬜ |
-| Group state / member list | ✅ | ⬜ | ✅ | ⬜ |
-| Group system messages (timeline) | ✅ | ⬜ | ✅ | ⬜ |
+| Create group, invite member | Yes | Yes | Yes | Yes |
+| Accept / decline invite | Yes | Yes | Yes | API |
+| Join via invite link | Yes | Yes | Yes | API |
+| Roles: promote, remove member | Yes | Yes | Yes | API |
+| Leave group | Yes | Yes | Yes | API |
+| Group system messages in the timeline | Yes | Yes | Yes | n/a |
+| Group avatar: display | Yes | Yes | No | n/a |
+| Group avatar: set / remove | Yes | No | No | No |
 
-## Contacts & profiles
+## Contacts and safety
 
-| Feature | iOS | Android | Desktop | Bots/Node |
+| Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
-| Contact list | ✅ | ⬜ | ✅ | ⬜ |
-| Fetch & cache contact profile | ✅ | ⬜ | ✅ | ⬜ |
-| Block / unblock + report | ✅ | ⬜ | ✅ | ⬜ |
-| Set own display name | ✅ | ⬜ | ✅ | ✅ |
-| QR code / invite link sharing | ✅ | ⬜ | 🚧 | n/a |
+| Contact list, profile fetch + cache | Yes | Yes | Yes | API |
+| Contact avatars: display | Yes | Yes | No (initials only) | n/a |
+| Message-request gate (accept / delete) | Yes | Yes | Yes | n/a |
+| Block / unblock, report-and-block | Yes | Yes | Yes | n/a |
+| Show own QR code / invite link | Yes | Yes | Yes | n/a |
+| Scan a QR code | Yes | Yes | No (paste link only) | n/a |
 
-## Infrastructure
+## Projects and Network tab
 
-| Feature | iOS | Android | Desktop | Bots/Node |
+| Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
-| Push notifications (APNs/FCM) | ✅ | ⬜ | n/a | n/a |
-| Native notifications (OS) | ✅ | ⬜ | ✅ | n/a |
-| System tray / close-to-background | n/a | n/a | ✅ | n/a |
-| Deep links (open conversation/invite) | ✅ | ⬜ | ✅ | n/a |
-| Dark mode | ✅ | ⬜ | ✅ | n/a |
-| Connection state display | ✅ | ⬜ | ✅ | ⬜ |
-| WebSocket reconnect with backoff | ✅ | ⬜ | ✅ | ✅ |
-| Recovery blob upload / refresh | ✅ | ⬜ | ✅ | ⬜ |
-| Project webview (token-scoped, IPC-isolated) | ✅ | ⬜ | ✅ | n/a |
-| Project login "Sign in with Avalanche" (OAuth, docs/25) | ✅ | ✅ | ⬜ | ⬜ |
+| Network tab: servers → Project directory | Yes | Yes | Yes | n/a |
+| Project webview (bridgeless, token via URL) | Yes | Yes | Yes (separate window) | n/a |
+| "Sign in with Avalanche" consent (docs/25) | Yes | Yes | No | API |
+
+## Platform infrastructure
+
+| Feature | iOS | Android | Desktop | Bots |
+|---|---|---|---|---|
+| Push wakeups via relay | Yes (APNs) | Yes (FCM, UnifiedPush) | n/a (persistent WS) | n/a |
+| Decrypt + show notification while suspended | Yes (Notification Service Extension) | No (syncs on next launch) | n/a | n/a |
+| OS notifications | Yes | Yes | Yes | n/a |
+| Deep links (`go.theavalanche.net/…`) | Yes | Yes | Yes | n/a |
+| Connection state / offline banner | Yes | Yes | Yes | n/a |
+| Recovery blob upload / refresh | Yes | Yes | Yes | n/a |
+| Hardware-backed DB key | Yes (Secure Enclave) | Yes (Keystore) | **No — constant placeholder key** (docs/61) | Operator-supplied |
+| System tray / close to background | n/a | n/a | Yes | n/a |
+| Dark mode | Yes | Yes | Yes | n/a |
+| Calls | No | No | No | n/a |
 
 ## Notes
 
-- **Android**: UniFFI generates Kotlin bindings as a byproduct of the iOS build (`make bindings`). The Kotlin glue exists; the UI layer does not.
-- **Desktop**: Uses Tauri with a Solid/TypeScript frontend. `app-core` is exposed via Tauri commands (`src-tauri/src/lib.rs`) — no napi layer. The messaging UI (DMs, groups, contacts, attachments, link previews, reactions/edit/delete, disappearing timers, device linking, tray, dark mode) is implemented; remaining divergences are passkey signup (recovery-phrase only by design), QR generation (paste-link path only — 🚧), and full multi-account (single-account model today — 🚧). See `docs/61-desktop-implementation.md`.
-- **Bots/Node**: Adminbot uses account creation, DMs, groups (create/invite), and admin events. Other features are available via the napi API but not exercised by any shipped bot.
-- **Project login (docs/25)**: Desktop is intentionally deferred — the desktop app registers no deep-link handler yet, so it can't be a login *authorizer*; desktop *users* are served by authorizing from their phone (the cross-device QR flow). Tracked in `docs/02-todos-deferred.md` (desktop deep-link handler → desktop-as-authorizer). Bots/Node expose `oauthIssueCode`/`oauthApproveDevice` via napi (⬜ = no shipped bot uses them yet, but the surface is present).
+- **Desktop does not currently build** against `app-core` (async `next_events` /
+  `wait_for_connection_state_change`; docs/61). The Desktop column describes the code, not a
+  shippable binary.
+- **Bots** (adminbot, testbot) use account creation, DMs, reactions, attachment sends, group
+  create/invite/expiry, group sends in `#admins`, and the admin event stream; OAuth calls are
+  exposed via napi but unused.

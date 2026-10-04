@@ -1,152 +1,90 @@
-# Vetted Onboarding Project (Gatekeeper)
+# 24 — Vetted Onboarding (Gatekeeper)
 
-A first-party Project that gates account creation behind human vetting. An applicant fills out a web form; approvers in an end-to-end-encrypted approvals group review it; on approval the applicant receives a single-use signed invite (via email/SMS) that lets them register — and the homeserver admits **no one** without such a token.
+> **Status:** Partial — the server side is built: closed registration (the default), the `registration.gatekeeper` capability with a pinned signing key, signed single-use invite tokens, and the operator bootstrap secret. The vetting Project itself (form, `#approvals`, review webview, delivery) and post-join routing are not built. The bootstrap path has a P0 escalation bug (`22`).
+> **Last verified against code:** 2026-10-03
 
-This is the realization of something `51-invite-tokens.md` already anticipated: token signing, expiry, usage limits, and **closed registration are explicitly "server/Project concerns"** (`51-invite-tokens.md:65-69`). This Project is what plugs into that seam.
+## Summary
 
-## The bootstrapping problem (why this Project is shaped oddly)
+A gatekeeper is a Project that decides who may create an account. The motivating one is human vetting: an applicant fills out a web form; approvers in an E2E `#approvals` group review it; on approval the applicant receives a single-use signed invite (by email or SMS) that lets them register. The homeserver admits **no one** without a valid token.
 
-Every other Project authenticates a user who *already has an account* — the app mints a project token or a magic link (`20-project-security.md`). This one is different: **the applicant has no account, no DID, and possibly not even the app during vetting.** Identity is established at the *end* (signup), not the start.
+The design is shaped by one fact: **the applicant has no account and no DID until the end.** Every other Project authenticates an existing account. So the front half runs out-of-band (email/SMS), which doubles as a weak possession check, while approvers are ordinary users on the normal Project-token and visible-bot model.
 
-Two consequences drive the whole design:
+## Current design
 
-- **The front half runs out-of-band.** There is no in-app channel to a non-member, so the approval has to reach the applicant over email or SMS. That's not a wart — it's structural. The out-of-band hop is also a weak possession check (the applicant controls that inbox/number).
-- **Approvers are normal users.** They *do* have accounts, so the review side uses ordinary project-token/webview auth and the visible-bot group model. Only the applicant side is special.
+### Trust and gating model
 
-## Architecture
+**Built** (`core/crates/server/src/routes/registration.rs`, `gate_registration`; `core/crates/server/src/invite_token.rs`; `core/crates/server/src/config.rs`).
 
-```
- Applicant (no account)        Vetting Project service          Homeserver
-        │                              │                             │
-        │  GET / (public form)         │                             │
-        │─────────────────────────────▶│                             │
-        │  POST /apply {fields, email} │  store application (own DB)  │
-        │─────────────────────────────▶│                             │
-        │                              │  bot posts to #approvals ───▶│ (E2E; server can't read)
-        │                              │                             │
-        │                   Approver opens magic link (project token) │
-        │                              │◀────────────────────────────│
-        │                              │  webview: full application   │
-        │                              │  Approve / Decline           │
-        │                              │                             │
-        │   email/SMS: invite URL      │  mint signed single-use token│
-        │◀═════════════════════════════│  (out-of-band delivery)     │
-        │                              │                             │
-        │  tap invite → app → register │                             │
-        │──────────────────────────────────────────────────────────▶│ POST /v1/accounts
-        │                              │   validate token ◀──────────│ (closed registration:
-        │                              │   (gatekeeper)  ────────────▶│  no valid token, no account)
-        │                              │                             │
-        │   account created → join event → adminbot and/or the issuing │
-        │                      gatekeeper route them into channels      │
-```
+- **Closed registration is the default.** `REGISTRATION_MODE=open|closed`, and anything unrecognized means closed. In closed mode `POST /v1/accounts` is refused unless its `invite_token` admits it. **Fail-closed:** any validation failure rejects.
+- **Two admitting credentials:**
+  1. **A signed gatekeeper invite**, verified locally against the issuing Project's pinned Ed25519 key. The server never calls the Project.
+  2. **The operator bootstrap secret** (`REGISTRATION_SHARED_SECRET`), honored only while no gatekeeper is installed. A bootstrap token may name a Project to link the new account into; naming `adminbot` is how superuser is bootstrapped (`22`).
+- **Open mode** admits anyone, but a supplied token is still validated, and a bootstrap token still links into its named Project.
+- **Many gatekeepers.** `registration.gatekeeper` is a per-Project capability any number of Projects may hold. Granting it requires and pins that Project's 32-byte Ed25519 public key (`routes/admin.rs`, `grant_capability`). Revoking it clears the key, fail-closed.
+- **The token is the hand-off.** Admission (who may register) and routing (where they land) stay separate; the token carries the bridge, its issuer stamp plus a routing payload the gatekeeper controls.
 
-## Trust and gating model
+### Token format
 
-- **Closed registration.** The homeserver runs in a mode where `POST /v1/accounts` is refused unless it carries an `invite_token` that validates against an installed **gatekeeper**. Today registration is open (`51-invite-tokens.md:67`); closing it is the load-bearing server change this Project depends on. It must **fail closed**: if no gatekeeper vouches for the token, registration is rejected, never waved through.
-- **Many gatekeepers, not one.** `registration.gatekeeper` is a per-Project capability that *any number* of Projects may hold — different invite flows (human vetting, regional signup, event registration) are different gatekeepers, each minting its own tokens. A registration succeeds if its token validates against **any** installed gatekeeper. So every token names its **issuer** (which gatekeeper minted it), and the server validates the signature against that issuer's pinned key.
-- **Gatekeeper designation.** Granting `registration.gatekeeper` (via adminbot, like `accounts.read` — `20-project-security.md` §Server-enforced capabilities) registers that Project's token-signing public key with the server. The server keeps a set of `issuer → signing key` and verifies each token locally against its claimed issuer (preferred: no per-registration round-trip); delegating to the issuer's `GET /v1/invites/<token>` (`51-invite-tokens.md:29`) is the alternative. Multiple issuers make the pinned-key approach the natural fit.
-- **The token is the hand-off.** Admission (*who may register*) and routing (*which channels they land in*) stay separate, and the **token carries the bridge between them**: its issuer stamp plus a routing payload the gatekeeper controls. Post-join routing is resolved from that token — see *Post-join hand-off* below — with no live call between bots.
+`base64url(JSON)` with single-character keys to keep QR codes small (`invite_token.rs`):
 
-## Components
+- **Envelope:** `{ s: server_url, i: issuer_slug, c: base64url(claims), g: base64url(sig) }`. `s` and `i` are untrusted hints for which server to call and which pinned key to check.
+- **Signed claims:** `{ s: server_url, i: issuer_slug, e: exp_unix, j: jti, u: purpose, r?: routing }`. The signature covers the exact `c` string, so there is no JSON-canonicalization hazard. The server checks signature, issuer match, server URL, `purpose == "invite"`, and expiry.
+- **Single use:** `jti` is inserted into `token_redemptions` before the account is created; a replay conflicts and is rejected. A token redeemed by a registration that later fails is still spent (fail-closed).
+- **Bootstrap token:** `{ s: server_url, k: secret, p?: project_slug }`, unsigned; the secret is the credential.
 
-### 1. Application form — Project-served, anonymous
+The invite URL is the standard `https://go.theavalanche.net/i/<token>`, so app onboarding handles it unchanged (`51`).
 
-Served by the Project over HTTPS on its own origin, **unauthenticated** (the applicant has nothing to authenticate with). Submissions are stored in the Project's own database.
+### Post-join hand-off
 
-We serve the form ourselves rather than ingesting an external form (Google/Typeform) deliberately: an external form routes applicant PII through a third-party processor the admin never vetted, undercutting the platform's server-seizure / minimize-what-anyone-learns posture. Keeping it in-Project keeps applicant data inside the admin's trust domain. (An external-source adapter can be added later behind the same ingestion interface.)
+**Partially built.** Every registration emits `AccountJoined` carrying the **raw** registration token to `accounts.read` holders, and logs it in `server_events` (`22` §Join event API). Nothing consumes the routing payload yet: adminbot invites every new human into every group it admins, regardless of token.
 
-Because it's the one open endpoint, it's the main abuse surface:
+## Known gaps
 
-- Rate-limit by IP; captcha or proof-of-work to blunt automated spam.
-- Cap stored application size; treat every field as hostile input.
-- Collect a **delivery handle** (email or phone) — load-bearing, since that's the only way approval can reach the applicant.
+1. **Bootstrap tokens escalate to superuser (P0).** Setup codes handed to Project operators are bootstrap tokens containing the master secret; rewriting `p` to `adminbot` grants superuser. Details in `22` §Known gaps.
+2. **Raw tokens in join events (P0).** Bootstrap tokens, and so the master secret, are pushed to every `accounts.read` holder and kept for 30 days (`20` §Known gaps).
+3. **`GET /v1/invites/<token>` doesn't validate gatekeeper tokens.** It decodes only `s` (and `d`, the inviter DID) and checks the server URL (`routes/invites.rs`). A forged, expired or spent invite looks valid until `POST /v1/accounts` rejects it, after the user has created a passkey and DID.
+4. **Gatekeepers can't be installed through adminbot.** `/install-project` never supplies the signing key, so a `registration.gatekeeper` grant fails; the manifest-dir path skips it. Today it takes a direct admin API call.
+5. **Bootstrap cliff.** Installing the first gatekeeper silently retires the bootstrap path, which also breaks setup codes and testbot registration (`22`).
+6. **No gatekeeper Project exists.** Nothing in `node/packages/` mints signed invites.
 
-### 2. The `#approvals` group — modeled on `#admins`
+## Planned
 
-A regular action-bound E2E group whose membership *is* the set of approvers, exactly like adminbot's `#admins` (`22-adminbot.md:6-8`). The server can't read the membership, so it has **no opinion on who may approve** — the bot mediates, because it's a member and can decrypt the roster.
+- **Per-Project bot-enrollment tokens** replace bootstrap setup codes (`22` §Planned). Same envelope and redemption table with `purpose: "bot"`, minted by the server rather than signed by a Project, and unable to name the superuser Project.
+- **Join events carry parsed claims** (issuer, purpose, routing), never the raw token.
+- **Validate fully in `GET /v1/invites/<token>`** (signature, expiry, redemption) so the app fails before identity creation, not after. The response shape is unchanged; only error behavior tightens.
+- **Gatekeeper install via adminbot:** the manifest declares the signing public key, shown to the admin for confirmation.
+- **The vetting Project**, as designed below.
 
-The bot posts each new application as a message containing a **low-PII summary plus a magic link** to the full application. The full detail lives in the webview, not the message body — so applicant PII isn't sprayed across group history and backups. (`identity.magic-links` + a webview behind a project token; see `23-messaging-extensions.md`.)
+### The vetting Project (design)
 
-### 3. Review and decision
+1. **Application form, Project-served and anonymous.** HTTPS on the Project's own origin, unauthenticated, stored in the Project's own database. It's the one open endpoint and the main abuse surface: rate-limit by IP, captcha or proof-of-work, size caps, every field treated as hostile. It collects a delivery handle (email or phone), the only way approval can reach the applicant.
+2. **`#approvals`, modeled on `#admins`.** An ordinary E2E group whose membership is the approver set; the server has no opinion on who may approve. The bot posts each application as a low-PII summary plus a link to the full application, so PII stays out of group history and per-member backups.
+3. **Review.** An approver opens the link (Project token; approvers have accounts), reads the full application, and approves or declines with an optional reason. Any `#approvals` member may decide; the bot checks the decider's DID against freshly fetched group state. Decisions are recorded in the Project database (who, when, why).
+4. **Approval → signed invite.** Single-use, short expiry, the Project's issuer slug, bound to the application id and ideally the delivery handle, plus a routing payload (`audience=northeast-volunteers`).
+5. **Out-of-band delivery** by email or SMS, or handed over by the approving admin.
+6. **Registration** through the normal invite flow (`51`, `50`).
+7. **Post-join routing**, either central (adminbot maps issuer + tags to shared channels) or self-routing (a gatekeeper with `accounts.read` invites people into channels it administers). Both key off the same join event, so they compose.
 
-- An approver taps the magic link → the Project webview opens (project-token authed; approvers have accounts) → shows the full application → **Approve / Decline**, with an optional reason.
-- **Authority: any `#approvals` member may approve.** The bot verifies the decider's DID is in the group's current member list — the same authority check adminbot uses (`22-adminbot.md:72-76`).
-- A ✅/❌ reaction on the bot's summary message is offered as a quick shortcut for the common case; the webview is the canonical, audit-friendly path (it captures who, when, and why). Decisions are recorded in the Project DB for accountability.
-- Quorum / N-of-M is a deferred config knob; v1 admits on a single approval.
+Scopes: real-DID (bot-bearing toward approvers); `registration.gatekeeper`; `accounts.read` only if self-routing.
 
-### 4. Approval → signed invite token
+### Security considerations for the vetting Project
 
-On approval the Project mints a **single-use, short-expiry, signed** invite token (signed with the Project's own secret per `51-invite-tokens.md:69`), stamped with the gatekeeper's **issuer id** and bound to the application id (and ideally the delivery handle). It's wrapped into the standard invite URL `https://go.theavalanche.net/invite/<token>` so the existing app onboarding handles it unchanged (`51-invite-tokens.md:3,24-41`). It also carries a **routing payload** the gatekeeper controls (e.g. `audience=northeast-volunteers`, `role=organizer`) that the post-join router reads.
+- **The open form is the abuse surface** (rate limits, captcha/PoW, dedupe by handle, size caps).
+- **The token is a bearer admission credential over a non-E2E channel.** Approved Alice can forward her link to Bob. Mitigations: single use, short expiry, binding to the delivery handle. Without binding, possession of the channel is the identity gate; say so.
+- **Applicant PII residency.** Minimize fields, encrypt at rest, purge declined and stale applications.
+- **Single-approver trust.** One rogue approver can admit anyone; quorum is the knob if a deployment needs it.
+- **Fail-closed is load-bearing.** If closed registration ever degrades to open, including when a gatekeeper is unreachable, the gate evaporates.
 
-### 5. Out-of-band delivery (email / SMS)
+## Speculative
 
-Either the approving admin can reach out and send the invite token to the recipient themselves, or the application process can automate it.
+- **Quorum / N-of-M approval.**
+- **Token binding** to the delivery handle (re-present the email/phone or an embedded code at signup).
+- **External form adapters** behind the same ingestion interface (see the rejection below; only if PII flows through an operator-vetted processor).
+- **Existing identities joining this server** go through the same vetting: vetting gates the server, not the identity.
 
-In the latter case, a delivery adapter sends the invite URL to the recipient and they can click/scan it from their Avalanche app.
+## Rationale and rejected alternatives
 
-### 6. Registration (closed)
-
-The applicant taps the invite and the app runs the normal invite flow (`51-invite-tokens.md:4-8`): `GET /v1/invites/<token>` (server validates against the gatekeeper — signature, not expired, not already redeemed), then identity creation (passkey + DID genesis per `50-identity-auth-recovery.md`), then `POST /v1/accounts` with the token. The server, in closed-registration mode, admits only a valid token and marks it **redeemed** so the same link can't onboard a second person. An optional `server_step_url` (`51-invite-tokens.md:40`) could run a final in-app onboarding webview, though vetting is already complete.
-
-### 7. Post-join hand-off
-
-Once the account exists, the new member must land in the right channels — and *which* channels depends on **which gatekeeper approved them**. The hand-off rides the token plus adminbot's existing join-event fan-out, so no bot has to command another.
-
-`AccountJoinedEvent` already delivers the registering token — including its issuer stamp and routing payload — to **any** bot holding `accounts.read` (`22-adminbot.md` §Join event API). Whichever bot *owns the relevant channels* acts on it:
-
-- **(a) Central routing (default).** adminbot reads the token, branches on the issuer + routing tags, and invites the member into the shared org channels via its existing rule config (`22-adminbot.md:413-432`). The gatekeeper expresses *intent* (tags); adminbot resolves intent → channels. Gatekeepers need no group membership and no channel knowledge. Best when channel routing is an org-wide admin policy.
-- **(c) Self-routing gatekeeper.** A gatekeeper that owns its own channels *also* holds `accounts.read`, recognizes its own issuer stamp on the event, and invites the member into the channels it administers directly. It needs admin membership in those channels (a bot can only invite to groups it's in — `22-adminbot.md:82`). Best when a flow is an autonomous sub-Project with its own channels.
-
-Both reuse the same primitive — the join event carrying the token — so they compose: adminbot handles the shared channels, a self-routing gatekeeper handles its own, each keyed off the issuer.
-
-What we deliberately *don't* build is **(b) a gatekeeper → adminbot command** ("add this DID to channels A, B"). It would couple the two bots with a new RPC and split invite authority awkwardly — the gatekeeper decides, adminbot executes. The cleaner decomposition: if the gatekeeper knows the channels, let it invite directly (c); if it doesn't, let adminbot decide from the token's tags (a). The token, not a cross-bot call, is the hand-off.
-
-## Scopes and permissions (against `20-project-security.md`)
-
-- **Identity: `real-did`.** Bot-bearing toward approvers (the bot is a member of `#approvals`), so pseudonymous is incoherent — identity is real-DID per *Identity is derived from the scope set*. (Applicants have no DID until the very end, so there's nothing to pseudonymize there anyway.)
-- **`identity.magic-links`** — the "review this application" link the bot posts is a magic link into the Project webview.
-- **New privileged capability: `registration.gatekeeper`** — the authority to mint tokens the server accepts under closed registration. Held by *any number* of Projects (one per invite flow); granting it registers the Project's token-signing public key with the server. In the same family as `accounts.read` (`20-project-security.md` §Server-enforced capabilities). This is the genuinely new server-side hook this Project introduces.
-- **`accounts.read`** — needed only by a *self-routing* gatekeeper (option (c) in *Post-join hand-off*) that invites its own members; central-routing gatekeepers leave routing to adminbot and don't need it.
-- The bot's membership in `#approvals` is arranged by an admin adding it (group membership, not a manifest scope, per the `20` model).
-- `profile.read` optional (to show approver names); not essential. `dm.initiate` not required for v1.
-
-## Security considerations
-
-- **The open form is the abuse surface.** Spam applications are the obvious attack. Rate-limit, captcha/PoW, dedupe by delivery handle, size-cap. It's the only unauthenticated endpoint — everything downstream is gated.
-- **The token is a bearer admission credential sent over a non-E2E channel.** Risks: interception and forwarding (approved Alice forwards her link to Bob). Mitigations: single-use, short expiry, and binding to the delivery handle (require the same email/phone — or an embedded code — at signup). Absent strong binding, possession of the channel *is* the identity gate; state that assumption explicitly.
-- **Applicant PII residency.** The application sits in the Project's DB — inside the admin's trust domain (good, and the reason we rejected the external-form option) but still a new PII store. Minimize fields, encrypt at rest, and set a retention policy that **purges declined and stale applications**.
-- **PII in the approvals group.** It's E2E among approvers, but keep the full application behind the webview/project-token, not in the message body, so it doesn't persist in group history or per-member backups.
-- **Single-approver trust.** Any-member approval means one rogue or compromised approver can admit anyone. That's the accepted trust model for v1; quorum is the mitigation if a deployment needs it.
-- **Fail-closed is load-bearing.** If closed registration ever degrades to open — including when the gatekeeper is unreachable — the entire gate evaporates. The server must reject rather than admit on validation failure.
-- **Auditability.** Record approver DID, decision, timestamp, and reason in the Project DB, mirroring adminbot's "commands are legible in group history" principle (`22-adminbot.md:391`).
-
-## Deployment considerations
-
-- Runs in the admin's trust domain on its own origin over HTTPS; the admin installs and configures it (the trust chain).
-- A bot account registered on the homeserver (full Signal participant); the admin adds the bot to `#approvals`.
-- **The server must be configured for closed registration with this Project as gatekeeper** — via the `registration.gatekeeper` capability (adminbot `/grant`) or a server config setting plus the Project's pinned token-signing public key.
-- Email/SMS provider credentials (server-side secret).
-- Own database for applications, token state (issued / redeemed / expired), and the decision audit log.
-- A token-signing key (server-side secret); rotating it invalidates outstanding invites.
-
-## Open questions
-
-1. **Token validation mechanism.** Server pins the Project's public key and verifies locally (no per-registration round-trip, fail-closed by default) vs. server delegates to the Project's `GET /v1/invites/<token>` (live, but couples registration to Project uptime). Lean: pin the key.
-2. **Token binding.** Bind to the delivery handle (re-present email/phone or a code at signup — resists link-forwarding, adds friction) vs. unbound single-use (possession suffices). 
-3. **Approval policy.** Quorum / N-of-M (deferred; v1 is any-member single approval).
-4. **Existing identities / second server.** Does an existing DID joining *this* server also go through vetting (`50-identity-auth-recovery.md` stories 2 and 3)? Vetting gates the *server*, not the identity, so probably yes — confirm.
-5. **Routing ownership per gatekeeper.** Default is central routing — adminbot maps issuer + tags → shared channels (option (a)); a gatekeeper that owns its channels self-routes (option (c)). Which gatekeepers are autonomous vs. centrally-routed is a per-deployment choice. (Adminbot is not itself a gatekeeper unless it mints tokens.)
-6. **Decline UX.** Re-application after decline, appeals, and whether declined applicants are notified or it's silent.
-7. **Handle verification timing.** Verify the email/phone before approval (so approvers aren't reviewing a bogus contact) or after (simpler, but a typo'd handle wastes an approval).
-
-## Assumptions audit
-
-- **Closed registration is enforced at `POST /v1/accounts`** by validating `invite_token` against a gatekeeper. The server currently has *open* registration (`51-invite-tokens.md:67`); this enforcement is not yet built and is a prerequisite. *(Not verified against server code — design references the doc-level seam only.)*
-- The existing invite-token + `GET /v1/invites` + `server_step` machinery (`51-invite-tokens.md:65-88`) is the right vehicle for delivering approval and registering.
-- Approvers hold normal accounts, so webview/project-token auth and the visible-bot group model apply to the review side.
-- Adminbot owns post-join channel routing (`22-adminbot.md` Future), so the vetting Project doesn't.
-- The bot's `#approvals` membership is arranged by an admin, consistent with the `20` model where bot group membership isn't a manifest scope.
-- `registration.gatekeeper` is part of the server-enforced capability set alongside `accounts.read` (`20-project-security.md` §Server-enforced capabilities); it is the server-side hook this Project relies on.
-</content>
-</invoke>
+- **Pin the gatekeeper's key; don't call it.** Local verification has no per-registration round-trip and fails closed. Delegating to the Project's own validation endpoint would couple registration to Project uptime.
+- **Rejected: an external form (Google Forms, Typeform).** It routes applicant PII through a processor the admin never vetted, against the minimize-what-anyone-learns posture.
+- **Rejected: a gatekeeper → adminbot command** ("add this DID to channels A, B"). It couples two bots with a new RPC and splits invite authority. If the gatekeeper knows the channels it invites directly; if not, adminbot decides from the token's tags. The token is the hand-off.
+- **Many gatekeepers, not one.** Different invite flows (vetting, regional signup, event registration) are different issuers, each with its own key.

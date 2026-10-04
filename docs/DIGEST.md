@@ -1,708 +1,1168 @@
-# Architecture Digest (compressed)
-
-> Dense summary of the whole `docs/` design for fast context-loading. Preserves
-> decisions, their rationale, and rejected alternatives; drops TODO lists, step-by-step
-> deployment commands, and UI minutiae. When a detail matters, go to the source doc
-> (numbering in parens). Status tags: ✅ built · 🚧 partial · 📐 design-only.
-
-## 0. Product premise & goals (`00`, `01`)
-
-Activism social network: **activism is the acquisition vector, social experience is retention.**
-Install because a Project (canvass, rally, phonebank) requires it; stay for the friendships.
-Thesis: *building Projects is now easy; building Signal-quality encrypted comms is still hard* — so
-build a boring, reliable encrypted **substrate** + many **Projects** on top. **App must feel like
-Signal, not Slack/Discord:** primary surface is a unified inbox across all servers, sorted by recency.
-
-Two governing technical principles: **don't implement crypto — use libsignal**; **make whole vuln
-classes impossible** (Rust memory safety for all security-critical code). All code open-source;
-pre-launch third-party audit; reproducible builds; `cargo audit`/`deny` in CI.
-
-Three app tabs (Signal-style): **Calls**, **Chats** (default, unified inbox), **Network** (servers →
-their Projects; Projects open full-screen webviews with own nav).
-
-## 1. Threat model (`00`)
-
-Tuned for two threats:
-- **Server seizure** — a seized homeserver must not yield contacts, memberships, message history, or
-  real names. Users reconstitute identity+connections elsewhere. → E2E everywhere + message expiry +
-  encrypted profiles + structural membership opacity.
-- **Surveillance** — limit cross-server linkage of persistent identities; membership lists are a
-  targeting vector. → per-server push pseudonyms, encrypted profiles, selective federation, optional
-  PLC home-server omission.
-
-**Not** hardened against state-actor surveillance of high-risk individuals (no onion routing / cover
-traffic / mixnets) — left to user (Tor/VPN). Network traffic analysis beyond TLS is out of scope.
-This is the deliberate target, not a limitation to fix now.
-
-## 2. Identity / terminology (`00`, `50`) — keep these distinct
-
-- **Identity** = a **DID** (`did:plc`, same method as Bluesky → portable across both networks). The
-  cryptographic identity a person controls; holds the long-term identity key. **Separate identities
-  are the compartmentalization boundary** (deliberately unlinkable personas).
-- **Account** = an **(identity, server) pair** — one DID registered on one homeserver. Server-side
-  rows keyed per account.
-- **Device** = one app install of an identity. Shares the identity key; keeps its own per-device
-  session/prekey/sender-key state. Registers an account on each server the identity uses.
-
-Durable user data (contacts, group keys, settings) is **identity-scoped**: synced across the
-identity's devices, replicated across its accounts, never shared across identities.
-
-**DID design (`50`):** DID = `f(derived_rotation_pub, server_url)` — identity key deliberately
-**omitted** from genesis op so the DID is recoverable from passkey + signup-server alone. Two PLC ops
-at signup: genesis (rotation key only) then update (adds random per-device identity key). Rotation key
-is the root authority (changes signing keys / endpoints / transfers DID); signing keys are day-to-day.
-
-**Recovery authority = the passkey** (or written phrase). Rotation key + recovery-blob key are
-**deterministically derived** from the WebAuthn PRF output via HKDF labels `"actnet-rotation-v1"` /
-`"actnet-blob-v1"` — never stored on a server. RP is a universal avalanche domain (`theavalanche.net`),
-so only official apps can recover. `user.id`(userHandle) = signup server URL → recovering device
-reconstructs the genesis op (and thus the DID) with no prompt; `user.displayName` is cosmetic.
-
-**Recovery blob = convenience, not authority.** Server-cached ciphertext (AES-256-GCM under the
-PRF-derived blob key), replicated to all the user's homeservers, holds: device identity keypair,
-server list, profile key + display name, **and (historically) group master keys**. Losing every copy
-costs session continuity (safety-number change), the server list, and per-group sender-key continuity
-— but **not** DID control (always recoverable from passkey). Blob key cached in SQLCipher so routine
-state changes re-upload silently (passkey only needed at create + recover). **Group keys are moving
-out of the blob into the storage service** (see §7), shrinking the blob to a near-constant keyring →
-enables a tight `MAX_RECOVERY_BLOB` cap (not yet enforced; sequenced after group-key sync is sole path).
-`GET /v1/recovery/{did}` is **unauthenticated** (opaque ciphertext).
-
-Recovery has two paths: **blob path** (common: restore identity key, server list, group keys; no
-safety-number change) and **no-blob path** (fresh identity key via rotation-key-signed PLC update;
-DID preserved, safety-number changes, server list lost). Passkey alone always reaches the no-blob path.
-
-**Membership privacy levers:** no default DID enumeration; auth-gated existence checks; PLC home-server
-URL optional (omit for privacy); encrypted profiles; per-server rotating push pseudonyms; selective
-federation. (Open-membership servers still leak existence to anyone who joins.)
-
-## 3. Crypto stack & repo (`01`, `11`)
-
-libsignal pinned at commit `4c460615` (git dep, not branch). Gives Double Ratchet (FS for 1:1 +
-sender-key groups), X3DH (async session init via prekeys), sealed sender, zkgroup anonymous credentials.
-Primitives: X25519, Ed25519, AES-256-GCM (ChaCha20-Poly1305 fallback), HKDF-SHA-256, Ristretto255
-(zkgroup), Argon2id. **Attachments deliberately use AES-256-CBC+HMAC** (Signal-exact, for incremental
-verification of large files) — the one divergence from the app's default AEAD.
-
-**Crate graph:** `types ← crypto ← store ← net ← app-core`; `server` and `app-core` both use `store`;
-mobile crosses the UniFFI boundary at `app-core`. Also `relay`, `federation` (stub), `project-sdk`,
-`test-utils`. Repo is a monorepo: Rust `core/`, `mobile/{ios,android}`, `node/` (napi bindings, bots),
-`projects/`, `infra/`, `docs/`.
-
-**Load-bearing patterns (also in root CLAUDE.md):**
-1. `crypto` has **no I/O** — defines a `Store` trait; `store` implements it (SQLCipher via
-   tokio-rusqlite); `app-core` wires them.
-2. `store::Store` is **Clone, Arc-backed single connection** serialized on one blocking thread —
-   load-bearing for libsignal's multi-`&mut` sub-trait API. **Do NOT replace with a pool.**
-3. Server DB fns take `&mut PgConnection` (callers `acquire()` or `begin()`) → transaction-rollback tests.
-4. UniFFI exports are **sync**, blocking on a global `OnceLock<Runtime>` (libsignal futures aren't Send);
-   tests use `_async` variants.
-5. `AppCore` uses `Mutex<AppCoreInner>` (UniFFI wraps in Arc).
-6. Two error types: `AppError` (rich) and `AppErrorFfi` (string reasons).
-7. **Default to Signal's approach** for crypto/protocol/UX; diverge only where needs require (DIDs,
-   federation, Projects, multi-account).
-
-**Message envelope** = protobuf `ContentMessage` in `core/proto/content.proto`. Body `oneof`: text,
-receipt, group_context, sender_key_distribution, group_message, timer_change (more reserved). Cross-cutting
-fields: `timestamp_ms`(15), `profile_key`(17), `profile_version`. Forward-compat by reserved field numbers.
-`types` generates Rust via prost; mobile generates Swift/Kotlin from same `.proto`.
-
-**Calls (`01`, Stage 8, not built):** substrate-level. 1:1 = WebRTC P2P (server is signaling only over
-WS), STUN/TURN, DTLS-SRTP. Group = LiveKit SFU + WebRTC Insertable Streams (E2E; SFU forwards ciphertext).
-Broadcasts = LiveKit one-to-many, distinct UX from calls. LiveKit is the one extra deployable besides PG.
-
-**app-core philosophy (`07`):** the shared Rust core behind *every* client — bots (napi) and mobile (UniFFI)
-get the **same API, no second-class clients**. Owns: homeserver connection + WS event stream, all crypto/
-ratchet/sender-key state, the SQLCipher store. **Minimal default storage** (invariant): it auto-persists
-**crypto + ephemeral protocol state**, but message content and contacts are **opt-in** — the embedder must
-call `save_message` / `touch_contact` etc.; nothing non-essential is stored implicitly. API is
-**async-oriented**: calls block on network and some (e.g. `next_events`) block until an event arrives — the
-core is a library you *drive*, not a daemon. Scope today: **one app-core per (device, server) connection**;
-multiple accounts → multiple cores. Future: one core per identity with multiple server connections.
-
-## 4. Federation model (📐 `13`, federation crate is a stub)
-
-People register on a homeserver (their org/campaign/community). Servers federate so users can find each
-other, DM, form ties across servers. Posture aims higher than Matrix: your home server knows your social
-graph (you trust it), other servers learn as little as possible cross-boundary; E2E everywhere; **selective
-federation** (operator allowlist). Origin auth via Ed25519 server keys published at
-`.well-known/actnet-server` — **not** a peering handshake; semi-open by default, abuse-gated by attestations.
-
-**Routing (multi-homing):** every DID has exactly **one discovery server** (in PLC, "home") + zero-or-more
-**member servers**. Each member server holds the user's per-server prekeys, queue, WS. **Key consequence:
-same-community conversations never federate** — if all members of a group are on `safe-haven.org`, all
-traffic stays there. Federation only enters at account-creation and for DMs crossing boundaries.
-- **Default route:** send via sender's discovery server S → S checks if recipient R is local (deliver, no
-  federation) else resolve R's DID → R's discovery server → federate.
-- **Learned route:** when you receive from C via member server X, record "for C route via X"; converges to
-  no-federation after one round trip each way. Only unhandled case: A&B share a non-discovery server
-  neither routes through (federate forever) — accepted as rare.
-- Prekeys per-server (OTPKs partition naturally; only the identity key is shared, signing every bundle).
-- Migration (discovery-server change) is **Settings-only**, rare; memberships persist across it; DID +
-  identity key + sessions + local history unaffected. The user's *signed* migration record is authoritative,
-  not the old server's say-so (old server can't block it).
-
-**QR / link types** (URL path is the discriminator, opaque base64url token resolved server-side):
-`/contact/<t>` (add contact, open chat), `/invite/<t>` (server-join trust-delta screen then join),
-`/project/<t>` (join server if needed, then Project). Deliberately no "also join their server?" prompt on
-contact-add, no migrate option in invite flows.
-
-PLC is a centralization point (Bluesky-operated) — assumed working. DID-resolution caching is dangerous
-(migration staleness) → short TTLs + signed move records.
-
-## 5. Groups (`03`, the deepest doc) — ✅ much built, Stage 5/9
-
-**Two group types (one of the most important product choices):**
-- **Action-bound** (single-server, rich): tied to a Project; full roles/vetting/moderation; Signal-private-
-  group crypto guarantees (zkgroup anonymous credentials), but issuer is the Project's homeserver. Can be
-  announcement-only. Federated users join as **guests** (deferred). **This is what's built.**
-- **Cross-server casual** (small <~50, peer-managed, Stage 9): ad-hoc E2E groups via **Sender Keys with
-  fan-out** (no central issuer). Basic chat only, no rich state/moderation. **Rule: if a group needs an
-  admin, it needs a homeserver.** MLS deferred — could later swap inside `crypto::groups::groups` behind
-  the same `encrypt`/`decrypt` interface, no API change.
-
-**Message expiry** is substrate-level (not a Project option): timer in encrypted group state; clients
-delete on schedule; server deletes its copy on same schedule; **server can't extend retention** (its own
-backstop is 30-day undelivered-slot TTL, matching Signal). Action-bound default ~30d, casual ~7d.
-
-### zkgroup identity-attribute decision (`03` §2.3–2.4) — important rejected-design history
-zkgroup's `AuthCredentialWithPniZkc` is hardcoded to `(Aci, Pni)` = 16-byte UUIDs; we have variable-length
-DIDs. **DECIDED option 1:** `UUID(did) := SHA-256("actnet-did-to-uuid-v1" || did)[..16]`, carried as
-`Aci::from(UUID(did))`, so **stock zkgroup primitives work as-is**.
-- **Originally chose option 2** (build a DID-shaped credential on `zkcredential`, ~500 LOC, shipped in
-  step 5), then **switched to option 1** when the same DID↔UUID mismatch began repeating for
-  `GroupSendEndorsement` (and would for every future zkgroup primitive). Re-analysis showed option 2's
-  claimed advantages (tighter DID binding, collision resistance) were illusory: server opacity, cross-group
-  unlinkability come from the *per-group encryption key*, identical in both; 128-bit collision matches
-  zkgroup's own Aci and is restricted to DIDs already in the system; clients cross-check via cleartext
-  members list. Switching deleted `crypto::groups::credentials`, `DidStruct`, `DidEncryptionDomain`.
-- Rejected option 3 (blind-sig bearer tokens) = strictly worse anonymity.
-- `app-core` API stays scheme-agnostic (`encrypt_member_id(&str)`) so MLS swap stays possible.
-- ServiceId migration: identity + session stores keyed on `Aci::from(did_to_uuid(did)).service_id_string()`
-  (SSv2 parses `ProtocolAddress.name()` as a ServiceId).
-
-### Encrypted group state (`03` §3)
-- **Encrypted state blob** (opaque to server, source of truth for clients): group identity, members
-  `(did, encrypted_member_id, role, joined_at, profile_key_ciphertext)` with **did in cleartext inside the
-  blob** so clients render names, metadata, policy, monotonic revision `u64`.
-- **Server-visible routing subset** (the minimum to enforce membership/route): `member_credentials`,
-  `members_pending`, `members_pending_approval`, `group_policy` — following Signal's
-  MemberPendingProfileKey / MemberPendingAdminApproval / access-control model.
-- Server stores blob + 256-revision **history ring buffer** (for catch-up bandwidth, historical UI, and
-  **tamper detection** — clients walk `(state_N, change, state_{N+1})` verifying each is the legit
-  continuation; the load-bearing reason to retain history).
-- **CRITICAL §3.9 schema discipline (membership opacity is structural, no at-rest encryption needed):**
-  the property holds *iff* the server keeps no auxiliary DID↔group links. Rules: no `(did→groups)` table/
-  persisted cache ever; no `(encrypted_member_id→did)` map; credential issuance not logged with credential
-  id (per-DID-per-day rate counters OK); presentation verification logs counts only; `member_credentials`
-  timestamps jittered/omitted. **Tables carry NO did/account_id column.** Operational "remove DID from all
-  groups" is *not available server-side* — must be client-driven. These are **test-enforced** (`03` §9:
-  migration schema-annotation audit, forbidden-column/forbidden-join lints, logging AST audit, send-endpoint-
-  unauthenticated test, transactional-writes audit). `03` §8 is a standing PR-review threat checklist.
-
-### Group changes (`03` §3.3–3.6)
-A `GroupChange` = `{revision, actions, presentation}`. Actions are **partly server-visible** (which ops,
-which encrypted_member_ids, roles, policy values) **partly sub-encrypted** (title/description/expiry/profile-
-keys). Self-class actions (promote/decline/join_via_link/cancel) must be the sole action; admin-class
-batch. Server checks: presentation valid → actor-eligibility by class → revision freshness
-(`==current+1`, else 409) → role check vs `group_policy` (`modify_policy` & `modify_member_role` are
-**protocol-fixed Admin** to prevent privilege escalation) → transactional apply + revision bump + history.
-**Actions are declarative** (`remove_members` = "ensure absent", idempotent) so 409-retry is clean.
-**Layered enforcement:** server enforces what it sees (membership/role/policy); clients re-verify on apply
-against the authoritative blob (catches server compromise/bugs). Fetch is **membership-gated → 404 (not
-403) for non-members** to hide group existence. The master key alone grants almost nothing without a
-membership-gated server fetch (can't read state, content, or forge credentials).
-
-### Join flows (`03` §3.10): invite (admin→members_pending→invitee promotes with profile_key+pseudonym),
-request-to-join, open-link self-join — unified `join_via_link` action, **server picks** immediate-add vs
-pending-approval vs reject based on `join_policy` (client shows neutral "Join", renders the outcome).
-Invite delivered as a normal substrate DM carrying `GroupContext {group_id, master_key, hosting_server_url,
-inviter_did}`; first-contact works via X3DH PreKey message, no new infra. Invite links safely carry the
-master key (Signal does this; leaked link gives a passive observer nothing). `invite_link_password` is
-rotatable via `modify_policy`; master key isn't realistically rotatable.
-
-### Delivery & push (`03` §3.7): per-`member_credentials` row carries a `group_push_pseudonym` **distinct
-from any DM pseudonym, no shared join key**. Online = client sends `subscribe{pseudonyms}` WS frame →
-server holds **in-memory** `pseudonym→ws` map (never persisted; rebuilt per reconnect). Offline = relay
-wakeup by pseudonym. **Live-memory caveat:** while connected, server transiently knows account↔pseudonym↔
-group; never persisted (cold seizure yields nothing) — same tradeoff Signal accepts. Claim-squatting
-defense = allow concurrent subscribers, rely on at-recipient decryption failure (option (b); option (a)
-would violate §3.9). Pseudonyms rotate 7d with per-group hash offset to avoid correlated bursts.
-
-### Sender opacity for sends (`03` §3.11, ✅ built): three layers.
-1. **Envelope** = `sealed_sender_multi_recipient_encrypt`, one slot/recipient-device, wrapping a Sender-Key
-   ciphertext + a homeserver-minted `SenderCertificate` (trust-root chain in v3 `GroupCryptoBundle`, pinned
-   by clients on first contact).
-2. **Dedicated endpoint** `POST /v1/groups/{id}/send` that **rejects session credentials** — auth is a
-   single `GroupSendFullToken` (combined endorsements) over the recipient ServiceId set. Server resolves
-   each `encrypted_member_id→pseudonym`, verifies token against ServiceIds (never sees DIDs), enqueues to
-   `group_message_queue`, discards all connection metadata (IP-rate-limited only, never logged). Test-enforced
-   (`03` §9 invariants 4 & 6).
-3. **Network layer** (source-IP correlation) explicitly out of scope; mitigation = user Tor/VPN. Matches
-   Signal's sealed-sender threat model.
-   Daily credential refresh split: `POST /v1/groups/credentials` (session-auth, identity-scoped: auth
-   credential + per-device sender cert) and `GET /v1/groups/{id}/endorsements` (presentation-auth, group-
-   scoped). Anonymity is at *send* time, not *refresh* time. Rate limiting under anon auth: per-group +
-   per-recipient endorsement budget + per-IP. Abuse reporting needs *selective* sender disclosure (recipient
-   reveals one message's sender cert) — full design deferred to `12`.
-
-Mesh (§7): action-bound groups work on bitchat in steady state (Sender-Key content flows unchanged; sender
-auth via signed SKDMs); state mutations / credential refresh / endorsements / sealed-sender don't (need
-server) — queued for reconnect. Use **per-sender** tag derivation, not per-group master key (avoids leak).
-
-### Supergroups (📐 `08`, design-only, deferred) — large broadcast channels
-Distinct primitive for **200+ → thousands+** one-directional channels; **not** the same as a normal group's
-`announcement_only` flag (that stays the right tool ≤~200). Three guiding principles: (1) **UX-transparent** —
-feels like an announcement-only group; all divergences stay *below the UX surface*; this is the tie-breaker
-when a scaling choice would leak into the UI. (2) **Promotion is the path** — born normal, promoted past the
-~200 gate (a *trigger*, not a create-time fork); promotion is explicit, member-visible, **one-way**, and
-keeps `group_id`+membership. (3) **Harmonize with `03` infra, diverge only where it doesn't scale.**
-*Why separate:* normal-group send already encrypts payload once (Sender Keys), but 3 costs stay O(N) —
-per-recipient sealing, per-recipient storage dup, O(N²) SKDM — and reply-to-all = spam megaphone. Large E2E
-broadcast ≈ MLS's problem; WhatsApp/Telegram channels aren't E2E (a deliberate, documented confidentiality
-tradeoff). **Organizing insight: cost is in _delivery_, not _readability_** — push-to-all-N = the wall;
-*pull* (announcements, reply threads) or *server-count* (reactions, reply counts) sidesteps it; supergroups
-push nothing but content-free wakeups.
-- **Announcements:** admins-only send → only admins seed Sender Keys (kills O(N²) SKDM). Content encrypted
-  once under a **shared supergroup read key**, stored as **one opaque blob** (no per-recipient header),
-  delivered by wakeup + **membership-gated pull** (404-for-non-members, `03` §3.4).
-- **Replies:** **pull-based per-announcement threads** ("5 replies, click to read") — readable-by-all but
-  *delivered-to-none* (pulled). Count is free (server tally, like reactions); lazy Sender-Key fetch via the
-  shared read key. **Stays consistent with `32`** (in-channel threads, quiet-by-default, surfacing = admin
-  post-to-channel cap). *Rejected:* a separate opt-in discussion group — breaks click-to-read and the
-  UX-transparency principle (the megaphone fear was conflating *readable* with *pushed*; pull ≠ push).
-- **Reactions:** **server-counted opaque tokens** — server counts `(message,token)` without reading the
-  emoji or any DID (`03` §3.9 intact); live + visible with no online-author dependency. Diverges from `33`
-  (per-member client-tally). *Rejected:* author-mediated aggregation (online dependency, not visible). Lost:
-  per-reactor faces at scale (counts only).
-- **Sender anonymity = tier 2, pseudonymous-among-admins. DECIDED.** Send carries a zkgroup `AuthCredential`
-  presentation verified vs the opaque admin `member_credentials` set (`role=Admin`, **no DID**) — reuses
-  `03` §2/§3.11, **`03` §3.9 fully intact, no admin roster, a seized server yields no organizer list.**
-  Residual: server links one admin's posts to each other (stable opaque id), never to a DID. *Rejected:*
-  tier 1 identified (needs `(group→admin DIDs)` roster = §3.9 carve-out, hands seizer the organizer list) and
-  tier 3 fully-unlinkable (GroupSendEndorsement+sealed sender — buys little for a small admin set). Cost
-  (tiers 2–3): no per-admin attribution → coarse per-IP/per-group rate limits. Members still see *which*
-  admin authored (sender cert inside the read-key blob); only the *server's* view is pseudonymous.
-- **Confidentiality given up** (scoped to broadcast path): (1) admin sends pseudonymous-not-unlinkable;
-  (2) weaker FS (long-lived shared read key; mitigate via epoch rotation). **Kept:** full membership opacity,
-  content confidentiality, reader/reactor anonymity.
-- **Hard open problem:** anonymous reaction de-dup needs a per-`(member,message)` **nullifier** (ZK,
-  anonymous-voting family). Recommend ship the *approximate* path (rate-limit/endorsement budget) first.
-- **Forward-compat (recommendations, undecided):** receive path is the binding constraint — can require
-  *admins* to update, not *receivers*. Most scaling is receiver-invisible (storage dedup, push, sender-side
-  sealing). Recs: keep a *legacy Sender-Key receive representation* possible (only the updated admin client
-  can emit it — server has no keys); a per-device **capability/version signal** would have lead-time value
-  (none today; it's for transition *efficiency*, not correctness); graceful unknown-`Body`-variant handling
-  is general hygiene. Fallback buys correctness, not efficiency.
-- **Open:** broadcast key schedule (long-lived key+rotation / channel key / **MLS** — eval MLS first); reply
-  abuse controls; membership + read-key rekeying at scale; optional spin-off discussion groups.
-
-## 6. Multi-device (`04`) — substrate ✅, app-level 🚧
-
-**Central distinction:** identity key is a **static credential → SHARED** across devices (provisioned at
-link, not minted per-device — matches Signal). Sessions/prekeys/sender-keys are **stateful ratchets →
-PER-DEVICE** (sharing a running ratchet breaks FS, desyncs counters, reuses keys). One-line version: copy a
-static credential, never a running ratchet. **Membership is per-identity (per-DID); only delivery/encryption
-fans out per-device** in the send path.
-
-Built per-device today: registration, prekey fetch, 1:1 + group send fan-out, per-device queues, stale-
-session reconciliation via registration-id comparison. `device_id` is a routing label only, carries no key
-material. Built: **device linking** (below). Not built: own-device event-sync fan-out, history backfill
-(explicit non-goal), revocation, device-set-change UX.
-
-**Device linking** (✅ built, `04` §4): a short-lived **ciphertext-only mailbox on a homeserver** (3 unauth
-endpoints `/v1/provisioning/{sessions,id/slot}`, ~5-min TTL) rendezvouses the two devices. **Role- and
-rendering-flexible** (deliberate divergence from Signal's "desktop always secondary"): either device shows a
-pairing string (rendered as QR *and/or* copy-paste code) carrying `{mailbox_url, session_id, ephemeral_pub}`;
-the other posts its ephemeral pubkey to a `handshake` slot; both derive `K=HKDF(X25519(...))`; the existing
-device seals the bundle (identity key + **rotation key** + storage key + did + servers) under `K` to a
-`bundle` slot. K depends on the out-of-band pubkey → hostile mailbox can DoS but not read. New device
-registers additively via **`POST /v1/devices/link`** (rotation-key authorized like `/replace`, but inserts —
-existing devices stay), then pulls durable state via storage service. Server-less device defaults
-`DEFAULT_MAILBOX_SERVER` (`av.theavalanche.net`), so it needn't know a URL. **Short PAKE codes deferred**
-(scanned/pasted high-entropy code is secure under plain ECDH; SPAKE2 unneeded). **All devices co-equal, no
-"primary"** (possession of any one authorizes a link). Reuses recovery-blob crypto; bundle adds the rotation
-key (recovery omits it, re-deriving from passkey). Registration not e2e-tested (needs live PLC, like
-`recover_from_blob`); mailbox+handshake+bundle round-trip is.
-
-**Three sync channels (`04` §5), deliberately cap the sync-message-type count** (Signal accreted ~20
-SyncMessage variants before moving durable state to a Storage Service — we commit to the capped model up
-front):
-- **Conversation** (recipients also see it — text, reactions, edits, deletes, timer): rides a **Sent
-  transcript** wrapping the ContentMessage verbatim → new content types sync for free, zero new plumbing.
-- **Durable** (current-value, only your devices: mute/pin/archive, contacts+nicknames, blocked list, group
-  master keys, settings, profile): the **storage service** (§7), per-record LWW snapshot, not deltas.
-- **Device-local** (theme, notif sound, biometric lock): never synced.
-- Residual thin **event types** (`SyncRead`, `SyncViewed`, `SyncLocalDelete`) — the only category that ever
-  adds a sync type, near-closed. Transport = a normal pairwise DM **to yourself** (no sealed sender).
-
-**Recovery vs linking** differ by the **aliveness assumption**, not device_id: linking is **additive**
-(existing device alive, both coexist); recovery is **total** (no device survives → revoke the identity's
-*entire* prior device set across *all* its accounts and register one fresh device). Current
-`POST /v1/devices/replace` is only a single-slot swap (OPEN: whole-identity, cross-account reset). History
-backfill = explicit **non-goal** for v1 (matches Signal). Device-set-change doesn't break safety number
-(shared identity key) — accepted weakness; optional "Bob added a device" info event from diffing reg-ids.
-
-## 7. Storage service / device-data-sync (`05`) + identity/device store split (`06`)
-
-**Storage service (`05`, server stages ✅, client snapshot/fast-sync 🚧):** how durable identity state stays
-consistent across devices and survives total loss. Model = **domain tables + sync sidecar + adapters** (goal:
-adding a synced type = one domain table + a small `SyncedType` adapter + one-line registry add; CAS/cursor/
-conflict/encryption/backup/recovery all handled). **No payload duplication** — sidecar holds only version/
-dirty/tombstone; payload read from domain table on demand. **Dirty-tracking via SQLite triggers** (can't be
-forgotten/bypassed), generated from the registry; **scheduling via a single rusqlite `commit_hook`** that
-pokes the sync task; periodic poll is the safety net — **zero per-write-path code**. `record_id = HMAC(
-storage_key, TYPE_TAG||logical_key)` (opaque, deterministic). **Server sees only opaque ciphertext**, enforces
-byte/count quotas only (~4–8MB/account, ~8KB/record, ~10–25k records).
-
-**Conflict = per-record last-writer-wins** (no CRDT/OT/vector clocks) — DECIDED, safe because the data
-cooperates (single-user, low-contention, records independent, mostly immutable/monotonic).
-
-**Placement = ONE authoritative account + passive backups (DECIDED: explicitly NOT multi-master).** Live
-reads/writes go to the discovery server's account; other accounts hold one-way encrypted snapshots
-(`PUT/GET /v1/storage/snapshot`, LWW on snapshot_version). Cost accepted: seizure of authoritative server
-pauses live sync until you promote a backup. Backing storage may be S3/R2/GCS; a *consumer* cloud
-(iCloud/Drive) is explicitly NOT the substrate (re-centralizes on a subpoenable party, leaks DID↔platform).
-
-**Storage key** = 32-byte identity-level key, provisioned at link, carried in recovery blob. **Its presence
-is the single opt-in signal** — bots have none, so they no-op all sync. **Group master keys move out of the
-recovery blob into the store**, making the snapshot path load-bearing for total-loss recovery.
-
-**Store split (`06`, client split ✅):** one SQLCipher store conflated per-device crypto with per-identity
-durable state. Split into:
-- **`DeviceStore`** (device.db) — `crypto::Store` impl: sessions, all prekeys, sender keys, push state,
-  per-server credential caches, registration_id, storage_cursor. **Never synced; fully rebuildable.**
-- **`IdentityStore`** (identity.db) — durable per-identity state + identity/rotation/storage keys + the
-  `storage_sync` sidecar + trust store (`known_identities`, synced). **Synced via storage service,
-  snapshotted, bootstrapped from recovery blob.**
-- **Boundary-crossers** (identity keypair, rotation key) live in IdentityStore but are consumed by device
-  crypto; bootstrapped via blob/provisioning, not the storage service (chicken/egg: can't fetch your
-  identity key from a service you authenticate to with it).
-- **`AppCore` = one identity (DECIDED).** Owns one IdentityStore + 1..N account contexts (DeviceStore +
-  server client + role authoritative|backup). Bots are N=1 with the two-file split hidden behind the
-  constructor. Cross-identity aggregation (e.g. contact autocomplete) lives **above** AppCore, read-only,
-  at IdentityStore granularity. Both DBs encrypted at rest with the device/enclave key (NOT the storage key
-  — storage key is record-level only; it lives *inside* IdentityStore so can't gate the file). Event log
-  (`message_history`, reactions, revisions, read marks) is a third concern, roams via the event channel —
-  store placement deferred.
-
-## 8. Server implementation (`10`, `11`) — ✅ Stage 2
-
-Axum + Tokio + PostgreSQL via sqlx (compile-time-checked queries, offline `.sqlx/` checked in). **No Redis,
-no libsignal on the server** — it stores/relays opaque `bytea`. Internal bigint PKs, external API uses
-DIDs + device_id. Schema: `accounts`(did, profile_blob), `did_documents`, `devices`(per
-(account,device_id): identity_key, registration_id), `session_tokens`(opaque, not JWT — revocable),
-signed/one-time/kyber prekeys, `message_queue`(bytea, 30d TTL, message_kind), `push_pseudonyms`,
-`rate_limit_counters`(per-account sliding window, in-process; PG advisory locks for multi-instance).
-
-Auth = two-step challenge-response: `POST /v1/auth/challenge` (nonce) → `/auth/token` (Ed25519-sign nonce).
-**Token issuance is identity-scoped; membership check is on token *use***, so a 401 (re-auth) is
-distinguishable from a 403 (kicked) — see §11 connection state. WS at `GET /v1/ws?token=` (query param,
-browsers can't set WS headers); binary `WsFrame` protobuf, either side originates, `frame.id` correlation;
-variants Send/Deliver/Ack/Keepalive/PrekeyLow (+ group + admin frames). HTTP message endpoints remain as
-fallback. Background tasks: message+token expiry, prekey vacuum, rate-limit cleanup. One-time prekeys
-consumed via atomic `DELETE...RETURNING`. did:plc stub locally (full PLC sync = Stage 9).
-
-## 9. Push relay (`00`, `01`, `41`) — ✅
-
-iOS/Android: only APNs/FCM/a UnifiedPush distributor can wake a backgrounded app. App developer runs a
-**push relay**: homeservers send content-free wakeups to per-(user,server) **pseudonyms**; relay maps
-pseudonym→device token, fires an **empty** payload; app wakes and fetches itself. Apple/Google/distributor
-see only "app pinged"; relay sees pseudonym timing but no identity/content/cross-server linkage; homeservers
-never see the device token. Pseudonyms rotate. Protocol supports multiple relays from day one (swappable, not
-a privileged singleton). High-risk users can opt out → manual fetch. Avalanche relay =
-`https://relay.theavalanche.net`; servers point via `RELAY_URL`. Relay state = tiny SQLite (pseudonym→token,
-7d TTL); ~$4/mo droplet, losing the DB just forces re-registration. One relay serves sandbox+production APNs,
-routed by client-supplied `environment`. **All external transports route through the relay** (homeserver only
-ever wakes pseudonyms, never POSTs to a third party): relay dispatches by stored `platform` — `apns`→APNs,
-`fcm`→FCM HTTP v1 (service-account JWT→OAuth2, data-only high-priority), `unifiedpush`→SSRF-guarded HTTPS POST
-to the client's distributor endpoint URL (degoogled Android; URL stored as the "token"). Client picks the
-transport (Play Services→FCM, else distributor→UnifiedPush, else foreground WebSocket). **Decision:**
-UnifiedPush is relay-routed, *not* homeserver-direct (rejected: would give the homeserver outbound push +
-per-device endpoint storage, breaking the no-token invariant). Deferred: distributor picker, no-distributor
-foreground-service keepalive (`02`).
-
-## 10. Projects framework (`20`–`24`, `23`) — testbot+adminbot ✅, framework 📐 Stage 6
-
-**A Project** = standalone service that (1) serves a web UI opened in an app webview, (2) owns **bot
-accounts** that are full Signal participants. Because everything is E2E, any Project touching message
-content/membership **must** use bots — the server can't mediate (no keys). **Bot visibility is a critical
-invariant: a bot's presence in a group is always visible to all members; no silent observer mode.**
-
-**Trust chain:** user trusts homeserver admin → admin installs/configures Project → user implicitly trusts
-it (like a Slack workspace admin installing apps). **Scopes are admin-granted at install** (not per-user
-runtime prompts — that would re-litigate the admin's decision and train reflexive "Allow"; and is partly
-theatre since the admin-run server already knows the DID). Default-deny, least-privilege.
-
-**Auth = homeserver-issued opaque Project tokens** (NOT JWT — no signing key to distribute, trivial
-revocation). `POST /v1/project-token` (session-auth) → 1h opaque token; app opens `project_url/?token=`;
-Project verifies via `GET /v1/project-token/verify?token=` → returns DID. One HTTP call, no crypto on the
-Project side. **Rejected reverse-proxy design** (server forwards with `X-User-DID`): would expose all
-Project traffic to the server (metadata/plaintext leak), widen blast radius, make the server a general
-proxy. The three-legged flow keeps the server small.
-
-**Project login / "Sign in with Avalanche" (📐 `25`):** OAuth 2.0 layered on the Project-token flow so a Project authenticates a user as a real DID with an *authenticated account on a given homeserver*. **v1 "membership" = "an authenticated account exists"** — already proven by the session-auth gate that mints a Project token; login just surfaces it OAuth-shaped (no new server membership state; no `status`/ban concept exists). **App is the authorization endpoint** (native consent via the `go.theavalanche.net` Universal Link — AASA already wildcards all paths; no server-rendered login page). **Token endpoint = homeserver; access_token = a Project token** so `verify` is unchanged (no JWT/signing key/OIDC — deliberate, matches the opaque-token decision). Two front-ends, one back-end: **auth-code+PKCE** (same-device) and **RFC 8628 device grant** (phone authorizes an app-less desktop browser via QR — no secret reaches the desktop, so *not* the `04` ECDH mailbox). New `oauth_grants` table carries `account_id`+`client_id` only (same accepted `account↔Project` linkage, §3.9 intact). **Consent = the user's act of signing in as this identity**, not per-scope re-approval (`20` admin-grants scopes). **Session lifetime: platform imposes none** — login is a point-in-time bootstrap, the Project owns its (possibly permanent) session; membership asserted as-of-login (continuous good-standing is future-only); optional `auth_time` for Project-side max-age. New threat = **cross-device consent phishing** (victim scans attacker's QR) — mitigated by "another device" consent copy + official badge + short TTL/rate limits + bounded blast radius, not eliminated. **Desktop app deferred as authorizer** (registers no deep-link handler yet; desktop *users* served via phone-QR) — noted parity-rule exception. Rejected/deferred: good-standing/roles/group claims, offline signed-credential verification, pseudonymous/anonymous tiers, OIDC conformance, refresh tokens.
-
-**Webview is bridgeless (through Stage 6):** `WKWebView`/`WebView` sandbox; **no JS bridge** — I/O is URL
-params in, intercepted deeplinks out. **Canonical deep-link form is `https://go.theavalanche.net/<action>/<arg>`**
-(`compose/attach?url=`, `close`, `conversation/<did>`, `i/<token>`) — caught by **host match** in the webview's
-nav delegate on all three platforms, so it doesn't depend on Universal Links firing inside the app's own webview;
-**never a custom scheme** (`avalanche://`/`theavalanche://` is not a registered/working scheme). Can't reach the
-SQLCipher DB/keys/conversations. Origin-isolated per Project. A JS bridge would need a scoped-permission
-system if ever added.
-
-**Scopes (`20`):** identity (`pseudonymous` default / `real-did` / `magic-links` / `profile.read`),
-messaging reach (`dm.initiate`, `dm.bypass-request`, `invites.auto-accept` — same-server only), client
-surfaces (`surface.compose`/`slash-commands`/`emoji`, `message.context-on-action`,
-`participant.context-on-action`). **Identity tier is
-derived from the interaction model, not freely chosen:** any bot-bearing Project learns the real DID through
-the messaging channel, so `pseudonymous` is only coherent for webview-only Projects. **"Officialness" is NOT
-a trust primitive** — it decomposes into a same-server `official` flag (the ✓ badge, on the bot's account
-record) + the `invites.auto-accept` scope; no signing, no attestation (earlier signed-attestation drafts
-all rejected as overengineered).
-
-**Multi-account compounds Project trust (`20`):** client renders Project surfaces from multiple trust domains
-side-by-side. **Per-(account, server, conversation) scoping** is needed now (Stage 6 / multi-account, ahead
-of federation): every client-visible surface is tagged with origin and shown only there; manifests are
-**untrusted input** (sanitize, length-limit, homoglyph-guard, size-cap assets, attribute to (server,Project)).
-A conversation lives on one homeserver/account; its affordances come only from that homeserver's Projects.
-
-### Messaging-extensions boundary (`23`) — core vs Project
-Three rules: (1) **explicit handoff only** — no ambient/compose-time Project access; (2) **1:1-DM litmus** —
-must it work in a bot-free DM? → core; (3) **mechanism vs content** — core owns mechanism/surface/privacy,
-Project contributes content/webview at a seam. Keep the in-conversation surface boring (native/auditable/
-E2E); push real interactivity into an explicit full-screen webview.
-- **Core:** reactions (`33`), replies/threading (`32`), read receipts/typing (`31`), `@`-mentions
-  (on-device, body-range), generic link preview (sender-fetches/recipient-never), live location, **simple
-  polls** (reaction-shaped PEER votes, client-tallied, E2E, DM-capable, no bot).
-- **Split:** rich text (BodyRanges — bot-authored first), custom emoji packs, slash commands (a slash
-  command is just a `TextMessage` a member-bot interprets — no wire change, autocomplete is a reminder).
-- **Project (webview):** Giphy/stickers (return content via `attach` deeplink, sender-fetched, never auto-
-  sent), cardstack survey (magic link → webview → bot posts result), message actions
-  (`message.context-on-action`), **participant actions** (`participant.context-on-action` — member
-  long-press → webview with target DID as context, e.g. "flag this member"; groups only, **bot-membership-
-  gated** so the tap discloses only the actor's intent, not a new membership fact — §3.9 intact; a bot-free
-  webview-only Project is ineligible).
-- **Explicitly NOT built:** inline interactive cards / in-feed form controls (redundant phishing-prone middle
-  layer once a webview exists). Lightweight in-feed actions = reactions/replies a bot observes.
-- **Magic links:** Project-issued self-authenticating links; the *clicking* device mints a scoped token at
-  tap time, only for Projects on the clicker's vetted allowlist (no open-redirect). Carry no credential, so
-  anyone can share them; beware the who-clicked beacon.
-
-### First-party Projects
-- **Testbot** (✅, `21`) — `node/packages/testbot/` TS bot on `@theavalanche/app-core`: web "Text Me" button →
-  ephemeral bot DMs you, relays to Claude Haiku. Proof-of-concept for the Project model.
-- **Adminbot** (✅ minimal, `22`) — server admin via chat. Two foundations: (1) **one superuser DID**
-  pinned in server config as `ADMINBOT_DID`; all `/v1/admin/*` check `caller==ADMINBOT_DID`. DECIDED to
-  drop the old fixed `did:local:adminbot` literal for a random per-server `did:local:` DID, so multi-homed
-  clients don't merge different servers' adminbots in the per-identity store (`22`,`37`; role discovery
-  deferred). (2) An
-  **`#admins` group** (regular E2E group) whose encrypted membership *is* the admin set — **the server DB
-  doesn't reveal who has admin authority**. Adminbot is the bridge: it can read `#admins` (it's a member)
-  AND is trusted by the server (the pin). **Two authorities:** operator authority (install Projects, grant
-  caps, officialness — not seizure-sensitive, lives in server DB) vs social-admin authority (who can
-  moderate — seizure-sensitive, lives in encrypted `#admins`). Rule: *the threat decides the home.*
-  **Headless, outbound-only** (no web UI, no inbound surface) → location-independent, hard to seize (no
-  public routing pointer; only holds off-box). **Coordination is data-carried, never bot-to-bot RPC**
-  (`AccountJoinedEvent` push + catch-up + invite-token routing tags). Server-enforced caps (dot namespace,
-  catalog in `20`): `accounts.read` (roster snapshot + account join/leave feeds), `registration.gatekeeper`.
-  `/install-project` consumes a manifest (pasted/URL) → creates the Project + grants approved caps.
-  **Rejected:** bot-to-bot RPC/service mesh (liveness fragility), per-admin
-  server-verified credentials (would leak admin roster, eroding the property `#admins` protects).
-- **Client directory / Network tab (✅ DB-backed, `22`):** `GET /v1/projects` reads a `directory_entries`
-  table (nullable `project_id` FK → `projects`, `ON DELETE CASCADE`). Entries are published **only** by a
-  manifest's `webEntries` via `PUT /v1/admin/projects/{slug}/directory` (replace-semantics), reviewed by the
-  admin at install, stored **always non-official** (officialness is never self-declared). Untrusted-input
-  capped (≤10 entries, http(s)-only, length-limited, control-chars rejected). The deploy bundle wires a web
-  Project's Caddy routes (`avalanche-install-project`) and writes a manifest per Project that adminbot installs
-  non-interactively at startup (`ADMINBOT_MANIFEST_DIR`), so the directory entry + login are configured without
-  a manual `/install-project`. Wire `ProjectInfo` shape unchanged → no client changes. This is the resolution
-  of the old "two projects concepts" reconcile TODO.
-- **OAuth client registration on the Project (✅ `25`):** a login-capable Project's `oauth_client_id` (UNIQUE)
-  + `oauth_redirect_uris` live on the `projects` row (audience = the Project's `url`), declared in its install
-  manifest (`clientId`/`redirectUris`) and set at `POST /v1/admin/projects`. `find_client` resolves login
-  requests against this row; a directory entry surfaces its Project's `client_id` by inheriting it via a join
-  for `GET /v1/projects`. `clientId`/`redirectUris` are self-declared/self-constraining (no separate admin
-  gesture; duplicate `client_id` fails install); `official` stays operator-only.
-- **Vetted onboarding / gatekeeper** (📐, `24`) — gates account creation behind human vetting. Shaped oddly
-  because the applicant has **no DID until the end**: front half runs out-of-band (email/SMS invite). Needs
-  **closed registration** (`POST /v1/accounts` refused without a token validating against an installed
-  gatekeeper, **fail-closed**). New cap `registration.gatekeeper` (any number of Projects hold it; each names
-  its issuer; server pins issuer→signing-key). `#approvals` group modeled on `#admins`. Post-join routing
-  rides the token's issuer+tags via the join event — central (adminbot maps tags→channels) or self-routing.
-  **Rejected:** gatekeeper→adminbot imperative RPC (couples bots, splits authority); external form
-  (Google/Typeform routes PII through an unvetted processor).
-
-## 11. Messaging UX features
-
-- **Read tracking (`31`):** per-message `read_at` timestamp (NULL=unread; future-proofs disappearing-msg
-  timer start), unread count **derived not stored**. Scroll-position marking (SwiftUI ScrollPosition, no
-  timer). `ReceiptMessage{DELIVERY|READ}` as encrypted DM to sender, 3s debounce. Delivery status
-  sending→sent→delivered→read (Signal checkmarks). Read receipts opt-in per identity.
-- **Reactions (`33`):** `(emoji, reactor, target)` tuple, small encrypted PEER message, never enters feed/
-  creates a row. **One reaction per person per message** (Signal-style — replace/remove; rejected Slack's
-  many-per as bloating clusters). Visible to all members; client-tallied; key on `(emoji,reactor)` →
-  idempotent. Don't touch badge/unread. No reactions feed, no custom emoji (first cut), no private reactions.
-- **Threading (`32`):** **every reply is a thread message; one knob = "surface to channel."** Default flips
-  by shape: chat-shaped (DMs/casual) surfaced-on with **latent** thread structure (no thread UI unbidden);
-  broadcast-shaped (channels/announcements) surfaced-off. Per-channel admin default deferred. **Why one
-  primitive:** WhatsApp's confusion came from the same gesture behaving structurally differently across an
-  invisible line; here only a *default* changes along a visible line — guessing wrong changes a default, not
-  a mechanism. **Threads browser** lives in a **shelf** (chrome above the inbox, scrolls away) — protects the
-  one-conversation-one-row Signal inbox; thread-only activity shows only on the Threads icon count, never
-  bolds the channel row. **No double-counting by construction:** each message in exactly one unread bucket
-  (surfaced→channel bucket, non-surfaced→thread bucket). Following = quiet by default (notify only if
-  following+mentioned or surfaced). Promotion posts a **surface message** (new channel message referencing
-  the original, own send-time/read-state) — keeps buckets clean, reading it cascades read to referent.
-  Announcement groups gate top-level posting but not in-thread replies (surfacing = the post-to-channel cap).
-  **Rejected:** two reply primitives (inline quote vs thread) — bakes the channel/chat line into the data
-  model, lossy to reorganize.
-- **Edit/delete (`36`):** two ops on one substrate, both target by `(author, sent_at)`, LWW with **delete
-  absorbing** (tombstone beats any edit regardless of timestamp). `EditMessage`/`DeleteMessage` as new
-  oneof variants. **Load-bearing rule: a recipient applies an edit / FOR_EVERYONE delete only if the
-  authenticated sender == target's author** (FOR_ME exempt — local-only). Server can't enforce (sealed
-  sender). Human limits: 24h window, ~10 edits (client-honored). **Bots: no cap, 30-day window, no retained
-  history** (canonical update-in-place pattern: live tally/countdown/status). Edits don't notify/bump/reset
-  expiry. Delete drops reactions+attachments; tombstone keeps position. Out-of-order ops held pending keyed
-  on target.
-- **Attachments (`35`, 📐 not built):** Signal encrypt-then-upload. Blob ≠ message path. **AES-256-CBC+HMAC**
-  (Signal-exact, incremental verification) — the 64-byte `key` field, divergent from the app's GCM default
-  (open decision to confirm). `digest = SHA-256(ciphertext‖tag)` verified before decrypt. Pad to geometric
-  buckets. `AttachmentPointer` inside `TextMessage` (field 2, `repeated`) — captioned photo = one TextMessage,
-  no separate media type. Server: `attachments` table + `POST/GET /v1/attachments`, `LocalFs` or `S3`
-  presigned backends (client does plain HTTP, only server is provider-aware). Download is **authenticated-
-  by-id** (unguessable id is the capability; server can't ACL under sealed sender). **Server can't reference-
-  count** (pointer is encrypted) → **TTL-based GC (~45d, longer than message queue** so offline/newly-linked
-  recipients still pull). Forwarding **re-encrypts+re-uploads** (avoids correlation, original may have
-  expired). Link previews: **sender generates at compose, recipient NEVER fetches** (else sender harvests
-  IPs); render only if `preview.url` ∈ body (anti-spoof). On-device storage Tier-1 controls work against the
-  delivery buffer; "offload + re-hydrate" (Tier-2) needs a durable backup substrate that doesn't exist yet.
-- **Compose (`30`, 🚧):** one flow for DM+group (iMessage-style, recipient *count* decides at send; no "New
-  Group" menu). Chip field, autocomplete from local contacts (People/Other sections), direct `did:` entry.
-  1 recipient → DM (appends to existing thread); 2+ → new group every time (matches Messages, not Signal's
-  membership-dedup). **Server pinning:** first chip pins the server; incompatible recipients become yellow
-  chips, never a silent server flip (active-server choice always intentional). From-pill `From: Alice (at
-  safe-haven.org)`. Group name optional (auto-default = comma-joined names); auto-mosaic icon.
-
-## 12. Connection state (`34`) — Layer 1 ✅, Layers 2-3 📐
-
-`AppCore` is the single source of truth (iOS/bots render directly, no client timers). **Three dimensions:**
-(1) instantaneous `ConnectionState` (Disconnected/Connecting/Connected/Reconnecting{next_attempt,
-unreachable_since}/Unauthorized); (2) outage **duration** → tiers Online/Retrying(<2min)/ServerDown(2min–7d)/
-Abandoned(>7d); (3) **transport** (server WS today; mesh/Nostr later — reachability is "any transport for
-this," not "server up"). Per **(identity,server)** membership, aggregated for display.
-
-Earlier design modeled only dim 1 with "any not-Connected → banner" → a dead server pinned a banner forever
-and hammered reconnect — fixed by making duration+transport first-class. Reconnect: **timed backoff while
-Retrying, opportunistic (parked, woken by `reconnect_now`) while ServerDown** — a fixed long timer is wrong
-on iOS (suspended apps don't fire it; just bursts on wake + drains radio). `unreachable_since` persisted so
-cold-launch lands directly in the silent tier (no banner flash). **Offline-safe `login` does no network
-call** (renders local DB instantly); lazy auth + transparent 401→re-auth→retry.
-
-**401 vs 403 contract:** 401 = unauthenticated (transparent re-auth, never terminal); **403 = membership
-revoked (kicked), terminal → `Unauthorized`.** Requires server to keep token issuance identity-scoped, 403 at
-WS-connect/membership-scoped request. Non-discovery 403 → auto-remove locally; discovery 403 → route to
-migration. **Send semantics: queue+retry, not fail-fast** — outbound to an unreachable server is pending/
-persisted, drains on reconnect, transport-agnostic. **Removal preserves crypto** (de-routing, not de-
-provisioning — keeps Signal/sender-key state so mesh can still carry it); groups stay in the list as
-unreachable rows. NWPathMonitor distinguishes device-offline ("No internet" banner) from server-down.
-
-## 13. Contacts & profiles (`52`) — 🚧 minimal slice built
-
-Goal: user **owns their contact book** (roll, nicknames, notes), surviving any identity/server loss
-(Gmail mental model). Principles: interaction-driven (no "Add to contacts"; surfaces from DMing/nicknaming —
-Signal/iMessage); server never sees plaintext profile; contacts local-only; **one unified table across all
-identities** (the book exists beyond any identity), but each row has **`preferred_identity`** (the de-anon
-guard — "message Alice" sends from her preferred identity, not the foregrounded one); per-DID not per-conversation.
-
-**One row per DID** (`is_curated` = "user knows this person" — drives People list, message-request gate,
-backup, search "primary"; sticky, set by any deliberate gesture). Other flags: `is_favorite`, `is_blocked`,
-`has_pending_request`, `nickname`/`notes`/`photo_override` (private, never leak), `learned_route_server`,
-`profile_key`, `cached_profile_version`. Nickname doesn't erase display name (you may introduce someone by
-their real name).
-
-**Substrate profile** = JSON (display_name required; avatar/bio future) encrypted with a 32-byte **profile
-key** (rotates only on revocation, not on edit), uploaded as opaque bytes. **Profile key + `profile_version`
-ride the outer envelope on every message** to recipients you share with. **Liveness via version:** inbound
-version mismatch → refetch (primary path, bypasses rate limit); dormant contacts → conversation-open
-opportunistic fetch; **no daily background sweep.** Client-side fetch throttle **keyed on last outcome**
-(success 5min, not-found 6h, etc.), **persisted in `profile_fetch_state`** (improvement over Signal's
-in-memory LRU). Two endpoints: `get_profile` (humans, blob) vs `get_account_info` (bots, public record →
-`account_info_cache` for offline bot names/`is_bot`). **Discovery server is authoritative** for the blob;
-fetch satisfiable on any server (proxies to discovery; a 200 leaks nothing about local membership).
-**Rejected per-member-server replication** (duplicates prekey complexity for rarely-changing state).
-
-**Bot presentation (`54`):** two independent axes — **provenance** (is it *official*? server-vouched
-`official` flag, same-server only, the ✓ badge) vs **automation** (is it a *bot*? `account_kind` in profile
-blob, **only self-declared, unenforceable**). UI must never present self-declared as proven. **Three tiers:**
-verified bot (hexagon + ✓), self-identified bot (hexagon, no ✓, "Automated (not verified)"), person (circle,
-default — absence of a bot signal is NOT a "is human" claim). **Signal lives in client-applied chrome the
-avatar bytes can't override** (hexagon frame + octagon-ish bubbles for bots, circle/rounded for people) —
-unspoofable, doesn't fight branding, glanceable. **Rejected** mandatory constrained-avatar-palette as a
-*security* mechanism (parasitic on the badge; harms legit bot branding; only constrains the honest case).
-
-## 14. Multi-account UX (`53`) + invites (`51`)
-
-**Accounts screen** lists every (identity, server) pair grouped by identity. Server rows show home tag,
-activity recency, reachability tier (ServerDown → "Unreachable since X", Abandoned → Remove-from-device,
-403 → auto-removed/migration). **Delete identity** = leave-cascade each server + PLC tombstone (rotation-key
-signed) + wipe local. **Leave server** (graceful, non-discovery only) = courtesy leave events then membership
-delete. **Remove from device** (unreachable/403) = local de-routing, **preserves crypto**, groups stay as
-unreachable rows. Discovery server has **no removal path** — only Change-home-server (migration, PLC-signed,
-completes even when old home is dead) or Delete-identity.
-
-**Invite tokens (`51`):** `base64url(json)` with at least `server_url`; arbitrary extra fields passed to the
-server (typically a Project). Flow: decode → `GET <server>/v1/invites/<token>` (server validates: signature/
-expiry/usage — all server/Project concerns) → returns `server_name`, optional `server_step_url` (onboarding
-webview), `post_onboarding_redirect`. **Currently unsigned + open registration** (token is discovery
-convenience, not access control). Signing/expiry/closed-registration are Project concerns (see gatekeeper
-§10). Substrate owns decode/extract/validate-call/UI; Projects own signing/onboarding/auto-enroll
-(`group_invitations` array of `{master_key, link_password}`)/redirect.
-
-## 15. Build stages & status (`01`)
-
-✅ **Stage 1** crypto core · ✅ **2** homeserver MVP · ✅ **3** mobile app + identity (iOS only; Android not
-started) · ✅ **4** invites/notifications/deployment · then (largely built ahead of plan in places):
-**5** action-bound groups (zkgroup, expiry, announcement-only — mostly ✅, see `03` §5) · **6** Project
-framework (📐) · **7** first-party Projects (Channel Directory, Team Assignment, Action Day, Q&A Bot, Collab
-Docs, Engagement Tracking — all 📐) · **8** Calls (📐) · **9** Federation + cross-server casual groups + guest
-credentials (📐) · **10** hardening + audit. Within-stage components parallelizable; order chosen to get
-encrypted 1:1 working earliest. Platform parity: iOS leads; Android = UniFFI Kotlin glue exists, no UI;
-Desktop = napi bindings exist, no UI; Bots/Node = account/DM/group create+invite/admin events.
-
-## 16. bitchat mesh fallback (📐 `14`, optional/opportunistic)
-
-BLE multi-hop flood (fork of public-domain BitChat) as a fallback transport when the homeserver is
-unreachable. **Flooding not routing** (no liveness tracking). Existing Signal/Sender-Key ciphertext flows
-unchanged — relay nodes see opaque bytes (same guarantee as the server path); **no new encryption layer**.
-Three message types: DMs (Double Ratchet), group (Sender Keys — both group types, since the difference is
-only the server-side auth layer), broadcast (plaintext "Local Mesh" channel). **User-activated, not
-automatic** (avoids surprise BLE / presence broadcast). **Only works with sessions/memberships already
-established via the server** (new sessions need prekeys). Mesh identity = Curve25519 derived from the Ed25519
-identity key (HKDF). Addressing = 8-byte HMAC tags rotating daily. **Known threat: forced mesh activation**
-(jam connectivity → observe mesh → confirm group co-membership within an epoch); mitigations deferred
-(per-recipient tags, Noise_XX header encryption, dummy traffic). Deferred: prekey exchange over mesh, WiFi
-Direct, Nostr tier, Android.
-
-## 17. Cross-cutting rejected designs (index)
-
-- zkgroup: DID-shaped credential on zkcredential (option 2, shipped then reverted); blind-sig bearer tokens
-  (option 3) — both worse than `UUID(did)` option 1 (`03` §2.4).
-- Server-side block-list enforcement / pushing block list to server (`12`) — metadata leak, diverges from
-  Signal; revisit only if queue-flooding seen in the wild.
-- Direct/anonymous spam reports (`12`) — leak reporter identity / trivially forgeable; chose homeserver-
-  mediated signed reports.
-- Project reverse-proxy with `X-User-DID` (`20`) — metadata/plaintext exposure, blast radius.
-- Signed/attestation-based "officialness" (`20`,`22`) — decomposed to a plain `official` flag + scope.
-- Bot-to-bot RPC / service mesh / per-admin server-verified credentials (`22`); gatekeeper→adminbot RPC;
-  external onboarding forms (`24`).
-- Multi-master storage replication / CRDTs / vector clocks (`05`) — chose single-authoritative + LWW.
-- Consumer-cloud (iCloud/Drive) as storage substrate (`05`).
-- Two reply primitives (`32`); many-reactions-per-message (`33`); constrained-avatar-palette as security
-  (`54`); inline interactive cards / in-feed forms (`23`); per-member-server profile replication (`52`).
-- Full ATProto stack (`00`) — public-by-default, no E2E; we take only DIDs, build the private substrate
-  ourselves, and leave public-social to ATProto-backed Projects sharing the same DID.
+# DIGEST — compressed index of docs/
+
+Derived and lossy. Source docs are authoritative; every section is tagged with its source doc
+numbers, and `(03 §3.9)` style pointers lead back to detail. Status words follow
+`docs/CLAUDE.md`: **Built** (in code), **Partial** (some built), **Planned** (committed, unbuilt),
+**Proposed** (contract change agreed in principle; **pending project-owner review, do not
+implement until approved**), **Speculative** (no commitment), **Superseded** (kept for rationale).
+Todo lists, deploy commands, SQL/proto tables and UI copy are omitted; see `02` for the roadmap.
 
 ---
-*Generated from docs/ as of 2026-06. Source docs remain authoritative; this is a lossy index of decisions,
-whys, and rejected alternatives. `signal-research/` (background, not decisions) intentionally omitted.*
+
+## 1. Premise and governing principles (00, 01)
+
+- **Premise.** A social network acquired through collective action: people install because a
+  Project (canvass, strike, rally) needs it, and stay for the social graph formed there.
+  Activism = acquisition; social = retention. Building campaign tools is easy; building
+  Signal-quality encrypted comms is hard, so: a boring, reliable encrypted **substrate** plus
+  many **Projects** on top.
+- **App-first, feels like Signal.** One unified inbox across all servers and identities,
+  sorted by recency; servers/Projects browsable in their own tab; you never "enter a server"
+  to read messages.
+- **Front door priority.** The path "campaign sends a link -> inside their Project and
+  groups" deserves as much care as chat polish. Today it is not smooth (links don't survive
+  App Store install; no `/project/<t>` deep link) (00, 23).
+- **Goals.** Projects with deep auth integration; decentralization (orgs run servers, no
+  single party holds everyone's data); E2E DMs/groups/channels; bots and agents as
+  first-class but always visible; Signal-grade iOS/Android/Desktop apps. Speculative: mesh,
+  public profiles/feeds as Projects, engagement tooling (with care).
+- **Two technical principles.** Don't implement crypto (use libsignal). Make vulnerability
+  classes impossible (Rust for all security-critical code). Copy Signal by default; diverge
+  only for multi-server identity, Projects, multi-account.
+- **Terminology.** *Identity* = cryptographic identity a person controls (today `did:plc`),
+  the compartmentalization boundary between unlinkable personas. *Account* = (identity,
+  server) pair. *Device* = one install; devices share the identity key but keep their own
+  sessions/prekeys/sender keys. Durable user data is identity-scoped, never shared across
+  identities.
+- **Substrate vs. Project heuristic.** Needed by multiple Projects or touches encrypted comms
+  -> substrate. One Project only or purely public data -> Project. The private connections
+  graph is never exposed; any public follow graph is Project-level.
+- **ATProto stance.** Public-by-default is wrong for organizing; we use ATProto-compatible
+  DIDs only. Public-social features belong in Projects (possibly published to Bluesky). Under
+  the Proposed identity change, a public DID becomes an opt-in link.
+- **Two group kinds rule:** "if a group needs an admin, it needs a homeserver" (00, 03).
+- **First-party Projects:** testbot and adminbot Built; others Speculative (invite codes,
+  channel directory, Q&A bot, teams, calendar, Action Day map, CRDT docs, engagement).
+  Cautions: Project server state is seizable; "most active / where is everyone" lists are
+  target lists, so locations must be E2E and rankings client-side.
+
+### Where things stand (00)
+
+| Area | Status |
+|---|---|
+| 1:1 messaging, receipts, reactions, edit/delete, attachments, link previews | Built |
+| Action-bound groups (zkgroup, sealed-sender send, expiry, roles, avatars) | Built, known gaps |
+| Identity: did:plc + passkey PRF, recovery blob | Built (no-blob path missing) |
+| Multi-device linking + storage sync | Partial |
+| Multi-account | Partial |
+| Push (relay, APNs/FCM/UnifiedPush, iOS NSE) | Built |
+| Contacts, profiles, blocking, requests, reporting | Built, known gaps |
+| Projects (manifest install, capabilities, directory, tokens, OAuth, adminbot) | Partial |
+| Platforms iOS (reference) / Android / Desktop | Built; parity in `62` |
+| Client-side federation | Proposed |
+| Threading beyond quote-reply | Planned / Speculative |
+| Calls | Speculative (undesigned) |
+| Supergroups, mesh | Speculative |
+
+---
+
+## 2. Security posture summary (09)
+
+Living register; read before trusting any privacy claim elsewhere. When a gap is fixed,
+update `09` and the subsystem's Known gaps together.
+
+**Threat model.** In scope: **server seizure** (disk+DB should not yield contacts,
+memberships, history, real names; users can carry on elsewhere); **surveillance of
+membership** (membership lists are targeting data; limit linking across servers and
+identities); **hostile participants** (strangers, malicious members, malicious/careless
+Projects); **device seizure** (limited: disappearing messages, platform-keyed at-rest
+encryption). Out of scope: targeted state surveillance (no onion routing/cover
+traffic/mixnets; use Tor/VPN), traffic analysis beyond TLS, compromised OS, coercion.
+
+**What holds today.** Content confidentiality (X3DH/PQXDH + Double Ratchet; Sender Keys);
+group tables name no members (encrypted blob; routing keyed by encrypted member IDs;
+non-members get 404); anonymous group send (zkgroup group-send token, no session
+credential); encrypted profiles; homeservers never see push tokens; bots always visible (no
+out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed keys
+(Desktop is not, S-05).
+
+**What each adversary learns today (intended in brackets):**
+- *Seized DB:* registered DIDs; encrypted blobs; up to 30 days of undelivered DM rows with
+  sender account (co-membership via SKDM/invite bursts); readable unpruned group history
+  (pseudonyms, link passwords, exact timestamps); ~1 h of IPs for anonymous sends; raw invite
+  tokens. [DIDs and ciphertext only] (S-09..S-12)
+- *Live operator:* the above plus presence, IPs, live account<->pseudonym<->group links
+  (accepted), the full identified DM graph. [own-org social graph, not group membership] (S-09)
+- *Relay:* each device's DM + all group pseudonyms and timing; *relay + homeserver:* full
+  group membership. [timing only; nothing more together] (S-13)
+- *Public PLC log:* signup server forever, every rotation; recovery GET tests which servers
+  hold a DID. (S-06, S-07, S-19, S-20)
+- *Stranger with your DID:* your profile key via delivery receipt; can add you to groups;
+  self-declared bots skip requests; attachment URLs leak your IP. [nothing until accept]
+  (S-02..S-04, S-08)
+- *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
+  sender membership check; extend expiry. (S-14..S-16)
+- *Project operator:* setup code -> full admin; audience-free tokens replay across Projects.
+  (S-01, S-17)
+- *Stolen device:* rotation key = permanent DID takeover; no revocation; Desktop constant key;
+  plaintext caches of deleted media. (S-05, S-06, S-18, S-25)
+- *Page on `*.theavalanche.net`:* can request the root PRF secret (shared RP with Project
+  hosting). (S-07)
+
+**Register (ID, severity, gap -> fix doc):**
+- **Critical:** S-01 setup codes embed `REGISTRATION_SHARED_SECRET`; rewriting slug to
+  `adminbot` = superuser; secret also in testbot env and in raw tokens in `server_events` ->
+  server-minted per-Project single-use enrollment tokens, parsed claims in events, purge (22, 24).
+- **High:** S-02 profile key in delivery receipts to un-accepted requests (52); S-03
+  self-declared `is_bot` bypasses request gate (54); S-04 group invites auto-accepted from
+  non-blocked strangers, Reported/needs UI check (12, 03); S-05 Desktop constant SQLCipher
+  key (61); S-06 rotation key on every device and in link bundle, sole rotation key (50
+  Proposed, 04); S-07 passkey RP shared with Project hosting (50, 20); S-08 attachment
+  pointers fetched from any host, no size cap, under core lock (35); S-09 identified DM plane
+  (SKDMs, invites, `sender_account_id`) undercuts group opacity -> sealed sender (03, 13);
+  S-14 WebSocket group subscribe last-writer-wins, drain deletes rows -> secret-backed
+  pseudonyms (03); S-15 no sender-membership check on SKDM/group receive, no re-seed on
+  removal, `announcement_only` unenforced (03); S-17 Project tokens audience-free, in query
+  string (20).
+- **Medium:** S-10 readable never-pruned group history (03); S-11 exact timestamps on group
+  routing tables (03); S-12 IPs persisted in Postgres rate-limit table (03); S-13 relay sees
+  full pseudonym set, unauthenticated `INSERT OR REPLACE` registration (15, 41); S-16 group
+  expiry unclamped (03); S-18 no device list/revocation; `/link` `/replace` don't check
+  identity key, non-transactional, PLC fetch without timeout (04, 50); S-19 unauthenticated
+  `GET /v1/recovery/{did}` returns device IDs (50); S-20 genesis op publishes signup server
+  (50 Proposed); S-21 device linking with no confirmation code (2025 Signal phishing pattern)
+  (04 §4.3); S-22 storage records not version-bound -> rollback (05); S-23 iOS Project
+  webview allows any navigation; Network-tab/`conversation/` links use first account (20,
+  23); S-24 no server WS ping, half-open sockets suppress push (10); S-25 deleted/expired
+  messages leave attachment rows/keys and plaintext caches on all platforms (35, 36); S-27
+  shared avatar/attachment blob namespace, sequential profile-avatar ids (55).
+- **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
+  S-26 mesh tags keyed on public identity key (design only, 14).
+
+**Hardening order:** (1) critical and stranger-facing fixes S-01..S-05, S-08, S-14, S-17,
+then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
+parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
+win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
+unlinkability (S-13); (5) client group membership enforcement (S-15).
+
+**Audit readiness:** not ready. No `cargo audit`/`deny`, no app-core e2e in CI, no
+mobile/relay/bot builds in CI, no `03` §9 invariant tests, no reproducible builds.
+
+---
+
+## 3. Stack, repo, app-core, homeserver (01, 07, 10)
+
+**Repo (Built, 01).** Crates `types`, `crypto` (no I/O; defines `Store`), `store`, `net`,
+`app-core`, `app-core-node` (napi), `server`, `relay`; `federation`/`project-sdk` are empty
+placeholders. Plus iOS, Android, Desktop (Tauri), Node bots, infra, web.
+
+**Crypto stack (Built).** libsignal pinned to commit `4c460615`: X3DH+PQXDH (incl. Kyber),
+Double Ratchet, Sender Keys, multi-recipient sealed sender (group path only; **1:1 DMs do
+not use sealed sender**), zkgroup. Primitives X25519, Ed25519/XEdDSA, AES-256-GCM,
+HKDF-SHA-256, Ristretto255. **Attachments use AES-256-CBC+HMAC** (Signal-exact, incremental
+verification) — the one divergence from GCM. DID rotation keys are P-256 (PLC requirement).
+
+**Envelope.** Plaintext is protobuf `ContentMessage` with a `oneof body` plus envelope fields
+(`timestamp_ms`, `profile_key`, expiry). Forward compatibility by reserved field numbers;
+retired numbers never reused; clients must silently ignore unknown variants (36; verifying
+this is a todo per 08).
+
+**Clients.** Rust core + native UI: iOS (UniFFI), Android (UniFFI + JNA), Desktop (hand-written
+Tauri commands), bots (hand-written napi). DB keys: Secure Enclave, Keystore, operator env,
+**Desktop constant placeholder** (S-05).
+
+**Server (Built, 10).** Axum/Tokio/sqlx (compile-time checked, `.sqlx/` checked in),
+Postgres only, no Redis, no libsignal session code (relays opaque bytes so a server bug
+can't touch plaintext). DB functions take `&mut PgConnection` (rollback-isolated tests,
+composable transactions). Opaque revocable session tokens, not JWT. One-time prekeys
+consumed with `DELETE ... RETURNING`. Migrations only via `migrate`, never on start. Auth =
+identity-key-signed challenge -> opaque token; **issuance identity-scoped, membership checked
+on use** (401 vs 403, 34). Delivery: WebSocket protobuf frames, drain on connect, ack deletes
+row; HTTP fallback; offline relay wakeup; 1:1 queue 30 days. Table-backed rate limits.
+- **Single-instance contract:** `ws_connections`, `group_subscriptions`,
+  `account_joined_subscribers` are in-memory maps — never persisted (keeps live
+  pseudonym<->account links out of a seized DB) but two instances can't share sockets.
+  Horizontal scale would need a fan-out channel (Speculative). Gaps: no server WS ping
+  (S-24), persisted IPs, PLC calls without timeout, no S3.
+
+**app-core (Built, 07).** One client library for every client; **bots and humans get the
+same API**. Owns connection, all crypto state, both stores, background tasks, and events. A
+library you drive, not a daemon; never calls back into platform code.
+- **Instances:** `AppCoreInner` is structured as one identity with a primary account plus
+  `backup_accounts` (always empty, dead scaffolding). Platforms hold one `AppCore` per
+  signed-in (identity, server) keyed by DID, merged into one inbox.
+- **Storage defaults:** humans (`did:plc:`) persist incoming content **before acking**
+  (load-bearing: server deletes on ack; event channel not durable). Bots (`did:local:`) don't
+  persist content, sync storage, or upload recovery blobs. Contacts are interaction-driven
+  (`touch_contact`).
+- **FFI shape (load-bearing):** exports sync by default, blocking on a global
+  `OnceLock<Runtime>`, because libsignal store traits return non-`Send` futures. **Exception:**
+  long waits (`next_events`, `wait_for_connection_state_change`) are native async exports;
+  a sync version pinned a thread per call and exhausted Swift's cooperative pool at three
+  accounts. Rule: never add a sync export that can block indefinitely; never wrap long waits in
+  `Task.detached`/`Dispatchers.IO`. Interior mutability via `tokio::sync::Mutex<AppCoreInner>`
+  with lock-free clones for read-only paths; never hold `inner` across a network await
+  (crypto send/group paths are a bounded documented exception). Two error types. Tests use
+  `_async` variants. Store = one serialized Arc connection per DB, never a pool (libsignal
+  multi-`&mut`).
+- **Gaps:** hand-maintained Tauri/napi bindings, unchecked; **Desktop bridge doesn't
+  compile** (calls async exports synchronously); parked waits uncancellable (logout leaves
+  socket open); one mutex serializes all crypto sends.
+- **Planned:** actor model (one thread with `LocalSet` owns libsignal state; async exports
+  over channels; retire the global mutex); generate or CI-check Tauri/napi bindings.
+
+**Rationale (01).** Rust server (memory safety, no GC, native libsignal; rejected Go,
+C/C++). Rust core + native UI (security code once; cost: three UIs and bindings). Capacity:
+messaging cheap; attachments drive storage. Speculative: key transparency; calls (1:1
+WebRTC, group LiveKit SFU with insertable-streams E2E); horizontal scaling.
+
+---
+
+## 4. Identity, authentication, recovery (50, 56)
+
+**Status: Partial.** Built: signup and blob-path recovery via passkey or 12-word phrase on
+iOS/Android (Desktop phrase-only). Not built: no-blob recovery, second-server join, any
+multi-device-aware recovery. Proposed redesign pending owner review.
+
+**Current design (Built).**
+- No phone/email (removes strongest real-world identifier from the server).
+- Keys: **rotation key** (P-256, in PLC `rotationKeys`, authorizes DID ops and device
+  replace/link; HKDF `actnet-rotation-v1` from passkey PRF or phrase seed); **blob key**
+  (HKDF `actnet-blob-v1`; encrypts recovery blob; cached on signup/recovered device, not on
+  linked devices); **identity key** (libsignal Curve25519, random, shared across devices,
+  published as `#avalanche`, used for sessions and server auth); **storage key** (random,
+  record-level, in blob and link bundle).
+- DID = hash of genesis op `{rotationKeys:[rotation_pub], services:{avalanche_homeserver:
+  signup_url}}` that **omits the identity key**, so passkey + signup URL recompute the DID
+  without lookup; an update op then adds the identity key.
+- Passkey: RP `theavalanche.net`, fixed PRF salt `actnet-recovery-v1`, userHandle = signup
+  server URL (no typed input at recovery), discoverable. Phrase: BIP39 12 words; first 32
+  bytes of seed replace PRF in the same HKDF; user records server URL. Skipping both ->
+  random rotation key, unrecoverable.
+- Recovery blob: identity keypair, servers, profile key, name, group keys, storage key; not
+  the rotation key. Registration checks the identity key against PLC `#avalanche`.
+  Recovery restores the same identity key (same safety number), does a rotation-signed
+  `/replace` on the first server, re-seeds group sender keys (old messages lost), then pulls
+  storage. Passkeys never used day to day. Identities share no keys or server state.
+
+**Known gaps.** Rotation key persisted on every device and shipped in link bundle, sole
+rotation key -> any device compromise = permanent DID takeover (S-06). No-blob recovery
+path has no code. Recovery is single-server, single-slot (reuses `min(device_ids)`).
+Unauthenticated recovery GET leaks registration, device count, and (via size) group count
+(S-19). Signup server published forever (S-20); "home server can be omitted" claim is
+unachievable with this genesis. **Identity key mislabelled as Ed25519 multicodec** in the
+DID document (actually Curve25519/XEdDSA). Any `*.theavalanche.net` origin can run the
+ceremony (S-07). Domain seizure = recovery outage. One vault links all personas (labels
+`"<name> @ <server>"`). Server PLC fetches have no timeout.
+
+**Planned.** Build or drop no-blob recovery; whole-device-set revocation on every server;
+PLC timeouts and IP rate limit before PLC fetch; fix DID-doc key type; stop hosting
+third-party content under the RP domain (dedicated RP domain); neutral passkey labels.
+
+**Proposed (pending owner review; agreed in principle 2026-10-03; needs migration plan):**
+- **P1 wrap, don't derive.** Random 32-byte root secret; rotation and blob keys derive from
+  it; root stored only wrapped under each factor (primary-RP passkey PRF, **backup-RP-domain
+  passkey** with different registrar/jurisdiction, phrase), stored with the blob on every
+  server. Why: today root = PRF output, unrotatable; compromised vault is forever; seized
+  domain disables recovery. Cost: DID not recomputable from passkey alone; recovery needs a
+  wrapped copy (server hint in userHandle).
+- **P2 priority-ordered rotation keys.** Top = root-derived recovery key, never stored on a
+  device; optional lower-priority device key. PLC lets higher-priority keys nullify lower
+  ops within 72 h. Linking ships no rotation key; `/v1/devices/link` authorized by the
+  existing device's session + identity-key signature, server checks same identity key.
+- **P3 unpublished private identity.** Self-certifying identifier (hash of genesis with root
+  public keys), never in a global directory; key document held by own homeservers and passed
+  to contacts over sessions; key changes/moves are rotation-signed statements; strangers
+  find you via invites/QR only. `did:plc` becomes an opt-in public link via signed
+  attestation. Why: PLC is public, permanent, records signup server, timestamps every
+  change, and is a third-party dependency. Gives up Bluesky identity by default and bare-DID
+  lookup. Pairs with 13.
+- **P4 authenticated blob fetch** with a per-factor fetch key (`HKDF(PRF,"actnet-fetch-v1")`);
+  drop `device_ids`.
+
+**Speculative.** Bluesky-linked identities (ATProto OAuth proves existing `did:plc`; lossy
+recovery); other OAuth providers as recovery authorities.
+
+**Rationale.** Passkey recovery = best UX (platform-synced); identity key kept random
+(passkey controls DID, blob restores key); genesis without identity key made DID
+recomputable (cost: publishes signup server; reason for P3); universal RP domain so one
+passkey works across servers and only official apps run recovery (cost: concentrated risk).
+Rejected: homeserver-held recovery keys (seized server takes identities); consumer-cloud
+backup (subpoenable).
+
+**Desktop passkeys via external browser (56) — Proposed, spec only, pending owner
+review and re-check against 50 P1.** Run WebAuthn in the default browser on a bridge page at
+the RP domain; seal PRF to an app ephemeral X25519 key; POST back to a `127.0.0.1` loopback
+(RFC 8252). Must produce PRF bit-identical to mobile (same RP, salt, userHandle) or it is a
+blocker. Rejected: in-app WebView WebAuthn (webkit2gtk lacks it, WKWebView entitlement);
+custom URL scheme (any app can register; leaks into history). Deferred: native OS ceremony
+(three integrations, no app<->domain binding on Windows, Linux can't reach 1Password).
+Risks: local process racing the signup POST could plant an attacker-known root (single POST,
+short timeout, user confirmation); bridge must be on an origin with no third-party content.
+Phase 0 spike gates everything.
+
+---
+
+## 5. Multi-device (04)
+
+**Status: Partial.** Built: per-device crypto, linking on all three platforms, group
+fan-out, sent-transcript sync, storage service. Not built: sending `SyncRead`, device list
+UI/revocation, whole-identity recovery reset, link confirmation.
+
+- **Central distinction (load-bearing):** the identity key is a static credential and is
+  shared (like Signal); sessions, prekeys, sender keys are running ratchets and are
+  per-device (sharing would reuse keys/nonces and collide counters). Server keys prekeys,
+  registration IDs, queues by `(account_id, device_id)`.
+- **Membership is per-identity; delivery per-device.** Adding a device doesn't add a member;
+  send fans out per device.
+- **Linking (Built, §4).** Short-lived ciphertext-only mailbox on a homeserver; either device
+  shows or scans (QR or paste); ECDH over an out-of-band key, so a hostile mailbox can only
+  abort; existing device seals identity, rotation, storage keys. Polling (joining device has
+  no account), cancellable from UI. `/v1/devices/link` is additive and rotation-key-authorized.
+  All devices co-equal; linked devices lack the blob key.
+- **§4.3 Planned:** existing device shows new device name + code derived from `K`; paste
+  accepted only on the new device; "New device linked" notice on all devices (S-21).
+- **Sync channels (§5, decided):** *Conversation* (anything recipients see) syncs free
+  via a **Sent transcript** wrapping the `ContentMessage`; *Durable* current values go to the
+  storage service (05); *Device-local* never syncs. Only *local events* add sync types; cap
+  target set `{Sent, Read, Viewed, LocalDelete}`. Decision rule: recipients need it ->
+  ContentMessage; only my devices, current value -> storage record; action -> thin event.
+  Rejected: one SyncMessage per feature (Signal accreted ~20). Sync messages are pairwise DMs
+  to yourself, no sealed sender. Live `SyncSent`/`SyncRead` emit scoped
+  `ConversationUpdated`. Gaps: `SyncRead` receive-only; `SyncViewed`/`SyncLocalDelete`
+  undefined.
+- **Group fan-out (§6, Built):** sealed-sender keys derive from the shared identity key so any
+  device decrypts; per-device pseudonyms; linked devices reconcile groups after storage pull.
+  Accepted: server learns device count.
+- **Recovery vs. linking (§7):** linking additive (device alive); recovery should be total
+  (revoke entire device set on every server). As built: one-slot `/replace` on primary only
+  (Partial). Planned whole-identity reset endpoint.
+- **§8 Planned:** shared identity key means a peer's new device doesn't change safety
+  number (accepted weakness); mitigate with "Bob added a device" notice.
+- **§9 Planned revocation:** delete device row/prekeys, kill session tokens, remove group
+  pseudonyms; doesn't rotate identity key.
+- **§10 History backfill:** explicit non-goal (Signal parity).
+- **Gaps:** no device list/revocation; rotation key on all devices; phishable linking; server
+  doesn't check linked identity key, `/replace` non-transactional, no IP limit, PLC fetch no
+  timeout (S-18); no e2e test (needs live PLC).
+- **Rejected:** per-device identity keys; Signal's desktop-always-secondary; provisioning
+  WebSocket. Deferred: spoken PAKE codes.
+
+---
+
+## 6. Device data sync / storage service (05)
+
+**Status: Partial.** Built: server `/v1/storage/items`, engine, four types (tag 1 group keys,
+2 contacts, 3 conversation settings, 4 contact profiles), trigger dirty tracking,
+commit-hook scheduler, WS nudge. Parked: passive backup snapshots. Data-loss bugs.
+
+- **Model:** domain tables stay the source of truth; a payload-free sidecar
+  (`storage_sync`: type, logical key, version, dirty, deleted) plus one adapter per type
+  (`SyncedType` trait). Adding a type = table + adapter + registration.
+- **Triggers** (generated from registry) mark dirty in the same transaction; one rusqlite
+  `commit_hook` wakes a debounced scheduler; 60 s safety poll; sync on reconnect. Rejected:
+  write-path helpers (discipline), inline push (blocks, fails offline, loses crash
+  durability), payload in sidecar (drift).
+- **Opacity:** storage key (identity-level, never to server; **its presence is the opt-in**:
+  bots have none). Record id = HMAC(storage_key, tag||key)[..16]; AES-GCM envelope binds tag
+  and key inside ciphertext (checked against record id) but **not version** (S-22).
+- **Server:** per-record CAS versions, per-account cursor, quotas; WS nudge to other devices.
+- **One authoritative account** on the discovery server (`servers[0]`); not multi-master;
+  never consumer cloud. Passive backups parked because snapshots lack seq/CAS so promotion
+  needs restore-then-reseed. Cost accepted: lose discovery server -> lose non-blob durable
+  state.
+- **Conflict model:** intended per-record LWW (single user, low contention). **As built: on
+  conflict the next pull overwrites the dirty local edit** ("first write to reach server
+  wins"); unknown-type records discarded permanently; rollback possible.
+- **Bootstrap:** link and recovery both = "get storage key, pull since=0". Blob still inlines
+  group keys; no `MAX_RECOVERY_BLOB` (2 MB axum default).
+- **Planned:** keep dirty edits and re-push; keep unknown payloads; bind version; trust-store
+  adapter; drop group keys from blob and cap 32-64 KB.
+- **Speculative:** client-assigned HLC versions sealed inside ciphertext -> true LWW,
+  rollback detection, every server a dumb mirror, no snapshots.
+- **Rejected:** multi-master/CRDT/vector clocks; consumer cloud (re-centralizes, leaks
+  DID<->platform).
+
+---
+
+## 7. Identity/device store split (06)
+
+**Status: Built** (multi-account contexts are scaffolding only).
+- Two SQLCipher files: **device.db** (libsignal state, sender keys, push state, caches;
+  never synced, rebuildable) and **identity.db** (keys, profile, contacts, groups, settings,
+  trust store, sidecar, and for now the event log).
+- Identity keys are bootstrapped via blob or link bundle, not the storage service (can't
+  fetch the key you authenticate with).
+- Group master key per-identity (roams); sender key and pseudonym per-device.
+- Both files keyed by platform key, not the storage key (which lives inside identity.db).
+- **AppCore = one identity = persona = storage-key boundary.** Cross-identity aggregation
+  (e.g. autocomplete) lives above, read-only; picker must bind contacts to their identity
+  (cross-persona send footgun). Rejected: AppCore = account (pushes sync coordination into
+  the app). Per-person cross-identity prefs deliberately unsupported (device-local).
+- **Decided:** two files; trust store per-identity and **should sync** (not built; cost: a
+  rolled-back store could poison trust everywhere); full replica per device. **Open:** event
+  log placement; one DID across servers.
+- Gaps: `backup_accounts` always empty; "add server" never registers; trust store doesn't
+  roam; event log doesn't sync via storage.
+
+---
+
+## 8. Groups (03)
+
+**Status: Partial.** Action-bound groups built end to end; §3.9 opacity has real gaps; §9
+invariant tests don't exist; cross-server casual groups (§6) and mesh (§7) not built.
+
+- **Shape.** A group lives on one hosting server. State is an encrypted blob (source of
+  truth: members with DID in cleartext inside the blob, metadata, policy, revision); server
+  keeps an opaque routing subset (`member_credentials`, per-device
+  `group_member_pseudonyms`, `members_pending`, `members_pending_approval`, policy columns).
+  **No group table has a DID or account column.** Clients trust the blob, not the subset.
+- **zkgroup via `UUID(did)` (§2, Built).** `SHA-256("actnet-did-to-uuid-v1"||did)[..16]` as
+  Aci (and Pni). EMI = stock `UuidCiphertext`. Rejected: a DID-shaped `zkcredential`
+  credential ("option 2"; shipped then reverted because the mismatch recurred in every
+  zkgroup primitive, each needing a ~500-line security-sensitive reimplementation, and its
+  claimed advantages didn't hold); blind/rotated bearer tokens ("option 3"; weaker). API
+  scheme-agnostic so MLS remains possible.
+- **Updates (§3.3).** Presentation-authorized changes; admin-class (batchable) and self-class
+  (sole action); revision+1 else 409; `modify_policy` and `modify_member_role` are
+  protocol-fixed Admin (else members could grant themselves anything); one transaction.
+  Actions are the diff; titles, descriptions, expiry, profile keys sub-encrypted.
+- **Fetch (§3.4):** non-members get **404 not 403** (no existence probing). History kept for
+  catch-up, timeline backfill, and **tamper detection** (client response to tampering
+  undesigned). 256-revision ring Planned, not implemented.
+- **Concurrency (§3.5):** monotonic revisions, declarative idempotent actions + 409 retry.
+  Rejected CRDT/OT.
+- **Layered roles (§3.6):** server enforces what it sees; clients re-verify against blob;
+  each applied change becomes a `kind > 0` system row + `GroupMetadataChanged`.
+- **Delivery (§3.7):** per-device group pseudonym, separate from DM pseudonym; in-memory
+  pseudonym->socket map; offline relay wakeup; live-memory account<->pseudonym<->group link
+  accepted (never persisted; Signal accepts same). 7-day per-group-offset rotation Planned
+  (endpoint exists, unscheduled).
+- **Expiry (§3.8, §5):** timer in encrypted state; clients stamp each message; countdown
+  starts on read; app-core reaper hard-deletes and emits `MessagesExpired` (substrate, not
+  UI). Server deletes undelivered rows (30-day default). Server should clamp; **doesn't**.
+- **§3.9 schema discipline:** no did->groups table/cache; no EMI->did map; no credential ids
+  logged; counts-only logging; day-aligned timestamps. Rules 1-4 hold; rule 5 violated. Honest
+  claim: **group tables don't name members, but DM-plane metadata, readable history, relay
+  correlation and IP tables let a live operator reconstruct much of the graph.** Change `09`
+  first before relaxing a rule.
+- **Invites/links (§3.10):** two-step (pending then self-promote) following Signal; invitee
+  supplies own profile key and pseudonym. Invite = admin action then identified DM with
+  `GroupContext` (master key). Links carry master key + password. Master key alone grants
+  nothing (fetch gated, Sender Keys pairwise) — **assuming clients reject non-member SKDMs,
+  which they don't yet**.
+- **Sender opacity (§3.11):** Sender Key ciphertext in multi-recipient sealed sender with a
+  homeserver-signed sender certificate (2-day); `POST /send` takes no Authorization header,
+  authorizes a `GroupSendFullToken` over recipient ServiceIds; logs nothing identifying.
+  Credential refresh is identified (session) — anonymity at send, not refresh (Signal's
+  trade). State changes stay identified by EMI. Group abuse reporting needs selective
+  sender disclosure (undesigned).
+- **§3.12:** groups never federate, under current and Proposed models.
+- **Gaps:** S-09..S-12, S-14..S-16 (see section 2); no per-group rate limit; no policy or
+  description FFI, no invite-link UI.
+- **Planned:** sealed sender for 1:1/SKDM; secret-backed pseudonyms (server stores H(secret),
+  subscribe presents preimage, no account link); client membership rules; server metadata
+  fixes; policy FFI/UI; scheduled rotation; three cheap invariant tests (others dropped).
+- **§6 Cross-server casual groups — Planned:** <~50, peer-managed, Sender Keys with client
+  fan-out to each member's server; needs churn/re-key design. **§7 mesh — Speculative:** group
+  mesh tags per sender from Sender Key, never from master key.
+- **§8 threat checklist** is the PR review gate for any group code change; walk it, verify
+  in code.
+- **Rationale/superseded:** two group types (most designs refuse the split and pay in UX or
+  guarantees); invite links carry master key (Signal); skipping sealed sender for invite DM
+  because admin is identified — **Superseded in effect** (the DM reveals *who was invited*);
+  claim-squatting defense "deliver to all claimers" chosen over "reject non-owned
+  subscribes" (needs account->group link) — neither built; replaced by secret-backed
+  pseudonyms.
+- Open: account deletion under opacity is client-driven leave cascade (53); tamper response.
+
+### Supergroups (08) — Speculative
+
+Normal groups to ~200. Costs linear/worse in N: per-recipient envelope slots, per-device
+storage, O(N^2) SKDMs; plus spam megaphone. Insight: **cost is delivery, not readability** —
+push nothing but wakeups; pull content, count reactions server-side. Sketch: promotion (not
+creation-time; explicit, visible, one-way); UX-transparent (feels like announcement-only);
+admin posts encrypted once under a channel read key, pull-gated; admin sends **pseudonymous
+among admins** via zkgroup presentation (server can link one admin's posts, not to a DID,
+and can enforce admin-only); replies as pull-based threads; reactions as server-counted
+opaque tokens. Gives up: admin-post linkability, weaker FS. Evaluate MLS first. Open: key
+schedule, reaction dedup (nullifiers), old clients. Rejected: announcement-only at any size;
+identified admin sends (organizer roster for seizers); fully unlinkable admin sends (too much
+machinery); separate opt-in discussion group (pull is not push); author-mediated tallies;
+create-as-supergroup.
+
+---
+
+## 9. Federation (13) and mesh (14)
+
+**Current (Built):** no federation. Single-server messaging; multi-account (53) is the
+cross-server mechanism; group traffic local to hosting server.
+
+**Proposed — client-side federation (pending owner review; changes wire protocol and
+endpoints).** Servers never talk to each other. To reach Bob on `b.org`, Alice's client
+learns his server from how it learned of him (invite/QR, contact card, group data, move
+notice), fetches prekeys from `b.org`, and delivers **sealed-sender** directly; `a.org`
+learns nothing.
+- **Delivery keys:** Bob derives `HKDF(profile_key,"delivery")`, registers its hash; only
+  contacts holding his profile key can deliver sealed or fetch prekeys. Strangers make an
+  **identified, signed, rate-limited first contact** that lands as a message request. A server
+  may refuse first contact (closed community). **Consequence: profile keys must go only to
+  accepted contacts** (S-02 must be fixed first).
+- Sender certificate trust root comes with card/invite or is fetched and pinned (open:
+  server-issued vs identity-key-signed certs).
+- **Move notice** `{did, new_servers, issued_at}` signed by identity key to contacts; old
+  server can't block.
+- Learns: sender's server nothing; recipient's server a sealed delivery and an IP (stranger
+  first contact reveals sender); relay unchanged. Costs: sender IP to foreign server;
+  routing needs current server; cross-server policy can't rest on another server's vouching;
+  abuse-report forwarding loses its channel (open conflict with 12).
+- Contract: new endpoints (sealed delivery, identified first contact, delivery-key
+  registration, key-authorized prekey fetch), delivery key, move-notice type, stop profile
+  keys on request receipts. Casual groups become client fan-out on the same path.
+
+**Superseded — server-to-server multi-homing (2026 drafts):** discovery server per DID; the
+sender's server federated ciphertext; server keys, learned routes, trust scoring, proxied
+prekeys. Why superseded: sender's server saw every cross-server recipient (seizable social
+graph); lots of leaky machinery against the threat model; activist operators can't evaluate
+server-to-server trust. Kept: same-community traffic stays local; per-server prekeys;
+migration authority is the user's signed record; join flows show what the new server sees;
+adding a contact never requires joining their server.
+
+**Speculative:** Project-to-Project federation is a Project concern over plain HTTPS
+(optionally Sign in with Avalanche); substrate doesn't provide pub/sub/RPC (`00` once
+committed to it). Rejected: full ATProto federation; Matrix-style room replication;
+multiple discovery servers per DID.
+
+**Mesh fallback (14) — Speculative.** Fork BitChat BLE flooding mesh; carry existing Signal
+ciphertext; user-activated when the server is unreachable; DMs need existing sessions; plus a
+labelled plaintext Local Mesh channel. **DM tag design is broken** (keyed on the public
+identity key, so anyone can track a device; must use shared secrets, S-26). Group tags per
+sender, never from the master key. Threat: forced activation by jamming to observe
+co-membership.
+
+---
+
+## 10. Push (15, 16, 41)
+
+**Push relay (15, 41) — Built**, at `relay.theavalanche.net`, deployed by hand. Homeservers
+POST content-free wakeups to pseudonyms; the relay (small losable SQLite) maps pseudonym ->
+token and dispatches APNs, FCM (data-only), or UnifiedPush (relay POSTs to the client
+endpoint, SSRF-guarded). Every external transport goes through the relay. Client picks FCM,
+else UnifiedPush, else foreground WS. Desktop never registers. Multiple relays allowed; push
+opt-out possible.
+- **Learns:** device token joins DM pseudonym and all group pseudonyms across servers;
+  rotation doesn't help (S-13). Registration unauthenticated `INSERT OR REPLACE` -> anyone
+  knowing a pseudonym can redirect wakeups; group members can see each other's pseudonyms.
+- Scheduled weekly pseudonym rotation is Planned (not built); the relay keeps a rotated
+  pseudonym for a 7-day grace period.
+- **Planned:** secret-backed pseudonyms with authenticated registration; distributor picker;
+  Android foreground keepalive; relay into deploy bundle; separate dev/prod relays.
+- **Rejected:** homeserver holds tokens (it and Apple/Google learn identity->device);
+  homeserver-direct UnifiedPush; Web Push payload encryption (no payload).
+
+**iOS Notification Service Extension (16) — Partial.** Silent `content-available` pushes are
+unreliable for rarely opened/force-quit apps, so (like Signal) send an alert push with
+`mutable-content` and no content; the NSE runs **full app-core** `fetch_notifications` for
+every account (no per-account hint; payload stays content-free), through the same
+`process_decrypted` path, acking after durable write. Relay `APNS_PUSH_MODE` (default
+`silent`; production value not recorded in repo).
+- Stages 1-4 and 6 Built (App Group storage, alert payload, NSE + FFI, WAL + busy timeout;
+  app/NSE fetch race resolved by the ratchet: second decrypt fails and is skipped). Stage 5
+  Signal-parity presentation (each message its own local notification, trigger completes
+  empty) **Built but gated off** pending Apple's filtering entitlement; interim rewrite
+  model can leave stray generic banners.
+- **Measured:** NSE footprint ~2-3 MB vs ~24 MB cap -> decision full core, fetch-based;
+  slim-decrypt and ciphertext-in-push rejected (cost privacy or duplicate crypto to dodge a
+  non-binding limit).
+- **Decision: fail silent, not generic banner** (generic is a false signal on every burst);
+  requires lost-push detection (Planned, not built) before enabling.
+- **Background lifecycle (0xDEAD10CC):** suspended process holding shared-container SQLite
+  locks is killed (nine field kills in a day), and a socket left open suppresses push. On
+  expiration: `prepare_for_background` per core on GCD (never `Task.detached`): set flag,
+  clean WS close, park reconnect, bounded wait, then **close** store connections via
+  `GatedConnection` (drain-only failed: idle WAL connections hold locks). Resume reopens.
+  iOS only. Divergences from Signal: no cross-process connection lock (NSE uses HTTP);
+  store-layer gate instead of task cancellation. Residual: busy-timeout overrun; unannounced
+  suspension; crashed sockets need server WS idle timeout (missing).
+- Privacy: Apple sees token + generic alert timing; decrypted banner text lands in iOS
+  notification store.
+- Deferred: per-account targeting (would expose a pseudonym to Apple). Rejected: silent push
+  primary; generic-text alert; hybrid fallback (for now); drain-only quiesce.
+
+---
+
+## 11. Abuse handling (12)
+
+**Status: Partial.** Built: message requests, block, local spam reports. Not built:
+forwarding, enforcement ladder, profile reports, group abuse. Follows Signal (passes App
+Store 1.2). **Reports never contain content.**
+- **Requests (Built):** un-accepted sender -> read-only thread with Accept/Delete/Report;
+  no read receipts or typing until accepted; delivery receipts still sent; sender can't tell
+  outcome. Known sender = curated or `is_bot` (should require server vouching).
+- **Block (Built):** local, synced via contact record; blocked inbound decrypted (advance
+  ratchet) then dropped silently; UI replaces composer (app-core doesn't refuse sends).
+  **Server-side block rejected for v1** (leaks cut-off list, diverges from Signal); revisit
+  only on observed queue flooding (per-pair rate limits or opt-in list).
+- **Report (Partial):** only on requests (highest-value signal; blunts weaponized
+  reporting); DID + reason enum to own server, stored for operator review, then block.
+  **Planned forwarding:** reporter's server signs `{reported_did, reporter_homeserver, time,
+  reason}` without reporter DID. Rejected: client->reportee server (leaks reporter);
+  unsigned anonymous (forgeable). **Open conflict with 13** (no server-to-server channel):
+  keep one narrow endpoint, or a signed reporter-anonymous token the client submits.
+- **Enforcement ladder (Planned):** throttle at 5 distinct reporters/24h; suspend at 20/7d or
+  50 total; ban at operator review or 100. Ban = this server only (DID is the user's).
+  Forwarded reports count distinct servers.
+- **Federation trust scoring (Speculative, kept as record):** assumes server-to-server
+  federation; attestation store is itself seizable membership metadata; no signal with few
+  servers. If ever needed: opt-in signed third-party blocklists as local inputs.
+- **Profile abuse (Planned):** client name filter, profile reports, forced reset.
+- **Never build:** content reporting/hashes, report button in accepted conversations, global
+  ban list, client ML moderation, on-device scanning (legal conflict), "who reported me".
+- Gaps: self-declared bot bypass (S-03); profile key to requesters (S-02); stranger group
+  invites ungated (S-04); reports don't leave reporter's server. Open: group abuse, Project
+  abuse, appeals, cross-server aggregation.
+
+---
+
+## 12. Projects (20, 21, 22, 23, 24, 25)
+
+### Security model (20) — Partial
+
+- A Project = web UI in an app webview + optional bot accounts (ordinary E2E participants).
+  Anything touching content or membership goes through a **visible bot**; **no silent
+  observer mode** (invariant). Trust model is Slack-workspace: user trusts homeserver admin,
+  admin vets Projects. Server rows: `projects`, `project_bots` (one Project per bot),
+  `project_capabilities`.
+- **Project tokens (Built):** `POST /v1/project-token` (session) mints 32 random bytes,
+  1 h, multi-use, stored with caller-supplied `project_url`; Project calls unauthenticated
+  `verify` -> `{did, project_url}`. OAuth access tokens are Project tokens. Always discloses
+  the real DID. Server learns which accounts asked for which Project; not webview traffic.
+- **Webview (Built):** no JS bridge; input = URL params (`?token=`); output = navigation to
+  `https://go.theavalanche.net/<action>/<arg>` intercepted by host match (works without
+  Universal Links); routes `conversation/<did>`, `i/<token>`, `authorize`; any intercept
+  dismisses. Chrome always names the Project. No custom schemes from webviews.
+- **Permissions:** declared in manifest, **granted by admin at install, default-deny, no
+  per-user runtime prompts** (would re-litigate admin choice, train reflexive Allow; identity
+  prompts are theatre). Login consent screen is legibility, not scope approval. One
+  dot-separated `namespace.action` space (earlier split separators rejected).
+- **Server-enforced capabilities (Built):** only `accounts.read` (roster + join feed, live
+  and 30-day catch-up) and `registration.gatekeeper` (pins Ed25519 key). `adminbot` Project
+  bots implicitly hold all. Roster to an operator-installed bot adds no new leak; no group
+  linkage.
+- **Manifest (Built):** slug (`adminbot` reserved), permissions, `webEntries` (always
+  non-official), unique `clientId`, exact-match `redirectUris`. Untrusted input: sanitize and
+  attribute to (server, Project).
+- **Identity follows interaction model:** bot-bearing Projects are always real-DID;
+  pseudonymous per-Project identity only coherent for webview-only Projects (Speculative).
+- **Officialness:** plain operator-set flag (signed attestation rejected — decomposes into a
+  flag plus scope). Today only on `directory_entries`, never settable -> no checkmark anywhere.
+- **Isolation:** separate processes/accounts; origin isolation only if each Project has its
+  own origin — deploy bundle serves under `/p/<slug>/` sharing the homeserver origin.
+- **Multi-server rule:** a conversation lives on one homeserver via one account; any Project
+  affordance in it comes only from that server's Projects; nothing crosses accounts.
+- **Known gaps:** setup codes carry master secret (S-01); secret broadcast via join feed;
+  testbot holds secret; no audience enforcement (S-17); tokens in query string; wrong
+  identity for Network tab and `conversation/` links (first account); default unhardened
+  WKWebView (S-23); officialness unsettable; self-declared bot bypass; group invites
+  auto-accepted (asserted as fact here; 09 marks it Reported).
+- **Planned:** bot-enrollment tokens; mandatory `audience` on verify and mint only for
+  installed origins (additive); tokens out of query string (fragment; Proposed, owner review); identity-correct minting/routing; webview hardening (per-Project data
+  store, origin lock, per-Project subdomains); checkmark from `project_bots` linkage to an
+  official Project exposed on account info; manifest from well-known URL.
+- **Proposed:** OIDC "Sign in with Avalanche" (25).
+- **Speculative:** client-honored scope vocabulary (identity, DM reach, surfaces); profile
+  sharing via token minting; guest access (superseded in spirit by 13); a JS bridge only with
+  its own permission system.
+- **Rejected:** JWT (no key distribution, trivial revocation); reverse-proxying Projects
+  through the homeserver with `X-User-DID` (plaintext through server, general proxy); runtime
+  prompts; in-feed widgets.
+
+### Testbot (21) — Built (dev/demo only)
+
+Node `node:http` service: "Text Me" spawns a new ephemeral bot per tap (temp SQLCipher store,
+Claude Haiku replies or echo fallback; read receipt + reaction exercises 33) and hosts the
+OAuth demo. Gaps: holds master secret (and its bots publish it via join events); breaks once
+a gatekeeper exists; ignores `project_url`; unbounded account creation; shared `/p/` origin.
+Planned: enrollment token, check audience, split OAuth demo. Rationale: ported from Rust to
+TS to prove "any language on app-core" (and Node's single thread avoids the non-`Send`
+workaround); ephemeral because it's a dev tool.
+
+### Adminbot (22) — Partial
+
+- **Superuser = link to reserved `adminbot` Project** (`AuthAdminbot`), not a DID. Admin API
+  refuses to link/unlink/install/uninstall it; **only entry is a bootstrap token naming it**.
+  Bootstrap secret honored only while no gatekeeper is installed.
+- **`#admins` group membership is the admin roster** — E2E, so the server DB doesn't reveal
+  who administers. Adminbot is the bridge between E2E authority and server privilege;
+  concentration risk accepted, kept minimal, privileged commands legible in `#admins`.
+  Principle: **"the threat decides the home"** — server resources -> server capability;
+  seizure-sensitive social authority -> E2E state; offline/cross-server trust -> signature
+  rooted in a cold key.
+- **Coordination is data-carried, not bot-to-bot** (events, signed tokens, catch-up).
+- No inbound surface; off-box operation supported and attractive (keys off the seized box),
+  but the deploy bundle runs it on the server box.
+- **Does today:** creates `#admins`; auto-invites new humans into every group where it is
+  admin (promoting adminbot makes a group an onboarding target); announces bots; clamps
+  timers to 4 weeks; release check; installs manifests at startup; a few commands
+  (`/install-project`, `/list-projects` gated on fresh `#admins` membership).
+- **Join events (server Built):** `AccountJoined` with raw `invite_token` pushed to
+  `accounts.read` holders, logged 30 days, catch-up endpoint. Adminbot uses only live push.
+- **`did:local:` decision (not built):** random per-server DIDs, no well-known literal, since
+  clients key by DID and `did:local:adminbot` merges adminbots across servers (block one,
+  block both). Rejected: `did:local:{hostname}:adminbot` (couples identity to hostname);
+  client conversation-key rewriting.
+- **Gaps:** setup codes = superuser (S-01); secret via join events; bootstrap cliff when a
+  gatekeeper is installed; `/audit` ungated; no catch-up; fixed DID; stale `ADMINBOT_DIDS`
+  comment.
+- **Planned:** server-minted per-Project single-use `purpose:"bot"` enrollment tokens that
+  can't name `adminbot`; adminbot self-bootstrap via operator-only path; remove secret from
+  bot envs; parsed claims in events; gate `/audit`; catch-up; random DID; officialness;
+  uninstall/revoke.
+- **Speculative:** routing rules (token tags -> channels); notification hints in invites;
+  fuller commands; recovery ladder; backup recovery identity.
+- **Rejected:** bot-to-bot RPC/service mesh (uptime coupling; use explicit HTTP trust edges
+  if ever needed); gatekeeper commanding adminbot (token carries routing tags instead);
+  signed officialness; per-admin server-verified credentials (server would accumulate the
+  roster `#admins` protects). Non-goals: general bot framework, RPC hub, federation-aware.
+
+### Messaging extensions: core vs Project (23) — Partial
+
+- **Thesis:** keep the in-conversation surface boring (native, auditable, E2E); push real
+  interactivity into an explicitly opened Project webview.
+- **Three rules:** (1) explicit handoff only — no Project reads the composer, no
+  Project-rendered UI inside a conversation; (2) **1:1-DM litmus test** — must work in a DM
+  with no bot -> core; (3) mechanism vs content — core owns mechanism/surface/privacy,
+  Project supplies content at a seam.
+- Placement: reactions, receipts, previews, contact cards core Built; replies, mentions core
+  Planned; polls, live location core Speculative; rich text, emoji packs, slash autocomplete
+  split Speculative; Giphy, surveys, task/flag actions, maps Project Speculative.
+- **Never:** inline interactive cards or in-feed forms; lightweight actions are
+  reactions/replies a member bot observes. Webview costs: not reproducible-build code,
+  metadata hit, phishing surface.
+- **Gaps:** no launch context; no Project deep link (invite redirect only opens a DM).
+- **Proposed (pending owner review; changes Project contract and deep-link behavior):**
+  `/project/<t>` links that survive install (installed+account -> open with fresh token;
+  no account -> invite onboarding then Project; not installed -> landing page + paste-prompt
+  "continue where you left off", no attribution SDK); **opaque launch context**
+  `ctx = HMAC(K_launch(group master key), project_origin)` — only a Project whose bot is a
+  member can map it; server and other Projects learn nothing.
+- **Speculative:** entry points ("+", message long-press disclosing one message,
+  participant long-press only where the Project's bot is a member); credential-free magic
+  links; return content (fetched sender-side, capped, never auto-sent) or bot posts result;
+  rich text as BodyRanges; slash commands as plain text; client-tallied polls; messenger-bot
+  HTTP API Project; scaffold; offline webviews.
+- **Rejected:** inline cards/forms; Project access to compose buffer; Project-hosted simple
+  polls (wouldn't work in DM/offline); slash commands as invocations.
+
+### Vetted onboarding / gatekeeper (24) — Partial
+
+- **Built server side:** **closed registration default** (anything unrecognized = closed;
+  fail-closed); admitted by a gatekeeper-signed invite (verified locally against pinned
+  Ed25519 key; **server never calls the Project**) or the bootstrap secret (only while no
+  gatekeeper). Many gatekeepers allowed. Token `base64url(JSON)` short keys; signature over
+  the exact claims string (no canonicalization hazard); `jti` redeemed before account creation
+  (spent even if registration fails). **Token is the hand-off:** admission separate from
+  routing; routing payload rides to the join event (nothing consumes it yet).
+- **Gaps:** bootstrap escalation (S-01); raw tokens in events; `GET /v1/invites` doesn't
+  validate gatekeeper tokens (user creates passkey/DID before rejection); adminbot can't
+  install gatekeepers; bootstrap cliff; no gatekeeper Project exists.
+- **Planned:** enrollment tokens; parsed claims; full validation in invite GET; gatekeeper
+  install via adminbot; **the vetting Project**: anonymous form (the abuse surface),
+  `#approvals` modeled on `#admins` with low-PII summaries, signed single-use invite with
+  routing, delivered out of band. Notes: bearer credential over a non-E2E channel; PII
+  residency; single-approver trust; **fail-closed is load-bearing**.
+- **Speculative:** quorum approval; handle binding; external form adapters; existing
+  identities go through the same vetting.
+- **Rejected:** calling the Project to validate (uptime coupling); external forms like Google
+  Forms (unvetted PII processor); gatekeeper -> adminbot command; single gatekeeper.
+
+### Sign in with Avalanche (25) — Built on iOS/Android; OIDC Proposed
+
+- Proves "controls this DID and has an authenticated account on this homeserver". **App is
+  the authorization endpoint** (`go.theavalanche.net/authorize` Universal Link + `server_url`),
+  **homeserver is the token endpoint**, **access token is a Project token** (verified with the
+  existing `verify`). No JWT, no new introspection.
+- Flows: same-device auth code + PKCE; cross-device RFC 8628 device grant ("another device"
+  warning). No client secret. Login is a point-in-time bootstrap; no refresh tokens.
+- Gaps: checkmark inert; first account on server used (no identity picker); name resolution
+  needs a directory entry; **Desktop as authorizer not built (noted parity exception)**;
+  audience unenforced.
+- Planned: identity picker; checkmark; audience.
+- **Proposed (pending owner review; reverses earlier non-goal):** OIDC conformance as main
+  developer story — discovery doc, `id_token` JWT signed by a per-homeserver key (introduces
+  the signing key 20 avoided), `userinfo`, scope `openid`; additive. Motivation: campaign
+  tools can add an OIDC provider by configuration.
+- Threat: cross-device consent phishing (bounded by copy, checkmark, short TTLs, rate limits,
+  scoped token). Rejected: server-rendered login page (attack surface on server); reusing
+  linking mailbox.
+
+---
+
+## 13. Messaging UX (30-37)
+
+### Mobile app (30) — Partial
+
+- No account without an invitation. Server cannot auto-enroll new users into E2E groups
+  (needs the master key; must be a client or bot).
+- Existing user: identity picker; **"join as existing identity" is a stub** (P1). Separate
+  identities keep personas apart; one name per identity, no per-server overrides.
+- Each conversation belongs to exactly one identity by construction; no per-message identity
+  choice; account tabs when >1 identity (37).
+- Tabs: Chats, Network (servers -> Projects), Settings, Search; tab bar hidden in
+  conversations.
+- Compose: **DM / New Group / Note to Self** actions; From starts empty and is fixed by the
+  first contact's most recent identity (also prevents cross-server groups). Decided: 2+
+  recipients always create a new group (Messages, not Signal dedup).
+- Group detail Partial. Planned: add/remove members, invite-link controls, per-conversation
+  mute (more important than threading for big groups).
+- Rejected: recipient-count-decides with no buttons; separate New Group menu (Signal);
+  per-row identity badges/switcher; importing OS contacts.
+
+### Read tracking (31) — Built, with gaps
+
+Per-message `read_at` (also starts disappearing timers); unread derived (can't drift);
+scroll-visibility marking. Delivery receipts auto-sent on every inbound DM (including
+requesters, leaking the profile key, S-02); read receipts only to curated contacts.
+Gaps: no setting (recommend Signal default on with per-identity toggle — **decision
+needed**); no debounce; group read receipts mostly suppressed (co-members uncurated; decide
+whether groups get them, gate on membership); `SyncRead` never sent; receipt send under core
+lock. Planned: VIEWED/PLAYED. Rejected: stored counter; watermark (`lastReadAt`); timer
+polling; read receipts to un-accepted senders.
+
+### Replies and threads (32) — quote-reply Proposed; full model Speculative
+
+- **Planned:** `ReplyTo{author_did, sent_at, unsurfaced (always false), quote_text}` as
+  `TextMessage` field 5; target identity `(author, sent_at)`; inline everywhere; DMs and
+  groups together. Quote-reply is an additive proto field pending owner review.
+- **One-primitive property:** every reply is a thread message; turning on threads later flips
+  a default, not data.
+- **Speculative full model:** per-reply "surface to channel" flag whose default depends on
+  conversation shape; one-way promotion; following quiet by default; each message unread in
+  exactly one place; announcement groups allow thread replies but gate surfacing (needs
+  recipient `announcement_only` enforcement, S-15).
+- Rejected: two reply primitives by conversation shape (bakes chat/channel line into data);
+  building full threading now; per-thread inbox rows; private/subset threads. Superseded: 32's
+  icon "shelf" (by 37's single row).
+
+### Reactions (33) — Built
+
+`(emoji, reactor, target)` encrypted message in the target's conversation via
+`send_to_target`; target `(author, sent_at)`; **one reaction per person per message**
+(replace/remove; idempotent, order-independent; can precede target); visible to all; cluster
+on bubble; never enter feed/unread/badge; delete-for-everyone drops them. Gaps: reactions
+outlive expired targets; no notifications; no who-reacted sheet. Planned: low-priority
+notifications only for your own messages (coalesced), who-reacted sheet. Never: reactions
+feed, badges, private reactions, super/paid reactions. Rejected: many per person (Slack);
+reactions as feed messages.
+
+### Connection state (34) — Partial
+
+- AppCore is the single source of truth; UIs render with no client timers; everything per
+  (identity, server) membership.
+- **Layer 1 Built:** four-state `ConnectionState`; one reconnect task; jittered backoff
+  1-30 s forever; offline-safe `login`; lazy auth with 401 re-auth once. Banner shows whenever
+  any account is disconnected (the failure this doc targets).
+- **Layer 2 Planned:** tiers Online / Retrying (<2 min, global banner) / ServerDown (2 min-7
+  days, a property of that server) / Abandoned (>7 days, offer removal), computed in core,
+  outage clock persisted; while ServerDown stop timers and probe opportunistically
+  (foreground, network path, user action) with a probe floor.
+- **401 vs 403 contract (Planned):** 401 transient; 403 = membership revoked, terminal
+  (`Unauthorized`, stop reconnect; non-home removed with notice; home -> change home server).
+  Server returns no membership 403 yet.
+- Layer 3 (Speculative): mesh composes into one model. Send queue (Planned): pending state
+  draining on reconnect; unused store `message_queue` — wire or delete. Device-offline
+  detection (Planned).
+- **Constraints:** removing a server preserves crypto (de-routing, not de-provisioning);
+  dead home server -> migrate, don't drop; don't mark DMs unreachable before per-peer
+  routing.
+- Gaps: dead server pins banner and is probed forever (P1); no send queue, 403 handling, or
+  path awareness; no server ping (S-24).
+- Rejected: any-offline banner; fixed long timers (don't fire suspended, burst on wake); 403
+  as unreachability; wiping crypto on removal; early DM unreachable markers.
+
+### Attachments, link previews, contact cards (35) — Partial
+
+- **Encrypt-then-upload (Built, Signal model):** pad to ~5% buckets; fresh 64-byte
+  CBC+HMAC key; authenticated allocate; backend-blind upload; repeated pointer in
+  `TextMessage` (albums are one message) with URL, key, digest, size, inline thumbnail;
+  **digest verified before decrypting**.
+- **Download unauthenticated by design** (unguessable server-minted id is the capability;
+  server can't enforce recipients under sealed sender; enables cross-server fetch and
+  presigned URLs). LocalFs backend; S3 Planned with no client change.
+- **Pointer carries full URL (Decision 7)** — consequence: client must constrain hosts.
+- Outgoing images always re-encoded: orientation baked, **EXIF stripped (privacy
+  requirement)**, 2048 px JPEG. Receive is format-agnostic, so WebP send later is compatible
+  (not HEIC/AVIF).
+- **Link previews (Built):** generated by native client layer, not app-core (keeps SSRF and
+  HTML parser out of the core bots run). **Load-bearing invariant: sender generates at
+  compose; recipient never fetches the URL** (IP harvesting). Render only if `preview.url`
+  occurs in body (anti-spoof). No opt-out setting yet.
+- **Contact cards:** `SharedContact{did, name}` inline, **no profile key** (third party
+  shouldn't decrypt subject's profile).
+- **Lifecycle:** server can't refcount; blobs TTL 45 days (> 30-day queue, so offline/new
+  devices can pull; delivery buffer, not backup); orphans fine; forwarding re-uploads with
+  fresh key (avoid correlation, expiry coupling, original-sender deletion).
+- Limits: 100 MB/attachment, ~500 MB/hour/account; scanning impossible by construction.
+- **Known gaps:** arbitrary-URL auto-download incl. requests (IP harvest, memory DoS, LAN
+  probe; S-08); download holds core lock; deletes/expiry leave attachment rows/keys and
+  plaintext caches on all platforms (S-25); cleartext caches; server buffers whole blobs.
+- Planned: fixes; S3; auto-download and local storage controls (deleting media keeps the
+  message with a placeholder); preview opt-out; upload throttling; Desktop preview hardening.
+  Offload Speculative (needs an encrypted backup substrate).
+- Never: server transcoding, streaming in-progress uploads, cross-attachment dedup (leaks
+  equality).
+- Rejected: GCM for attachments; authenticated download; bare id resolved on own server;
+  app-core fetching previews; recipient-fetched previews; refcounting; blob reuse on forward;
+  deleting whole message when media removed (Signal).
+
+### Editing and deletion (36) — Built, with gaps
+
+- Two operations on one substrate targeting `(author, sent_at)`. **Load-bearing rule:
+  recipients apply an edit or FOR_EVERYONE delete only if the cryptographically
+  authenticated sender is the target's author** (session or sealed-sender certificate); server
+  can't and needn't enforce. FOR_ME honored only from own devices.
+- LWW by operation timestamp; **delete is the absorbing top of the lattice** (rejected:
+  delete as plain LWW — a delayed edit could un-delete). Edits keep position, record revision;
+  deletes tombstone, drop reactions/revisions. No notifications, unread, or bump; edit doesn't
+  reset timer. Multi-device via Sent transcript.
+- Limits intended: humans 24 h / ~10 edits; bots no cap, 30 days, no revision history
+  (update-in-place pattern; "bot" must be server-vouched per 54). As built: only mobile UI
+  hides after 24 h; no caps; recipients enforce nothing; bot exemption unwired.
+- Gaps: delete leaves attachment keys/plaintext (S-25); out-of-order ops dropped not held;
+  edits replace only body (stale preview); bot revisions accumulate. Version skew: unknown
+  variants silently ignored (conservative failure).
+- Rejected: separate global message ids; server-enforced authorship; editing attachments;
+  edit-to-empty as delete.
+
+### Chat organization (37) — Partial
+
+- Default inbox: plain, one row per conversation, no tab row. **Account tabs Built (iOS,
+  Android; not Desktop)** only with >1 identity: avatar + unread badge, filter.
+- **Decided: no per-row identity/server marking**; the conversation is the context; if you
+  want separation, make it a tab. Supersedes 30's per-row indicator and switcher.
+- Per-conversation mute Planned (synced via conversation settings; muted excluded from badge;
+  P1).
+- **Speculative full model:** tabs are homes (exhaustive partition, no "All"); structural
+  rules plus on-device classifier proposals; one evolving configuration; **automatic behavior
+  never stomps the user's setup**; Threads catch-up row.
+- Rejected: per-row marking; filter bar with All; threads as a tab; discrete switch from
+  server to topic tabs; the shelf.
+
+---
+
+## 14. Contacts, profiles, avatars, bots, invites, accounts (51-55)
+
+### Contacts and profiles (52) — Partial
+
+- Principles: interaction-driven (no "Add contact"); Signal technical model; **server never
+  sees plaintext profile data** (seized server yields blobs and DIDs, not a named roster);
+  contacts local-only; one book across identities merged at query time (per-identity tables;
+  caveat: unlocking exposes the merged book); per-DID; substrate profile separate from
+  Project profiles.
+- Contact row: `is_curated` (sticky, set only by deliberate gestures: send DM, accept, save
+  shared card), `is_blocked` (orthogonal), `has_pending_request`, `nickname` (local, not yet
+  synced), `last_interaction_at`. Curation drives request gate, read receipts, People/Other
+  sectioning. Group co-members not curated.
+- Profile: name + avatar ref, AES-GCM under a profile key (no rotation on edit) that rides
+  outgoing DMs, group messages, and receipts.
+- **Fetch throttle decided in core and persisted** by last outcome (improves on Signal's
+  in-memory LRU). Profile GET returns identical 404s (no existence leak). Nickname > profile
+  name > truncated DID; nickname never erases the real name.
+- **Gaps:** **profile key to un-accepted requesters via delivery receipt (P0 here; S-02
+  High in 09)**; self-declared bot bypass (P1); no `profile_version` liveness; profile fetch
+  under core lock.
+- Planned: `profile_version` envelope field (additive contract); favorites/notes/nickname UI;
+  `preferred_identity`; cross-identity contact backup under a recovery-derived key;
+  profile-key rotation; safety-number UI.
+- **Proposed:** delivery keys derived from the profile key (13) — makes the S-02 fix
+  structural.
+- Speculative: contact merging; Project-introduced bulk save.
+- Rejected: per-member-server profile replication; separate `blocked_dids` table; daily
+  background sweep; per-row identity marking.
+
+### Avatars (55) — Partial
+
+Small JPEG, client-encrypted (AES-GCM), **overwrite-in-place** blob, one per account and per
+group; pointer (version + digest) lives inside already-encrypted state (profile blob under
+profile key; group state with key derived from master key). Whoever can read the name can
+read the picture; no new key distribution. Digest verified before decrypt (server can blank,
+not spoof). Group avatar object id derived from master key (no server group link). Limits:
+512 px, <=48 KiB encoded, 60 KiB plaintext, 64 KiB ciphertext, 60 uploads/hour. Device-local
+`avatar_cache`. iOS sets/displays both; Android displays only; Desktop initials only.
+Gaps: **shared blob namespace** lets any account delete/overwrite attachments and enumerate
+profile-avatar ids from sequential account ids (S-27); group blob replaceable by any
+old-key holder (fix: per-version object id); linked device doesn't fetch own avatar; upload
+under core lock; parity. Rejected: avatar as attachment pointer (45-day TTL, per-send);
+separate avatar key; server-visible group->avatar mapping; presigned upload (too small to
+matter).
+
+### Bot presentation (54) — Partial
+
+Two independent properties: **provenance** (official bot my server vouches for — verifiable)
+and **automation** (is it a bot — always self-declared). Client-applied chrome avatar bytes
+can't override: **hexagon avatars and chamfered bubbles** for `is_bot` (Built all
+platforms). Gaps: `is_bot` is self-declared yet bypasses requests (S-03) and is presented as
+if vouched; no verified tier. Planned: exempt only bots linked to an installed Project on
+your server (server-vouched field); checkmark from official installation (same-server only);
+hedged "Automated (not verified)" tier. Target tiers: verified / self-identified / person
+(absence of signal is not a claim of humanity). Speculative: `account_kind` in profile; server
+policy requiring declaration; synthetic default avatars. Rejected: mandatory constrained bot
+avatar palette (only constrains honest bots; redundant with badge; strips branding).
+
+### Invite tokens (51) — Built
+
+`base64url(JSON)` short keys in `https://go.theavalanche.net/i/<token>` (legacy `/invite/`).
+**Personal invite** `{s, d?}` unsigned, client-generated, doubles as contact link; validation
+returns server name and a redirect to the inviter DM; does not admit on closed servers.
+**Gatekeeper token** signed (24). **Bootstrap token** `{s, k: secret, p?}` (to be replaced).
+Gaps: no server step; no group auto-enrollment; tokens in URL path land in landing-page logs —
+any secret-bearing future token must use the fragment; invite GET only understands personal
+tokens. Planned: enrollment tokens; `server_step_url` onboarding webview; group
+auto-enrollment via `group_invitations` in the fragment; in-app invite creation. 51 lists
+deferred deep links through install as Speculative (see contradictions). Rationale: personal
+tokens are discovery, not access control; Projects sign, server pins and verifies locally;
+short keys for scannable QR.
+
+### Multi-account UX (53) — Partial
+
+Identities each with server memberships; one **discovery (home) server** per identity. Built:
+Accounts screen (identity groups, `home` tag), identity detail (contact QR = personal invite,
+DID, public-explainer), **delete identity** (load-bearing order: leave groups and delete
+accounts best-effort -> **PLC tombstone must succeed** -> only then wipe local; tombstone is
+the authoritative "gone" and wiping first would make failure unretryable), server detail,
+leave server (graceful; leaves hosted groups, deletes account; home server can't be left in
+place). Gaps: add-server stub; no activity/reachability rows; no remove-from-device; no change
+home server. Planned: real second-server registration (requires 06 contexts; under 13 a
+second server is for community, not reachability); reachability rows tied to 34 tiers;
+remove-from-device as local de-routing preserving crypto and keeping groups listed; change
+home server (today PLC update; under 50 P3 a signed move notice). Rejected: remove wipes
+crypto.
+
+---
+
+## 15. Deployment (41, 42)
+
+**Server deploy/upgrade (42) — Partial.** Zulip model: each release in an immutable
+`deployments/<tag>/`, atomic `current` symlink flip; updater and units ship inside each
+release (self-updating); operator `.env` never rewritten; one git tag for all first-party
+artifacts; update halts on reconcile mismatch rather than auto-fixing; bots handled
+uniformly; Projects get Caddy `/p/<slug>/` routes. Gaps: no rollback, no pre-upgrade dump, no
+N-1 migration check, manual new secrets, relay outside bundle.
+Planned: dumps + rollback, `ensure-secret`, `/upgrade` from `#admins`. Rejected: per-file
+binary swap; updater baked into cloud-init (froze boxes at provision-time logic);
+`self-update` server; per-Project upgrade logic; independent component versions;
+auto-update.
+
+**Relay (41) — Built**, manual droplet deploy (legacy `actnet-relay` names), Caddy TLS,
+hardened systemd, state is one losable SQLite file. Planned: fold into `av-deploy`, separate
+dev/prod, authenticated registration.
+
+---
+
+## 16. Platforms (60, 61, 62)
+
+- **Android (60) — Built**, near file-for-file port of iOS (`AppViewModel` mirrors
+  `AppState`); all FFI via `ActnetService`; sync exports in `Dispatchers.IO`, long waits
+  awaited directly. Passkeys via Credential Manager PRF; Digital Asset Links on
+  `theavalanche.net` (Cloudflare must not cache `/.well-known/*`). Gaps: recovery-key
+  banner hardcoded off; no avatar setting; killed-process push defers to next launch (no NSE
+  equivalent); identity list in SharedPreferences. Rationale: native Compose; JNA + generated
+  sources over AAR.
+- **Desktop (61) — Partial.** Tauri 2 + Solid; Rust commands over `app-core`; TS owns the event
+  loops; left sidebar instead of tabs; Project pages in IPC-isolated `WebviewWindow`. **Phrase
+  is the credential (sanctioned divergence)**; 56 is the passkey path. Gaps: **constant DB key
+  (S-05)**; **bridge doesn't compile**; no Project login, avatars, account tabs, search, QR
+  scanning; plain JSON metadata. **Rationale:** Tauri over Electron (OS-patched webview vs
+  bundled Chromium; Rust links app-core like mobile; small footprint on cheap, replaceable
+  hardware). Solid for the only privileged webview (small dependency tree); rejected
+  Dioxus/Leptos (immature WASM integration), React/Vue (huge dep trees), Svelte, others.
+- **Parity matrix (62) — Built**, the only parity tracker (60/61 deliberately have none).
+  Desktop column describes code, not a shippable binary.
+
+---
+
+## 17. Proposed changes awaiting project-owner review (index)
+
+Do not implement until approved. Each alters a contract.
+
+1. **Identity root wrapping, backup-domain passkey, priority rotation keys, root never on
+   devices, device-signed linking** (50 P1/P2; S-06).
+2. **Unpublished self-certifying private identity; `did:plc` as opt-in public link** (50 P3;
+   S-20).
+3. **Authenticated recovery-blob fetch via per-factor fetch key; drop `device_ids`** (50 P4;
+   S-19).
+4. **Sealed sender for 1:1 and SKDM traffic with profile-key-derived delivery keys** (03,
+   13, 52; S-09).
+5. **Client-side federation** with identified first contact and move notices (13); resolve
+   abuse-report forwarding without server-to-server calls (12).
+6. **Acquisition path:** `/project/<t>` links surviving install, opaque per-conversation
+   launch handles (23).
+7. **OIDC-conformant Sign in with Avalanche** (25, 20).
+8. **Project tokens out of the URL query string** (20).
+9. **Quote-reply `reply_to`** additive proto field (32).
+10. **Group/DM flag on `ConversationSummaryFfi`** so clients stop parsing id prefixes (02, 07).
+11. **Validate `conversation/<did>` deep links before creating rows** (02; S-28).
+12. Desktop passkey bridge via external browser (56).
+
+---
+
+## 18. Rejected and superseded designs (consolidated index)
+
+**Superseded**
+- Server-to-server multi-homing federation (discovery server in PLC, server keys, learned
+  routes, trust scoring) -> client-side federation Proposed. Sender's server saw all
+  cross-server recipients; leaky machinery; untrustable peers (13).
+- Federation trust/attestation scoring (12 §5): presumes S2S; attestation store is seizable
+  metadata; no signal yet.
+- Skipping sealed sender for invite `GroupContext` DM: superseded in effect — reveals who was
+  invited (03).
+- "Deliver to all claimers" squatting defense and "reject non-owned subscribe": both replaced
+  by secret-backed pseudonyms (03).
+- DID-shaped zkcredential credential ("option 2"): shipped then reverted (03 §2.4).
+- Per-row identity indicator and in-conversation identity switcher (30) -> account tabs (37).
+- Threads "shelf" of icons (32) -> single pinned catch-up row (37).
+- Recipient-count-decides compose with no buttons (30) -> explicit DM / New Group.
+- Avatar as attachment pointer inside profile (55) -> overwrite-in-place blobs.
+- Cloud-init-baked updater (42) -> in-release deploy bundle.
+- Drain-only store quiesce (16) -> close-on-suspend.
+- Silent `content-available` push as primary (16) -> alert + NSE.
+- Rust testbot (21) -> TypeScript on napi.
+- `00`'s substrate pub/sub/RPC between Project instances (13) -> Project concern.
+- Guest access to remote Projects (20) -> superseded in spirit by client-side federation.
+- Passive backup snapshots (05 §7): parked, not superseded; don't re-enable without a
+  replacement.
+
+**Rejected** (reasons inline in the sections above)
+- Crypto/server: own crypto; Go/C++ server (01); per-device identity keys (04); bearer group
+  tokens (03); CRDT/OT group changes (03); GCM attachments (35); JWT tokens (01, 20); Redis;
+  client-store connection pool (07); migrate on start (42); server block lists (12);
+  server-enforced authorship (36); blob refcounting; authenticated download (35).
+- Sync/identity: multi-master/CRDTs; consumer cloud (05, 50); write-path helpers; inline push;
+  sidecar payload (05); per-feature SyncMessages; provisioning WebSocket; desktop-always-secondary
+  (04); homeserver-held recovery keys; per-server RPs (50); WebView WebAuthn; custom URL
+  schemes (56); sync FFI for long waits; `Task.detached` wrappers (07).
+- Push: server-held tokens; server-direct UnifiedPush; Web Push encryption; slim NSE or
+  ciphertext-in-push; generic-banner fallback (15, 16).
+- Groups/federation: announcement-only at scale; identified or fully unlinkable admin sends;
+  opt-in discussion group; author tallies; create-as-supergroup (08); Matrix replication;
+  ATProto federation; multiple discovery servers (13).
+- Projects: `X-User-DID` reverse proxy; runtime prompts; split separators; signed
+  officialness (20); bot RPC mesh; gatekeeper->adminbot commands; per-admin credentials;
+  literal/hostname `did:local:`; key rewriting (22); calling the gatekeeper; external forms
+  (24); server login page; mailbox reuse (25); in-feed cards/forms; compose-buffer access;
+  Project polls; slash invocations (23).
+- Abuse: direct-to-reportee or unsigned reports (12).
+- Messaging UX: multi-reactions; reactions as messages (33); two reply primitives; thread rows;
+  private threads (32); delete as plain LWW; editing attachments; edit-to-empty; global ids
+  (36); stored counters; watermarks; polling; receipts to requesters (31); recipient or
+  app-core preview fetch; blob reuse; whole-message media delete; bare ids (35); any-offline
+  banner; long timers; 403 as outage; crypto wipe on removal (34, 53); per-row marking; All
+  filter; threads tab; regime switch (37); New Group menu; OS contacts (30).
+- Contacts/bots: per-server profile replication; `blocked_dids`; daily sweep; in-memory
+  throttle (52); bot avatar palette (54); avatar key; server group->avatar map (55).
+- Platforms/ops: Electron, React/Vue, Svelte, Dioxus/Leptos, Elm/Mithril/Lit (61); file swap;
+  self-update; per-Project upgrades; per-component versions; auto-update (42).
+
+---
+
+Generated from docs/ as of 2026-10-03. Source docs are authoritative.

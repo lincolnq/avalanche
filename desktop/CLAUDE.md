@@ -1,19 +1,12 @@
 # Desktop CLAUDE.md
 
-## Platform Parity Rule
+## Platform parity
 
-**Any feature added or changed on iOS must be implemented on Desktop (Tauri)
-in the same session. Any feature added or changed on Desktop must be implemented
-on iOS.**
-
-iOS is the reference implementation. The Desktop app must match it
-feature-for-feature. When in doubt about behavior, check the iOS source.
-
-The same rule applies across all three platforms — see `mobile/CLAUDE.md` for
-iOS/Android and the root `CLAUDE.md` for the overall parity rule.
-
-Use `docs/61-desktop-implementation.md` as the parity tracking document — update
-the `[ ]` / `[x]` checkboxes as each component is completed.
+iOS is the reference implementation; when behavior is ambiguous, check the iOS source. The
+parity rule itself (and its bug-fix exception) is in the root `CLAUDE.md`. Track feature
+parity in **`docs/62-feature-parity.md`** — the single parity matrix.
+`docs/61-desktop-implementation.md` holds Desktop implementation notes and the stack
+rationale, not a tracker.
 
 ---
 
@@ -49,16 +42,14 @@ All Rust core calls flow: `Solid → invoke() → src-tauri/src/lib.rs → app-c
 
 ### Architectural invariant: TS owns the event loop
 
-`startEventLoop()` in `AppContext.tsx` polls `nextEvents()` in a loop. The
-Tauri command blocks on the Rust side (`ffi_runtime().block_on`) and returns
-via IPC when events arrive — the JS event loop stays responsive. Each poll
-parks one blocking-pool thread for the duration of the call. With multi-account
-(day 7) there is one event loop + one connection-state loop **per signed-in
-account**, so steady state is `2 × N` parked blocking-pool threads for `N`
-accounts (well within tokio's default 512-thread blocking pool at realistic N).
-Each loop serializes its own calls — no unbounded fan-out. Events queue in
-app-core's MPSC channel between polls. No registration race — the consumer
-initiates every fetch.
+The frontend's event loops (`state/createEventLoops.ts`) call `nextEvents()` in a loop,
+plus a connection-state loop calling `waitForConnectionStateChange()` — one of each **per
+signed-in account**. On the Rust side these two app-core methods are native `async`
+exports, so the Tauri commands should simply `.await` them (no `spawn_blocking`, no parked
+thread). **Known breakage:** `src-tauri/src/lib.rs` still wraps them in `spawn_blocking`
+as if they were sync, which no longer compiles (docs/61). Each loop serializes its own
+calls; events queue in app-core's channel between polls; the consumer initiates every
+fetch, so there is no registration race.
 
 - ❌ Never spawn a thread/task in `lib.rs` to call `next_events()`
 - ❌ Never `app_handle.emit(…)` events or `listen(…)` in the frontend
@@ -78,32 +69,25 @@ the `tauri` package script. `cargo tauri ...` only works if you've separately
 `cargo install tauri-cli`, which this repo does not assume.
 
 FFI constraints:
-- Tauri commands are async-capable — use `async fn` for Rust calls that block
-- Event polling runs in the TS frontend via a loop calling `nextEvents()` — the
-  Tauri command blocks on the Rust side but returns via IPC when events arrive,
-  so the JS event loop stays responsive
+- Tauri commands are async-capable. Sync app-core exports block, so run them via
+  `async fn` + `spawn_blocking`; the async exports (`next_events`,
+  `wait_for_connection_state_change`) are awaited directly.
 
 ---
 
 ## UX Adaptation: Tabs → Sidebar
 
-iOS uses a bottom tab bar (Calls / Chats / Network). Desktop uses a **left
-sidebar** — the standard for desktop messaging apps (Signal Desktop, Slack,
-Discord). The three sections are identical in content; only the navigation
-chrome differs. This is the one intentional UX divergence from iOS.
+iOS uses a bottom tab bar (Chats / Network / Settings, plus Search). Desktop uses a
+**left sidebar** — the standard for desktop messaging apps (Signal Desktop, Slack,
+Discord). Section content matches iOS; only the navigation chrome differs.
 
 ---
 
 ## Visual Reference: Screenshots
 
-`docs/screenshots/` contains iOS simulator screenshots organized by screen name
-(e.g. `splash.png`, `chats-list.png`, `conversation.png`). When implementing a
-screen on Desktop, use the matching screenshot as a visual reference if it
-exists. If it doesn't exist, derive the layout from the iOS source alone —
-screenshots are optional, not required.
-
-Screenshots are only capturable on macOS with the iOS simulator. Contributors on
-Windows or Linux skip this step entirely.
+`docs/screenshots/` is the place for iOS simulator screenshots by screen name (it
+currently holds only a README). Use a matching screenshot if one exists; otherwise derive
+the layout from the iOS source.
 
 ---
 
@@ -116,18 +100,12 @@ Before closing any branch that adds or changes Desktop UI:
 - [ ] Tauri command added to `desktop/src-tauri/src/lib.rs` if new Rust calls needed
 - [ ] AppContext updated to match AppState changes
 - [ ] New model fields added to both `.swift` and `.ts` types
-- [ ] `docs/61-desktop-implementation.md` parity table updated
-- [ ] *(macOS only)* Screenshot taken and saved to `docs/screenshots/<screen-name>.png`
+- [ ] `docs/62-feature-parity.md` updated
 
-## Adding a New FFI Method (checklist)
+## Adding a New FFI Method (Desktop step)
 
-1. Add Rust method to `core/crates/app-core/src/lib.rs` (`#[uniffi::export]`, sync)
-2. `make bindings` — regenerates Swift + Kotlin UniFFI glue
-3. Add to `AppCoreProtocol` in `ActnetService.swift` and stub in `MockActnetService.swift`
-4. Add to `ActnetService` interface in Kotlin and stub in `MockActnetService.kt`
-5. Call from `AppState.swift` via `Task.detached`
-6. Call from `AppViewModel.kt` via `withContext(Dispatchers.IO)`
-7. Add Tauri command in `desktop/src-tauri/src/lib.rs` with `#[specta::specta]`, then **run `make desktop-bindings`** to regenerate `desktop/src/bindings.ts` (it is checked in, not generated at build time — a plain `cargo tauri dev` does **not** regenerate it; codegen only runs behind the `codegen` feature). Commit the regenerated `bindings.ts` with your change — CI fails if it drifts from the command surface. Update `AvalancheService` interface + `MockAvalancheService` + `DevServerAvalancheService` if the signature changed. No manual typed wrapper needed; the generated `commands.*` in `bindings.ts` handle the invoke call.
+The full cross-platform cycle is in the root `CLAUDE.md` ("UniFFI / Mobile Workflow"). The
+Desktop step: add a Tauri command in `desktop/src-tauri/src/lib.rs` with `#[specta::specta]`, then **run `make desktop-bindings`** to regenerate `desktop/src/bindings.ts` (it is checked in, not generated at build time — a plain `cargo tauri dev` does **not** regenerate it; codegen only runs behind the `codegen` feature). Commit the regenerated `bindings.ts` with your change — CI fails if it drifts from the command surface. Update `AvalancheService` interface + `MockAvalancheService` + `DevServerAvalancheService` if the signature changed. No manual typed wrapper needed; the generated `commands.*` in `bindings.ts` handle the invoke call.
 
 ---
 
@@ -160,6 +138,12 @@ phrase; desktop offers phrase only):
 If a desktop WebAuthn/PRF path is ever added, revisit all of the above.
 
 ## Security constraints
+
+**Known gap:** Desktop currently opens SQLCipher with the constant key
+`"dev-placeholder-key"` (`state/createAccounts.ts`, `state/createDeviceLink.ts`), so local
+databases are effectively unencrypted at rest. The fix (a random per-install key in the OS
+credential store) is tracked in docs/61 and docs/09. Don't copy the placeholder into new
+code paths.
 
 The shell is the only WebView with Tauri command access. Keep these invariants:
 
@@ -258,27 +242,9 @@ so the UI doesn't show a green indicator before any connection exists.
 
 #### Event polling: TS-owned loop, not a Rust background thread
 
-`nextEvents()` blocks on the Rust side until decrypted events arrive, then
-returns via IPC. The TS side calls it in a loop, which parks one blocking-pool
-thread per in-flight call (the connection-state loop adds a second — and with
-multi-account it is one of each per signed-in account, so `2 × N`). Each loop
-serializes its own calls. Do not reintroduce a Rust background thread or
-`app_handle.emit(…)` — the loop is the single unified path for both DevServer
-and Mock mode.
-
-#### Unicode in prompts breaks JSON
-
-Em dashes (`—`), curly quotes (`‘` `’`), and other non-ASCII
-characters in system prompts silently break `JSON.stringify()`. Some providers
-reject these with "invalid unicode code point". Use ASCII-safe alternatives
-(`--`, `'`, `"`).
-
-#### Model response format varies by provider
-
-Don't assume `content[0].text`. DeepSeek v4 models return a `"thinking"` block
-first. Find the first block with `type: "text"`; fall back to `thinking` text
-if no text block is present. Defensive parsing over positional indexing — the
-same fix applies to any LLM backend swap.
+The TS side calls `nextEvents()` in a loop (one per signed-in account). Do not reintroduce
+a Rust background thread or `app_handle.emit(…)` — the loop is the single unified path for
+both DevServer and Mock mode.
 
 #### `.env` reload won't override existing env vars
 

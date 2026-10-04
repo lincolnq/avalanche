@@ -1,158 +1,55 @@
-# Read Tracking & Read Receipts
+# 31 — Read tracking and read receipts
 
-Design for unread counts, read receipts, and scroll-position-based read marking. Follows Signal's approach.
+> **Status:** Built, with gaps — per-message `read_at`, derived unread counts, scroll-position read marking, delivery and read receipts, and Signal-style delivery checkmarks. Diverges from this doc's earlier plan: there's no read-receipt setting (receipts are always sent to curated contacts), no debounce, and no read-state sync between your own devices.
+> **Last verified against code:** 2026-10-03
 
-## Data Model
+## Summary
 
-### Per-message `read_at` timestamp
+Each incoming message has a `read_at` timestamp. Unread counts are derived from it. Scrolling a message into view marks it read. Read and delivery receipts are small encrypted `ReceiptMessage`s sent back to the author, which drive sending → sent → delivered → read on outgoing messages. This follows Signal.
 
-Each incoming message in the `message_history` table gets a `read_at` column — `NULL` means unread, a unix-millis timestamp means read at that time. Outgoing messages are always considered read (set `read_at` to `sent_at` on creation).
+Code: store `messages.rs` (`mark_messages_read`, `unread_count`, `update_delivery_status`); app-core `lib.rs` (`mark_messages_read`, `unread_count`, `send_read_receipt`), `messaging.rs` (auto delivery receipt on inbound DMs, receipt handling); iOS `ConversationView.swift` (`onScrollTargetVisibilityChange`), `AppState.markMessagesReadUpTo` / `markAllMessagesRead`.
 
-```sql
-ALTER TABLE message_history ADD COLUMN read_at INTEGER;
--- NULL = unread, non-NULL = unix millis when marked read
-```
+## Current design
 
-Using a timestamp instead of a boolean future-proofs for disappearing messages. Signal starts the disappear timer based on when the message was read:
-- **Sent messages**: timer starts immediately on send (sender's copy).
-- **Received messages**: timer starts when the recipient reads it.
+### Per-message `read_at`
 
-The `read_at` timestamp provides this for free. `NULL`/non-`NULL` gives us the boolean semantics for unread counts.
+*Built.* `message_history.read_at`: `NULL` means unread, otherwise unix millis. Outgoing messages count as read. A timestamp rather than a boolean also drives disappearing messages: a received message's countdown starts when it's read (`03` §5), and marking messages read wakes the expiry reaper.
 
 ### Unread count: derived, not stored
 
-No stored `unreadCount` on conversations. Instead, computed via query:
+*Built.* `COUNT(*) WHERE conversation_id = ? AND read_at IS NULL AND sender != me`. The app icon badge is the total across conversations.
 
-```sql
-SELECT COUNT(*) FROM message_history
-WHERE conversation_id = ? AND read_at IS NULL AND sender_did != ?
-```
+### Marking messages as read
 
-The Swift `Conversation.unreadCount` becomes a computed property that reads from `messagesByConversation` (in-memory) or falls back to a store query.
+*Built.* `ConversationView` uses `onScrollTargetVisibilityChange` and, while the app is active, marks everything up to the last visible message read. Opening a conversation (and new arrivals while it's open) marks everything read via `markAllMessagesRead`. There's no timer: SwiftUI's scroll-visibility callback replaces Signal's 100 ms poll. The threshold uses the max of local time and the newest message's `sent_at`, so the sender's clock skew can't leave a just-received message unread.
 
-The app icon badge is the total unread count across all conversations.
+### Receipts (wire)
 
-### No `lastReadAt` or `activeConversationId` on Conversation
+*Built.* `ReceiptMessage { type: DELIVERY | READ, timestamps: [sent_at…] }` is a `ContentMessage` body, sent as an encrypted DM to the author.
 
-No timestamp watermark or active-view tracking needed. The per-message `read_at` is the source of truth.
+- **Delivery receipts:** app-core auto-sends one on every successfully decrypted inbound **DM** (not to yourself, not to blocked senders). This includes DMs from un-accepted requesters, which today also leaks the profile key — see `52` Known gaps.
+- **Read receipts:** after local marking, the platform calls `send_read_receipt(sender, timestamps)` once per sender per marking event. App-core **only sends to curated contacts** (`52`), so opening a message request isn't an acknowledgement.
 
-## Marking Messages as Read
+### Delivery status on sent messages
 
-### Scroll-position tracking
+*Built.* `message_history.delivery_status`: sending → sent (server accepted) → delivered → read. Shown as Signal-style checkmarks.
 
-When a conversation is open, scroll position changes trigger marking visible messages as read.
+## Known gaps
 
-**Implementation:**
-1. ConversationView uses SwiftUI's `ScrollPosition` (iOS 17+) to track the last visible message.
-2. `.onChange(of: scrollPosition)` calls `appState.markMessagesRead(upTo: lastVisibleMessageId, in: conversationId)`.
-3. `markMessagesRead` sets `read_at = now` on all unread messages with `sent_at <=` the target message's timestamp, both in-memory and in SQLCipher.
+1. **No read-receipt setting.** Receipts are always on for curated contacts. This doc used to specify opt-in, default off; Signal defaults them on with a toggle. **Decision needed:** recommend Signal's default (on, with a per-identity toggle in Settings).
+2. **No debounce.** Each scroll-visibility change that newly reads messages sends one receipt per sender, with an FFI call and network send each. Batch with a short debounce (~3 s) per sender.
+3. **Group read receipts are mostly not sent.** Group co-members aren't curated (`52`), so the curation gate suppresses receipts to them. Also, a group read receipt is a pairwise DM per author. Decide whether groups get read receipts at all (Signal sends them); if so, gate on group membership rather than curation.
+4. **Read state doesn't sync to your other devices.** `SyncRead` is defined and applied on receive (`04`), but `mark_messages_read` never sends it. Reading on your phone leaves the desktop unread. P1 for multi-device. Owned by `04`.
+5. **`send_read_receipt` holds the core lock across the network send** (it's on the crypto send path, the documented exception in `core/CLAUDE.md`).
 
-Signal uses a 100ms polling timer because UIKit's `UIScrollView` doesn't have declarative scroll observation. SwiftUI's `ScrollPosition` gives us reactive change tracking, so no timer is needed.
+## Planned
 
-**Guards** (don't mark as read when):
-- The conversation view is not the topmost view (a sheet/modal is presented)
-- The app is in the background
+- Fix gaps 1–4.
+- A `VIEWED` receipt type for view-once media and `PLAYED` for voice notes (reserved in the proto).
 
-### On conversation open
+## Rationale and rejected alternatives
 
-When opening a conversation, `.onAppear` triggers the same `markMessagesRead` path for initially visible messages.
-
-## Read Receipts (Wire Protocol)
-
-### Protobuf definition
-
-Add to `proto/content.proto` (when created), or define as a simple JSON envelope for now:
-
-```protobuf
-message ReceiptMessage {
-  enum Type {
-    DELIVERY = 0;
-    READ = 1;
-  }
-  Type type = 1;
-  repeated uint64 timestamps = 2;  // sent_at timestamps of the messages being acknowledged
-}
-```
-
-A receipt is sent as an encrypted DM to the message sender, using the same E2E channel as regular messages. The plaintext is a `ReceiptMessage` instead of a `ContentMessage`.
-
-### When to send
-
-After messages are marked as read locally, queue a read receipt to the sender. Batch with a 3-second debounce to avoid sending a receipt per message during scroll.
-
-**Flow:**
-1. `markMessagesRead()` collects newly-read message timestamps, grouped by sender DID.
-2. A 3-second debounce timer fires per sender.
-3. On fire, encrypt and send a `ReceiptMessage { type: READ, timestamps: [...] }` to that sender.
-4. On receive, the sender updates the corresponding outgoing messages' delivery status.
-
-### Message request gating
-
-If the sender is not yet accepted (message request pending), do NOT send read receipts. Queue them. Send once accepted. (Not needed for MVP — all users are explicitly invited.)
-
-### User preference
-
-Read receipts are opt-in per identity. Stored in the local SQLCipher `account` table:
-
-```sql
-ALTER TABLE account ADD COLUMN send_read_receipts INTEGER NOT NULL DEFAULT 0;
-```
-
-If disabled, skip step 3 above. Still mark messages as read locally.
-
-## Delivery Status on Sent Messages
-
-Outgoing messages gain a delivery status enum:
-
-```
-sending -> sent -> delivered -> read
-```
-
-Stored in `message_history`:
-
-```sql
-ALTER TABLE message_history ADD COLUMN delivery_status INTEGER NOT NULL DEFAULT 0;
--- 0 = sending, 1 = sent, 2 = delivered, 3 = read
-```
-
-- **sent**: server accepted the message
-- **delivered**: recipient's device received it (delivery receipt)
-- **read**: recipient read it (read receipt)
-
-Displayed in the UI as checkmarks (single = sent, double = delivered, blue double = read) — Signal-style.
-
-## Implementation Stages
-
-### Stage A: Per-message read_at + derived unread count (do now)
-
-Changes:
-- **store schema**: Add `read_at` column to `message_history`.
-- **store**: Add `mark_messages_read(conversation_id, up_to_sent_at)` and `unread_count(conversation_id, own_did)` methods.
-- **app-core**: Expose `mark_messages_read` and `unread_count` via UniFFI.
-- **Swift Message model**: Add `readAt: Date?` field.
-- **Swift Conversation**: Replace stored `unreadCount` with computed property derived from in-memory messages. Remove `activeConversationId`.
-- **Swift ConversationView**: On appear, mark all loaded messages as read (sets `read_at = now`).
-- **Swift ConversationRow**: Compute unread count from `messagesByConversation`.
-- **Swift AppState.handleIncomingMessage**: No unread count logic — just append the message with `read_at = nil`.
-
-### Stage B: Scroll-position-based read marking
-
-Changes:
-- **Swift ConversationView**: Use `ScrollPosition` (iOS 17+) to track last visible message. `.onChange(of: scrollPosition)` marks visible messages as read via `markMessagesRead(upTo:)`.
-- **app-core**: `mark_messages_read` already supports partial marking (up to a timestamp).
-- Stage A marks all messages on appear; Stage B refines to only mark visible ones.
-
-### Stage C: Read receipt wire protocol
-
-Changes:
-- **proto**: Define `ReceiptMessage` in protobuf envelope.
-- **app-core**: Send batched read receipts (3-second debounce) after marking messages read. Receive and apply incoming read receipts.
-- **store**: Add `delivery_status` column. Methods to update status on receipt.
-- **Swift UI**: Show delivery status indicators (checkmarks) on sent messages.
-- **Settings**: Toggle for `send_read_receipts` preference.
-
-### Stage D: Delivery receipts
-
-Changes:
-- **app-core**: On successful decryption of an incoming message, send a `ReceiptMessage { type: DELIVERY }` back to the sender.
-- **app-core**: Handle incoming delivery receipts, update `delivery_status` from `sent` to `delivered`.
+- **Stored unread counter on the conversation** — rejected: derived from `read_at` it can't drift.
+- **Watermark (`lastReadAt`) instead of per-message `read_at`** — rejected: per-message timestamps also start disappearing-message timers.
+- **Timer-based visibility polling (Signal)** — unnecessary with SwiftUI's scroll-visibility callbacks.
+- **Receipts to un-accepted senders** — rejected for read receipts: opening a request to judge it isn't acknowledgement. Delivery receipts still go out (Signal does the same), but must not carry the profile key.

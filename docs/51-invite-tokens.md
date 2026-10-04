@@ -1,87 +1,67 @@
-# Invite Tokens
+# 51 — Invite tokens
 
-Invite tokens encode the information a new user needs to join a server. They are embedded in shareable URLs (`https://go.theavalanche.net/invite/<token>`) that can be shared as links, QR codes, or pasted into the app.
+> **Status:** Built — personal invite links (unsigned, carrying a server and optionally an inviter DID) and Project-signed gatekeeper tokens for closed registration are both built. The onboarding "server step" webview and token-driven group auto-enrollment are not.
+> **Last verified against code:** 2026-10-03
 
-## Token format
+## Summary
 
-A token is `base64url(json)`. The only field the client needs to parse out is `server_url`:
+An invite token tells a new (or existing) user which server to join and, optionally, who invited them. Tokens are `base64url(JSON)` with single-character keys to keep QR codes small, embedded in `https://go.theavalanche.net/i/<token>` links. Two shapes exist: an unsigned **personal invite** (discovery only) and a Project-signed **gatekeeper token** (admission to a closed-registration server, `24`). A third shape, the operator's **bootstrap token**, carries the server's shared registration secret.
 
-```json
-{
-  "server_url": "https://myorg.example.com",
-  ...
-}
+## Known gaps
+
+- **No server step.** `GET /v1/invites/{token}` returns `server_name`, an optional `post_onboarding_redirect`, and an optional `privacy_policy_url`; it never returns a `server_step_url`, and the apps have no server-step webview (`50` onboarding screens).
+- **No group auto-enrollment from tokens.** Nothing reads a `group_invitations` field.
+- **Tokens travel in the URL path.** When Universal Links / App Links don't fire, the token lands in the `go.theavalanche.net` web server's access logs. Today's personal tokens carry only a server URL and a DID, but any future token carrying a secret (group master keys, link passwords) must not use the path. Signal puts such secrets in the URL fragment, which browsers never send to the server.
+- **Bootstrap tokens contain the server's master registration secret** and are handed to Project operators as "setup codes"; anyone holding one can edit the Project slug and register into the superuser Project. See `24` and `09`.
+- **`GET /v1/invites/{token}` only understands personal tokens.** It decodes `{s, d}` and checks `s` matches the server; it does not verify gatekeeper signatures (that happens at registration).
+
+## Current design
+
+### Link format
+
+```
+https://go.theavalanche.net/i/<base64url token>
 ```
 
-Tokens may contain arbitrary additional fields. They are passed through to the server, which interprets them (typically via a Project). 
+The legacy `/invite/<token>` path is still accepted (`mobile/ios/.../AppState.swift`). The host is matched in-app, so links work even when Universal Links don't fire inside the app (`23`).
 
-### URL format
+### Personal invite token
 
-```
-https://go.theavalanche.net/invite/<base64url_token>
-```
+**Built.** `{"s": "<server_url>", "d": "<inviter_did>"}`; `d` is optional. Generated client-side with no server call by the identity detail screen's contact QR code and link (`IdentityDetailView.swift`). The same link doubles as a **contact link**: pasting or scanning it into the compose recipient field adds the `d` DID as a recipient (`ComposeMessageView.swift` `recipientDid(fromContactLink:)`, which also accepts `/conversation/<did>`).
 
-## Flow
+Flow:
 
-1. User receives a URL (link, QR code, or paste).
-2. App extracts `<token>` from the URL path.
-3. App decodes the base64url JSON to extract `server_url`.
-4. App calls `GET <server_url>/v1/invites/<token>`. The server decodes the token, performs any validation it wants (signature checks, expiry, usage limits — all server/Project concerns), and returns:
-   ```json
-   {
-     "server_name": "My Org",
-     "server_step_url": "https://myorg.example.com/p/onboarding?token=...",
-     "post_onboarding_redirect": "https://go.theavalanche.net/conversation/did:plc:abc123"
-   }
-   ```
-   All fields except `server_name` are optional.
-5. App shows "Join [server_name]?" screen (identity picker if existing accounts, new account flow otherwise).
-6. User registers on the server (normal `POST /v1/accounts` flow, with the raw token passed through in an `invite_token` field).
-7. If `server_step_url` is present, the app opens it in a webview (the "server step" from doc 33). The Project handles whatever onboarding it needs — collecting a name, assigning teams, showing terms of service, etc.
-8. If `post_onboarding_redirect` is present, the app navigates to that deep link. For example, `https://go.theavalanche.net/conversation/<inviter_did>` opens a DM with the person who invited you. (Probably the server step should also have control over this post onboarding redirect, but we will implement that later.)
+1. The app extracts the token from the URL and decodes `s`.
+2. `GET <s>/v1/invites/<token>` (`server/src/routes/invites.rs`). The server checks `s` matches its own URL and returns `{server_name, post_onboarding_redirect?, privacy_policy_url?}`. If `d` is present, `post_onboarding_redirect` is `https://<invite_domain>/conversation/<d>`.
+3. The app shows "Join <server_name>?" with the identity picker if identities exist (`50`).
+4. New identity: register with `POST /v1/accounts`, passing the raw token as `invite_token`.
+5. If `post_onboarding_redirect` is present, the app opens it, which lands the user in a DM with the inviter.
 
-## Current implementation shortcut
+If the scanning user already has an account on that server, the app skips registration and goes straight to the DM.
 
-Until the Project framework exists, the server handles one token field directly: if the token contains `inviter_did`, the server's `GET /v1/invites/<token>` response includes `post_onboarding_redirect` set to `https://go.theavalanche.net/conversation/<inviter_did>`. This gives us the "scan invite, register, land in a DM" flow without needing Projects. Once Projects exist, this behavior moves to an invite Project.
+On a **closed-registration** server (the default, `24`), a personal token does not admit a new account; only a gatekeeper or bootstrap token does.
 
-## Creating tokens
+### Gatekeeper token
 
-Tokens are constructed client-side — the app base64url-encodes the JSON payload directly. No server endpoint is needed.
+**Built** (`server/src/invite_token.rs`). An envelope `{"s", "i": <issuer project slug>, "c": base64url(claims), "g": base64url(Ed25519 sig over c)}`. Claims: `{"s", "i", "e": exp, "j": jti, "u": purpose ("invite"), "r": routing?}`. The server picks the pinned key by issuer, requires the issuer to hold `registration.gatekeeper`, verifies the signature, checks `server_url`, expiry, and purpose, and redeems `jti` once. The opaque `routing` payload is carried through to the account-joined event for post-join routing. Details in `24`.
 
-For example, to create an invite link for a dev server:
-```bash
-echo -n '{"server_url":"http://localhost:3000"}' | base64 | tr '+/' '-_' | tr -d '='
-# Paste the result into: https://go.theavalanche.net/invite/<result>
-```
+### Bootstrap token
 
-A server-side endpoint for generating invite links from within the app is a future Project concern.
+**Built.** `{"s", "k": <REGISTRATION_SHARED_SECRET>, "p": <project slug>?}`. Admits registration while the shared secret is configured and no gatekeeper is installed, and links the new account into the named Project. Used to bootstrap adminbot (superuser) and hand Projects their bot accounts. See `24` for why this shape must change.
 
-### "My QR Code" screen
+## Planned
 
-The app includes a screen (in Settings for now) that displays a QR code encoding the user's personal invite link. The token payload is `{"server_url":"<user's server>","inviter_did":"<user's DID>"}`. Scanning this QR code registers the new user on the same server and opens a DM with the inviter. The QR code is generated client-side — no server call needed.
+- Replace bootstrap-token setup codes with server-minted, per-Project, single-use bot-enrollment tokens (`24`, `09`).
+- Server step: return `server_step_url` from invite validation and open it as an onboarding webview between registration and landing.
+- Group auto-enrollment from gatekeeper tokens (`group_invitations: [{master_key, link_password}]`, applied after registration via `join_with_link` per `03` §3.10). Must carry secrets in a URL fragment, not the path.
+- In-app invite creation for admins, via a Project.
 
-If the scanning user already has an account on that server, the app skips registration and the onboarding flow entirely and navigates directly to a DM with the inviter.
+## Speculative
 
-## Security
+- **Deferred deep links through install** (Proposed in `23`; listed here for context). A `/project/<t>` or invite link that survives an App Store install and lands the new user in the Project or group after onboarding. This is the acquisition path the product premise depends on (`00`); see `20`.
 
-In the current implementation, tokens are not signed. Anyone who knows a server URL can construct a valid token. This is fine because registration is open — the token is a convenience for discovery, not an access control mechanism.
+## Rationale and rejected alternatives
 
-Signing, expiry, usage limits, and closed registration are all server/Project concerns. A Project can sign tokens with its own secret, validate them during the `GET /v1/invites/<token>` call, and reject invalid or expired tokens. The substrate doesn't need to know about any of this.
-
-## What the substrate owns vs. what Projects own
-
-**Substrate:**
-- Decode the base64url JSON
-- Extract `server_url`
-- Call the server's validation endpoint, passing the raw token through
-- Display the server name and registration UI
-- Open the server step webview if provided
-- Navigate to the post-onboarding redirect if provided
-
-**Projects (future):**
-- Token signing and validation
-- Expiry and usage limits
-- Onboarding flows (server step webview content)
-- Auto-enrollment into groups — admin-side UI for constructing tokens with a `group_invitations` array of `{group_master_key, invite_link_password}` entries. (`group_id` is derived client-side from the master key; not included in the token.) The receiving substrate (`docs/03-groups.md` §3.10 "Inviting someone who doesn't have an account yet") applies them via `join_with_link` or `request_to_join` after registration.
-- Post-onboarding redirect (e.g., open a DM, navigate to a channel)
-- In-app invite creation UI
+- **Unsigned personal tokens (decided).** A personal token is a discovery convenience, not access control; anyone who knows a server URL could construct one. Admission control lives in gatekeeper tokens.
+- **Signing in the substrate vs. in Projects (decided: Projects sign).** The server pins each gatekeeper Project's public key and verifies locally; it never calls the Project (`24`).
+- **Single-character JSON keys (decided).** Keeps QR codes small enough to scan reliably.

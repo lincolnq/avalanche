@@ -1,342 +1,148 @@
-# Adminbot
+# 22 — Adminbot
 
-This document describes **adminbot**, the canonical first-party Project that runs on every homeserver to handle server administration through chat. The two foundational pieces are:
+> **Status:** Partial — adminbot runs on every deployment: the `#admins` group, auto-invites, an expiry cap, update checks, and manifest-based Project install are built. Rule-based routing, the full command surface, officialness, and join-event catch-up are not. Superuser bootstrapping has a P0 escalation bug.
+> **Last verified against code:** 2026-10-03
 
-1. **One superuser identity** — adminbot's DID — pinned in server config. All privileged `/v1/admin/*` endpoints check that the caller is adminbot; nothing else.
-2. **An `#admins` group** — a regular action-bound group, encrypted like any other, whose membership *is* the set of human administrators. The server can't read this membership (group state is E2E encrypted), so it has no opinion on which humans have admin authority. Adminbot mediates: humans post commands in `#admins`; adminbot verifies the sender is a group member and executes the command by calling its own superuser endpoints.
+## Summary
 
-The big property this gives us: **the homeserver database doesn't reveal who has administrative authority.** Privilege sits in the encrypted member list of `#admins`, which adminbot can decrypt because it's a member but the server itself can't.
+Adminbot is the first-party Project that administers a homeserver through chat. Two foundations:
 
-A second property, from adminbot's *shape* rather than its authority model: it is **headless and outbound-only** — no web UI, no inbound network surface, and no public routing record pointing at it. It can run anywhere with outbound connectivity (behind a firewall, on a laptop), and because nothing public routes to it, the admin control plane is **hard to locate or seize**: an adversary must seize the homeserver first, then chase a source IP to a device. This inherits the platform's server-seizure posture (`00-design.md`). See *Deployment shape* for the full picture and the caveats (the server still sees the live source IP; co-locating adminbot with the homeserver forfeits it).
+1. **Superuser authority is membership in the reserved `adminbot` Project.** Every `/v1/admin/*` endpoint requires the caller to be a bot linked to that Project.
+2. **The `#admins` group is the admin roster.** It is an ordinary E2E group; its membership *is* the set of human administrators. The server can't read it, so the **server database doesn't reveal who has admin authority**. Humans post commands; adminbot checks the sender is in `#admins` and acts through its superuser endpoints.
 
-This doc opens with **the model** and the **alternatives we rejected** (and why), then splits into a **v1** section describing what's built today and a **Future** section sketching design directions that motivated the v1 shape but are not yet implemented.
+Adminbot is a Node/TypeScript process (`node/packages/adminbot/src/index.ts`) on `@theavalanche/app-core`. The deploy bundle runs it on the homeserver box with the master registration secret.
 
----
+## Current design
 
-## The model: two authorities, and why adminbot is privileged
+### The model: two authorities, and why adminbot is privileged
 
-Two different kinds of authority run a server, and conflating them is the mistake the rest of this design is careful to avoid:
+- **Operator authority** — install a Project, link its bots, grant server capabilities, mark it official. Not seizure-sensitive (installed Projects are public by construction), so it lives in the server database.
+- **Social admin authority** — who may moderate, kick, or add people to channels. Seizure-sensitive ("who can target whom"), so it lives in encrypted `#admins` membership.
 
-- **Operator authority** — the infrastructure / trust-root domain: install a Project, register its bot account, grant it server capabilities, mark it official. The operator holds the server's trust root. These facts are **not seizure-sensitive** — an installed Project and its officialness are public by construction (a ✓ badge exists to be seen). So they can live in the server's database without weakening the seizure posture.
-- **Social admin authority** — who may moderate: kick a member, remove content, add someone to a channel. This **is** seizure-sensitive ("who can target whom"), so it lives in the encrypted `#admins` membership, which the server cannot read.
+> **The threat decides the home.** Access to the server's own resources → a server-enforced capability. Seizure-sensitive social authority → E2E state. A trust signal that must be verified offline or across servers → a signature rooted in a cold key.
 
-These are protected differently, and the general rule for where any bot capability lives is:
+The server can't see who the admins are, so something must bridge "an admin authorized this" (E2E) to "perform this privileged action" (server). That bridge has to read `#admins`, so it must be a member, and the server has to trust it. Adminbot is that bridge. Humans never hold superuser; they exercise it through adminbot. The price is concentration: a compromised adminbot is a compromised server. So adminbot holds only the specific endpoints it needs, and privileged commands are issued in `#admins`, where they are legible in group history.
 
-> **The threat decides the home.** Access to the *server's own* resources → a **server-enforced capability** (the bot is the constrained party; only the server can enforce a limit on what touches its facilities). Seizure-sensitive social authority → **E2E state** (the server is the threat). A trust signal that must be verified *offline or across servers* → a **signature rooted in the server's cold trust-root key**.
+### Superuser authority
 
-### Why adminbot needs the superuser pin
+**Built**, with a P0 flaw (*Known gaps*).
 
-We want installing and permissioning Projects to happen **in the `#admins` group** — a conversational admin experience, not shelling into the box. But the server **cannot see who the admins are** (membership is E2E). So when a privileged action is requested, the server has no way to verify "a real admin authorized this."
-
-Something must bridge *admin authority (E2E, invisible to the server)* → *privileged server action*. That bridge needs to (1) read `#admins` membership — so it must be a member — and (2) be trusted by the server — so the server must recognize it. **adminbot is that bridge, and the superuser pin (`caller == ADMINBOT_DID`) is property (2).** Humans never hold superuser; they exercise it *through* adminbot, gated by their `#admins` membership.
-
-So **yes — adminbot has to be able to install Projects and grant capabilities.** That power lives in adminbot precisely because adminbot is the only thing that can both verify the E2E authorization *and* be trusted by the server to act on it. The price of "in-app admin channel + admins hidden from the server" is one privileged bridge bot.
-
-Two disciplines keep that price bounded:
-
-- **Least privilege for the delegate.** The pin is a concentration — a compromised adminbot is full server-admin compromise. So adminbot holds *specific* privileged endpoints (install, grant) and we avoid piling other powers onto adminbot. Note especially that adminbot may run on less-controlled hardware and isn't guaranteed to be up at all times.
-- **Legible, confirm-gated commands.** Privileged actions are issued as `#admins` messages (auditable in group history); destructive ones gate on a reaction confirmation (see *Full chat-command surface*).
+- The server seeds a reserved Project with slug `adminbot` at startup (`core/crates/server/src/main.rs` → `db::projects::ensure_adminbot_project`).
+- `AuthAdminbot` (`core/crates/server/src/middleware/auth.rs`) admits a session only if its account is linked to that Project. Authority is the link, not a DID.
+- The admin API refuses to link or unlink bots on the `adminbot` Project and refuses to install or uninstall it (`routes/admin.rs`, `resolve_mutable_project`). **The only way into the superuser Project is registering with a bootstrap token that names it** (`routes/registration.rs`, `gate_registration`). A comment in `auth.rs` mentions seeding from an `ADMINBOT_DIDS` config; no such code exists.
+- On first run adminbot registers as `did:local:adminbot` with a bootstrap token `{s: server_url, k: REGISTRATION_SHARED_SECRET, p: "adminbot"}` (`AppCore.bootstrapToken`), which links it into the superuser Project.
+- The bootstrap secret is honored only while **no** `registration.gatekeeper` Project is installed (`gate_registration`). After that, only signed gatekeeper invites admit registrations.
 
 ### Coordination is data-carried, not bot-to-bot
 
-adminbot does not call other bots, and other bots do not call it. All coordination rides **durable signed data + server events + catch-up**, never a live dependency on a peer. Adminbot learns of new accounts via `AccountJoinedEvent` (which can be carried over the websocket or the catch-up endpoint), reads the registering invite token, and determines which groups to add them to based on the token's contents.
+Adminbot calls no other bot and exposes no API to them. Coordination rides durable data: server events, signed tokens and catch-up. Adminbot learns of new accounts from the `AccountJoined` push and can read the registering token to decide where to route people (`24`). Bots depend on the server and on signed artifacts, never on each other's uptime.
 
-Through this property we push for keeping the bot dependency graph minimal: bots depend on the server and on signed artifacts, not on each other's uptime.
+### Deployment shape
 
-### Deployment shape: headless and outbound-only
+Adminbot has **no web UI and no inbound network surface**. It is an ordinary client that opens an outbound WebSocket and HTTP connection to the homeserver, so it can run anywhere with outbound connectivity.
 
-Adminbot has **no web UI and no inbound network surface.** Unlike web-UI Projects (the chatbot, the gatekeeper) — which serve a webview, need a public HTTPS origin, and use the project-token flow — adminbot's entire interface is chat commands in `#admins`, carried over the E2E messaging substrate. It is just another client account: it opens an *outbound* WebSocket (plus HTTP) to the homeserver and serves nothing.
+That makes **off-box** operation possible and attractive: nothing public routes to it (its `did:local:` DID has no PLC endpoint, and it serves no origin), so an adversary has to seize the homeserver and then trace a source IP to find it. Its private keys stay off the seized box too.
 
-That makes it **location-independent.** It can run behind a firewall or NAT — on a server, a Raspberry Pi, or an admin's laptop — anywhere with outbound connectivity to the homeserver. No port to open, no origin to host, no TLS to terminate, no DNS. As long as the process stays up and can reach the server it does its job; if the device sleeps or drops off, adminbot is simply "down" and resumes when it returns (the only cost is missed events, which the `AccountJoinedEvent` catch-up endpoint covers — not a connectivity-exposure problem).
+**In practice the deploy bundle runs adminbot on the homeserver box** (`infra/deploy/bundle/lib/common.sh`, `write_bot_env`) and relies on it for startup manifest installs. On a standard install, seizing the server seizes adminbot. Off-box operation is supported but not the default. The same location-independence also argues against making anything depend on adminbot's uptime; capability records and the directory live on the server.
 
-Three consequences worth noting:
+### What adminbot does today
 
-- **Hard to seize — no public pointer to it.** This is the seizure angle, and it composes with the platform's server-seizure posture (`00-design.md`). *Nothing public routes to adminbot:* its `did:local:` DID is server-scoped (no PLC service endpoint), and adminbot serves no origin, so there is no DNS, IP, or directory record an adversary can follow to find it. To locate it you must first seize the **homeserver**, recover adminbot's source IP from live connection state or retained logs (which may be behind NAT/VPN, dynamic, or not logged at all), and only then trace that IP to a physical device. Contrast a web-UI Project, whose public HTTPS origin is itself a persistent, findable routing pointer — and whose box, if seized, doesn't even require the homeserver as a first step. (Bonus: an off-box adminbot keeps its superuser *private* keys off the seized server too — only its public verification key is in the accounts table.) **Caveat:** this only holds if adminbot is deliberately run *off-box*; co-locating it with the homeserver — the simple `make dev-all` shape — forfeits the property: seize the server, seize the bot.
-- **Smaller attack surface, but not zero.** With no inbound listener, adminbot isn't directly reachable from the network. Its real exposure is the untrusted *message* input it decrypts and parses from `#admins` and DMs, plus the security of whatever device it runs on. "Outbound-only" is genuine hardening, but the superuser pin still means treat the host with care.
-- **It argues against making anything depend on adminbot's uptime.** A bot that may live on a laptop behind a firewall is the wrong place for a *liveness dependency*: anything other Projects or users rely on — capability records, the `official` flag, routing — lives on the always-available server, not on a process that might be asleep. The location-independence that makes adminbot easy to run is the same property that argues against letting anything *depend* on it being up.
+- **`#admins @ <hostname>`** is created at bootstrap. DIDs in `ADMINBOT_INITIAL_ADMINS` are invited.
+- **Auto-invite.** On each live `AccountJoined` push for a human account, adminbot invites the new account into every group where it is currently an admin, `#admins` included. Any group that promotes adminbot to admin thereby becomes an onboarding target. Bots are never auto-invited.
+- **Bot announcements.** New bot accounts are announced in `#admins` with a contact card, except display names in `UNANNOUNCED_BOT_NAMES` (`Testbot`).
+- **Expiry cap.** When added to a group as admin, adminbot clamps the disappearing-message timer to at most 4 weeks, treating "off" as exceeding the cap. Later timer changes are only caught by `/audit`.
+- **Update check.** Daily and at startup, it compares the deployment's `VERSION` file with the latest GitHub release and posts to `#admins` once per new release.
+- **Manifest install at startup.** Every `*.json` in `ADMINBOT_MANIFEST_DIR` (default `<dirname(state dir)>/manifests`) is installed non-interactively, auto-granting every requested permission except `registration.gatekeeper`. This is how the deploy bundle configures web Projects.
+- **State:** `ADMINBOT_STATE_DIR` holds the SQLCipher store and a `state.json` sidecar. Losing it means re-registration, which needs the old `did:local:adminbot` account row deleted server-side first.
 
----
+### Commands
 
-## Rejected alternatives (and why)
+Accepted in `#admins` and in 1:1 DMs.
 
-- **A bot-to-bot RPC / service mesh, with discovery.** Tempting for "bots offering services to bots" (a signing bot, a directory bot, an "add-to-channel" service). Rejected: it makes *anybody depend on any other bot* being live — exactly the fragility we want to avoid. Everything we needed turned out to be expressible as data-carried coordination (signed tokens + server events + catch-up). If a genuinely *synchronous, interactive* bot-to-bot need ever appears, model it as one Project calling another's ordinary HTTP API (with its own auth) — a new, explicit trust edge — not an ambient mesh. A discovery layer (registry / directory bot) is deferred with it.
-- **The gatekeeper asking adminbot to add a user to channels (imperative RPC).** See `24-vetted-onboarding-project.md`. Rejected in favor of the invite token carrying routing *tags* that adminbot maps to channels declaratively; a self-routing gatekeeper reads the same `AccountJoinedEvent` instead of calling adminbot. No cross-bot call.
-- **Officialness as anything more than a flag + a scope.** Earlier drafts made it a bespoke trust primitive with a signed, periodically re-issued official-bot attestation (first signed by adminbot, then by the server). All rejected: officialness decomposes into a same-server `official` flag (the ✓ badge, read from the bot's account record) and the `invites.auto-accept` scope — both plain server records: no signing, no attestation, no recurring signer, no separate "declare official" channel (it's set at install through the normal grant flow). The full treatment lives in `20-project-security.md`.
-- **Per-admin server-verified credentials instead of the pinned delegate.** An alternative bridge: give each admin a signed credential the server checks per request, so admins call privileged endpoints directly (no adminbot). Rejected for the base design: the server would then see *which admin DID* acted on each privileged call, accumulating a partial roster over time and eroding the seizure property `#admins` protects — plus per-admin credential provisioning. The pinned delegate keeps the roster fully invisible (the server only ever sees adminbot act).
+| Command | Gate | Effect |
+|---|---|---|
+| `/whoami`, `/help` | none | Echo DID; help text |
+| `/audit` | **none** | Refresh every group adminbot is in; report admin status, counts and timer; clamp timers |
+| `/check` | none | Check for a newer release |
+| `/install-project` | `#admins` member | DM interview: paste a manifest (or URL), authorize permissions and web entries, install |
+| `/list-projects` | `#admins` member | List installed Projects, capabilities, bots |
 
----
+Confirmations are typed (`yes`); the Node layer can't receive reaction events yet. Membership is checked against freshly fetched `#admins` state (`requireAdminsMember`).
 
-## v1: what's implemented today
+### Installing a Project
 
-A minimal demo: `make dev-all` brings up the homeserver and a separate adminbot process together; the first human to register is invited to `#admins`; `/whoami` and `/help` work there. Everything in *Future* below is not yet built. What exists, vaguely:
+**Built.** `/install-project` reacts with an eyes emoji, DMs the operator to paste a manifest (schema in `20-project-security.md` §The manifest document), shows requested permissions and web entries in plain language, then:
 
-- **A separate Node/TS process** (`node/packages/adminbot/`) on `@theavalanche/app-core`, talking to the server over HTTP+WS, coupled to it only by a reserved `did:local:` DID (server-scoped; the server pins `ADMINBOT_DID` and claims the identity key on first registration). *(v1 mints the fixed literal `did:local:adminbot`; this is being replaced by a random per-server DID — see the `did:local:` scheme decision below.)*
-- **One privileged endpoint** — `GET /v1/admin/ping`, gated by `caller_did == ADMINBOT_DID` — the entire "superuser" surface so far, proving the pin middleware. No capability table yet.
-- **The `#admins` group**, created at bootstrap; adminbot invites every newly-registered account (detected via an `AccountJoinedEvent` WS push — fire-and-forget, lost if adminbot is disconnected; no catch-up yet). Humans accept via the normal invite UI.
-- **Auto-invite to every admin group, not just `#admins`.** On each `AccountJoinedEvent` (human accounts only — bots are skipped), adminbot enumerates the groups it belongs to (`list_groups`) and invites the new account into every one where it is *currently an admin* (`fetch_group_state` role check, evaluated live at join time). `#admins` is just one such group. Adding adminbot to any group thus makes that group an onboarding target — but only if it was added *as admin*, since the default group policy is admin-only invites (the iOS composer adds members as plain members, so a group needs adminbot promoted to admin to take effect). Adminbot auto-accepts the invite when added (app-core auto-accepts on receiving the `GroupContext` DM), so it's a full member immediately. Anyone may add adminbot today; a confirmation flow for auto-add-to-group targets is future work.
-- **Group expiry cap (4 weeks).** When adminbot is added to a group (the `groupInvite` event) and is an admin there, it clamps the disappearing-messages timer to at most 4 weeks via `set_group_expiry` — including `0`/"off" (never-expire), which is treated as exceeding the cap. `#admins`, being *founded* by adminbot rather than joined, gets no `groupInvite` event and so is not clamped. Enforcing the cap on a *subsequent* timer change is deferred: a remote `modify_expiry` only surfaces (as a `GroupMetadataChanged` event) when `apply_pending_group_changes` is polled, and there's no group-state push to drive that — see `02-todos-deferred.md`.
-- **Daily update check.** Once a day (and once at startup) adminbot compares the deployment's `VERSION` file (`/opt/avalanche/deployments/current/VERSION`, overridable via `AVALANCHE_VERSION_FILE`) against the newest GitHub release tag (the `/releases` list, same source as the configure page and deploy bundle). If the box is behind, it posts to `#admins` — once per newly-seen release tag, not every day. If the VERSION file is absent (dev / separate-host without it) or GitHub is unreachable, the check no-ops. The `/check` command runs the same check on demand and always replies.
-- **Commands** in `#admins` (and 1:1 DMs with the bot) — `/whoami`, `/help`, `/audit`, `/check`, `/install-project`, and `/list-projects`. `/audit` refreshes every group adminbot is in and reports, per group, whether it sees itself as admin, member/admin counts, and the disappearing-messages timer — clamping the timer to the 4-week cap wherever it's an admin and the timer exceeds it (this includes `#admins` itself when audited, unlike the add-time enforcement). Authorization for the read/status commands is still "sender can reach the channel" (the `#admins`-membership check is a tracked gap there); the privileged `/install-project` and `/list-projects` **do** verify `#admins` membership before acting. Confirmations are typed (`yes`), not reaction-based — the Node bot layer can't yet receive inbound reaction events.
-- **Installing a Project — `/install-project` and `/list-projects`.** `/install-project` runs a DM interview (the *bot-tool-ux* skill): it reacts 👀 on the trigger message, DMs the admin to paste the Project's **manifest** (or a URL to fetch — the manifest schema lives in `20-project-security.md`), shows the requested permissions **and any `webEntries` (pages it will publish to the client Network tab)** in plain language for the admin to authorize, then creates the Project — or, for an existing slug, updates its name/url/OAuth registration (install is an upsert, so re-installing a manifest refreshes it) — grants the approved capabilities via its superuser endpoints (`POST /v1/admin/projects`, `POST /v1/admin/capabilities`), publishes the Network-tab pages (`PUT /v1/admin/projects/{slug}/directory`, replace-semantics, stored non-official in `directory_entries`), and DMs back a one-time **setup code** — a bootstrap token naming the Project's slug — for the Project's bot to register with (`24-vetted-onboarding-project.md`). It flips the trigger reaction to ✅ (or ❌ on failure/cancel/timeout). `/list-projects` lists installed Projects and their capabilities. Both are `#admins`-gated. Adminbot reaches these HTTP-only admin endpoints through a generic authenticated `admin_request` passthrough on app-core (the bot's own session is the credential; the superuser pin authorizes it). **Non-interactive install:** adminbot also installs any manifests found in `ADMINBOT_MANIFEST_DIR` (`*.json`) at startup, running the same `performInstall` path with all requested permissions auto-granted (minus `registration.gatekeeper`). This is how the deploy bundle configures web Projects without an operator pasting a manifest — it writes one manifest per installed web Project and points adminbot at the directory (docs/42). Idempotent per restart (a pre-existing slug is treated as an update). Interim vs the *Future* design below: the manifest is pasted, not fetched from a well-known URL; confirmation is typed, not reaction-based; and `registration.gatekeeper` can't be granted this way (it needs a signing key).
-- **The client directory (Network tab) is DB-backed.** `GET /v1/projects` reads the `directory_entries` table; a Project's entries are published by its `/install-project` manifest (`webEntries`), replace-semantics per Project, `ON DELETE CASCADE` on uninstall. Manifest entries are always non-official (officialness is server-vouched, never self-declared — `54-bots-and-verification.md`). A login-capable Project declares its `clientId`/`redirectUris` in the same manifest; those land on the `projects` row (`25-project-login.md`), and each directory entry surfaces its Project's `client_id` by inheriting it via a join. There is **no `PROJECTS` env var** — a Project (and its OAuth registration) exists in the directory only through a manifest install. The deploy CLI (`avalanche-install-project`) wires a web Project's process + Caddy routes only; its directory entry comes from the manifest install.
-- **State** in `ADMINBOT_STATE_DIR` (SQLCipher store + `state.json` sidecar); config via `ADMINBOT_DID`, `ADMINBOT_SERVER_URL`, `ADMINBOT_DB_KEY`, and `ADMINBOT_INITIAL_ADMINS` (comma-separated DIDs to seed the admin set when retrofitting onto a server that already has users).
-- **Recovery** is restart-from-state; if state is lost, the reserved DID is already claimed, so re-registration needs adminbot's `ADMINBOT_DID` accounts row deleted server-side first.
+1. `POST /v1/admin/projects` — create, or update an existing slug (install is an upsert, including OAuth registration).
+2. `POST /v1/admin/capabilities` for each approved permission.
+3. `PUT /v1/admin/projects/{slug}/directory` for the manifest's `webEntries` (replace semantics, stored non-official).
+4. DM back a **setup code** for the Project's bot: a bootstrap token `{s, k: REGISTRATION_SHARED_SECRET, p: <slug>}`. A bot registering with it is linked to the Project.
 
-## Non-goals
-
-- **Not a general bot framework.** Adminbot is one Project among many. The cross-cutting concepts in this doc — superuser pinning, the join-event API, capability grants — are framework hooks other Projects use too. None of that framework exists in v1.
-- **Not a bot-to-bot RPC hub.** Adminbot exposes no callable API to other bots; coordination is data-carried (see *The model* and *Rejected alternatives*).
-- **Not a free pass to invite anyone to anything.** Adminbot can only add users to groups *it is itself a member of*. The group's existing invite policy still applies; the bot acts as a regular admin, just on a hair trigger.
-- **Not federation-aware.** Adminbot runs against the homeserver it's installed on, learns about local joins, and acts on local groups. Federated joins / multi-homed users follow `docs/13-federation.md` separately.
-
----
-
-## Future / not yet built
-
-Everything below is design sketch, not built. The v1 shape was deliberately chosen so each of these can be layered on without rework: adminbot is a regular client account, the server's only opinion is the DID pin, all policy lives in adminbot's process.
-
-### `did:local:` DID scheme — DECIDED: random, no well-known literal
-
-**Every `did:local:` account, adminbot included, uses `did:local:{random}` — a per-registration random suffix, unique per server.** There is no shared, well-known literal: the fixed `did:local:adminbot` that v1 mints today is **dropped**.
-
-Why: the fixed literal is the *same string on every server*, but a client's per-identity store (`06`, `37`) keys contacts/profiles/conversations/message-history by DID and assumes a DID names the same principal everywhere. A user multi-homed on two servers therefore *merges* their two adminbots into one row across every DID-keyed table — block one and you block both, a nickname on one shows on the other, their DMs interleave. See the invariant in `37`. Random per-server DIDs make each server's adminbot a distinct identity, so the merge can't happen — and the fix lives at the identity layer, so no client-side per-table scoping is needed.
-
-**Rejected: a human-readable, host-scoped shape** like `did:local:{server_hostname}:adminbot`. It reads nicely at a glance, but couples the identity to a hostname (custom domains, renames) — the exact thing PLC DIDs avoid — for a cosmetic gain. Random keeps the DID opaque and location-free. (Client-side conversation-key rewriting was also considered and rejected — it fixes only one table and leaves the same footgun for the next DID-keyed table; see `37`.)
-
-Consequence — **finding adminbot without a well-known string.** The server still pins its own adminbot via the `ADMINBOT_DID` config value (now a generated random DID the operator records, not a constant), so server-side authorization is unaffected. What's deferred is any *role-discovery* mechanism for a client to ask "which DID is this server's adminbot?" without the literal — solve that when a concrete need appears (see *Open questions*), not now.
-
-### Installing a Project and granting permission (the `#admins` flow)
-
-**Status: partially built.** The paste-a-manifest install is implemented today — see *Installing a Project* under *v1* above. What remains future: fetching the manifest from a well-known Project URL (today it's pasted into the DM interview), reaction-based confirmation for high-privilege grants (today typed), and granting `registration.gatekeeper` (needs the signing-key registration). The steps below are the target flow.
-
-This is the easy system for bringing a Project online — and it's the concrete realization of *operator authority exercised through the admin channel* (see *The model*). All of it is driven from `#admins`:
-
-1. An admin posts `/install-project <name> <url>` in `#admins`.
-2. Adminbot verifies the sender is a current `#admins` member (it decrypts the roster).
-3. Adminbot registers the Project's bot account and records the install via its superuser endpoint (`POST /v1/admin/projects`), which creates the bot-account row and returns its DID.
-4. Adminbot grants the capabilities the Project's manifest declares — one `POST /v1/admin/capabilities` per permission. **Default-deny:** only the declared, admin-approved permissions are granted. High-privilege grants (`registration.gatekeeper`, `accounts.read`) gate on a reaction confirmation in `#admins`.
-5. Adminbot posts a summary back to `#admins` — what was installed, which scopes were granted — so the decision is legible and auditable.
+It flips the reaction to a check or a cross when done. There is no `PROJECTS` env var: a Project appears in the Network tab only through a manifest install.
 
 ### Project capabilities
 
-The full catalog of Project permissions — both the client-honored *scopes* and the server-enforced *capabilities* (`accounts.read`, `registration.gatekeeper`) — lives in `20-project-security.md` §Project permissions, which is the single home for what a Project may request and how each is enforced. This doc covers only adminbot's role in *granting* them.
-
-The capabilities are the *operator authority* made concrete and are enforced server-side because the bot is the constrained party. Adminbot is the sole grantor (`granted_by` records its DID for later `#admins` cross-referencing), and grants are validated against a known set. Adminbot itself holds `accounts.read` (so it can act on new users) plus the implicit `superuser` pin, which subsumes every capability. No other bot ever gets superuser.
+The catalog of what a Project may request and how it is enforced lives in `20-project-security.md` §Project permissions. Adminbot is the only grantor; `granted_by` records its DID so a grant can be cross-referenced with the `#admins` thread that authorized it. Adminbot holds every capability implicitly through the superuser link.
 
 ### Join event API (push + catch-up)
 
-The `accounts.read` capability lets a bot's account receive a server-side event each time a new account registers. The bot is responsible for inviting users to channels (using the normal `POST /v1/groups/{id}/changes` endpoint with `invite_members`) — the server never invites on a bot's behalf.
+**Built** server-side (`routes/registration.rs`, `routes/admin.rs`, `infra/migrations/017_server_events.sql`).
 
-A long-lived authenticated stream on the bot's session. WebSocket is the existing transport for the bot's normal traffic; we extend `actnet.ws.WsFrame` with a new event-push variant:
+- **Push.** On every registration the server sends `AccountJoined { did, joined_at_ms, invite_token }` over the WebSocket to every connected session holding `accounts.read`.
+- **Durable log.** The same event is appended to `server_events` (30-day retention, swept in `server/src/tasks/mod.rs`).
+- **Catch-up.** `GET /v1/admin/events?since=<id>&kind=account_joined` (500 per page) for any bot holding `accounts.read`.
+- **Roster snapshot.** `GET /v1/admin/accounts?after=<did>` returns `{ accounts: [{did, display_name?, is_bot, created_at_ms}], next }`, gated on the same capability.
 
-```proto
-// Server → bot: a new account registered on this server. Sent only to
-// bots whose account has the `accounts.read` capability.
-message AccountJoinedEvent {
-  string did                = 1;
-  string display_name       = 2;
-  // The token used to register, if any. Lets bots route based on
-  // which invite link the new user came in through (regional channel
-  // onboarding flow, event registration, gatekeeper approval, etc.).
-  // Absent for direct registrations.
-  optional string invite_token = 3;
-  // Server epoch millis at registration.
-  int64 joined_at_ms        = 4;
-}
-```
+**Adminbot uses only the live push.** Neither app-core nor adminbot calls the catch-up endpoint, so joins that happen while adminbot is disconnected are never routed.
 
-The `invite_token` field is the data-carried hand-off that lets adminbot route without any bot-to-bot call: adminbot reads the token's issuer + routing tags and maps them to channels (see `24-vetted-onboarding-project.md` and *Coordination is data-carried* above).
+### Privacy posture
 
-A bot reconnecting after downtime fetches the events it missed via a paginated HTTP endpoint:
+The server already knows every account it registers, so showing that to a bot the operator installed adds no new leak, and there is deliberately no group linkage (`03` §3.9 intact). A compromised `accounts.read` bot gets a real-time roster of joins with timing; the threat model accepts this. **Exception:** the events carry the raw `invite_token`, which today can contain the master secret (*Known gaps*). Planned: carry parsed issuer and routing claims only.
 
-```
-GET /v1/admin/events?since=<event_id>&kind=account_joined
-```
+### `did:local:` DID scheme
 
-Each event carries a server-side monotonic `event_id`. The bot persists the highest id it has processed; on (re)connect it requests the tail. The server retains events for a configurable window (default 30 days); older events are dropped. This catch-up is what makes routing *deferred, not lost*, when adminbot is down.
+**Not built as decided.** Bot accounts without a PLC DID get `did:local:<suffix>`: either a caller-chosen suffix (3–32 lowercase alphanumerics, first come first served) or one derived from the identity key (`registration.rs`, `generate_local_did`). Adminbot still registers the fixed literal `did:local:adminbot`.
 
-**Roster snapshot.** The event feed above is incremental and only reaches back as far as the retention window, so a bot that needs the *current* full list of accounts — e.g. a Project displaying an attendee list — fetches a snapshot:
+**Decided: random per-server DIDs, no well-known literal.** The fixed literal is the same string on every server, but the client's per-identity store keys contacts, profiles and conversations by DID. A user on two servers therefore merges the two adminbots into one row: block one and you block both, and their DMs interleave (`37`). Random DIDs make each server's adminbot a distinct identity. Server authorization is unaffected, since authority is the Project link. Finding "this server's adminbot" without a literal (role discovery) is deferred until a concrete need appears.
 
-```
-GET /v1/admin/accounts?after=<did>
-```
+**Rejected:** a host-scoped shape such as `did:local:{hostname}:adminbot` (couples identity to a hostname), and client-side conversation-key rewriting (fixes one table, leaves the footgun for the next).
 
-Returns `{ "accounts": [{ did, display_name?, is_bot, created_at_ms }], "next": <did|null> }`, ordered by DID and paginated on it: pass the `next` value from one page as `after` for the following page (`next` is null on the last page). Gated on the **same** `accounts.read` capability — a snapshot is no more powerful than replaying every `account_joined` event from the beginning (strictly, it is slightly *less*: it carries no `invite_token`), so it does not warrant a separate capability. `is_bot` is returned so the consumer can filter bots out of a human-facing list.
+## Known gaps
 
-**Privacy posture.** The server already knows every account that registers (it ran the registration). Disclosing that to a bot the operator has explicitly installed adds no new leak. The bot is a privileged participant of the same trust domain as the server operator.
+Security items are also in `09-security-posture.md`; todos in `02`.
 
-### Default notifications on accept
+1. **Setup codes grant superuser (P0).** A setup code is `base64url(JSON)` containing the master `REGISTRATION_SHARED_SECRET` (`index.ts`, `performInstall`; token format in `server/src/invite_token.rs`, `BootstrapToken`). Anyone holding one, i.e. any Project operator, can decode it, set `p` to `"adminbot"`, register, and be linked into the superuser Project (`gate_registration`). That is full server admin.
+2. **The master secret leaks through join events (P0).** The raw registration token goes into `server_events` and to every `accounts.read` holder (`20` §Known gaps). Every bot registered with a setup code, or with testbot's plain bootstrap token, publishes the secret.
+3. **The secret has a silent cliff.** Installing any gatekeeper retires the bootstrap path, so new Project bots can no longer register with setup codes, and adminbot can't re-register.
+4. **`/audit` has no `#admins` check.** Anyone who can DM adminbot gets a listing of every group adminbot is in (titles, counts, timers) and triggers timer clamps.
+5. **No catch-up.** Joins while adminbot is down are never routed (*Join event API*).
+6. **Fixed `did:local:adminbot`** still merges adminbots across servers in multi-homed clients.
+7. **Stale comment:** `ADMINBOT_DIDS` in `middleware/auth.rs` describes config seeding that doesn't exist.
 
-A bot inviting a user can express a default notification preference inside the `GroupContext` DM. The hint is end-to-end encrypted (it's inside the DM, not group state) and the server never sees it.
+## Planned
 
-```proto
-message GroupContext {
-  // …existing fields…
-  optional NotificationDefaults notification_defaults = N;
-}
+- **Bot enrollment tokens (fixes 1–3).** The server mints per-Project, single-use, short-lived enrollment tokens (`purpose: "bot"`, redeemed through `token_redemptions` like gatekeeper invites). Adminbot requests one via a new admin endpoint and hands it out instead of a bootstrap token. They work whether or not a gatekeeper is installed, and can never name the `adminbot` Project. Adminbot bootstraps itself from an operator-only path: the shared secret, scoped by the server to the `adminbot` Project and refused once adminbot exists, or a one-shot operator command on the box. Testbot gets an enrollment token too. Then remove `REGISTRATION_SHARED_SECRET` from every bot env except adminbot's first run.
+- **Join events carry parsed claims, not raw tokens:** issuer slug, purpose and routing tags.
+- **Gate `/audit`** on `#admins` membership.
+- **Use catch-up:** persist the last processed event id and drain `GET /v1/admin/events` on connect.
+- **Random `did:local:` for adminbot**, per the decision above.
+- **Officialness.** An operator command sets an `official` flag for a Project; clients show the checkmark for that Project's linked bots and directory entries (`20` §Planned, `54`).
+- **Uninstall and revoke from chat** (`/uninstall-project`, `/revoke`), reaction-based confirmation for destructive commands once the Node layer gets reaction events.
 
-message NotificationDefaults {
-  uint32 level = 1;                   // 0 = all, 1 = mentions only, 2 = muted
-  optional int64 mute_until_ms = 2;   // reverts to "all" after this time
-}
-```
+## Speculative
 
-- Auto-accept path: applied silently.
-- Manual accept path: shown in invite-confirmation UI ("Adminbot suggests: muted for 7 days") and applied on accept.
+- **Rule-based routing config.** Per-server rules mapping invite-token tags to channels with default notification levels, editable from chat (`/add-rule`). This is the central-routing half of `24`'s post-join hand-off.
+- **Default notifications on accept.** An E2E hint inside the invite's `GroupContext` ("muted for 7 days"), applied on accept. Always a hint, never a command.
+- **Security-update awareness** beyond the version check: a curated or signed security manifest with severity-based nagging.
+- **Fuller command surface:** `/grant`, `/revoke`, `/officialize`, `/pause`, `/kick <did> from <group>`, `/add`, `/seed-into <group>`.
+- **Leave/rejoin for `#admins`** (DM a leaver a `/rejoin` path) and an **official-groups registry** to protect the reserved `#admins` title.
+- **Recovery ladder:** restart from state → rotate keys (authority is the Project link, not a key) → re-bootstrap with a fresh DID → recreate `#admins` and re-invite.
+- **Backup recovery identity** for the "every admin left" case. Today the answer is operator shell access.
 
-Always a hint, never a command.
+## Rationale and rejected alternatives
 
-### Security-update awareness
-
-Adminbot tracks the homeserver's running version, compares against a known-good manifest, and DMs `#admins` when the server is behind on a security-relevant update.
-
-**Server build endpoint:**
-
-```
-GET /v1/server/build                           (any authenticated session)
-Response: { "commit": "...", "version": "0.4.1", "built_at_ms": ..., "started_at_ms": ... }
-```
-
-Adminbot polls every few hours; server pushes a `ServerBuildEvent` over WS on restart for immediate post-upgrade detection.
-
-**Known-good manifest:**
-1. Operator-curated `security_manifest.toml` (simplest).
-2. Project-signed feed from an upstream release authority (future — needs a release-authority key concept).
-
-```toml
-[[security_release]]
-minimum_version = "0.4.1"
-severity        = "high"
-summary         = "Fix CVE-2026-xxxxx (sender-cert spoofing)"
-published_at_ms = 1717200000000
-```
-
-**Notification policy:**
-- `info`/`low` behind: silent unless queried via `/version`.
-- `medium` behind: DM `#admins` once per release; repeat weekly.
-- `high`/`critical` behind: DM `#admins` once per release; repeat daily. After 7 days of non-action on critical, DM each `#admins` member individually.
-
-Entirely client-side (in adminbot). The homeserver never makes value judgments about which versions are good.
-
-### Full chat-command surface
-
-```
-/install-project <name> <url>          install + start a Project's bot, grant its declared capabilities
-/uninstall-project <name>              uninstall (revokes capabilities + tokens)
-/grant <bot_did> <capability>          grant a capability to a bot
-/revoke <bot_did> <capability>         revoke
-/officialize <bot_did>                 set the bot's ✓ flag
-/unofficialize <bot_did>               clear the ✓ flag
-/list-projects                         list installed Projects
-/pause <bot_did>                       freeze that bot's capabilities
-/unpause <bot_did>                     reverse /pause
-/kick <did> from <group>               adminbot removes <did> from <group>
-/add <did> to <group>                  adminbot invites <did> to <group>
-/version                               report current server build + pending updates
-/seed-into <group_id>                  adminbot joins the group as Admin
-```
-
-Destructive operations gate on reaction-based confirmation: adminbot replies "React 👍 within 60s to confirm" and only acts on the reaction. Makes commands legible in group history (auditable) and protects against typos.
-
-The Server Console — adminbot's chat-command interface — is structurally just a Project. Adminbot installs itself as the very first Project at bootstrap.
-
-### Reserved-name protection for `#admins`
-
-The group title `#admins @ {server_hostname}` is a reserved string on each server, but the server has no way to enforce uniqueness because group state is encrypted. Protections:
-
-- The legitimate `#admins` is created by adminbot, which carries the `official` flag and the `invites.auto-accept` scope; the badge and auto-accept apply only to such operator-blessed bots.
-- Long-term, an **official-groups** registry: the server marks a group's server-visible id as the canonical `#admins`, surfaced to clients the same way as the bot `official` flag — a plain server record, no signing (same-server only, like the badge). The open part is how the client reliably maps the encrypted group it's in to that record; defer until the threat is concrete.
-
-### Leave/rejoin flow
-
-A human can leave `#admins` like any other group, via `remove_members(self)`. After the leave applies, adminbot:
-
-1. DMs the leaver: "You've left the admins group. If this was a mistake, reply with `/rejoin` and I'll add you back." Includes a deep link.
-2. On `/rejoin`, adminbot issues a fresh `invite_members`. Client auto-accepts (adminbot holds `invites.auto-accept`), user is back.
-
-No special handling for "last admin leaves" — same DM is sent. If they ignore it, the server's `#admins` ends up empty until someone acts on the rejoin link. Operator-shell recovery remains the fallback for adminbot being permanently unreachable.
-
-### Configuration (full)
-
-Beyond v1's hardcoded "invite everyone to `#admins`", per-server config (welcome message, channel sets, invite-token routing rules) lives in adminbot's own process — file on disk, or a Project-internal DB. This is where adminbot maps invite-token tags → channels (the declarative routing that replaces any bot-to-bot RPC).
-
-```toml
-[adminbot]
-welcome_message = "Welcome to Safe Haven! These are our main channels."
-
-[[adminbot.rule]]
-# Invite everyone who joins.
-match.always = true
-groups = ["did:plc:safe-haven-announcements", "did:plc:safe-haven-general"]
-notification = { level = 1, mute_until_ms = 604800000 }
-
-[[adminbot.rule]]
-# Invite only users whose invite token carried a specific tag.
-match.invite_token_tag = "regional-northeast"
-groups = ["did:plc:northeast-region"]
-notification = { level = 0 }
-```
-
-Long-term, chat commands (`/add-rule`, `/list-rules`, `/edit-rule`) expose this through `#admins`.
-
-### Full recovery story
-
-1. **Adminbot down temporarily.** Restart; state persists.
-2. **Adminbot identity keys lost / corrupted.** Adminbot regenerates and rotates via the normal device-rotation flow. The server's pin is on the DID, not the key.
-3. **Adminbot DID itself unrecoverable.** Operator-shell recovery: re-run bootstrap with a fresh DID, write the new `ADMINBOT_DID`, re-create `#admins`. Existing admin humans need to be re-invited. Once-in-a-lifetime event.
-4. **`#admins` group lost.** Adminbot creates a new one and starts the bootstrap re-add flow. Cached `AccountJoinedEvent` DIDs from prior runs can auto-populate.
-
-A `/pause` mechanism (freeze adminbot's capabilities without uninstalling) helps with rollback if adminbot is misbehaving.
-
-### Full API surface
-
-| Method & path | Auth | Purpose |
-| --- | --- | --- |
-| `POST /v1/admin/projects` | adminbot only | Install a Project (creates bot account, returns its DID). |
-| `GET /v1/admin/projects` | adminbot only | List installed Projects. |
-| `DELETE /v1/admin/projects/{id}` | adminbot only | Uninstall. |
-| `POST /v1/admin/capabilities` | adminbot only | Grant a capability to a bot. |
-| `DELETE /v1/admin/capabilities/{account_id}/{capability}` | adminbot only | Revoke. |
-| `POST /v1/admin/official/{account_id}` | adminbot only | Set the bot's officialness record. |
-| `DELETE /v1/admin/official/{account_id}` | adminbot only | Clear officialness. |
-| `GET /v1/server/build` | any authenticated session | Current server commit / version / build time. |
-| `GET /v1/admin/events?since=<id>&kind=...` | bot session w/ capability | Paginated catch-up for missed events. |
-| `GET /v1/admin/accounts?after=<did>` | bot session w/ `accounts.read` | Snapshot of the account roster (DID-paginated). |
-
-Officialness is a plain `official` flag set via `POST/DELETE /v1/admin/official/*` — no signing endpoint, no attestation (see `20-project-security.md`).
-
-New WebSocket frame variants (`ws.proto`):
-
-| Variant | Direction | Purpose |
-| --- | --- | --- |
-| `AccountJoinedEvent` | server → bot | Push for `accounts.read`. |
-| `ServerBuildEvent` | server → bot | Push on server (re)start. |
-
-New DB tables / columns:
-
-| Table / column | Where | Purpose |
-| --- | --- | --- |
-| `project_capabilities` | homeserver | `(account_id, capability, granted_at, granted_by)`. |
-| `accounts.is_official` | homeserver | Server-side officialness flag (the ✓ badge), set via the `#admins` install flow. |
-| `server_events` | homeserver | `(id, kind, payload, created_at)` — append-only, drained by `GET /v1/admin/events` and WS push. |
-
-(There is no `adminbot.official_bots` table and no `adminbot.attestation_key`: officialness is a plain `official` flag on the bot's account record — no signing, no attestation. See `20-project-security.md`.)
-
----
-
-## Open questions
-
-1. **Bot identity-key rotation telemetry.** Adminbot rotating its identity keys is transparent (DID is the pin). But the client-side trust UX should probably surface a safety-number-like change indicator when adminbot's identity key rotates — same as any contact. Confirm this is in scope for the rotation UX work or treat as a follow-up.
-
-2. **`did:local:` resolution + adminbot role discovery.** `docs/02-todos-deferred.md` mentions the concept but doesn't define a DID document shape or resolution path. Probably resolved by "the homeserver's accounts table is the DID document for its own `did:local:` DIDs" — simplest possible thing. This is also where the deferred *role discovery* lands: with adminbot on a random DID (no well-known literal), a client needs some way to ask "which DID is this server's adminbot?" Confirm/define when a concrete need appears.
-
-3. **Cross-server officialness (deferred).** Officialness is now a same-server `official` flag plus the `invites.auto-accept` scope, with no signing (see `20-project-security.md`). If a future federated/guest scenario ever needs a *cross-server-verifiable* badge or auto-accept, that's where a signed projection would re-enter — deferred with federation, not needed now.
-
-4. **Default-mute discoverability.** A user auto-joined into 8 muted channels may never look at them. Channel discovery + "you have unread mentions" surfaces in the Chats tab will mostly handle this, but worth checking once the UX is in users' hands.
-
-5. **Server-event privacy disclosure.** A compromised bot with `accounts.read` gets a real-time roster of everyone who joins this server, including timing. The threat model accepts this (the operator authorized the bot; the server already had the data). Worth a one-line acknowledgment in `docs/00-design.md` "Trust model" when this lands.
-
-6. **Recovery from `#admins` ghosting.** If every admin leaves and nobody acts on adminbot's rejoin DMs, the server is frozen. The current answer is "operator shell." Worth thinking about whether a backup recovery DID (dormant, operator-pinned, promotable out-of-band) is worth the complexity. Defer.
-
-7. **Event durability across adminbot restarts.** v1's `AccountJoinedEvent` push is fire-and-forget — if adminbot is disconnected, the event is lost. The future `server_events` table + `GET /v1/admin/events?since=…` catch-up endpoint fixes this, but is deferred. Worth checking how painful the gap is in practice.
-</content>
+- **Rejected: a bot-to-bot RPC / service mesh with discovery.** It makes every bot depend on every other bot being live. Everything needed so far fits data-carried coordination. A genuinely synchronous need should be one Project calling another's ordinary HTTP API with its own auth, an explicit trust edge, not an ambient mesh.
+- **Rejected: the gatekeeper asking adminbot to add a user to channels.** Imperative cross-bot RPC; the token carries routing tags instead (`24`).
+- **Rejected: officialness as a signed attestation.** Decomposes into a plain operator-set flag (same-server only) plus an ordinary scope (`20`).
+- **Rejected: per-admin server-verified credentials instead of the delegate.** The server would see which admin DID made each privileged call, accumulating a partial roster and eroding the property `#admins` protects. The delegate keeps the roster invisible.
+- **Non-goals.** Adminbot is not a general bot framework, not an RPC hub, and not federation-aware. It can only add people to groups it is itself an admin of, under the group's normal policy.

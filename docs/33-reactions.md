@@ -1,54 +1,50 @@
-# Emoji Reactions — UX Proposal
+# 33 — Emoji reactions
 
-Status: draft for review. This is a UX proposal.
+> **Status:** Built — `ReactionMessage` on the wire; one reaction per person per message; on-bubble clusters on iOS, Android, and Desktop; DMs and groups. Not built: reaction notifications, a "who reacted" sheet, and removing reactions when their target expires.
+> **Last verified against code:** 2026-10-03
 
-## Why
+## Summary
 
-Reactions are the cheapest possible response: acknowledgement, a vote, a "got it" without adding a message to the feed. In an organizing channel that matters — it lets a hundred people signal agreement on an announcement without a hundred "+1" messages burying it. They're also the lowest-risk social feature we can ship, because unlike threading there's no real predictability problem: tapping an emoji does one obvious thing.
+A reaction is the cheapest response — acknowledgement, a vote, "got it" — without adding a message to the feed. In an organizing channel it lets a hundred people agree with an announcement without a hundred "+1"s. It mirrors Signal.
 
-Most of this design is uncontroversial and mirrors Signal. The one real decision — **one reaction per person per message, or many** — is resolved Signal-style: **one** (see below).
+Code: proto `ReactionMessage` (`content.proto`, body variant 9); app-core `send_reaction` (via `send_to_target`, so DMs and groups share one path), `apply_inbound_reaction` (`messaging.rs`); store `reactions` table (`upsert_reaction`, `remove_reaction`, `load_reactions`); UI iOS `MessageBubble.swift` / `EmojiPickerView.swift`, Android `MessageBubble.kt` / `EmojiPicker.kt`, Desktop `MessageBubble.tsx`.
 
-## Core model
+## Current design
 
-- A reaction is an `(emoji, reactor, target message)` tuple — a small encrypted message in the same conversation as its target, not a content message in the feed.
-- Reactions are **visible to every member of the conversation**, same as the message they're on. No private reactions, consistent with `32-threading.md` (no subset visibility).
-- Reactions render as a **cluster on the target bubble** — each distinct emoji with a count, your own reaction highlighted. Tapping the cluster shows who reacted with what.
-- **Reactions never enter the feed and never create a conversation row.** They decorate a message; they are not messages you scroll past.
+*Built.*
 
-## One reaction per person per message (Signal-style)
+- A reaction is an `(emoji, reactor, target)` tuple sent as a small encrypted message in the target's conversation. The target is identified by `(target_author, target_sent_at)`, the same identity receipts, edits and deletes use.
+- **One reaction per person per message.** Picking a new emoji replaces the old one; `remove = true` clears it. The store keys on `(target, reactor)`, so reactions are idempotent and converge regardless of arrival order. A reaction can arrive before its target and still attach when the target lands.
+- Reactions are **visible to every member** of the conversation. There are no private reactions.
+- Reactions render as a **cluster on the target bubble**: each distinct emoji with a count, in first-applied order, with your own highlighted. Tapping your own emoji removes it.
+- Reactions **never enter the feed, never create a conversation row, never touch unread or the badge.**
+- **Deleting a message for everyone drops its reactions** (`36`). Editing leaves them.
 
-Each person has **at most one reaction on a given message**. Reacting with a new emoji **replaces** the old one; tapping your current emoji again **removes** it. (Slack's many-per-message model was the alternative — rejected as more Slack-shaped, and because it bloats the on-bubble cluster in large channels.)
+## Known gaps
 
-Why this fits:
+1. **Reactions outlive expired targets.** `delete_expired_messages` removes the message row but not its reactions. They're invisible, but they linger on disk past the disappearing timer. Delete them with the target.
+2. **No reaction notifications** (below).
+3. **No "who reacted" sheet** on iOS.
 
-- Consistent with the app's "feel like Signal" ethos.
-- The picker is a single decisive tap — no per-emoji toggling.
-- The on-bubble cluster stays small and legible even in a channel with hundreds of members.
+## Planned
 
-## How they look and behave
+- **Notifications:** a reaction to *your own* message may notify you at low priority ("Dana reacted [emoji] to your message"), respecting mute. Coalesce or suppress floods in large or announcement-shaped groups. Reactions to other people's messages never notify.
+- **Who reacted:** tapping the cluster opens a sheet listing reactors grouped by emoji.
+- Fix gap 1.
 
-- **Adding:** long-press (or hover, desktop) a message → a reaction bar with a few recent/frequent emoji + a "more" affordance to the full picker. One tap applies.
-- **Removing / changing:** tap your own emoji in the cluster to remove it; pick a different one to replace it.
-- **Cluster display:** distinct emoji each with a count, ordered by first-applied, your own visually marked. Overflow collapses to a count past some width.
-- **Who reacted:** tap the cluster → a small sheet listing reactors grouped by emoji.
-- **Reactions on a thread reply** behave exactly like reactions anywhere else — the target is just a message that happens to live in a thread. Nothing thread-specific.
+## Speculative
 
-## Notifications
-
-- **A reaction to your own message may notify you** (a low-priority notification, e.g. "Dana reacted 👍 to your message"), respecting the conversation's mute state. Reactions to *other people's* messages never notify you.
-- **Quiet by default in noisy contexts.** In large/announcement-shaped channels a flood of reactions on an announcement should not generate a notification per reaction — coalesce, or suppress, rather than push each one. (Exact threshold is an implementation detail.)
-- Reactions **do not touch the app-icon badge** and do not mark a conversation unread — receiving a reaction is not unread "discussion you'd otherwise miss." This mirrors the `32-threading.md` badge discipline: the badge is for messages, and a reaction is not a message in the feed.
+- Custom or uploaded emoji packs (`23` puts these in Projects).
+- A server-counted reaction design for very large broadcast channels (`08`).
 
 ## What we are explicitly NOT doing
 
-- **No reactions feed / activity tab.** There is no aggregated "who reacted to my stuff" surface. (Contrast the cross-channel Threads browser in `32-threading.md` — reactions don't earn a shelf slot.)
-- **No badges or unread counts from reactions.** They never contribute to any count.
-- **No private or subset-visibility reactions.**
-- **No custom/uploaded emoji** in the first cut — system emoji only. (Custom emoji is a possible later addition; out of scope here.)
-- **No super-reactions / paid reactions / reaction effects.**
+- No reactions feed or activity tab.
+- No badges or unread counts from reactions.
+- No private or subset-visibility reactions.
+- No super-reactions, paid reactions, or effects.
 
-## Behavior to pin down (not blockers)
+## Rationale and rejected alternatives
 
-- **Read/expiry interaction.** A reaction is a tiny message; it should inherit its conversation's expiry timer and not independently resurrect or outlive its target. When the target expires, its reactions go with it.
-- **Reaction to an edited/deleted message.** If the target is deleted, its reactions are dropped. (Editing leaves reactions in place — see `36-message-editing-deletion.md`.)
-- **Ordering & races.** Two people reacting with the same emoji at once must converge to a count of 2, not two separate entries — reactions key on `(emoji, reactor)`, so re-applying the same emoji is idempotent per person.
+- **Many reactions per person per message (Slack)** — rejected: more Slack-shaped, and it bloats the cluster in large channels. One decisive tap, Signal-style.
+- **Reactions as feed messages** — rejected: they decorate a message; they aren't discussion you'd otherwise miss.

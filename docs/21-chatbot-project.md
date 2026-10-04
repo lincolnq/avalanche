@@ -1,185 +1,52 @@
-# Testbot Project — Design & Implementation Plan
+# 21 — Testbot (reference Project)
 
-## Goal
+> **Status:** Built — a dev and demo Project: a web page with a "Text Me" button that spawns an ephemeral AI chatbot, plus a "Sign in with Avalanche" demo.
+> **Last verified against code:** 2026-10-03
 
-Build the first Project on the avalanche platform: a chatbot that users can talk to via encrypted DMs. This serves as both a useful dev tool (fake conversations for testing) and the proof-of-concept for the Project model.
+## Summary
 
-## What a "Project" is (minimal version)
+Testbot is the first Project on the platform and the only complete example of one. It is a single TypeScript service, `node/packages/testbot/src/index.ts`, built on `@theavalanche/app-core` (napi). It demonstrates both halves of the Project model (`20-project-security.md`): a webview UI authenticated with a Project token, and bot accounts that talk to users over E2E DMs. It also hosts the OAuth login demo for `25-project-login.md`.
 
-A Project is a standalone service that:
+It is a dev tool, not a pattern to copy for production Projects (see *Known gaps*).
 
-1. **Serves a web UI** that the mobile app opens in a webview.
-2. **Owns bot accounts** that participate in encrypted DMs using the standard Signal protocol, like any other user.
+## Current design
 
-Because all groups and DMs are E2E encrypted, the homeserver cannot mediate message content or group membership — it doesn't have keys. Any Project that touches messages or manages groups must do so through bot accounts that are full Signal protocol participants. This means every non-trivial Project follows the same pattern: a standalone service with bots. The chatbot is a representative example, not a special case.
+**Process.** One Node service using `node:http` with no framework. Config comes from the environment (and the repo-root `.env` in dev): `HOMESERVER_URL`, `TESTBOT_BIND_ADDR` (default `0.0.0.0:3001`), `TESTBOT_BASE_PATH` (deploy: `/p/testbot/` behind Caddy), `TESTBOT_PUBLIC_URL`, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, and `REGISTRATION_SHARED_SECRET`. The deploy bundle installs it as a web Project with a manifest (`infra/deploy/bundle/lib/common.sh`).
 
-The homeserver's role in the Project model is minimal: it registers bot accounts (like any other account), relays encrypted messages, and issues Project tokens for user authentication (see [Project Security](20-project-security.md)).
+**HTTP surface.**
 
-## The chatbot Project
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /` | none (page reads `?token=`) | The "Text Me" page |
+| `POST /api/text-me` | Project token (Bearer) | Spawn a bot that DMs the caller |
+| `GET /api/bots` | Project token | List the caller's live bots |
+| `GET /login` | none | OAuth login demo page (`25`) |
+| `POST /api/oauth/exchange` | none | Auth-code + PKCE exchange (same-device flow) |
+| `POST /api/oauth/device/start`, `/poll` | none | Device-grant flow (phone authorizes a desktop browser) |
 
-### Architecture
+**Auth.** Every token is checked with `GET /v1/project-token/verify`; the returned DID is the caller (`verifyProjectToken`). OAuth access tokens are Project tokens, so the same check serves the login demo.
 
-```
-┌─────────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Mobile App      │     │  Chatbot      │     │  Homeserver   │
-│                  │     │  Service      │     │               │
-│  Network tab ────┼────▶│  Web UI       │     │               │
-│  (webview)       │     │  :3001        │     │               │
-│                  │     │               │     │               │
-│  Chats tab  ◀────┼────▶│  Bot accounts ◀────▶│  :3000        │
-│  (encrypted DMs) │     │  (app-core)   │     │               │
-│                  │     │               │     │               │
-│            ──────┼────▶│  (token verify)├───▶│  /v1/project- │
-│  (token request) │     │               │     │  token/verify │
-│            ◀─────┼─────┤               │     │               │
-│                  │     │  Claude Haiku │     │               │
-└─────────────────┘     └──────────────┘     └──────────────┘
-```
+**Bot lifecycle.** Each "Text Me" tap registers a **new** bot account (`AppCore.createBotAccount`, display name "Testbot", a throwaway SQLCipher store in the OS temp dir) and sends an opening DM. A per-bot `for await (core.events())` loop handles each inbound DM: a short pause, a read receipt, a thumbs-up reaction (exercising `33`), then a reply. All bot state is in memory; bots die when the process restarts, and their server accounts are orphaned.
 
-The chatbot service is a Rust binary that uses `app-core` for all crypto and messaging. It's a full Signal protocol participant.
+**Replies.** Claude Haiku (`claude-haiku-4-5-20251001`) via the Anthropic API, with the conversation history and the user's display name in the system prompt. With no API key, or on an API error, the bot echoes the user's message, so local dev needs no setup.
 
-### Authentication flow
+**Registration.** On a closed-registration server, bots register with a bootstrap token built from `REGISTRATION_SHARED_SECRET` (no Project link). adminbot suppresses join announcements for display name "Testbot" so `#admins` isn't flooded (`22`).
 
-The Project uses homeserver-issued tokens to verify user identity. See [Project Security](20-project-security.md) for the full design. The flow for the chatbot:
+## Known gaps
 
-1. User taps "Chatbot" in the Network tab.
-2. App calls `POST /v1/project-token` on the homeserver → gets a short-lived opaque token.
-3. App opens webview to `http://localhost:3001/?token=<token>`.
-4. Web page stores the token and includes it as `Authorization: Bearer <token>` on API calls.
-5. Chatbot service verifies the token by calling `GET /v1/project-token/verify?token=<token>` on the homeserver.
-6. Homeserver returns the user's DID (or 401 if invalid).
+- **Holds the master registration secret.** Testbot is internet-facing and LLM-driven, yet holds `REGISTRATION_SHARED_SECRET`. That secret also lets anyone who holds it register into the superuser Project (`22` §Known gaps). Worse, every bot it registers publishes the raw bootstrap token, secret included, to every `accounts.read` holder and to `server_events` for 30 days (`20` §Known gaps).
+- **Stops working once a gatekeeper is installed.** The bootstrap secret is retired as soon as any `registration.gatekeeper` Project exists (`registration.rs`, `gate_registration`), so testbot bots can no longer register on such a server.
+- **Doesn't check token audience.** It ignores the `project_url` returned by `verify`, so it accepts tokens minted for other Projects (`20` §Known gaps).
+- **Unbounded account creation.** Each tap creates a permanent server account. Nothing caps taps per user.
+- **Shares the homeserver origin** under `/p/testbot/` in the deploy bundle, so it has no origin isolation from other `/p/` Projects.
 
-The chatbot caches verified tokens for a few minutes to avoid a round-trip on every request.
+## Planned
 
-### Web UI
+- Register bots with a per-Project enrollment token (`22` §Planned) instead of the master secret, and link them to the testbot Project.
+- Check the `verify` response's `project_url` (and pass `audience` once the server supports it).
+- Split the OAuth demo from the chatbot so the example Projects stay small and copyable.
 
-A single HTML page served at `GET /`. The page shows:
+## Rationale
 
-- A heading ("Chatbot")
-- A "Text Me" button
-
-When the user taps "Text Me", the page calls `POST /api/text-me` with the token in the Authorization header. The service verifies the token, gets the user's DID, creates a bot, and sends an opening message.
-
-### Bot lifecycle
-
-1. **Creation:** user taps "Text Me" → `POST /api/text-me`.
-2. **Registration:** the service creates a new account on the homeserver using `AppCore::create_account_with_store()` with an in-memory store. The bot gets its own DID, identity keys, and prekeys.
-3. **Opening message:** the bot sends an encrypted DM to the user: "Hey! I'm a chatbot. Ask me anything."
-4. **WebSocket listener:** the bot connects to the homeserver's WebSocket endpoint (`GET /v1/ws?token=<session_token>`). When a message arrives, it decrypts it, sends the plaintext to Claude Haiku, and sends the response back as an encrypted DM. The WebSocket also handles the initial drain of any queued messages on connect.
-5. **State:** all bot state (accounts, conversation history) lives in-memory. Bots die when the service restarts. Each bot gets its own in-memory SQLCipher store. Orphaned bot accounts remain on the homeserver but are harmless — queued messages expire via the server's normal message TTL, and the orphaned account/device rows are inert.
-
-### Claude Haiku integration
-
-The bot calls the Anthropic API with a simple system prompt:
-
-> You are a friendly chatbot on the avalanche platform. Keep your responses concise and conversational. You're chatting with an activist — be supportive and helpful.
-
-Each bot maintains a conversation history (the decrypted messages it has sent and received) and passes the full history to Claude on each turn. The API key is provided via the `ANTHROPIC_API_KEY` environment variable.
-
-### API
-
-```
-GET  /                 → HTML page (web UI)
-POST /api/text-me      → creates bot, sends opening message (requires valid project token)
-GET  /api/bots         → list active bots for this user (requires valid project token)
-```
-
-All endpoints except `GET /` require a valid Project token in the `Authorization: Bearer` header.
-
-## Mobile app changes
-
-### Network tab
-
-Currently empty. Change to show a list of Projects fetched from the homeserver.
-
-The homeserver exposes `GET /v1/projects` (unauthenticated or authenticated — TBD), which returns the list of Projects installed on the server. For now, this list is hardcoded in the server config (e.g., an environment variable or a config file). The response is an array of `{ name, url, description }` objects.
-
-The mobile app fetches this list and displays it in the Network tab. Tapping a Project:
-1. Calls `POST /v1/project-token` on the homeserver to get a token.
-2. Opens a `WKWebView` (iOS) / `WebView` (Android) to `{project_url}?token={token}`.
-
-The webview should have visible chrome (a header bar with the Project name and a close button) so the user always knows they're in a Project view, not the native app.
-
-### Message receive via WebSocket
-
-The app currently has no real-time message receiving. For bot messages to appear in the Chats tab, we need:
-
-- A WebSocket connection to the homeserver (`GET /v1/ws?token=<session_token>`) that receives messages in real time.
-- Decryption of incoming messages via app-core.
-- When a message arrives from an unknown DID, auto-create a Conversation.
-- Store messages locally and update the conversation list.
-
-This is Stage 3 work that's needed regardless. The chatbot Project motivates building it now.
-
-### Conversation wiring
-
-Currently `ConversationView` has a placeholder recipient DID. Conversations need:
-
-- A `recipientDid` field so replies go to the right place.
-- The send path to use this field instead of the hardcoded placeholder.
-
-## Implementation order
-
-### Step 1: Homeserver — Project list + token endpoints
-
-New migration + three new routes. Small, self-contained.
-
-**DB migration:**
-```sql
-CREATE TABLE project_tokens (
-    token       TEXT PRIMARY KEY,
-    account_id  BIGINT NOT NULL REFERENCES accounts(id),
-    project_url TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at  TIMESTAMPTZ NOT NULL
-);
-```
-
-**New endpoints:**
-- `GET /v1/projects` — returns the list of Projects installed on this server, read from the DB-backed directory (`directory_entries`, populated by adminbot's manifest install — see `22-adminbot.md`). Returns `[{ "name": "Testbot", "url": "http://localhost:3001", "description": "Chat with an AI bot" }]`.
-- `POST /v1/project-token` (authenticated) — generate a 32-byte random token, store with user's account ID and 1-hour expiry, return the token.
-- `GET /v1/project-token/verify?token=<token>` (unauthenticated) — look up the token, return `{ "did": "...", "project_url": "..." }` if valid, 401 if not.
-
-Add expired-token cleanup to the existing background garbage-collection task.
-
-**Also add to `net` crate:** `fetch_projects()` and `request_project_token(project_url)` methods.
-**Also add to `app-core`:** FFI wrappers so the mobile app can call them.
-
-### Step 2: Chatbot service (TypeScript)
-
-Package: `node/packages/testbot/`
-
-- A TypeScript service on `@theavalanche/app-core` (the napi binding), using Node's
-  built-in `node:http` (no web framework) and global `fetch` for the Claude API.
-- Starts an HTTP server on `:3001`.
-- `GET /`: serves a static HTML page with the "Text Me" button.
-- `POST /api/text-me`: verifies the Project token with the homeserver, registers
-  an ephemeral bot account (a throwaway SQLCipher store in the OS temp dir —
-  node has no in-memory store binding — so bots die with the process), sends the
-  opening DM.
-- Per-bot `for await (core.events())` loop: receive → read receipt + 👍 reaction
-  → Claude → reply.
-- Claude API key from `ANTHROPIC_API_KEY` env var (echoes when unset).
-- Homeserver URL from `HOMESERVER_URL` env var (default `http://localhost:3000`).
-
-### Step 3: Mobile — Network tab + webview
-
-- Update Network tab to show a list of Projects (hardcoded for now).
-- Before opening a Project, call `requestProjectToken()` via app-core.
-- Open a `WKWebView` with the Project URL + token.
-- Add visible chrome (header bar identifying the Project view).
-
-### Step 4: Mobile — WebSocket message receive + conversation auto-create
-
-- Connect to the homeserver's WebSocket endpoint after login.
-- Decrypt incoming messages via app-core.
-- On receiving a message from a new DID: create a Conversation with that DID as the recipient.
-- Wire `ConversationView` to use `conversation.recipientDid` for sending.
-
-## Open questions
-
-1. **Should the chatbot service be a Rust crate or a separate process in another language?** Rust is simplest because it can use `app-core` directly for crypto. But it means the first Project example is Rust-only, which doesn't demonstrate the "Projects in any language" story. A future iteration could add an HTTP-based bot SDK that wraps the crypto operations.
-
-2. **Bot display names.** The current protocol has no display name exchange. The bot's DID will show up as a raw `did:plc:...` string in the chat list. We could add a display name to the opening message payload, or defer this.
-
-3. **Should we persist bot state to disk?** In-memory is simpler for a dev tool. Disk persistence would let bots survive restarts. Start in-memory.
+- **TypeScript on napi, not Rust.** The original testbot was a Rust binary; it was ported so the first Project demonstrates the "any language on app-core" story and exercises the same Node bindings third-party bots use. Node's single-threaded event loop also removes the dedicated-thread workaround the Rust version needed for libsignal's non-`Send` futures.
+- **Ephemeral bots.** It is a dev tool for fake conversations; persistence would only add cleanup work.

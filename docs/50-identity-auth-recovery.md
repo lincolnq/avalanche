@@ -1,366 +1,192 @@
-# Identity, Authentication, and Recovery
+# 50 — Identity, authentication, and recovery
 
-This document describes the user-facing flows for creating accounts, logging in, and recovering access after device loss.
+> **Status:** Partial — signup and blob-path recovery with a passkey or a 12-word phrase are built on iOS and Android (Desktop is phrase-only; passkeys are specced in `56`). The no-blob recovery path, joining a second server with an existing identity, and every multi-device-aware part of recovery are not built. Proposed changes to the identity model below need project-owner review.
+> **Last verified against code:** 2026-10-03
 
-## Background
+## Summary
 
-Avalanche has no phone numbers or emails. Identity is a DID (`did:plc`), a cryptographic identifier hosted in the public PLC directory. Each DID has two kinds of keys:
+Avalanche has no phone numbers or emails. An identity is a `did:plc` DID in the public PLC directory. A passkey (WebAuthn PRF) or a written phrase deterministically produces the DID's **rotation key** and the key that encrypts a server-side **recovery blob**. The blob holds the Signal identity key and the rest of the bootstrap state, so a recovered device keeps the same safety number. Day-to-day authentication to a homeserver is a challenge-response signed with the identity key; passkeys are only used at signup and recovery.
 
-- **Rotation keys** — control the DID itself. Can change signing keys, service endpoints, or transfer the identity. These are the "root authority."
-- **Signing keys (verification methods)** — used for day-to-day operations (encrypting messages, authenticating to servers). Don't control the DID unless also listed as rotation keys.
+This doc describes what is built, its known weaknesses, and a proposed redesign (§Proposed) that came out of the October 2026 review.
 
-This separation is what makes recovery possible: you can lose your signing key and use a rotation key to issue a new one.
+## Known gaps
 
-### Recovery authority: the passkey owns the rotation key
+Security-relevant items are also tracked in `09`.
 
-The user's passkey (or written-down recovery phrase) is the sole authority over the DID. The **rotation key is deterministically derived from the passkey** via the WebAuthn PRF extension — it is not stored on any server. As long as the passkey survives, the user retains full control of the DID, regardless of what happens to any server.
+- **The rotation key is stored on every device.** It is "re-derived from the passkey on demand" in the design, but in practice it is persisted permanently in identity.db at signup, at recovery, and on every linked device (`store/src/account.rs` `save_rotation_key`; callers in `app-core/src/lib.rs`), and shipped inside the link bundle (`core/proto/provisioning.proto` field 2). The genesis op lists it as the **only** rotation key (`app-core/src/plc.rs` `build_genesis_op`). Anyone who extracts it from any device can rewrite or tombstone the DID permanently; there is no higher-priority key to override them.
+- **The no-blob recovery path does not exist.** Step 9 of story 4 (fresh identity key via a rotation-key-signed PLC update) has no code: `build_identity_update_op` is only called at signup. If every copy of the recovery blob is lost, the identity cannot be recovered today, even with the passkey.
+- **Recovery is single-server and single-slot.** `recover_from_blob` calls `/v1/devices/replace` on the first server in the blob only, reusing `min(existing device_ids)` as both old and new device id (`app-core/src/lib.rs`). Other devices and other servers are untouched (`04` §7).
+- **`GET /v1/recovery/{did}` is an unauthenticated lookup.** No auth, no rate limit, and it returns the account's `device_ids` alongside the blob (`server/src/routes/recovery.rs`). Anyone who knows a DID can ask any server whether that DID is registered there, how many devices it has, and (from the blob size, which grows with group count) roughly how many groups it is in. This undercuts the membership-privacy goal (`09`).
+- **The signup server is published permanently.** The genesis op includes `services.avalanche_homeserver = signup_server_url`, and the DID is the hash of that op. PLC's audit log is public and append-only, so "DID X was created at server S at time T" is public forever, even after a home-server migration. The privacy claim that the home server can be omitted from the DID document is not achievable with this genesis design.
+- **The identity key is mislabelled in the DID document.** It is a libsignal Curve25519 key, but `did_key_ed25519` strips the `0x05` prefix and publishes it with the Ed25519 multicodec (`0xed`) (`app-core/src/plc.rs`). Anyone verifying against it as Ed25519 will fail. Earlier versions of this doc also called it Ed25519; it is Curve25519 used with XEdDSA signatures.
+- **Any `*.theavalanche.net` origin can run the recovery ceremony.** The relying party ID is the registrable domain `theavalanche.net` and the PRF salt is a fixed constant (`actnet-recovery-v1`). WebAuthn lets any subdomain origin request assertions for that RP. The demo homeserver `av.theavalanche.net` serves installed Projects' web code under `/p/<slug>/` (`infra/deploy/bundle/lib/common.sh`), so third-party Project code runs on an eligible origin. If a user approves the passkey prompt in a browser on such a page, that page receives the PRF output, which is the root of the identity.
+- **Domain seizure is a recovery outage.** On iOS the passkey RP depends on the `theavalanche.net` association file being served. If the domain is seized or lapses, no user can create or use passkeys in the app.
+- **One vault holds every persona.** All of a user's identities' passkeys sit under one RP, labelled `"<name> @ <server>"`. Anyone who can browse the password manager can link the personas.
+- **Server-side PLC fetches have no timeout** (`server/src/plc.rs`, `routes/registration.rs` `verify_did_plc` use bare `reqwest::get`). PLC being slow stalls registration, link, and replace requests.
+- **Joining a second server with an existing identity is not built.** The apps' `joinServer` only appends to a local server list (`53` Known gaps).
 
-Concretely, the PRF output is treated as seed material and run through HKDF with two distinct labels:
+## Current design
 
-- `"actnet-rotation-v1"` → DID rotation keypair (P-256, deterministic from passkey).
-- `"actnet-blob-v1"` → symmetric key for the recovery blob (see below).
+### Keys
 
-A written-down recovery phrase produces the same two outputs via the same KDF, just with the phrase replacing the PRF as the seed.
+- **Rotation key (P-256)** — listed in PLC `rotationKeys`. Authorizes DID operations (genesis, updates, tombstone) and device replacement or linking on homeservers. Derived from the passkey PRF or phrase via HKDF label `"actnet-rotation-v1"` (`app-core/src/recovery.rs` `derive_recovery_keys_from_prf`, `derive_rotation_key_from_seed`). Persisted on every device (Known gaps).
+- **Blob key (AES-256)** — HKDF label `"actnet-blob-v1"` from the same seed. Encrypts the recovery blob. Cached in identity.db so later blob updates need no passkey prompt. Not present on linked devices.
+- **Identity key (libsignal Curve25519)** — the Signal identity key, random at signup, shared by all the identity's devices (`04` §1). Published as the `#avalanche` verification method in the DID document. Used for Signal sessions and for homeserver challenge-response auth.
+- **Storage key** — random, identity-level, encrypts durable-state records (`05` §4). Carried in the recovery blob and the link bundle.
 
-**The device identity key is *not* derived from the passkey.** It is generated randomly per device at signup time, consistent with libsignal's per-device identity model. This means the DID is `f(derived_rotation_pub, random_identity_pub, server_url)` — not purely a function of the passkey. See "How the DID stays recoverable" below for how we still reconstruct it from the passkey alone.
+### DID derivation
 
-### How the DID stays recoverable from the passkey alone
+The genesis op deliberately **omits the identity key**, so the DID is `hash(genesis(derived_rotation_pub, signup_server_url))`. Signup writes two PLC ops back to back (`app-core/src/plc.rs`):
 
-To make the DID derivable from just the passkey + the original signup server URL (no need to remember the DID itself), the genesis op intentionally **omits the identity key**. The DID is committed as a function of `(derived_rotation_pub, server_url)` only, and the identity key is added in an immediately-following PLC update operation signed by the same rotation key.
+1. **Genesis** — `rotationKeys = [rotation_pub]`, `services = {avalanche_homeserver: signup_server_url}`, no verification methods. The DID is fixed by this op's hash.
+2. **Update** — adds the identity key as verification method `#avalanche`, `prev` = genesis CID.
 
-Signup writes two PLC ops back-to-back:
+A recovering device with the seed and the signup server URL can recompute the genesis op and therefore the DID with no lookup (`derive_did_from_passkey`).
 
-1. **Genesis op** — `rotation_keys = [derived_rotation_pub]`, `services = {homeserver: server_url}`, `verification_methods = {}` (empty). Signed by rotation key. **The DID is fixed by the hash of this op.**
-2. **Update op** — adds the random per-device identity key as a verification method. Signed by rotation key, with `prev` pointing at the genesis op.
+### Passkey ceremony
 
-This separation means a recovering device with only the passkey + the original signup server URL can deterministically recompute the genesis op, derive the same DID, and from there issue a new identity key via another PLC update.
+- RP ID: `theavalanche.net` (iOS `PasskeyManager.relyingParty`, Android `PasskeyManager.RELYING_PARTY`).
+- PRF salt: the fixed string `actnet-recovery-v1`.
+- `user.id` (userHandle): the signup server URL bytes. Returned on every assertion, so recovery needs no typed input.
+- `user.displayName`: `"<name> @ <server>"`, cosmetic.
+- Discoverable credential (no `allowCredentials` at recovery).
 
-**Where the original signup server URL is stored.** The passkey credential's WebAuthn `user.id` (userHandle) is set to the original signup server URL at create time. The userHandle is returned to the relying party during any future assertion ceremony, so the recovering device gets the server URL back automatically — the user never has to remember or type it. The userHandle does not change if the user later migrates discovery servers; it always reflects the *original* genesis server, because that's what's baked into the DID.
+### Recovery phrase
 
-The passkey's `user.displayName` is set to a human-readable label (e.g. `"Sam @ safe-haven.org"`) so the OS passkey picker can disambiguate between multiple identities. That field is cosmetic only.
+**Built.** A 12-word BIP39 mnemonic (128 bits), generated in `app-core` (`generate_recovery_phrase`). The first 32 bytes of the BIP39 seed (`recovery_phrase_to_seed`) replace the PRF output in the same HKDF, so the same signup and recovery code paths are reused. The phrase does not carry the server URL: signup shows the home server URL next to the words, and recovery asks for both. Signup re-prompts for three words before creating the account.
 
-### Recovery blob: convenience, not authority
+### Skipping recovery
 
-The recovery blob is a server-side cache that lets a recovering device skip re-registration friction. It contains:
+If the user skips both passkey and phrase, the rotation key is random (`generate_rotation_key`) and no blob key exists. The identity is unrecoverable on device loss.
 
-- Device identity keypair (so Signal sessions continue without a safety-number change).
-- Full list of homeservers the user is a member of.
-- Profile key and display name (so the user's profile is restored without prompting).
-- The group 'master key' for all groups you're a member of (so the user can continue reading messages in that group).
+### Recovery blob
 
-**Wire format.** The plaintext is a versioned protobuf (`actnet.recovery.RecoveryBlob`, currently v4). Homeserver URLs are interned in a top-level `servers` table and referenced by index from each group entry — N groups on the same homeserver pay the URL string once, not N times. The protobuf is encrypted with AES-256-GCM under the `"actnet-blob-v1"` HKDF output; the on-the-wire envelope is `version(1) || nonce(12) || ciphertext+tag`. The intent is to replicate the ciphertext to every homeserver the user belongs to so any of them can anchor recovery.
+**Built** (`app-core/src/recovery.rs`, v4). Plaintext protobuf `RecoveryBlob { identity_keypair, servers[], profile_key, display_name, groups[{master_key, server_index}], storage_key }`; envelope `version(1) || nonce(12) || AES-256-GCM`. Server URLs are interned. It does **not** contain the rotation key.
 
-**Auto-updates.** The PRF-derived blob key is cached in the local SQLCipher database at signup (and again after recovery). Every event that changes blob-relevant state — joining or creating a group, accepting an invite, adding a server — re-encrypts and uploads the blob silently using the cached key. The passkey is only required at account creation and at recovery; routine state changes never re-prompt.
+Uploaded at signup and re-uploaded silently (using the cached blob key) when blob-relevant state changes. `PUT /v1/recovery` is session-authenticated and rate-limited; `GET /v1/recovery/{did}` is unauthenticated (Known gaps). The intended replication to every server the user is on depends on multi-server identities, which are not built.
 
-**It does not contain the rotation key.** Losing every copy of the blob costs session continuity (safety-number change), the server list (user re-enters one server URL manually), and per-group sender-key continuity (peers must re-DM their SKDMs to the recovered device) — but not DID control. The rotation key is always recoverable from the passkey, and the DID is always recoverable from `(rotation_key, signup_server_url)`.
+### Signup (story 1)
 
-### Privacy: DID document and server discovery
+1. Scan or tap an invite (`51`); the app validates it with the server.
+2. Name (required) and photo (optional).
+3. Create a passkey (or choose a phrase, or skip).
+4. HKDF the seed into the rotation key and blob key; generate the identity key and prekeys.
+5. Build, sign, and submit the genesis and update PLC ops.
+6. Encrypt the recovery blob.
+7. `POST /v1/accounts` with the DID, identity key, an identity-key signature over `register:{did}:{server_url}`, registration ID, device ID 1, prekeys, the blob, and the invite token. The server verifies the signature and checks the identity key against the DID's `#avalanche` verification method in PLC (`routes/registration.rs`), and applies the registration gate (`24`).
+8. Land in Chats; the post-onboarding redirect (if any) opens the inviter's DM.
 
-The DID document is public. To avoid leaking all of a user's organizational affiliations, the DID document lists only a single "home" homeserver as its service endpoint — whichever server the user signed up on first (changeable in settings via discovery-server migration; see `13-federation.md`). Cross-server message routing uses contact exchange: when two users connect, they learn each other's homeserver addresses and store them locally. The PLC directory is not used for ongoing message routing, only for initial DID verification and recovery.
+### Recovery, blob path (story 4)
 
-During recovery, the app resolves the DID via the PLC directory → finds the current home server → downloads the recovery blob → discovers all other servers. If the home server is unreachable or has no blob, recovery still proceeds via the passkey path described above; the user just loses the server-list convenience and takes a safety-number change.
+1. "Recover" → WebAuthn assertion (discoverable) with the PRF salt, or phrase + server URL.
+2. Derive the rotation key and blob key; recompute the DID.
+3. Resolve the DID via PLC to find the current home server (falls back to the signup URL).
+4. `GET /v1/recovery/{did}` → decrypt.
+5. Restore the identity keypair (same safety number), profile key and name, storage key, and server list.
+6. Sign `replace:{did}:{old}:{new}:{nonce}` with the rotation key and call `/v1/devices/replace` on the first server (Known gaps).
+7. For each group in the blob: persist a group row, fetch state, register a new delivery pseudonym, re-seed and distribute a sender key. Peers' old sender keys are not redistributable, so messages already sent under them are lost.
+8. Storage sync pulls the rest of durable state (`05` §11).
 
----
+### Day-to-day authentication (story 5)
 
-## User Stories
+**Built.** The database is unlocked with a platform-protected key. Session tokens are opaque and expire; on expiry the core does challenge-response (`POST /v1/auth/challenge` → `POST /v1/auth/token`, signing the nonce with the identity key) with no user interaction. Passkeys are never used day to day.
 
-### 1. First signup: new identity at a rally
+### Multiple identities (story 3)
 
-**Story:** Sam scans a QR code at a rally. They've never used avalanche before. They type a name, create a passkey with Face ID, and they're in — with recovery already set up.
+**Built.** "Create a fresh identity" makes a new DID with fully independent keys and a separate passkey. Identities share no keys and no server-side state. All identities' chats appear in the unified inbox (`37`).
 
-**Flow:**
+### What lives where (as built)
 
-1. Scan QR / tap invite link.
-2. App validates invite token with the server.
-3. "What's your name?" screen — display name required, photo optional.
-4. "Create a passkey to protect your identity" — brief explanation. Sam authenticates with Face ID. The WebAuthn `create()` ceremony is configured with `user.id = <signup_server_url_bytes>`, `user.displayName = "<name> @ <server>"`, and the PRF extension is requested. 1Password (or iCloud Keychain) creates and stores the passkey. The authenticator returns the credential plus the PRF output. (Skipping this step is possible, but discouraged — see below.)
-5. App runs the PRF output through HKDF with labels `"actnet-rotation-v1"` and `"actnet-blob-v1"` to derive (a) the P-256 DID rotation keypair and (b) the 32-byte blob-encryption symmetric key.
-6. App generates the remaining keys randomly: device identity key (Ed25519 keypair) and Signal protocol prekeys (signed, one-time, Kyber).
-7. App builds the **genesis PLC operation** with `rotation_keys = [derived_rotation_pub]`, `services = {homeserver: signup_server_url}`, `verification_methods = {}`. Signs with the rotation key. The DID is now determined by the hash of this op.
-8. App builds the **identity-key update PLC operation** with `prev` pointing at the genesis op, adding the random device identity key as a verification method. Signs with the rotation key.
-9. App submits both ops to the PLC directory in order. The DID now exists publicly with a registered identity key.
-10. App encrypts `{identity_keypair, [signup_server_url], profile_key, display_name}` into the recovery blob using the blob symmetric key from step 5.
-11. App registers with the homeserver: `POST /v1/accounts` with identity key, registration_id, device_id, prekeys, DID, and the encrypted recovery blob.
-12. Server auto-enrolls Sam into the rally's groups per the invite token.
-13. Push notification permission prompt.
-14. Sam lands in Chats with groups populated. Recovery is already active.
+| Secret | Where it lives |
+|---|---|
+| Passkey / phrase | Password manager or paper. Produces the rotation key and blob key. |
+| userHandle | Inside the passkey: the signup server URL. |
+| Rotation key (P-256) | **identity.db on every device** (signup, recovery, link). Never on a server. |
+| Identity key | identity.db on every device + the recovery blob. Public half in PLC. |
+| Prekeys | Private halves in device.db; public halves on the server. |
+| Recovery blob | Homeserver, encrypted under the blob key. |
+| Blob key | identity.db on the signup or recovered device (not linked devices). |
+| Storage key | identity.db on every device + the recovery blob + the link bundle. |
+| Session token | Device. |
 
-**Technical details:**
-- Passkey relying party: a universal avalanche domain (e.g. `theavalanche.net`), not the homeserver's domain. This means recovery of a passkey identity can only be done by our official mobile apps and/or web application on our domain.
-- `user.id` (WebAuthn userHandle): set to the signup server URL bytes. This is what gets returned during any future assertion, letting a recovering device reconstruct the genesis op without prompting the user. It never changes, even after discovery-server migration.
-- PRF extension: a fixed app-wide salt (e.g. `"actnet-recovery-v1"`) is provided during the ceremony. The authenticator returns 32 deterministic bytes from `HMAC-SHA256(passkey_secret, salt)`. HKDF-Expand with two labels then derives the rotation keypair and the blob-encryption key. Both are recoverable from the passkey alone.
-- Why two PLC ops: the genesis op must be signable before the identity key exists (because we want the DID to be derivable from just the passkey + signup server URL, with no dependency on the random per-device identity key). A second op adds the identity key as a verification method.
-- DID genesis + update operations submitted to `plc.directory` (or configured PLC directory).
-- Server registration: `POST /v1/accounts` with identity key, registration_id, device_id, prekeys, and recovery blob (stored opaque ciphertext).
-- Server stores the DID document with the device's public key as a verification method and the homeserver as a service endpoint.
-- **What if the user skips recovery?** No passkey is created, so the rotation key is generated randomly on-device and no recovery blob is written. If Sam loses their phone they cannot recover this identity at all. The server knows this and can nag the user. This is the only case where DID control is not deterministically derivable from a user-held secret.
-- **Written-down recovery phrase:** ✅ implemented as a 12-word **BIP39** mnemonic (128 bits of entropy), generated in `app-core` (`generate_recovery_phrase`). The phrase → 32-byte seed (`recovery_phrase_to_seed`: first 32 bytes of the standard BIP39 seed) is run through the same HKDF (same labels) to produce the rotation keypair and the blob-encryption key — identical to the passkey PRF path, so the same `prepare`/`finalize`/`recover` code is reused. Since there's no WebAuthn ceremony, the signup server URL is **not** embedded in the phrase; instead the signup screen displays the home server URL alongside the 12 words for the user to record, and at recovery the user enters **both** the phrase and the server URL. The server URL lets Rust recompute the DID (`derive_did_from_passkey`, which works for any 32-byte seed); the rest of recovery (PLC resolve → blob download → restore) is unchanged. The blob-encryption key is cached locally (SQLCipher) after creation so silent re-encryption on later server joins needs no re-entry. Signup includes a verification step that re-prompts for three of the words before the account is created.
+### Onboarding screens
 
----
+Built on iOS and Android; Desktop uses the phrase path only.
 
-### 2. Joining a second server with the same identity
+- **Landing** — scan invitation (primary), enter invite code, recover, link this device (`04` §4).
+- **Choose identity** — when the device already has identities and an invite arrives: pick an identity, create a new one, or recover. Picking an existing identity does not yet register on the new server (Known gaps).
+- **New identity** — photo (optional), display name (required).
+- **Passkey explainer** — create passkey (primary), use a recovery phrase instead, skip.
+- **Recovery explainer** — recover with passkey (primary), or phrase + home server URL.
+- **Progress console** — scrolling status during signup and recovery.
+- **Server step** — a homeserver-provided onboarding webview. Not built; the invite response has no `server_step_url` (`51`).
 
-**Story:** Sam's org is on a different server. Sam taps an invite link, and the app asks which identity to use. Sam picks their existing name and is in immediately.
+## Planned
 
-**Flow:**
+- **Build the no-blob recovery path**, or explicitly drop the claim. (The Proposed design changes what it means.)
+- **Make recovery revoke the whole prior device set on every server** (`04` §7).
+- **Add timeouts to server-side PLC fetches**, and rate-limit `/v1/devices/replace` by IP before doing any PLC fetch.
+- **Fix the DID document key type** (publish the identity key with the X25519 multicodec, or as a libsignal-typed key), coordinated with the registration-time PLC check.
+- **Stop hosting third-party content under the RP domain.** Move the demo server and its Projects off `*.theavalanche.net`, or move the passkey RP to a dedicated domain that serves only the AASA/assetlinks files and the desktop ceremony page (`56`).
+- **Offer neutral passkey labels** (for example "Avalanche identity 2") for users who want personas unlinkable inside their own password manager.
 
-1. Tap invite link for server 2.
-2. App shows identity picker: "Join as Sam" (existing DID) or "Create a fresh identity."
-3. Sam taps "Join as Sam."
-4. App registers the existing DID on server 2: uploads identity public key, prekeys, and recovery blob.
-5. Server 2 verifies the DID against the PLC directory — confirms the signing key matches.
-6. Auto-enrollment into groups per the invite token.
-7. Sam lands in Chats with new groups visible alongside existing ones.
+## Proposed
 
-No new keys generated (except fresh prekeys for this server). The DID document already has this device's signing key; the server just verifies it.
+**Pending project-owner review.** These change the identity contract (key hierarchy, PLC usage, wire formats, recovery endpoints) and need a migration plan for existing accounts before implementation. They were agreed in principle with the maintainer on 2026-10-03.
 
-No passkey prompt either: the blob symmetric key is already cached locally from the original signup, so the app silently re-encrypts the blob with the updated server list and uploads. Tapping "Join as Sam" is the only user-visible step.
+### P1. Wrap the root secret instead of deriving it
 
-**Technical details:**
-- Server resolves the DID via the PLC directory and checks that the presented identity key matches a verification method in the DID document.
-- `POST /v1/accounts` with the existing DID, identity key, registration_id, device_id, prekeys.
-- The recovery blob now needs to include server 2 in its server list. The app reads the cached blob symmetric key from SQLCipher (saved at signup), re-encrypts, and uploads the updated blob. Replicating to both servers ensures recovery from either one discovers all servers.
-- **Written-down recovery key case:** Same story — the derived symmetric key is cached locally after first entry, so subsequent server joins don't make the user dig out the recovery phrase.
+Generate a random 32-byte **root secret** at signup. Derive the rotation key and blob key from the root, not from the passkey. Store the root only **wrapped** (encrypted) under each recovery factor:
 
----
+- the passkey's PRF output on the primary RP (`theavalanche.net` or its replacement);
+- a **second passkey on a backup RP domain** with a different registrar and jurisdiction;
+- the recovery phrase.
 
-### 3. Creating a second identity (pseudonymous)
+The wrapped copies are tiny and are stored with the recovery blob on every server the identity uses (and optionally exported to a file).
 
-**Story:** Sam wants to organize with a different group under a pseudonym. They create a second identity with a different name, unlinked to the first.
+Why: today the root *is* the passkey's PRF output, so it can never be rotated, a compromised password manager is compromised forever, and a seized domain disables recovery for everyone. Wrapping makes each factor independently addable and revocable, and lets a backup domain keep recovery working through a domain seizure.
 
-**Flow:**
+Cost: the DID can no longer be recomputed from the passkey alone with no server state; recovery needs one wrapped copy. Today's no-blob path doesn't exist anyway. Open question: where the recovering device learns which server holds a wrapped copy. The 64-byte userHandle can carry the identity's identifier plus a short server hint; phrase users record the server as they do today.
 
-1. From an invite link, choose "Create a fresh identity."
-2. "What's your name?" — Sam enters a pseudonym.
-3. "Create a passkey to protect your identity" — Sam authenticates with Face ID. 1Password creates a second passkey.
-4. App generates a completely new set of keys: new rotation key, new identity key, new prekeys. Encrypts recovery blob with the new passkey's PRF-derived key.
-5. New DID genesis operation submitted to PLC directory. This is a separate DID with no connection to the first.
-6. Register with the server, upload recovery blob.
+### P2. Priority-ordered rotation keys; nothing root-level on devices
 
-Sam now has two identities. Both appear in the app. Chats from both identities appear in the unified inbox with subtle identity indicators.
+PLC's `rotationKeys` is ordered: a higher-priority key can nullify operations signed by a lower-priority key within a 72-hour window. Use that:
 
-**Technical details:**
-- Completely independent key material. The PLC directory has two unrelated DIDs.
-- Second passkey in 1Password, registered against the same relying party; 1Password distinguishes them by label.
-- The two identities share no keys, no server-side state, and no PLC directory linkage. The server cannot tell they belong to the same person.
+- **Top priority:** the root-derived recovery key. Never stored on any device; produced only during a recovery or a deliberate "security settings" ceremony.
+- **Lower priority (optional):** a per-identity device key for routine DID updates, or no device-held rotation key at all.
 
----
+Linking stops shipping any rotation key. `/v1/devices/link` is instead authorized by the existing device: its session plus a signature over the link request by the identity key, with the server checking that `new_identity_key` equals the identity's existing key. A stolen device can then at worst submit lower-priority ops that the owner nullifies with the recovery key within 72 hours (verify PLC's handling of a lower-priority tombstone before relying on this).
 
-### 4. Recovering an identity after device loss
+### P3. A private, unpublished identity; did:plc becomes an opt-in public link
 
-**Story:** Sam loses their phone. They get a new one, install avalanche, and recover their activist identity using the passkey synced through 1Password.
+The problems with anchoring the private identity in PLC: the log is public and permanent; the genesis op publishes the signup server; every key change and migration is publicly timestamped; signup, linking, and recovery all depend on a third-party service (Bluesky PBC) being up and willing.
 
-**Flow:**
+Proposal:
 
-1. Install avalanche on new phone. Tap "Recover existing identity."
-2. App initiates a WebAuthn assertion ceremony (no `allowCredentials`, discoverable mode) with the PRF extension and the same salt as signup.
-3. 1Password syncs to the new phone and presents Sam's passkey(s). Sam selects the one for their activist identity and authenticates with Face ID.
-4. Authenticator returns `{credentialId, userHandle = signup_server_url_bytes, prfOutput}`.
-5. App runs the PRF output through HKDF with the same two labels, producing the rotation keypair and the blob-encryption symmetric key. **At this point, regardless of any server state, Sam has full DID control.**
-6. App **recomputes the genesis op deterministically** with `(derived_rotation_pub, signup_server_url)` and `verification_methods = {}`. Hashing this op yields the original DID. No PLC lookup required to know Sam's DID.
-7. App resolves the DID via PLC to find the *current* home server (it may have been migrated since signup), and attempts to download the recovery blob.
+- The private identity is a **self-certifying identifier**: a hash of a genesis document containing the root public key(s). It is never published to any global directory.
+- The current key document (identity key, rotation keys, servers) is held by the identity's own homeservers and **passed to contacts over existing sessions**. Key changes and server moves are statements signed by the rotation key, delivered to contacts the same way. Contacts verify them against keys they already hold.
+- Strangers find you through invites and QR codes, which already carry the server address (`51`). There is no lookup by bare identifier.
+- **did:plc becomes optional.** A user who wants a public presence (for example on Bluesky) links a `did:plc` to their private identity with a signed attestation, only when they choose to.
 
-8. **Blob path (common case):** App decrypts the blob with the derived blob symmetric key. The plaintext yields the original identity keypair, the full list of homeservers, and the master key for every group Sam was in.
-   - App restores the identity keypair — same identity key as before, so contacts see no safety-number change.
-   - App generates a new device_id and signs a device replacement request with the rotation key. On each homeserver in the list, the server verifies the signature against the rotation key listed in PLC, revokes the old device, and registers the new device_id with fresh prekeys.
-   - App caches the blob symmetric key in SQLCipher so future state changes can refresh the blob silently.
-   - For each group master key in the blob: app persists a minimal group row, calls `fetch_group_state` on the host homeserver, rotates the per-device push pseudonym (the old one died with the lost device), re-seeds its own Sender Key, and DMs the new SKDM to every other member so they can decrypt Sam's future group messages. Sam can immediately send into every group. Old group messages that other members sent under Sender Keys this device previously held are undecryptable until those peers re-distribute their keys.
-   - Sam is back. Existing 1:1 Signal sessions continue seamlessly.
+This matches `00`'s own framing (public side as Projects, private substrate as ours) better than anchoring the private substrate in a public log. It pairs with the client-side federation proposal in `13`, which needs no global resolution either.
 
-9. **No-blob path (every blob copy is gone):** App generates a fresh identity keypair on-device. Signs a PLC update with the rotation key replacing the old identity verification method with the new one. Submits to PLC.
-   - App proceeds with the original signup server URL (from `userHandle`) and tries to register there. If that server no longer accepts the user, prompts Sam to enter a server URL manually.
-   - Re-registration on the chosen server uses the rotation-key-signed proof of DID ownership.
-   - Result: Sam's DID is preserved, but contacts see a safety-number change and per-server state (group memberships, queued messages, the full server list) is lost. Sam can re-add other servers later as they remember them.
+What it gives up: Bluesky identity sharing by default, and lookup of a stranger by bare DID. Existing `did:plc` identities would keep working as "published" identities through a transition.
 
-10. If Sam has additional identities: Settings → Add an account → "Recover a different identity" → repeat steps 2–9 with the next passkey. Each recovery is independent — one passkey per identity, one Face ID prompt each.
+### P4. Authenticated recovery-blob fetch
 
-**Technical details:**
-- WebAuthn assertion uses the same PRF salt as signup and the same HKDF labels, so the resulting rotation key, identity key (where derived), and blob key are bit-identical to those derived at signup. The rotation key is never transmitted or stored on any server.
-- `userHandle` returned by the assertion is the original signup server URL bytes; the client uses it to reconstruct the genesis op without prompting.
-- Recovery blob downloaded via `GET /v1/recovery/{did}` (unauthenticated — the blob is opaque ciphertext, safe to serve publicly).
-- **Device replacement:** The rotation key (re-derived from the passkey, never on disk during normal operation) serves as proof of authority to replace the device. The app signs a replacement request with the rotation key, the server revokes the old device_id (invalidating its session tokens so it can no longer authenticate), and registers the new device_id. This is a server endpoint `POST /v1/devices/replace`, authenticated by rotation key signature rather than session token.
-- **Blob path** preserves session continuity and the full server list. No safety-number change.
-- **No-blob path** preserves the DID and the rotation key authority. Identity key changes (safety-number change) and server list is lost. This is the fallback path; the passkey alone is always sufficient to reach it.
-- After recovery, the app re-authenticates to each homeserver via challenge-response with the restored (or freshly generated) identity key.
-
----
-
-### 5. Day-to-day app usage (no passkey involved)
-
-**Story:** Sam opens the app, reads messages, sends replies. No authentication prompts.
-
-**Flow:**
-
-1. App launches. SQLCipher database unlocked via Secure Enclave-derived key.
-2. Identity key loaded from local database.
-3. WebSocket connection established to each homeserver using existing session tokens.
-4. If session token is expired: automatic challenge-response re-authentication using the device identity key. No user interaction.
-5. Messages encrypt/decrypt using existing Double Ratchet sessions.
-
-Passkeys are never touched during normal use. They exist solely for recovery.
-
-**Technical details:**
-- Session tokens have a configurable lifetime. When expired, the client automatically performs the challenge-response flow: `POST /v1/auth/challenge` (get nonce) → `POST /v1/auth/token` (sign nonce with identity key, get new token).
-- No user interaction required for re-authentication. The identity key is always available in the local encrypted database.
-
----
-
-## Summary: What Lives Where
-
-| Secret | Where it lives | What it's for |
-|---|---|---|
-| Passkey (or written-down recovery phrase) | 1Password / iCloud Keychain / hardware key / paper | Sole authority over the DID. Via HKDF labels `"actnet-rotation-v1"` and `"actnet-blob-v1"`, deterministically produces the rotation key and the blob-encryption key. |
-| Passkey `user.id` (userHandle) | Inside the passkey credential | Stores the original signup server URL. Returned during recovery assertion so the client can reconstruct the genesis op and derive the DID without prompting. |
-| DID rotation key (P-256) | Re-derived from passkey on demand; cached in device SQLCipher during a session | Signing DID operations (genesis, identity-key updates, device replacement). **Never stored on any server.** |
-| Device identity key (Ed25519) | Device (SQLCipher) + encrypted in recovery blob | Signal protocol: session establishment, message encryption, server auth. Generated randomly per device. |
-| Prekeys (signed, one-time, Kyber) | Public halves on server; private halves on device (SQLCipher) | Signal protocol: X3DH session initiation |
-| Recovery blob | Homeserver(s), encrypted | Contains identity key + server list + profile data + group master keys. Convenience-only: losing every copy costs session continuity, the server list, and silent group re-join — not DID control. |
-| Blob symmetric key (cached) | Device (SQLCipher) | PRF-derived AES key for the recovery blob. Cached at signup/recovery so routine state changes (group join, etc.) can re-encrypt and upload silently without a passkey prompt. |
-| Session token | Device (memory/keychain) | Authenticating API requests to homeserver |
-
-
----
-
-## Notes
-
-### Bluesky-linked identities (future)
-
-The flows above cover standalone avalanche identities. A future extension could allow users to connect an existing Bluesky identity via ATProto OAuth — authenticating with Bluesky to prove ownership of a `did:plc` that already exists, then registering that DID on an avalanche homeserver. This would let public organizers use the same identity across both networks.
-
-Key differences from standalone identities:
-
-- No passkey needed — Bluesky is the identity authority, recovery is "log in with Bluesky again"
-- No PLC directory writes — Bluesky manages the DID document
-- No recovery blob — device loss means new keys, sessions reset, contacts see a safety number change (same tradeoff Signal makes with phone numbers)
-- No automatic server list recovery — the user must remember which servers they were on and re-authenticate with Bluesky on each one individually
-- Could extend to other OAuth providers (Google, Apple, etc.) that create a new avalanche DID on the user's behalf with the OAuth provider as the recovery authority
-
-Privacy tradeoff: connecting a Bluesky account means Bluesky can verify that identity on avalanche. For sensitive organizing, users should create a separate standalone identity instead.
-
-### Other OAuth providers
-
-Any OAuth provider could serve as an identity authority using the same pattern as Bluesky. The difference is that non-Bluesky providers don't use `did:plc`, so the avalanche homeserver would create a new DID on the user's behalf and link it to the OAuth identity. Recovery = re-authenticate with the provider. Same lossy recovery (new keys, safety number change) as the Bluesky case.
-
-
-## Screen Flow
-
-```
- ┌────────────────┐
- │    Landing     │
- │                │
- │ [Scan QR]      │
- │ Enter code     │
- │ Recover        │
- └──┬──────────┬──┘
-    │ invite   │ recover
-    │ link     │
-    ▼          ▼
- ┌────────┐  ┌────────────────┐
- │Choose  │  │   Recovery     │
- │ID page │  │   Explainer    │
- │(if ≥1  │  │                │
- │ID on   │  │ [Passkey]      │
- │device) │  │ Phrase ->      │
- │        │  └───────┬────────┘
- │ Alice  │          │
- │[+] New │          │ WebAuthn sheet
- │[⚷] Re- │          │ (system UI: pick
- │  cover │          │  passkey, Face ID)
- └┬──┬──┬─┘          │
-  │  │  │            ▼
-  │  │  │ recover  ┌────────────────┐
-  │  │  └─────────►│   Recovery     │
-  │  │             │   Console      │
-  │  │             └───────┬────────┘
-  │  │ new                 │
-  │  ▼                     │
-  │ ┌────────────────┐     │
-  │ │    New ID      │     │
-  │ │                │     │
-  │ │ [photo]        │     │
-  │ │ Display Name   │     │
-  │ │ [Next]         │     │
-  │ │ recover ->     │     │
-  │ └───────┬────────┘     │
-  │         │              │
-  │         ▼              │
-  │ ┌────────────────┐     │
-  │ │  Server Step   │     │
-  │ │  (optional)    │     │
-  │ └───────┬────────┘     │
-  │         │              │
-  │         ▼              │
-  │ ┌────────────────┐     │
-  │ │    Passkey     │     │
-  │ │   Explainer    │     │
-  │ │                │     │
-  │ │ [photo+name]   │     │
-  │ │ [Create]       │     │
-  │ │ phrase ->      │     │
-  │ │ skip ->        │     │
-  │ └───────┬────────┘     │
-  │         │              │
-  │   WebAuthn sheet       |
-  │         │              │
-  │         ▼              │
-  │ ┌────────────────┐     │
-  │ │    Signup      │     │
-  │ │   Console      │     │
-  │ └───────┬────────┘     │
-  │         │              │
-  │ existing│              │
-  │ identity│              │
-  │         ▼              ▼
-  │ ┌──────────────────────────┐
-  └►│       SIGNED IN!         │
-    └──────────────────────────┘
-```
-
-## Screen Details
-
-### Landing Page
-- **Scan invitation** — primary action, opens camera
-- **Enter invite code** — secondary, text entry
-- **Recover account** — secondary, navigates to Recovery Explainer
-
-### Choose ID Page
-Shown when the user already has one or more identities on this device and scans/taps an invite link. First-time users skip straight to New ID.
-
-- "Log into [server name] with:"
-- List of existing identities on this device (tap to join this server with that identity)
-- [green] **+ New identity** — navigates to New ID page
-- [yellow] **⚷ Recover** — navigates to Recovery Explainer
-
-### New ID Page
-- "Create a new identity for [server name]:"
-- Profile picture field (optional)
-- Display Name field (required)
-- (future) Icon field for disambiguation
-- **Next** button — primary action, disabled until display name is entered
-- Small "recover an existing identity instead →" at bottom (hidden if navigated from Choose ID page, since Recover is already an option there)
-
-### Server Step (deferred)
-A webview provided by the homeserver for any pre-account-creation requirements: terms of service agreement, additional signup info, org-specific onboarding, etc. The invite token tells the app whether a server step exists and what URL to load. If the server doesn't specify one, this screen is skipped entirely.
-
-This also runs when an existing identity joins a new server (after tapping an identity on the Choose ID page). 
-
-The exact implementation needs to be planned out for this. For now we can just skip implementing it, but it will be important later.
-
-### Passkey Explainer Page
-- "Create a passkey to protect this identity"
-- Shows the profile picture and display name as they will appear on the Choose ID page in the future
-- "Passkeys are stored securely in your password manager or iCloud, and synced across all your devices. You'll use it to sign back into this identity if you lose this device. [More about passkeys →]" (links to explainer page on our website)
-- **⚷ Create Passkey** — primary action. Triggers a WebAuthn registration ceremony: the system presents a sheet (1Password, iCloud Keychain, or hardware key), the user confirms with Face ID, and a new passkey is created for the `theavalanche.net` relying party.
-- "Use a recovery phrase instead →" — generates a 12-word BIP39 phrase shown alongside the home server URL for the user to write down, then a verification step re-prompts for three of the words before creating the account (`RecoveryPhraseSetupView`)
-- "Skip recovery setup →" — proceeds without recovery (server may nag later)
-
-### Recovery Explainer Page
-- "Recover an identity"
-- **⚷ Recover using Passkey** — primary action. Triggers a WebAuthn authentication ceremony: the system presents a sheet showing all passkeys stored for `theavalanche.net`. The user picks one and confirms with Face ID. The app receives the PRF-derived symmetric key and the DID from the user handle. If the user picks an identity that is already signed-in on this device, we explain that they're already signed in and prompt to pick another.
-- "Enter your recovery phrase instead →" — text entry for the written-down phrase **plus the home server URL** (the URL recomputes the DID, since a bare phrase carries no server metadata). Routes through the same progress console as passkey recovery once the DID is derived.
-
-### Progress Console
-A monospace-text console that scrolls through status updates as the app works in the background. Used for both signup and recovery.
-
-After completion, the console transitions to the signed-in Chats screen, which will hopefully have a welcome message or something, but that's up to the server.
+`GET /v1/recovery/{id}` requires a signature over a server challenge by a **fetch key** derived directly from each recovery factor (for example `HKDF(PRF, "actnet-fetch-v1")`), whose public half was registered when the factor was set up. That doesn't need the root (so it works with P1), stops DID-holders from probing servers for membership, and lets the server rate-limit per identity. Stop returning `device_ids`; a recovery that revokes the whole device set (`04` §7) doesn't need them.
 
+## Speculative
+
+- **Bluesky-linked identities.** Let a user authenticate with Bluesky (ATProto OAuth) to prove ownership of an existing `did:plc` and register it on a homeserver. No passkey, no PLC writes, no recovery blob; recovery is "log in with Bluesky again", with a safety-number change. Under P3 this becomes the opt-in public link rather than a separate identity kind. Privacy cost: Bluesky can see the identity is used on Avalanche.
+- **Other OAuth providers as recovery authorities.** Same pattern, with the homeserver creating an identity linked to the OAuth account. Lossy recovery (new keys).
+
+## Rationale and rejected alternatives
+
+- **No phone number or email (decided).** Removes the strongest real-world identifier from the server.
+- **Passkey-based recovery (decided).** The best recovery UX available: synced by the platform, no seed phrase to lose. P1 keeps it and removes its single points of failure.
+- **Identity key not derived from the passkey (decided).** Keeps the Signal identity key random; the passkey controls the DID, the blob restores the identity key.
+- **Genesis op without the identity key (decided, under review by P3).** Made the DID recomputable from passkey + signup server. Its cost — publishing the signup server — is one reason for P3.
+- **Universal RP domain rather than per-homeserver RPs (decided).** One passkey works across servers and only official apps can run recovery. Cost: concentrates risk on one domain (Known gaps, P1).
+- **Homeserver-held recovery keys (rejected in `00`'s original open question).** Would let a seized server take over identities.
+- **Consumer cloud backup as the recovery substrate (rejected).** Re-centralizes on a subpoenable party; see `05`.

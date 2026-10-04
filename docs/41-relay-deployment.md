@@ -1,252 +1,119 @@
-# Deploying the push relay
+# 41 — Deploying the push relay
 
-One push relay serves all environments (dev + production). It maps opaque
-per-(user, server) pseudonyms to APNs / FCM / UnifiedPush targets and fires
-content-free silent pushes when homeservers report offline messages. APNs and
-FCM need credentials (below); UnifiedPush needs only outbound HTTPS.
+> **Status:** Built — one relay (`https://relay.theavalanche.net`) is deployed and serves all
+> environments. It is deployed by hand, outside the `av-deploy` bundle.
+> **Last verified against code:** 2026-10-03
 
-This guide walks through running it on a $5 DigitalOcean droplet.
+## Summary
 
-**Why so cheap:** the relay has very little state, just a small SQLite file
-(pseudonym → device token, with 7-day TTL). RAM use is ~10 MB, disk grows
-linearly with active devices. A `s-1vcpu-512mb-10gb` droplet handles
-hundreds of thousands of devices comfortably.
+The push relay (`core/crates/relay`) maps opaque per-(user, server) pseudonyms to APNs, FCM,
+and UnifiedPush targets and fires content-free pushes when homeservers report waiting messages
+(design: docs/15, docs/16). It is tiny: a small SQLite file (pseudonym → device token, 7-day
+TTL), roughly 10 MB of RAM, and a `s-1vcpu-512mb-10gb` droplet ($4/mo) handles hundreds of
+thousands of devices. This doc is the runbook for the one relay the project operates.
 
-**What you'll need:**
-- A DigitalOcean account.
-- Docker on your dev Mac (for the cross-compile).
-- Your APNs `.p8` key, Key ID, Team ID, and app bundle ID (see
-  `core/crates/relay/README.md`).
-- A domain you control (e.g. `relay.theavalanche.net`) — required so the
-  homeserver can reach the relay over HTTPS.
+## Current design
 
----
+### Build
 
-## 1. Build the binary
+Either take `av-relay-<target>.tar.gz` from a GitHub release (built by `release.yml` on every
+`v*` tag), or build locally with `make relay-release`, which runs
+`cargo build --release -p relay` inside a `rust:1-bookworm` container and writes `dist/relay`
+(dynamically linked against glibc + libssl; any modern Debian/Ubuntu has them).
 
-From the repo root on your Mac:
+### Droplet setup
 
-```bash
-make relay-release
-```
-
-This runs `cargo build --release -p relay` inside a `rust:1-bookworm`
-Docker container and drops the binary at `dist/relay`. It links
-dynamically against glibc + libssl/libcrypto, which any modern Debian or
-Ubuntu droplet already has.
-
-Rebuilds are incremental (cargo target dir is mounted at
-`dist/cargo-target/`), so subsequent builds take ~30s.
-
----
-
-## 2. Create the droplet
-
-DigitalOcean → Create → Droplets:
-
-- **Image:** Ubuntu 24.04 LTS
-- **Size:** Basic → Regular → $4/mo (`s-1vcpu-512mb-10gb`)
-- **Region:** anywhere; latency to APNs/FCM doesn't matter much
-- **Auth:** SSH key (paste your `~/.ssh/id_ed25519.pub`)
-
-Once it's up, point a DNS A record (`relay.theavalanche.net`) at the droplet's
-IPv4 address.
-
----
-
-## 3. Bootstrap the droplet
-
-SSH in as root and create an unprivileged user for the relay:
+Ubuntu 24.04, `s-1vcpu-512mb-10gb`, SSH-key auth, and a DNS A record for
+`relay.theavalanche.net`. The running relay uses the legacy `actnet-relay` names for its
+user and paths:
 
 ```bash
-ssh root@<droplet-ip>
-
 adduser --system --group --home /var/lib/actnet-relay actnet-relay
 mkdir -p /opt/actnet-relay /etc/actnet-relay
 chown actnet-relay:actnet-relay /var/lib/actnet-relay
+# Caddy from the official apt repo, for TLS
 ```
 
-Install Caddy for TLS termination (free, auto-renews Let's Encrypt certs):
+Copy the binary to `/opt/actnet-relay/relay` (mode 755) and the APNs `.p8` key and FCM
+service-account JSON to `/etc/actnet-relay/` (mode 600, owned by `actnet-relay`).
 
-```bash
-apt update
-apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-apt update && apt install -y caddy
-```
+### Configuration (`/etc/actnet-relay/env`, mode 600)
 
----
+| Variable | Meaning |
+|---|---|
+| `RELAY_BIND_ADDR` | e.g. `127.0.0.1:3002` (Caddy terminates TLS in front) |
+| `DATA_DIR` | `/var/lib/actnet-relay` — holds `relay.db` |
+| `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | APNs token auth. Without a key path, APNs wakeups are logged only. |
+| `APNS_PUSH_MODE` | `silent` (default: content-free background wakeup) or `alert` (content-free alert + `mutable-content`, which invokes the iOS Notification Service Extension — docs/16) |
+| `FCM_SA_PATH`, `FCM_PROJECT_ID` | FCM HTTP v1 service account (project id defaults to the JSON's). Omit to disable FCM. |
+| `RUST_LOG` | e.g. `relay=info,tower_http=info` |
 
-## 4. Copy the binary and APNs key
+One relay serves both sandbox and production APNs: it builds a client per environment from
+the same key and routes each wakeup by the `environment` the client registered with
+(`sandbox` for debug builds, `production` for TestFlight/App Store). UnifiedPush needs no
+config — wakeups are HTTPS POSTs to the client-supplied endpoint, SSRF-guarded (https only,
+global addresses only).
 
-From your Mac:
+### Service
 
-```bash
-scp dist/relay root@<droplet-ip>:/opt/actnet-relay/relay
-scp AuthKey_3WMG978DSL.p8 root@<droplet-ip>:/etc/actnet-relay/
-```
+A systemd unit `actnet-relay.service` runs `/opt/actnet-relay/relay` as `actnet-relay` with
+`EnvironmentFile=/etc/actnet-relay/env`, `Restart=on-failure`, `NoNewPrivileges`,
+`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and `ReadWritePaths=/var/lib/actnet-relay`.
+Caddy reverse-proxies `relay.theavalanche.net` to `127.0.0.1:3002`.
 
-Back on the droplet:
-
-```bash
-chmod 755 /opt/actnet-relay/relay
-chmod 600 /etc/actnet-relay/AuthKey_*.p8
-chown actnet-relay:actnet-relay /etc/actnet-relay/AuthKey_*.p8
-```
-
----
-
-## 5. Configure the environment
-
-```bash
-cat > /etc/actnet-relay/env <<'EOF'
-RELAY_BIND_ADDR=127.0.0.1:3002
-DATA_DIR=/var/lib/actnet-relay
-APNS_KEY_PATH=/etc/actnet-relay/AuthKey_3WMG978DSL.p8
-APNS_KEY_ID=3WMG978DSL
-APNS_TEAM_ID=7FVK3RR3TV
-APNS_BUNDLE_ID=net.theavalanche.app
-# FCM (standard Android). Omit both to disable FCM (wakeups logged only).
-FCM_SA_PATH=/etc/actnet-relay/fcm-service-account.json
-# Optional — defaults to the service-account JSON's own project_id.
-#FCM_PROJECT_ID=avalanche-12345
-RUST_LOG=relay=info,tower_http=info
-EOF
-chmod 600 /etc/actnet-relay/env
-```
-
-A single relay handles both sandbox and production APNs endpoints — it
-builds one client per environment from the same `.p8` and routes each
-wakeup based on the `environment` field clients pass at registration
-(`sandbox` for Xcode/debug builds, `production` for TestFlight/App
-Store).
-
-**FCM credentials.** From the Firebase console (the same project that backs
-`app/google-services.json`): Project settings → Service accounts → *Generate
-new private key*. Copy the downloaded JSON to the droplet alongside the APNs
-key and lock it down:
-
-```bash
-scp fcm-service-account.json root@<droplet-ip>:/etc/actnet-relay/
-# on the droplet:
-chmod 600 /etc/actnet-relay/fcm-service-account.json
-chown actnet-relay:actnet-relay /etc/actnet-relay/fcm-service-account.json
-```
-
-The relay mints OAuth2 tokens from this key (FCM HTTP v1) and caches them. No
-config is needed for UnifiedPush — those wakeups are plain HTTPS POSTs to the
-client-supplied endpoint, SSRF-guarded (https only, global hosts only).
-
----
-
-## 6. Create the systemd unit
-
-```bash
-cat > /etc/systemd/system/actnet-relay.service <<'EOF'
-[Unit]
-Description=avalanche push notification relay
-After=network.target
-
-[Service]
-Type=simple
-User=actnet-relay
-Group=actnet-relay
-EnvironmentFile=/etc/actnet-relay/env
-ExecStart=/opt/actnet-relay/relay
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/actnet-relay
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now actnet-relay
-systemctl status actnet-relay
-journalctl -u actnet-relay -f
-```
-
-You should see `APNs client configured` and `starting push relay`.
-
----
-
-## 7. Caddy TLS reverse proxy
-
-```bash
-cat > /etc/caddy/Caddyfile <<'EOF'
-relay.theavalanche.net {
-    reverse_proxy 127.0.0.1:3002
-}
-EOF
-systemctl reload caddy
-```
-
-Caddy obtains a Let's Encrypt cert automatically on first request. Verify:
+Smoke test:
 
 ```bash
 curl -i https://relay.theavalanche.net/v1/wakeup -X POST \
-  -H 'content-type: application/json' \
-  -d '{"pseudonyms":["bogus"]}'
-# → HTTP/2 200, {"woken":[],"unknown":["bogus"]}
+  -H 'content-type: application/json' -d '{"pseudonyms":["bogus"]}'
+# → 200 {"woken":[],"unknown":["bogus"]}
 ```
 
----
+### Pointing homeservers at it
 
-## 8. Point homeservers at it
+`RELAY_URL=https://relay.theavalanche.net` in each homeserver's env (the configure page sets
+it by default).
 
-On every homeserver's `.env`:
+### Updating
 
-```
-RELAY_URL=https://relay.theavalanche.net
-```
+Copy the new binary to `/opt/actnet-relay/relay.new`, `mv` it over the old one, and
+`systemctl restart actnet-relay`. In-flight requests drop, but homeservers retry and APNs
+accepts duplicate wakeups (at-least-once is fine).
 
-Restart the homeserver. Send a DM to a backgrounded device; you should
-see the device wake and present a banner, and `journalctl -u
-actnet-relay` on the droplet should log `sent APNs wakeup`.
+### Backup and observability
 
----
+The only state is `/var/lib/actnet-relay/relay.db`. Losing it forces devices to re-register
+their pseudonyms, which clients already do periodically, so backups are optional (droplet
+snapshots suffice). Logs: `journalctl -u actnet-relay`. APNs rejections show as
+`APNs send failed` (expired key, wrong environment, or wrong bundle id).
 
-## Updating
+## Known gaps
 
-```bash
-# On Mac
-make relay-release
-scp dist/relay root@<droplet-ip>:/opt/actnet-relay/relay.new
+- **Not in the release/deploy pipeline.** The binary is released, but install and upgrade are
+  manual `scp` + `systemctl`, unlike the homeserver's `av-deploy` bundle (docs/42).
+- **One relay for dev and production**, and no relay tests in CI.
+- **Registration is unauthenticated** — `POST /v1/register` is an `INSERT OR REPLACE` keyed by
+  pseudonym, so anyone who knows a pseudonym can redirect its wakeups. Combined with group
+  members being able to see each other's group pseudonyms, this is a real attack; see docs/09
+  and docs/03 §3.7.
+- **The relay sees every device's full pseudonym set** (DM plus all group pseudonyms,
+  registered as one batch), so whoever holds the relay plus one homeserver's database can
+  re-link group membership. See docs/09.
+- Legacy `actnet-*` names on the box.
 
-# On droplet
-mv /opt/actnet-relay/relay.new /opt/actnet-relay/relay
-systemctl restart actnet-relay
-```
+## Planned
 
-Restarts drop in-flight HTTP requests but the homeserver retries, and
-APNs accepts the same wakeup again — at-least-once is fine here.
+- Fold the relay into the `av-deploy` model (deployment dir, `current` symlink, same
+  tag-based `avalanche-update`), and rename paths to `avalanche-relay`.
+- Separate dev and production relays.
+- Authenticate pseudonym registration (e.g. pseudonyms carry a secret whose hash the server
+  and relay store; registration must present the preimage).
 
----
+## Rationale and rejected alternatives
 
-## Backup
-
-The only state is `/var/lib/actnet-relay/relay.db`. Losing it forces all
-devices to re-register their pseudonym on next app launch (the client
-already handles this — pseudonyms are re-uploaded periodically). So
-backups are nice-to-have, not required. If you want them, DO's weekly
-droplet snapshots ($1/mo) are enough.
-
----
-
-## Observability
-
-```bash
-journalctl -u actnet-relay -f                  # live logs
-journalctl -u actnet-relay --since "1h ago"    # last hour
-ls -lh /var/lib/actnet-relay/relay.db          # DB size
-```
-
-If APNs starts rejecting tokens, look for `APNs send failed` lines —
-typical causes are an expired/revoked `.p8`, the wrong
-`APNS_ENVIRONMENT`, or device tokens for a different bundle ID.
+- **A separate, minimal service** so homeservers never hold device tokens and Apple/Google see
+  only "app pinged" (docs/15).
+- **All external transports go through the relay**, including UnifiedPush, so a homeserver
+  never makes outbound push requests or stores per-device endpoints (docs/15).
+- **Cheap by design:** the relay is stateless enough that losing it costs only a
+  re-registration round.

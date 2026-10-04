@@ -44,11 +44,12 @@ minimum work. See the header of `Makefile` for the build chain.
 
 For further detail, open the relevant source doc — the digest cites them inline (e.g. `(03 §3.9)`):
 
-- `docs/00-design.md` — goals, architecture, threat model, first-party Project designs
-- `docs/01-technical-implementation.md` — tech stack, crypto approach, repo structure, staged build plan
-- `docs/02-todos-deferred.md` — deferred TODOs / backlog
+- `docs/00-design.md` — premise, architecture overview, where things stand, and the documentation map
+- `docs/09-security-posture.md` — what each adversary actually learns today, and the security register of known gaps. **Read before any security-relevant change, and update it when you fix or find a gap.**
+- `docs/02-todos-deferred.md` — prioritized todo list / roadmap (P0–P3, plus Proposed changes awaiting owner review)
+- `docs/01-technical-implementation.md` — repo layout, crate map, tech stack, crypto approach, CI
 
-Additional docs exist in `docs/` covering specific subsystems (server, projects, mobile, etc.) — numbering scheme: first digit = category (0=core design, 1=server & protocol, 2=projects, 3=messaging & conversation UX, 4=deploy/infra, 5=identity/accounts/contacts). See the documentation map at the top of `docs/00-design.md` for the full index.
+Every doc opens with a status block (Built / Partial / Planned / Proposed / Speculative / Superseded — defined in `docs/CLAUDE.md`). Trust a doc's Built claims only as of its "last verified" date; when you change behavior a doc describes, update the doc in the same change. **Proposed** items are contract changes that need project-owner review before implementation. Numbering scheme and doc layout rules are in `docs/CLAUDE.md`; doc numbers and code-cited section numbers are stable.
 
 ## Architecture
 

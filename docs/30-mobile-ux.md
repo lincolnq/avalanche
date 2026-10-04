@@ -1,173 +1,143 @@
-# Mobile App UX
+# 30 — Mobile app UX
+
+> **Status:** Partial — onboarding (invite, recover, link device), the four-tab shell, compose (DM / New Group / Note to Self), conversation view, and group detail are built on iOS and ported to Android. Not built: joining a second server with an existing identity (the flow is a local stub), calls, per-conversation mute, adding or removing group members from group detail, invite-link controls, server pinning in compose.
+> **Last verified against code:** 2026-10-03
+
+## Summary
+
+The app should feel like Signal: one unified inbox of every conversation across all servers and identities, sorted by recency. Servers and Projects are browsable in their own tab, but you never "enter a server" to read messages. iOS is the reference implementation (`mobile/ios/Actnet/Sources`); Android mirrors it (`60`, `62`).
 
 ## First launch
 
-On first launch with no identity, the app shows a splash screen with two paths:
+*Status: Built.* With no identity, the splash screen (`SplashView.swift`) offers:
 
-- **Scan invite QR code** — opens the camera to scan an invite code
-- **Enter invite link** — paste or type a link manually
+- **Scan invite QR code**
+- **Enter invite link**
+- **Recover account** (passkey or recovery phrase, `50`)
+- **Link to an existing device** (`04`)
 
-There is no "create account" flow independent of a server invitation. You always join a server.
+There's no "create account" path without a server invitation: a new identity always joins a server.
 
 ## Invite links
 
-Invite links are web URLs on the homeserver's domain (e.g., `https://myorg.example.com/invite/<token>`). QR codes encode the same URL. The link opens in the browser, where the homeserver serves a landing page that:
-
-- Explains what's happening ("You've been invited to join [Org Name]")
-- Links to the App Store / Play Store if the app isn't installed
-- Has an "Open in Avalanche" button that links to `https://go.theavalanche.net/invite/<server>/<token>`, which opens the app via Universal Links (iOS) / App Links (Android)
+*Status: Built (see `51` for the token format).* Invite links and QR codes resolve to `https://go.theavalanche.net/i/<token>`, which opens the app via Universal Links / App Links, or a web landing page with store links when the app isn't installed. The token carries at least the server URL; the app validates it against `GET <server>/v1/invites/<token>`.
 
 ## Registration flow
 
 ### New user (no existing identity)
 
-When the app receives an invite link (either via deep link or QR scan):
+*Status: Built.*
 
-1. The app contacts the server and validates the invite token.
-2. **Display name screen.** "What's your name?" with a text field and optional photo upload. Display name is required; photo is not. This is the only screen the user must interact with.
-3. The app generates keys (identity key, prekeys) and registers with the server in the background. The user never sees this.
-4. The server creates the account, generates a DID, and auto-enrolls the user into whatever groups/Projects the invite token specified.
-5. **Push notification permission prompt.** iOS requires explicit permission; ask here with context ("Get notified when your team sends a message").
-6. The user lands in the **Chats tab** with their groups already populated.
+1. Validate the invite token with the server.
+2. **Display name** (required) and optional photo.
+3. **Recovery setup** — passkey, or a written recovery phrase (`50`).
+4. Keys are generated and the account registered in the background.
+5. **Push permission prompt**, with context.
+6. Land in **Chats**.
 
-If the invite token specifies an onboarding Project (e.g., a conference registration flow), that Project's onboarding UI runs between steps 4 and 5. The Project can collect additional information (organization, role, dietary restrictions, whatever it needs). The substrate display name is already set; the Project collects Project-specific data.
+If the token names an onboarding step, a Project's onboarding web view runs between registration and the push prompt (`51`). The substrate display name is already set; the Project collects whatever else it needs.
 
-Total interaction for the minimal case: scan, type name, tap continue, approve push notifications. A few seconds of background work. That's it.
+The server cannot "auto-enroll" a new user into encrypted groups. Group membership needs the group master key, which only clients hold. Automatic group joins after an invite have to come from a client or a bot that holds the keys (see `51`, `24`).
 
-### Existing user (already has one or more identities)
+### Existing user (already has identities)
 
-When the app receives an invite and the user already has identities:
+*Status: Partial.* `IdentityPickerView` offers "Join [server] as…" each existing identity, "Create a new identity", or "Recover an identity".
 
-1. The app shows a choice of identities:
-   - **Join as [Alice]**
-   - **Create a fresh identity**
-   - **More options...**
-   The Alice prefill is your most recently used identity. More options presents a list of all your signed-in accounts alongside which servers they are bound to.
-2. If joining as an existing identity: the app registers that DID with the new server (signs a challenge to prove ownership, uploads fresh prekeys). One confirmation tap.
-3. If creating a new identity: full new-user flow — new DID, new name, new identity.
-4. Either way, auto-enrollment and onboarding proceed as above.
+- **Create a new identity** runs the full new-user flow.
+- **Join as an existing identity is a stub.** `AppState.joinServer` appends the server to the identity's local server list and returns. It never registers the identity on the new server, so nothing is actually joined. See `53` and `06`.
 
-Creating a separate identity is the right choice when you want to keep identities apart — e.g., organizing pseudonymously with one group while using your real name with another. Most users will just tap their existing name.
+Creating a separate identity is the right choice when you want personas kept apart, e.g. organizing pseudonymously in one group while using your real name in another.
 
-## Account recovery (passkey)
+## Display name and avatar
 
-During initial signup, after entering a display name, the app prompts the user to create a passkey. This is a single biometric prompt (Face ID / fingerprint) — the passkey is stored in the user's password manager or iCloud Keychain and syncs across their devices automatically. The passkey protects an encrypted recovery blob (containing the user's DID rotation key and identity keypair) stored on each homeserver the user is registered on. See `docs/50-identity-auth-recovery.md` for the full design.
-
-## Display name
-
-Display name is attached to a DID, required at account creation. It is what other users see in chats. The name is client-owned — stored locally and pushed to every server the DID is registered on. Changing your name updates it everywhere. This is the same model Signal uses for profile names.
-
-If you want different names in different contexts, create separate identities (separate DIDs). There are no per-server name overrides — one DID, one name.
+*Status: Built.* The display name is required at account creation and is part of the identity's encrypted profile (`52`). The avatar is optional (`55`). One identity, one name everywhere. To use different names in different contexts, create separate identities. There are no per-server name overrides.
 
 ## Multi-account
 
-The app supports multiple identities (multiple DIDs). Each has its own display name, keys, and set of servers. All identities' chats and servers appear together in the Chats and Network tabs — you don't switch identities to see different content. Each chat and server has a subtle indicator showing which identity it's associated with.
+*Status: Built (account tabs).* The app supports several identities, each with its own name, keys, and servers. All identities' conversations appear together in one inbox; you don't switch identities to see content.
 
-When you send a message, you send as whichever identity is a member of that group. When starting a new DM with someone reachable from multiple identities, the app asks which identity to use, defaulting to the one that shares a server with the recipient.
+- **Each conversation belongs to exactly one of your identities by construction.** A DM from your pseudonymous persona and one from your real identity are different conversations. You therefore send as whichever identity the conversation belongs to; there's no per-message identity choice. Inbox rows carry **no per-identity marker** (`37`).
+- With more than one identity, the Chats screen shows a row of **account tabs** (one avatar per identity, each with an unread badge) that filter the inbox (`37`).
+- **New conversations** pick the acting identity in compose (below).
 
-### Multiple identities in the same conversation
+The earlier ideas of a per-row identity indicator and an in-conversation identity switcher are **superseded** by `37`. The conversation is the context.
 
-It is possible to join the same group or server with multiple identities. The app doesn't prevent this, but warns you: "You're already on [Server] as [Alice]. Join as [Bob] too?" The server sees two unrelated accounts and can't tell they're the same person.
-
-When multiple of your identities are present in a conversation, the app shows a small identity indicator with a way to switch. It defaults to whichever identity you last sent from in that conversation. Messages from your active identity render as "you" (right side); messages from your other identities render like any other participant (left side, with name and avatar). Seeing your own name on the left is a strong cue that you may be on the wrong identity.
+*Speculative:* if a user joins the same group with two identities, warn them at join time ("You're already in this group as Alice").
 
 ## Navigation
 
-Three tabs:
+*Status: Built.* Four tabs (`MainTabView.swift`; Liquid Glass tab bar on iOS 26):
 
-- **Calls.** Voice and video calls.
-- **Chats.** Unified inbox across all servers, sorted by recency. Every DM and group you belong to appears here. This is the default tab and primary surface.
-- **Network.** Hierarchical list of servers you're on. Each server expands to show its Projects. Tapping a Project opens it full-screen with its own navigation.
+- **Chats** — the unified inbox (default), with account tabs once you have several identities and a compose button in the header.
+- **Network** — your servers, each listing the Projects it publishes (`22` directory). Tapping a Project opens it full-screen in a web view (`20`).
+- **Settings** — identities, servers, linked devices, blocked contacts.
+- **Search** — searches conversations (the iOS 26 floating search tab).
 
-Projects open as full-screen views. Group chats managed by a Project appear in the Chats tab like any other chat; the Project view is for non-chat surfaces (maps, dashboards, sign-up flows). Projects and chats are deep-linkable in both directions.
+The tab bar is hidden inside a conversation, so the composer sits on the bottom edge.
+
+**Calls** are Speculative (`01`); there's no calls tab. Project-to-chat deep links work in one direction: Projects open conversations via `https://go.theavalanche.net/conversation/<did>`. A conversation showing which Project it belongs to is Planned.
 
 ## Compose
 
-> **Status: partially implemented.** The core slice is live in
-> `mobile/ios/Actnet/Sources/Views/Chats/ComposeMessageView.swift`: chip
-> field, autocomplete sectioned into People / Other from the local
-> contacts table, direct `did:`-prefix entry, dedupe, group-name
-> auto-default, and dispatch (1 chip → DM in existing thread, 2+ chips
-> → `create_group` + `invite_members` fan-out + first message).
->
-> Not yet implemented: From pill with "Send as" sheet, server pinning,
-> yellow / red chips for cross-server / unreachable recipients, paste
-> as multi-recipient, profile preview on chip tap, partial-failure
-> banner on group create, custom group icon at creation time.
-> Group-name override (user editing the placeholder) is also not yet
-> wired — the auto-default is what's sent.
+*Status: Built.* `ComposeMessageView.swift`, with `NameGroupView.swift` for groups.
 
-A single compose flow creates both DMs and groups. Like iMessage, the *number of recipients* decides at send time; there is no separate "New Group" menu item.
+A single screen with a **To** field of recipient pills above an always-visible, type-to-filter contact list, and three persistent actions:
 
-**Entrypoint.** A bottom-right floating action button (pencil icon) on the Chats tab. Top-right works on iPad in split-view layouts. No multi-step "choose new DM vs new group" prompt — that's a Signal pattern this app intentionally drops.
+- **DM** — enabled with exactly one recipient. Opens the existing thread with that person if there is one, otherwise a new one.
+- **New Group** — always available. Goes to the **Name Group** screen (title; the auto-default is the comma-joined member names), then `create_group` + invites + navigate.
+- **Note to Self** — a DM with your own identity (`04` §5.5).
 
-### Recipient field
+**From (acting identity):**
+- Starts **empty**, showing the merged contact book across all identities.
+- The first contact you pick fixes it to that contact's most recent identity. Alternatively you pick From explicitly, and the contact list filters to what that identity can reach.
+- Single-identity users never see the From row.
+- Because conversations are server-local until federation, this filtering also prevents building a cross-server group.
 
-A Messages-style chip field, not Signal's stacked contact-list-with-checkmarks UI.
+**Recipients:**
+- The contact list is sectioned **People** (curated) and **Other** (everyone else seen), per `52`.
+- Matching is on names; DIDs match only when the query starts with `did:`.
+- Typing a full DID or scanning a contact QR adds that DID directly.
+- Duplicates and yourself are ignored.
 
-- Confirmed recipients render as **chips** showing display name (and small avatar). You can tap to highlight a chip; backspace while highlighted, or backspace at an empty caret after a chip, deletes.
-- **Autocomplete** is backed by the local contacts table per `docs/52-contacts-and-profiles.md`. Results mirror that doc's search shape:
-  - **People** section first (rows where `is_curated`) — matched against nickname, profile `display_name`, notes, and DID prefix.
-  - **Other** section below (every non-removed, non-blocked row) — matched against `display_name` and DID prefix only. These are folks the user has encountered (group co-members, message-request senders) but hasn't curated yet.
-- **Direct DID entry.** If what's typed looks like a DID (`did:[anything]`), Enter accepts it as-is. This is the path for adding someone whose DID you have but haven't met through the contact graph yet; the chip is shown grayed out because the client isn't yet sure if that DID can be reached on the chosen server.
-- **Empty state.** A brand-new user has no contact rows at all. The autocomplete dropdown shows a single hint: "Type a DID, or wait — anyone you message will appear here." No system-contact import; per `docs/52-contacts-and-profiles.md` we don't pull from OS contacts.
-- **Dedupe silently.** Adding the same recipient twice, or yourself, is a no-op.
-- A **`+` button** on the right edge of the recipients box opens a contact browser modal: search bar at top, **People** and **Other** sections (same shape as the inline autocomplete), multi-select with a "Add N" confirm bar.
-- **Cross-server suggestions** stay visible in autocomplete but render **greyed out** below the same-server matches when a server has already been pinned by an existing chip — they're discoverable but de-prioritised, since adding one would conflict with the current server choice.
-- **Server pinning.** The first added chip pins the server — the From pill picks whichever (identity, server) pair reaches that recipient (max-overlap, falling back to most-recently-used on tie). Subsequent recipients incompatible with the pinned server are added as yellow chips, *not* an auto-flip; the user has to tap the From pill and choose a different server explicitly to switch. This makes the active-server choice always reflect an intentional act, never a silent flip caused by adding one chip.
+**Planned:**
+- Server pinning and cross-server warnings (yellow/red pills), once identities have more than one server or federation exists.
+- Pasting a list of recipients.
+- Profile preview on tapping a pill.
+- A "3 of 4 invited — Retry?" banner when some group invites fail.
+- Draft persistence.
 
-**Pasted text** is parsed as a list when it contains separators (commas, semicolons, or newlines). Each token is run through the autocomplete matcher; matches become chips, anything that parses as a DID becomes a (grayed-out) chip, anything else gets dropped on the floor. A paste with no separators is treated as a single token typed into the field.
+**Decided:**
+- **Two or more recipients always create a new group**, even if an identical one exists (matches Messages, not Signal's membership dedup).
+- **The group icon** is auto-generated (initials mosaic); admins can set a photo later (`55`).
 
-**Tapping a chip** does nothing in this version other than enabling delete (backspace, or the chip's `×`). Profile preview on tap is a later polish.
+## Conversation view
 
-**Back-out** discards the compose state silently — no draft persistence in this version. Users who back out and then re-open the FAB land in a fresh compose.
+*Status: Built.* Text, attachments and link previews (`35`), reactions (`33`), edit and delete (`36`), disappearing-message timers, shared contact cards, group system messages for every membership or metadata change, and the message-request gate (Accept / Delete / Report) for un-accepted DMs (`12`, `52`).
 
-### Identity & server pill
+## Group detail
 
-Centered above the composer, format `From: Alice (at safe-haven.org) ▾`. (Not `alice@safe-haven.org` — the parenthetical reads more naturally when "Alice" is the user's display name rather than a handle.)
+*Status: Partial.* Tap the group header to open it. **Built on iOS:**
+- group photo and rename;
+- disappearing-message timer;
+- member list (message a member, copy their contact card, make or remove admin);
+- pending invites (shown as opaque ids);
+- leave group.
 
-- **Default on a fresh compose** (no recipients yet) is the last-used (identity, server) pair across all of the user's previous sends. The pill updates once the first chip is added, per the server-pinning rule above.
-- **Single identity, single shared server:** non-interactive label.
-- **Multiple identities or multiple shared servers reachable for the current recipient set:** tappable, opens a "Send as" sheet listing each `(identity, server)` pair with how many of the current recipients are reachable on it. Default selection: the pair reachable by the *most* recipients; ties broken by most-recently-used.
-- The pill is **editable mid-compose.** Changing the identity or server re-validates the chip set: any recipient now unreachable on the new server flips to a yellow or red chip (see below).
+**Planned:**
+- **remove member** and **add members** (from the same contact browser as compose, scoped to the hosting server);
+- **invite-link controls** (`JoinPolicy` Closed / RequestToJoin / OpenLink and the link password, `03` §3.10);
+- **per-conversation mute and notification preferences** — not built anywhere. Big organizing groups need it more than threading;
+- per-member block and report.
 
-### Cross-server / unreachable recipients
+## Known gaps
 
-- **Yellow chip:** recipient is reachable on some server but not the one currently pinned. The pill suggests switching ("Switch to safe-haven.org to reach Bob"); tapping applies it.
-- **Red chip:** recipient is reachable on no server in common with any of the user's identities. Send button stays disabled. Federated server-join invites — the planned fix — are deferred to the federation flow; the UX hook will land alongside it.
-- An inline error band sits below the recipient field when any chip is yellow or red, summarising what would need to change.
+1. Joining a second server with an existing identity doesn't register (above). P1.
+2. No per-conversation mute. P1 for organizing-scale groups.
+3. No add or remove members in group detail. P2.
 
-### Group name
+## Rationale and rejected alternatives
 
-A small "Group name" field appears below the recipient chips once a second chip is added. It is **optional**; leaving it blank uses the auto-default. The placeholder text shows what the auto-default *would* be in real time, so a user who doesn't want to bother sees the eventual name and can leave it alone.
-
-- **Auto-default:** comma-joined member display names, truncated ("Alice, Bob, Carol" or "Alice, Bob & 4 others"). Recomputed live as chips are added or removed.
-- The field becomes the group's initial `title`. Admins can rename later from the group detail screen.
-
-### Group icon
-
-**Auto-generated** at creation from member initials in a Messages-style mosaic (no prompt at compose time). Admins can replace it later from the group detail screen. A custom icon at creation time is not worth the friction for the first version.
-
-### Sending
-
-- **Send button** stays disabled until the field resolves: ≥1 recipient with no yellow/red chips, plus either a non-empty message or an attachment.
-- **1 recipient:** DM. If a thread already exists with that person on the chosen server, the new message tail-appends to *that* thread; we do *not* spawn a duplicate. The app navigates into the existing thread.
-- **2+ recipients:** every send creates a **new group**, even if the same exact membership has existed before (matches Messages; does not match Signal's strict membership-dedup). Each compose is a fresh thread.
-- **Partial failure on group create.** If `create_group` succeeds but one or more `invite_member`s fail (network, server reject), the group exists with whoever did succeed and the new thread surfaces a banner: "3 of 4 invited — Retry?". No rollback.
-- **Send failure on first message.** Stay on compose with the message intact and an inline error; user can retry without losing state.
-- **On success.** Push the new thread onto the nav stack, replacing compose. Back goes to the message list, not back to compose.
-
-### Editing an existing group
-
-Tap the group name/icon header at the top of a thread to open the group detail screen. From there we copy Signal:
-
-- Group icon and name (admin-gated edit).
-- Group expiry timer (admin-gated; action-bound groups only).
-- Member list. Tap a member to remove, change role, or view their profile.
-- Add members (opens the same contact browser as the compose `+` button, scoped to the hosting server).
-- Invite-link toggle, which switches the group's `JoinPolicy` between `Closed` / `RequestToJoin` / `OpenLink` plus optional link password (per `docs/03-groups.md` §3.10).
-- Notification preferences (mute, mentions) — local per-device, not group state.
-- Leave group (emits `remove_members(self)`).
-- Per-member block (DM-level) and report (per `docs/12-abuse-handling.md` once written).
-
-This matches Signal's pattern; the bullet list above is the concrete mapping into our action surface.
+- **Recipient count decides DM vs. group at send time with no explicit buttons** (the earlier design) — replaced by explicit **DM** and **New Group** actions with a naming step. Clearer, and it gives groups a name before they exist.
+- **A "New Group" menu separate from compose** (Signal) — rejected. Compose is one screen; New Group is an action on it.
+- **Per-row identity badges and an in-conversation identity switcher** — rejected in `37`.
+- **Importing OS contacts** — rejected: contacts come from interaction (`52`).

@@ -1,175 +1,99 @@
-# Multi-Account UX
+# 53 — Multi-account UX
 
-How signed-in identities and their server memberships are surfaced in Settings, and the actions available against each.
+> **Status:** Partial — the Accounts screen, identity detail (contact QR, DID, delete identity), server detail, and leave-server are built. Adding a server to an existing identity, activity stats, reachability state on rows, remove-from-device, and change-home-server are not.
+> **Last verified against code:** 2026-10-03
 
-## Model recap
+## Summary
 
-The app holds **identities** (DIDs the user controls), and each identity has one or more **server memberships**. Every (identity, server) pair is a row in this UI. Exactly one server per identity is the **discovery server** (published in PLC); the others are additional memberships. See `13-federation.md` for the protocol model.
+How identities and their server memberships are shown in Settings, and the actions available on each. The app holds one or more **identities**; each identity has one or more **server memberships** (accounts). Exactly one server per identity is its **discovery (home) server**.
 
-## Accounts screen (replaces current Settings page)
+In practice every identity has exactly one server today, because joining a second server with an existing identity is not built. The screens are designed for the general case.
 
-A 'Scan Invite' row opens the QR scanner. 
+Headings "Delete identity" and "Leave confirmation" are cited from code (`docs/53 §Delete identity`, `§Leave`) and are stable.
 
-Below that, the screen lists every (identity, server) pair, grouped by identity.
+## Known gaps
 
-```
-Scan Invite
+- **"Add a server to an existing identity" doesn't register anything.** iOS `AppState.joinServer` and Android `AppViewModel.joinServer` only append a `ServerInfo` to the local account; they never call the new server. The row appears, but the identity has no account there (`06` §9).
+- **Server rows show name and the `home` tag only.** No activity recency or message counts.
+- **No reachability state on rows** (ServerDown / Abandoned / removed-by-server). The core's connection-state tiers these depend on are not built (`34`).
+- **No "Remove from this device" action** and **no "Change home server"**: the identity detail screen's home-server row shows a "not implemented yet" stub (`IdentityDetailView.swift`).
+- **The contact QR is a personal invite token**, not a separate `/contact/<token>` type (`51`).
 
-[Fred]
-  ─ safe-haven.org           home   ·  active today      ·  142 msgs this week
-  ─ org.example                     ·  active 3 days ago ·  8 msgs this week
+## Current design
 
-[Anonymous Coward]
-  ─ pseudo.example           home   ·  active 1 hr ago   ·  37 msgs this week
-  ─ other.example                   ·  active 2 wks ago  ·  0 msgs this week
+### Accounts screen
 
-[+ Sign in to another account]
-```
+**Built** (`AccountsView.swift`, Android and Desktop equivalents). Top to bottom:
 
-### Sorting
+- **Scan Invite** — opens the QR scanner.
+- Every identity, with its server rows grouped under it. Identity groups appear in creation order; the header is the display name. Each server row shows the server's name and a `home` tag on the discovery server.
+- **Add an account** — scan an invite QR, enter an invite link, or **recover a different identity** (`AddAccountView.swift`).
+- Get Help, About.
 
-- **Identity groups** are sorted in the order the user created them (oldest first). The group header is the identity's display name.
-- **Server rows within a group** are sorted by activity count on that server (highest first).
+### Identity detail screen
 
-### Server row contents
+**Built** (`IdentityDetailView.swift`). Tapping an identity header shows:
 
-Each row shows:
-
-- Server name (the user-visible name, not the URL).
-- A `home` tag if this is the identity's discovery server.
-- Recency of activity on that server — last sent or received message timestamp, formatted relatively ("active today", "3 days ago").
-- A short activity count for context (e.g., messages exchanged via this server in the last 7 days). Exact metric TBD; intent is one glanceable signal.
-
-### Reachability state on the row
-
-A server that's been continuously unreachable past the short blip window stops
-being a transient banner and becomes a property of its row here. The state comes
-from the per-membership reachability tier owned by the core
-(`34-connection-state.md` §"Layer 2"):
-
-- **Online / Retrying** — normal row (activity recency as above). A brief outage
-  shows in the global connection banner, not here.
-- **ServerDown** (unreachable ≳ 2 min) — the row replaces activity recency with
-  a warning glyph + "Unreachable since X". No banner.
-- **Abandoned** (unreachable > 7 days) — same, plus the detail screen surfaces a
-  **Remove from this device** action (below).
-- **Removed by server** — if the server actively refused the membership (HTTP
-  403, `34` §"Auth rejection"), a non-discovery row is auto-removed with a
-  one-time "You were removed from [Server]" notice; a discovery row instead shows
-  "[Home] removed this identity" and routes to **Change home server**.
-
-### Sign in to another account
-
-A single entry point at the bottom of the list. Tapping it offers two paths:
-
-- **Recover an identity** — restore an identity that isn't in the list from a saved passkey / recovery key. Creates a new identity group. See `50-identity-auth-recovery.md`.
-- **Add a server to an existing identity** — paste or scan an invite link, then pick which existing identity to join the server as. Adds a new row to that identity's group. The standard server trust-delta screen (`13-federation.md` §Server-join trust-delta screen) gates the join.
-
-The branch between these is presented as two buttons inside the sheet; the user is not asked to disambiguate before tapping the entry point.
-
-## Identity detail screen
-
-Tapping an identity group header pushes a detail screen for that identity. This is the screen for actions that affect the identity as a whole, distinct from any single server membership.
-
-Contents:
-
-- Display name and small profile photo (with edit affordance — see `30-mobile-ux.md` for the name model).
-- **Contact QR code** shown directly below the name and photo. Encodes a `/contact/<token>` URL for this identity (per `13-federation.md` §QR code / invite link types) so another user can scan it to add this identity as a contact. Small 'copy' and 'share' buttons alongside the QR code to copy the link or invoke the system share sheet.
-- The identity's DID, shown verbatim.
-- Created date.
-- **Home server** row — shows the current discovery server name and URL, with a chevron that brings you into the Homeserver migration flow (`13-federation.md` §Discovery-server migration).
-- Public listing explainer: small text that links to an FAQ page (tbd) with more information about what's listed publicly on the DID, what can only be seen by contacts and what's private.
-- **Delete identity** button at the bottom, destructive styling.
+- Display name and editable photo.
+- **Contact QR code** with copy and share. It encodes the identity's personal invite link, `https://go.theavalanche.net/i/<token>` with `{s: home server, d: DID}` (`51`); scanning it lands the scanner in a DM with this identity.
+- The DID, verbatim.
+- **Home server** row (migration stub; Known gaps).
+- An explainer of what is public: "Your home server is listed publicly so people can reach you. Your display name, other server memberships, contacts, and messages are not public." (Under `50` §Proposed P3 the home server would no longer be public either.)
+- **Delete identity**, destructive.
 
 ### Delete identity
 
-Destructive. Wipes the identity from the network as completely as the protocol allows.
+**Built** (`app-core/src/lib.rs` `delete_identity`; all three platforms). Wipes the identity from the network as completely as the protocol allows.
 
-Confirmation sheet:
+Confirmation: "This will delete <name> from <N> servers and mark the identity deleted in the public registry. This cannot be undone. Your other identities on this device will not be affected."
 
-> **Delete this identity?**
->
-> This will delete [Display Name] from [N servers] and mark the identity deleted in the public registry. This cannot be undone.
->
-> Your other [N identities] on this device will not be affected. 
->
-> [Delete] [Cancel]
+Order (load-bearing):
 
-On confirm:
+1. For each account, leave every group (best effort), then delete the account on the server (best effort; proceed even if a server is uncooperative).
+2. Submit a rotation-key-signed **PLC tombstone**. This must succeed; on failure the core returns `IdentityDeletionFailed` and keeps local state so the user can retry.
+3. Only then wipe identity.db and every device.db.
 
-1. For each server membership, run the same Leave cascade described below (courtesy leave events, then membership deletion).
-2. Submit a tombstone operation to the PLC directory, signed with the rotation key. The DID resolves to a tombstoned state thereafter; future senders resolving the DID see it is gone.
-3. Wipe local state for this identity: identity keypair, rotation key, recovery blob references, session tokens, local message history scoped to this identity.
+### Server detail screen
 
-Failure modes mirror migration: if any individual server is uncooperative, proceed anyway — the PLC tombstone is authoritative. If PLC submission fails, stop and offer retry; the identity isn't fully deleted until PLC reflects it.
-
-## Server detail screen
-
-Tapping a server row pushes a detail screen for that (identity, server) pair.
-
-Contents:
-
-- Server display name.
-- **Actual server URL** (e.g., `https://safe-haven.org`). Always shown — name alone is not enough to identify the operator.
-- Joined date.
-- Activity summary (counts, last active).
-- Operator / jurisdiction / policy links, same content as the trust-delta screen shown at join time.
-- **Leave this server** button at the bottom for non-discovery memberships. The discovery server has no Leave button here — that affordance lives on the identity detail screen as **Change home server** (which routes through migration) or **Delete identity** (which leaves every server). The server detail screen for the discovery server displays an inline note pointing to the identity detail screen for those actions.
+**Built** (`ServerDetailView.swift`). Server name and actual URL (the name alone does not identify the operator). The discovery server shows "Home server for <name>" and a note pointing to the identity detail screen for changing home or deleting the identity; it has no Leave button. Other servers show **Leave this server**.
 
 ### Leave confirmation
 
-Tapping Leave shows a confirmation sheet:
+**Built** (`app-core/src/lib.rs` `leave_server`). Confirmation: "You'll be removed from any groups and Projects on <server>. People you share other servers with will still be able to reach you there. New contacts will reach you at <home server>."
 
-> **Leave b.example?**
->
-> You'll be removed from N groups and M Projects on b.example. People you share other servers with will still be able to reach you there. New contacts will reach you at [discovery server name].
->
-> [Leave] [Cancel]
+On confirm the core leaves every group hosted on that server (courtesy leave actions, `03`), then deletes the account on the server. Because each core is bound to one server today, leaving removes that account from the device. Leave is the **graceful** path and assumes the server is reachable.
 
-On confirm, the client sends courtesy leave events for the affected groups and Projects, then deletes the membership on the server. If the user is offline or the server is uncooperative, the server tombstones the user from its hosted groups/Projects on its own schedule. Either path converges. See `13-federation.md` for the protocol-level cascade.
+## Planned
 
-Leave is the **graceful** path and assumes the server is (eventually) reachable.
-It is the normal way to drop a non-discovery membership.
+### Add a server to an existing identity
+
+From an invite, pick an existing identity; the core registers the identity on the new server (fresh device registration and prekeys for that server, same identity key), adds an account context, and re-uploads the recovery blob with the new server list. Requires the multi-account `AppCore` contexts in `06` §9. Under the client-side federation proposal (`13`), a second server is something you join for that community, not something you need in order to talk to people there.
+
+### Row activity and reachability
+
+Each server row shows activity recency ("active today") and a single glanceable activity count, sorted by activity within the identity. When the core's reachability tiers exist (`34`):
+
+- **Online / Retrying** — normal row; brief outages show in the global banner.
+- **ServerDown** (unreachable ≳ 2 min) — the row shows "Unreachable since X". No banner.
+- **Abandoned** (unreachable > 7 days) — same, plus **Remove from this device** on the detail screen.
+- **Removed by server** (HTTP 403, `34`) — a non-discovery row is auto-removed with a one-time notice; a discovery row shows "<Home> removed this identity" and routes to **Change home server**.
 
 ### Remove from this device (unreachable server)
 
-Distinct from Leave. This is the "the server is gone and isn't coming back" path,
-available on a non-discovery row once it reaches the **Abandoned** tier
-(unreachable > 7 days, `34-connection-state.md` §"Layer 2"), and triggered
-automatically when a server refuses the membership (HTTP 403, `34`
-§"Auth rejection").
+Distinct from Leave: a **local-only de-routing** when a server is gone. Confirmation: "We haven't been able to reach <server> in <N> days. Removing it here stops the app from retrying and hides its connection status. You may still appear as a member there if it comes back — this only affects this device."
 
-Because the server is unreachable, there is no courtesy cascade — this is a
-**local-only de-routing**. Confirmation sheet:
+Two load-bearing constraints:
 
-> **Remove [Server]?**
->
-> We haven't been able to reach [Server] in [N days]. Removing it here stops the
-> app from retrying and hides its connection status. You may still appear as a
-> member there if it comes back — this only affects this device.
->
-> [Remove] [Cancel]
+- **Preserve crypto.** Drop the membership and routing but keep the Signal sessions and sender keys for that membership's conversations, so a future offline transport (`14`) can still carry them. Removal is de-routing, not de-provisioning.
+- **Groups stay in the list** as unreachable rows. They are real memberships the user hasn't left.
 
-Two constraints, both load-bearing (`34` §"Removal, migration & the crypto
-constraint"):
+### Change home server
 
-- **Preserve crypto.** Removal drops the server **membership and routing** but
-  must **keep the Signal session and sender-key state** for that membership's
-  conversations. A future BLE-mesh transport (`14-bitchat-fallback.md`) carries
-  DM/group traffic off exactly that local crypto state; wiping it on removal
-  would silently kill conversations that still function offline. Removal is
-  *de-routing*, not *de-provisioning*.
-- **Groups stay in the list.** Groups hosted on the removed server
-  (`groups.hosting_server_url`) are **not** deleted — they remain in the
-  conversation list as permanently-unreachable rows (and stay mesh-reachable in
-  the future). They represent real memberships the user hasn't left.
+The discovery server has no remove path: a 403 or long outage there routes to **Change home server** (migration, `13`), which completes even when the old home is unreachable. Today that means a rotation-key-signed PLC update; under `50` §Proposed P3 it becomes a signed move notice delivered to contacts.
 
-### Why the discovery server has no removal path
+## Rationale and rejected alternatives
 
-A 403 or long outage on the **discovery (home)** server cannot be resolved by
-local removal — new contacts resolve the identity there via PLC. Both cases route
-to **Change home server** (`13-federation.md` §Discovery-server migration), which
-is PLC-signed with the rotation key and completes even when the old home is
-unreachable. The discovery server's detail screen continues to point at the
-identity detail screen for **Change home server** / **Delete identity**, never a
-local remove.
+- **Every (identity, server) pair is a visible row (decided).** Users need to see where each persona is registered; hiding servers behind identities would make leave and reachability opaque.
+- **The discovery server cannot be left in place (decided).** New contacts find the identity there; dropping it without migrating would strand the identity.
+- **Delete identity tombstones PLC before wiping locally (decided).** The tombstone is the authoritative "gone" signal; wiping first would make a failed tombstone unretryable.
+- **Remove-from-device wipes crypto (rejected).** Would silently kill conversations an offline transport could still carry.
