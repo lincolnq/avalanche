@@ -56,6 +56,7 @@ struct ChatsView: View {
             }
             .background(Color.avPaper.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .hidesTabBarWhenPushed(!navigationPath.isEmpty)
             .navigationDestination(for: Conversation.self) { conversation in
                 ConversationView(conversation: conversation)
             }

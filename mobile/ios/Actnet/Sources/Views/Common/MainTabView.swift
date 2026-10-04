@@ -39,3 +39,29 @@ struct MainTabView: View {
         }
     }
 }
+
+/// Hides the tab bar while anything is pushed on a tab's NavigationStack (you
+/// don't tab-navigate from inside a thread, so the composer gets the bottom
+/// edge). Apply to the stack's *root* view. Driving it from the path rather
+/// than `.toolbar(.hidden)` on the pushed view lets it animate with the push
+/// and reappear as the pop starts, instead of popping back in only after the
+/// pushed view is torn down.
+private struct HidesTabBarWhenPushed: ViewModifier {
+    let isPushed: Bool
+    @State private var hidden = false
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar(hidden ? .hidden : .visible, for: .tabBar)
+            .onAppear { hidden = isPushed }
+            .onChange(of: isPushed) { _, pushed in
+                withAnimation(.easeInOut(duration: 0.25)) { hidden = pushed }
+            }
+    }
+}
+
+extension View {
+    func hidesTabBarWhenPushed(_ isPushed: Bool) -> some View {
+        modifier(HidesTabBarWhenPushed(isPushed: isPushed))
+    }
+}
