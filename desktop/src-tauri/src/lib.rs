@@ -4,6 +4,8 @@
 // All FFI types are now derived directly on app-core via the "specta" feature —
 // no more manual ffi_types.rs mirror.
 
+#[cfg(debug_assertions)]
+mod debug_bridge;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -275,6 +277,11 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             use tauri_plugin_deep_link::DeepLinkExt;
+
+            // Dev-only control endpoint for driving the running app from the
+            // command line (`desktop/scripts/devctl`). Not compiled into release.
+            #[cfg(debug_assertions)]
+            debug_bridge::start(app.handle().clone());
 
             // Route the Rust core's `tracing` output to stderr so app-core /
             // net / store / crypto diagnostics are visible in the dev console.

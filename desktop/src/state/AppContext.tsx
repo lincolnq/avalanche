@@ -313,6 +313,12 @@ export function AppProvider(props: { children: JSX.Element }) {
     handleDeepLink,
   };
 
+  // Dev-only command-line control surface (desktop/CLAUDE.md "Debugging the
+  // running app"). Tree-shaken out of production builds.
+  if (import.meta.env.DEV) {
+    void import("../dev/debugHelpers").then((m) => m.installDebugHelpers(ctx));
+  }
+
   return (
     <AppContext.Provider value={ctx}>
       {props.children}

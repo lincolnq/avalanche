@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Drive and inspect the running Desktop dev app (macOS, debug builds only).
+
+Talks to the dev-only debug bridge (src-tauri/src/debug_bridge.rs) and the
+window-scoped screenshot tool. See desktop/CLAUDE.md "Debugging the running app".
+
+  devctl state                     route, selection, accounts, conversations (JSON)
+  devctl open "<title or id>"      open a conversation (switches to Chats)
+  devctl goto chats|network|settings
+  devctl click "<visible text>"    click a button/link by its text
+  devctl text [css-selector]       visible text of the page (or one element)
+  devctl eval '<js function body>' run JS in the page; `return` a value; `await` ok
+  devctl shot [out.png]            screenshot just the app window (default /tmp/avalanche-desktop.png)
+
+`eval` snippets can use the window.__av helpers (state, open, goto, click, text).
+Screenshots need Screen Recording permission for the terminal.
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+
+INFO = "/tmp/avalanche-desktop-debug.json"
+WINID_BIN = os.path.expanduser("~/.cache/avalanche/desktop-winid-v2")
+WINID_SRC = r'''
+import CoreGraphics
+// All windows, not just the current Space: screencapture -l can capture a
+// window on another Space. The main window is the titled, layer-0 one.
+let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+for w in list where (w[kCGWindowLayer as String] as? Int ?? 1) == 0 {
+    if (w[kCGWindowOwnerName as String] as? String) == "avalanche-desktop",
+       !((w[kCGWindowName as String] as? String) ?? "").isEmpty {
+        print(w[kCGWindowNumber as String] as? Int ?? 0); break
+    }
+}
+'''
+
+
+def die(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def eval_js(js):
+    try:
+        info = json.load(open(INFO))
+    except OSError:
+        die(f"no {INFO}: is the Desktop dev app running (make desktop)?")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{info['port']}/eval",
+        data=js.encode(),
+        headers={"x-debug-token": info["token"]},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            res = json.load(r)
+    except OSError as e:
+        die(f"debug bridge unreachable ({e}); is the Desktop dev app running?")
+    if not res.get("ok"):
+        die(f"error: {res.get('error')}")
+    return res.get("value")
+
+
+def window_id():
+    if not os.path.exists(WINID_BIN):
+        os.makedirs(os.path.dirname(WINID_BIN), exist_ok=True)
+        src = WINID_BIN + ".swift"
+        open(src, "w").write(WINID_SRC)
+        subprocess.run(["swiftc", "-O", src, "-o", WINID_BIN], check=True)
+    out = subprocess.run([WINID_BIN], capture_output=True, text=True).stdout.strip()
+    if not out:
+        die("Desktop window not found: is the dev app running?")
+    return out
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    cmd, args = argv[1], argv[2:]
+    q = lambda s: json.dumps(s)  # noqa: E731 — safe JS string literal
+    if cmd == "state":
+        print(json.dumps(eval_js("return __av.state();"), indent=2))
+    elif cmd == "open":
+        print(json.dumps(eval_js(f"return await __av.open({q(args[0])});")))
+    elif cmd == "goto":
+        print(eval_js(f"return await __av.goto({q(args[0])});"))
+    elif cmd == "click":
+        print(eval_js(f"return await __av.click({q(args[0])});"))
+    elif cmd == "text":
+        sel = q(args[0]) if args else "undefined"
+        print(eval_js(f"return __av.text({sel});"))
+    elif cmd == "eval":
+        v = eval_js(args[0])
+        print(v if isinstance(v, str) else json.dumps(v, indent=2))
+    elif cmd == "shot":
+        out = args[0] if args else "/tmp/avalanche-desktop.png"
+        subprocess.run(["screencapture", "-x", "-o", "-l", window_id(), out], check=True)
+        print(out)
+    else:
+        die(f"unknown command {cmd!r}; see devctl --help")
+
+
+if __name__ == "__main__":
+    main(sys.argv)

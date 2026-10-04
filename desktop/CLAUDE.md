@@ -74,6 +74,35 @@ FFI constraints:
 
 ---
 
+## Debugging the running app (`scripts/devctl`)
+
+Dev builds (`make desktop` / `npm run tauri dev`, macOS) expose a command-line control
+surface, so you can navigate the real app and screenshot it without the maintainer:
+
+```bash
+desktop/scripts/devctl state                    # route, selection, accounts, conversations
+desktop/scripts/devctl open "Test group"        # open a conversation (title substring or id)
+desktop/scripts/devctl goto settings            # chats | network | settings
+desktop/scripts/devctl click "Join"             # click a button/link by visible text
+desktop/scripts/devctl text                     # visible page text
+desktop/scripts/devctl eval 'return __av.state().route'   # any JS; `return` a value
+desktop/scripts/devctl shot /tmp/x.png          # screenshot just the app window, then Read it
+```
+
+- **How it works:** `src-tauri/src/debug_bridge.rs` (compiled only with
+  `debug_assertions`) listens on `127.0.0.1:17890` and runs posted JS in the main webview;
+  the token is in `/tmp/avalanche-desktop-debug.json` (0600). The page posts results back,
+  which `devCsp` allows (the production `csp` is unchanged). Helpers live on `window.__av`
+  (`src/dev/debugHelpers.ts`), installed only when `import.meta.env.DEV`.
+- **Screenshots** use `screencapture -l <window id>`, so the terminal needs **Screen
+  Recording** permission (System Settings → Privacy & Security). The window can be on
+  another Space.
+- A syntax error in an `eval` snippet shows up as a timeout, not an error message.
+- Never ship any of this in release builds; keep the `cfg(debug_assertions)` /
+  `import.meta.env.DEV` guards.
+
+---
+
 ## UX Adaptation: Tabs → Sidebar
 
 iOS uses a bottom tab bar (Chats / Network / Settings, plus Search). Desktop uses a
