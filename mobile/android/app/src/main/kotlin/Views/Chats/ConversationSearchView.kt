@@ -110,6 +110,9 @@ fun ConversationSearchView(
                     isBotConversation = isBot,
                     previewText = conversationPreviewText(viewModel, conversation),
                     avatarData = conversationAvatar(viewModel, conversation),
+                    inviterName = conversation.inviterDid?.let {
+                        viewModel.displayName(did = it, accountId = conversation.accountId)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .chatRowPressHighlight { onOpenConversation(conversation) }

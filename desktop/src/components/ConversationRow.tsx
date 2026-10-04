@@ -29,6 +29,10 @@ export default function ConversationRow(props: Props) {
   // preview when the last message is one; otherwise show the raw last message.
   const preview = () => {
     const c = props.conversation;
+    // A group invite from someone you haven't accepted (docs/09 S-04).
+    if (c.isGroup && c.isRequest) {
+      return c.inviterDid ? `Invited by ${displayName(c.inviterDid, c.accountId)}` : "Group invitation";
+    }
     if (c.lastMessageKind > 0) {
       return groupEventText(
         c.lastMessageMetadata,

@@ -372,11 +372,17 @@ export type ConversationSummaryFfi = {
 	lastMessagePreview: LastMessagePreviewFfi | null,
 	/**
 	 *  True for a DM from an un-curated, un-blocked sender — an unaccepted
-	 *  message request (docs/12 §1). The chat list shows a "Message request"
-	 *  label and the conversation opens into the Accept/Delete/Report gate.
-	 *  Always false for groups.
+	 *  message request (docs/12 §1) — and for a group invite from someone we
+	 *  haven't accepted, which we have not joined (docs/09 S-04). The chat list
+	 *  shows it as a request; a DM opens into the Accept/Delete/Report gate, a
+	 *  group into the Join/Delete/Block gate.
 	 */
 	isRequest: boolean,
+	/**
+	 *  For a group invite request (`is_request` on a `group-` row), who invited
+	 *  us. `None` otherwise.
+	 */
+	inviterDid: string | null,
 	/**
 	 *  True for a DM with a blocked contact (docs/12 §2). The chat list routes
 	 *  these into a Blocked section. Always false for groups.
@@ -598,11 +604,14 @@ export type IncomingEvent =
 /**  A delivery status update from a read receipt. */
 { type: "receiptUpdate"; update: DeliveryStatusUpdate } | 
 /**
- *  Received a `GroupContext` DM — we've been invited to a group. The
- *  master key has already been persisted; the UI should refresh its
- *  conversation list so the group appears.
+ *  Received a `GroupContext` DM — we've been invited to a group. The UI
+ *  should refresh its conversation list so the group appears. With
+ *  `is_request == false` the inviter is accepted and we've joined. With
+ *  `is_request == true` the inviter is someone we haven't accepted, so the
+ *  invite is held as a request (docs/09 S-04): nothing was joined, and the
+ *  group shows as a request row until `accept_invite` / `decline_invite`.
  */
-{ type: "groupInvite"; group_id: string; hosting_server_url: string; inviter_did: string } | 
+{ type: "groupInvite"; group_id: string; hosting_server_url: string; inviter_did: string; is_request: boolean } | 
 /**
  *  A prior message was edited in place (docs/36). The store has already
  *  been updated; the UI should refresh the message's body / "Edited" mark.

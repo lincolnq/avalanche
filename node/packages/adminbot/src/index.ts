@@ -270,13 +270,23 @@ async function handleMessage(
   groupId: string,
   event: IncomingEvent,
 ): Promise<void> {
-  // Being added to a group is interesting on its own: app-core auto-accepts
-  // the invite (so we're already a full member by the time this fires), and
-  // any group we're an admin of becomes an auto-invite target for new
-  // server-joiners (see handleAdminEvent). We also enforce the expiry cap
-  // here — no accept needed.
+  // Being added to a group is interesting on its own: any group we're an admin
+  // of becomes an auto-invite target for new server-joiners (see
+  // handleAdminEvent), and we enforce the expiry cap here. app-core only joins
+  // automatically for an accepted inviter; anyone else's invite arrives as a
+  // request (docs/09 S-04). Adminbot doesn't curate contacts, so it accepts
+  // every invite request: being added to groups by the server's people is its
+  // job. (Blocked inviters never reach here; app-core drops their invites.)
   if (event.kind === "groupInvite") {
-    const { groupId: gid, inviterDid } = event.groupInvite;
+    const { groupId: gid, inviterDid, isRequest } = event.groupInvite;
+    if (isRequest) {
+      try {
+        await core.acceptInvite(gid);
+      } catch (e) {
+        console.error(`adminbot: joining group ${gid} (invited by ${inviterDid}) failed: ${(e as Error).message}`);
+        return;
+      }
+    }
     console.log(`adminbot: added to group ${gid} by ${inviterDid}`);
     await enforceExpiryCap(core, gid);
     return;

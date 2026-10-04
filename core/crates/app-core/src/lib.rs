@@ -727,10 +727,14 @@ pub struct ConversationSummaryFfi {
     /// a new summary field.
     pub last_message_preview: Option<LastMessagePreviewFfi>,
     /// True for a DM from an un-curated, un-blocked sender — an unaccepted
-    /// message request (docs/12 §1). The chat list shows a "Message request"
-    /// label and the conversation opens into the Accept/Delete/Report gate.
-    /// Always false for groups.
+    /// message request (docs/12 §1) — and for a group invite from someone we
+    /// haven't accepted, which we have not joined (docs/09 S-04). The chat list
+    /// shows it as a request; a DM opens into the Accept/Delete/Report gate, a
+    /// group into the Join/Delete/Block gate.
     pub is_request: bool,
+    /// For a group invite request (`is_request` on a `group-` row), who invited
+    /// us. `None` otherwise.
+    pub inviter_did: Option<String>,
     /// True for a DM with a blocked contact (docs/12 §2). The chat list routes
     /// these into a Blocked section. Always false for groups.
     pub is_blocked: bool,
@@ -906,13 +910,17 @@ pub enum IncomingEvent {
     Message { msg: DecryptedMessage },
     /// A delivery status update from a read receipt.
     ReceiptUpdate { update: DeliveryStatusUpdate },
-    /// Received a `GroupContext` DM — we've been invited to a group. The
-    /// master key has already been persisted; the UI should refresh its
-    /// conversation list so the group appears.
+    /// Received a `GroupContext` DM — we've been invited to a group. The UI
+    /// should refresh its conversation list so the group appears. With
+    /// `is_request == false` the inviter is accepted and we've joined. With
+    /// `is_request == true` the inviter is someone we haven't accepted, so the
+    /// invite is held as a request (docs/09 S-04): nothing was joined, and the
+    /// group shows as a request row until `accept_invite` / `decline_invite`.
     GroupInvite {
         group_id: String,
         hosting_server_url: String,
         inviter_did: String,
+        is_request: bool,
     },
     /// A prior message was edited in place (docs/36). The store has already
     /// been updated; the UI should refresh the message's body / "Edited" mark.
@@ -2934,7 +2942,14 @@ impl AppCore {
     /// conversation, sorted newest-first. The mobile chat list is derived
     /// directly from this — no parallel persistence in UserDefaults.
     pub fn load_conversations(&self) -> Result<Vec<ConversationSummaryFfi>, AppErrorFfi> {
-        ffi_runtime().block_on(async {
+        ffi_runtime().block_on(self.load_conversations_async()).map_err(AppErrorFfi::from)
+    }
+}
+
+impl AppCore {
+    /// Async `load_conversations` (also used by tests).
+    pub async fn load_conversations_async(&self) -> Result<Vec<ConversationSummaryFfi>, AppError> {
+        {
             // Read-only: goes through the lock-free `store`/`did` handles so the
             // chat list never waits on a network op holding `inner`.
             let inner = self;
@@ -2969,7 +2984,7 @@ impl AppCore {
                 .map_err(AppError::from)?
                 .into_iter()
                 .collect();
-            Ok::<_, AppError>(rows.into_iter().map(|c| {
+            let mut list: Vec<ConversationSummaryFfi> = rows.into_iter().map(|c| {
                 let peer = c.conversation_id.strip_prefix(&dm_prefix);
                 let contact = peer.and_then(|p| contacts.get(p));
                 let is_blocked = contact.map(|c| c.is_blocked).unwrap_or(false);
@@ -2993,12 +3008,47 @@ impl AppCore {
                     last_message: c.last_message.map(stored_to_ffi),
                     last_message_preview: c.last_message_preview.map(Into::into),
                     is_request,
+                    inviter_did: None,
                     is_blocked,
                     unread_count: c.unread_count,
                 }
-            }).collect())
-        }).map_err(AppErrorFfi::from)
+            }).collect();
+
+            // Group invites we haven't accepted (docs/09 S-04) aren't in
+            // `groups`, so append them as request rows. A pending invite for a
+            // group we now have (joined on a sibling device) is stale: drop it.
+            let known: std::collections::HashSet<String> =
+                list.iter().map(|c| c.conversation_id.clone()).collect();
+            for invite in inner.store.list_pending_group_invites().await.map_err(AppError::from)? {
+                let conversation_id = format!("group-{}", invite.group_id);
+                let have_group =
+                    inner.store.load_group(&invite.group_id).await.map_err(AppError::from)?.is_some();
+                if known.contains(&conversation_id) || have_group {
+                    inner
+                        .store
+                        .delete_pending_group_invite(&invite.group_id)
+                        .await
+                        .map_err(AppError::from)?;
+                    continue;
+                }
+                list.push(ConversationSummaryFfi {
+                    conversation_id,
+                    group_title: None,
+                    last_message: None,
+                    last_message_preview: None,
+                    is_request: true,
+                    inviter_did: Some(invite.inviter_did),
+                    is_blocked: false,
+                    unread_count: 0,
+                });
+            }
+            Ok::<_, AppError>(list)
+        }
     }
+}
+
+#[uniffi::export]
+impl AppCore {
 
     /// Load just the most recent message for a conversation. Returns `None`
     /// if the conversation has no messages. Used to restore conversation list
@@ -5318,6 +5368,8 @@ impl AppCore {
         let ws = self.ws.lock().expect("ws mutex poisoned").clone();
         let mut inner = self.inner.lock().await;
         let did = inner.did.clone();
+        // A held invite request (docs/09 S-04) becomes a stored group first.
+        groups::promote_pending_invite(&inner.store, &inner.client, &did, group_id).await?;
         let device_id = inner.device_id;
         groups::accept_invite(&inner.store, &inner.client, &did, group_id).await?;
 

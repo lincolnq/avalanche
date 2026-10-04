@@ -20,8 +20,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - **Operator action after the S-01 fix deploys:** rotate `REGISTRATION_SHARED_SECRET` on servers
   where old setup codes were handed out (at least `av.theavalanche.net`), and re-issue each
   Project's bot signup key with `/install-project` (S-01, `22`).
-- Route group invites from non-curated senders through the request gate; confirm current UI
-  behavior first (S-04, `12`, `03`).
 - Desktop: replace the constant SQLCipher key with an OS-keychain-backed key, with migration
   for existing databases (S-05, `61`).
 - Attachments: restrict download hosts to known homeservers, cap reads at the pointer's size,
@@ -61,6 +59,8 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   deleted for me, or expires; encrypt or clear plaintext attachment caches on all platforms
   (S-25, `35`, `36`).
 - Separate the avatar and attachment blob namespaces; salt profile-avatar ids (S-27, `55`).
+- Delete-identity must wipe `message_attachments` and `message_link_previews` too
+  (`IdentityStore::wipe_identity`) (S-31, `53`).
 - Storage sync: keep dirty local edits on pull, retain unknown-type payloads, bind record
   versions against server rollback (S-22, `05`).
 - Webviews: origin-locked navigation and per-Project data stores; Network tab and
@@ -118,6 +118,9 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 ## Later: P2 planned features
 
 **Messaging**
+- Group invite requests: show the group's title in the request row (fetch state as a pending
+  invitee without storing the group), clear a deleted request on your other devices, and
+  refresh the iOS conversation title after Join (`12`, S-04).
 - Share your profile when you accept a message request (Signal parity): apply profile keys
   carried on any message from an accepted contact, and send yours on accept (`52`).
 - Quote-reply, once approved (`32`).

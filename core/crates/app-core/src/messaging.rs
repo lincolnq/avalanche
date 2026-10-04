@@ -213,6 +213,19 @@ impl SenderGate {
     }
 }
 
+/// What to do with an inbound group invite (docs/09 S-04, docs/12 §1). Joining
+/// publishes our membership (and profile key) to the group, so only an
+/// accepted sender gets an automatic join; anyone else's invite becomes a
+/// request the user resolves (`accept_invite` / `decline_invite`).
+pub(crate) enum InviteDisposition {
+    /// Blocked inviter: discard the invite entirely; don't even keep the key.
+    Drop,
+    /// Accepted contact, Project bot on our server, or ourselves: join.
+    Join,
+    /// Anyone else: hold the invite as a request.
+    Request,
+}
+
 /// The automatic delivery receipt sent back for an inbound DM (docs/31). It
 /// goes to every un-blocked sender, including an un-accepted request (docs/12
 /// §1), but carries our profile key only to an accepted (curated) contact:
@@ -1220,6 +1233,22 @@ impl AppCoreInner {
         }
     }
 
+    /// Decide what to do with a group invite from `inviter_did`, using the same
+    /// gate as DM message requests (see `InviteDisposition`).
+    pub(crate) async fn group_invite_disposition(&self, inviter_did: &str) -> InviteDisposition {
+        if inviter_did == self.did {
+            return InviteDisposition::Join;
+        }
+        let gate = self.sender_gate(inviter_did).await;
+        if gate.is_blocked {
+            InviteDisposition::Drop
+        } else if gate.passes() {
+            InviteDisposition::Join
+        } else {
+            InviteDisposition::Request
+        }
+    }
+
     /// Refuse a user-initiated outbound DM to a blocked DID (docs/12 §2).
     /// Plumbing sends (delivery receipts, SKDM fan-out) deliberately don't call
     /// this, so blocking a group co-member never breaks group crypto.
@@ -1322,13 +1351,28 @@ impl AppCoreInner {
                             });
                         }
                         Some(Body::GroupContext(ctx)) => {
-                            if let Err(e) = groups::store_inbound_group_context(
-                                &self.store,
-                                &ctx.group_master_key,
-                                &ctx.hosting_server_url,
-                            )
-                            .await
-                            {
+                            // docs/09 S-04: only an accepted inviter's group is
+                            // stored for joining; a stranger's is held as a
+                            // request; a blocked inviter's is discarded.
+                            let stored = match self.group_invite_disposition(&raw.sender_did).await {
+                                InviteDisposition::Drop => continue,
+                                InviteDisposition::Join => groups::store_inbound_group_context(
+                                    &self.store,
+                                    &ctx.group_master_key,
+                                    &ctx.hosting_server_url,
+                                )
+                                .await
+                                .map(|_| ()),
+                                InviteDisposition::Request => groups::hold_inbound_group_invite(
+                                    &self.store,
+                                    &ctx.group_master_key,
+                                    &ctx.hosting_server_url,
+                                    &raw.sender_did,
+                                )
+                                .await
+                                .map(|_| ()),
+                            };
+                            if let Err(e) = stored {
                                 tracing::warn!(
                                     "[groups] failed to store inbound GroupContext: {e}"
                                 );
@@ -1735,6 +1779,38 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             // below: cryptographic plumbing, not content.
             let ws = core.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = core.inner.lock().await;
+            // docs/09 S-04: auto-join only an accepted inviter's group. A
+            // stranger's invite is held as a request (surfaced with
+            // `is_request`, joined only via `accept_invite`); a blocked
+            // inviter's is discarded.
+            match inner.group_invite_disposition(&decrypted.sender_did).await {
+                InviteDisposition::Drop => return,
+                InviteDisposition::Request => {
+                    let held = groups::hold_inbound_group_invite(
+                        &inner.store,
+                        &ctx.group_master_key,
+                        &ctx.hosting_server_url,
+                        &decrypted.sender_did,
+                    )
+                    .await;
+                    drop(inner);
+                    match held {
+                        Ok(Some(group_id)) => {
+                            let _ = core.event_tx.send(IncomingEvent::GroupInvite {
+                                group_id,
+                                hosting_server_url: ctx.hosting_server_url.clone(),
+                                inviter_did: decrypted.sender_did.clone(),
+                                is_request: true,
+                            });
+                        }
+                        // Already have this group (joined on a sibling device).
+                        Ok(None) => {}
+                        Err(e) => tracing::warn!("[groups] failed to hold group invite: {e}"),
+                    }
+                    return;
+                }
+                InviteDisposition::Join => {}
+            }
             let result = groups::store_inbound_group_context(
                 &inner.store,
                 &ctx.group_master_key,
@@ -1769,6 +1845,7 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
                         group_id,
                         hosting_server_url: ctx.hosting_server_url.clone(),
                         inviter_did: decrypted.sender_did.clone(),
+                        is_request: false,
                     });
                 }
                 Err(e) => {

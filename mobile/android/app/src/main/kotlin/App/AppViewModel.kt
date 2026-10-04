@@ -1393,6 +1393,46 @@ class AppViewModel(
         }
     }
 
+    /**
+     * Join a group you were invited to by someone you hadn't accepted (docs/09
+     * S-04). Mirrors iOS AppState.acceptGroupInvite(groupId:accountId:).
+     */
+    fun acceptGroupInvite(groupId: String, accountId: String) {
+        val core = cores[accountId] ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { core.acceptInvite(groupId = groupId) } }
+            loadConversationsFromStore()
+            refreshGroupTitle(groupId = groupId, accountId = accountId)
+        }
+    }
+
+    /**
+     * Delete a group invite request: decline it and drop it from the chat list.
+     * Mirrors iOS AppState.deleteGroupInvite(groupId:accountId:).
+     */
+    fun deleteGroupInvite(groupId: String, accountId: String) {
+        val core = cores[accountId] ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { core.declineInvite(groupId = groupId) } }
+            loadConversationsFromStore()
+        }
+    }
+
+    /**
+     * Report and block a group invite request's sender, and decline the invite.
+     * Mirrors iOS AppState.blockGroupInviter(inviterDid:groupId:accountId:).
+     */
+    fun blockGroupInviter(inviterDid: String, groupId: String, accountId: String) {
+        val core = cores[accountId] ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { core.reportAndBlock(did = inviterDid, reason = "spam") }
+                runCatching { core.declineInvite(groupId = groupId) }
+            }
+            loadConversationsFromStore()
+        }
+    }
+
     /** Block a contact (docs/12 §2). Mirrors iOS AppState.blockContact(did:accountId:). */
     fun blockContact(did: String, accountId: String) {
         val core = cores[accountId] ?: return
@@ -1839,6 +1879,27 @@ class AppViewModel(
                 val lastSender = lastMsg?.senderDid
 
                 val groupId = groupIdFromConversationId(s.conversationId)
+                if (groupId != null && s.isRequest) {
+                    // A group invite from someone you haven't accepted (docs/09
+                    // S-04): not joined, so there's no group state to fetch.
+                    // Shown as a request row until you Join or Delete it.
+                    // Mirrors iOS AppState.loadConversationsFromStore.
+                    newConvs.add(
+                        Conversation(
+                            id = s.conversationId,
+                            title = "Group invitation",
+                            accountId = accountId,
+                            serverUrl = serverUrl,
+                            recipientDid = null,
+                            groupId = groupId,
+                            isGroup = true,
+                            isRequest = true,
+                            inviterDid = s.inviterDid,
+                        )
+                    )
+                    s.inviterDid?.let { displayName(did = it, accountId = accountId) }
+                    continue
+                }
                 if (groupId != null) {
                     val groupTitle = s.groupTitle
                     if (!groupTitle.isNullOrEmpty()) {

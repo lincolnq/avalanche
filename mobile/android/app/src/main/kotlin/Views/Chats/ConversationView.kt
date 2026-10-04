@@ -434,7 +434,9 @@ fun ConversationView(
         conversation.recipientDid?.let { did ->
             viewModel.refreshContactProfile(did = did, accountId = conversation.accountId)
         }
-        conversation.groupId?.let { groupId ->
+        // A group invite request isn't joined yet, so there's no group state or
+        // membership to fetch (docs/09 S-04).
+        conversation.groupId?.takeIf { !conversation.isRequest }?.let { groupId ->
             viewModel.refreshGroupTitle(groupId = groupId, accountId = conversation.accountId)
             isGroupMember = viewModel.isGroupMember(
                 groupId = groupId,
@@ -496,7 +498,8 @@ fun ConversationView(
         topBar = {
             TopAppBar(
                 title = {
-                    if (conversation.isGroup && groupId != null) {
+                    // Not for a group invite request: you aren't a member yet.
+                    if (conversation.isGroup && groupId != null && !liveConv.isRequest) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -665,6 +668,14 @@ fun ConversationView(
         // request shows the Accept/Delete/Report gate (docs/12 §1), and an
         // accepted DM or group shows the normal composer.
         when {
+            liveConv.isGroup && liveConv.isRequest && conversation.groupId != null ->
+                GroupInviteGate(
+                    groupId = conversation.groupId!!,
+                    inviterDid = liveConv.inviterDid,
+                    accountId = conversation.accountId,
+                    viewModel = viewModel,
+                    onDismiss = onBack,
+                )
             liveConv.isBlocked && liveConv.recipientDid != null ->
                 BlockedBar(
                     did = liveConv.recipientDid!!,
@@ -1019,6 +1030,74 @@ private fun StagedRemoveButton(onClick: () -> Unit, modifier: Modifier = Modifie
  * The message-request gate (docs/12 §1): a stranger's first contact is
  * read-only until the user Accepts, Deletes, or Reports & Blocks.
  */
+/**
+ * Shown in place of the composer for a group invite from someone you haven't
+ * accepted (docs/09 S-04). Mirrors [MessageRequestGate] and iOS
+ * `ConversationView.groupInviteGate`: you aren't a member until you Join.
+ */
+@Composable
+private fun GroupInviteGate(
+    groupId: String,
+    inviterDid: String?,
+    accountId: String,
+    viewModel: AppViewModel,
+    onDismiss: () -> Unit,
+) {
+    val inviter = inviterDid?.let { viewModel.displayName(did = it, accountId = accountId) } ?: "Someone"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "$inviter invited you to a group. Join to see its messages and let its members see your name?",
+            style = MaterialTheme.typography.labelSmall,
+            color = LocalAvalancheColors.current.muted,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (inviterDid != null) {
+                OutlinedButton(
+                    onClick = {
+                        viewModel.blockGroupInviter(inviterDid = inviterDid, groupId = groupId, accountId = accountId)
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = LocalAvalancheColors.current.error,
+                    ),
+                ) {
+                    Text("Block")
+                }
+            }
+
+            OutlinedButton(
+                onClick = {
+                    viewModel.deleteGroupInvite(groupId = groupId, accountId = accountId)
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = LocalAvalancheColors.current.error,
+                ),
+            ) {
+                Text("Delete")
+            }
+
+            Button(
+                onClick = { viewModel.acceptGroupInvite(groupId = groupId, accountId = accountId) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Join")
+            }
+        }
+    }
+}
+
 @Composable
 private fun MessageRequestGate(
     did: String,

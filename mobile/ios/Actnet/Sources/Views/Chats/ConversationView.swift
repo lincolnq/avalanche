@@ -254,7 +254,9 @@ struct ConversationView: View {
             // Bottom bar: a blocked DM shows an unblock prompt, an un-accepted
             // request shows the Accept/Delete/Report gate (docs/12 §1), and an
             // accepted DM or group shows the normal composer.
-            if liveConv.isBlocked, let did = liveConv.recipientDid {
+            if liveConv.isGroup, liveConv.isRequest, let groupId = conversation.groupId {
+                groupInviteGate(groupId: groupId, inviterDid: liveConv.inviterDid)
+            } else if liveConv.isBlocked, let did = liveConv.recipientDid {
                 blockedBar(did: did)
             } else if liveConv.isRequest, let did = liveConv.recipientDid {
                 messageRequestGate(did: did)
@@ -269,8 +271,11 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // For groups, the centered title + avatar is a tappable link into
-            // the group detail screen. (DMs keep the plain navigationTitle.)
-            if conversation.isGroup, let groupId = conversation.groupId {
+            // the group detail screen. (DMs keep the plain navigationTitle.) Not
+            // for a group invite request: you aren't a member, so there's no
+            // detail to show. Keyed on the stable `conversation`, never
+            // `appState` (toolbar re-hosting, docs/55).
+            if conversation.isGroup, !conversation.isRequest, let groupId = conversation.groupId {
                 ToolbarItem(placement: .principal) {
                     NavigationLink {
                         GroupDetailView(groupId: groupId, accountId: conversation.accountId)
@@ -368,7 +373,9 @@ struct ConversationView: View {
             if let recipientDid = conversation.recipientDid {
                 appState.refreshContactProfile(did: recipientDid, accountId: conversation.accountId)
             }
-            if let groupId = conversation.groupId {
+            // A group invite request isn't joined yet, so there's no group
+            // state, avatar, or membership to fetch (docs/09 S-04).
+            if let groupId = conversation.groupId, !liveConv.isRequest {
                 appState.refreshGroupTitle(groupId: groupId, accountId: conversation.accountId)
                 // Seed the header avatar from cache (stable @State), then kick a
                 // fetch; the onChange above pushes the resolved value in (docs/55).
@@ -583,6 +590,53 @@ struct ConversationView: View {
                     Task { await appState.acceptRequest(did: did, accountId: conversation.accountId) }
                 } label: {
                     Text("Accept").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    /// Shown in place of the composer for a group invite from someone you
+    /// haven't accepted (docs/09 S-04). Mirrors `messageRequestGate`: you
+    /// aren't a member until you Join, so the group can't see you yet.
+    @ViewBuilder private func groupInviteGate(groupId: String, inviterDid: String?) -> some View {
+        let inviter = inviterDid.map { appState.displayName(for: $0, accountId: conversation.accountId) } ?? "Someone"
+        VStack(spacing: 10) {
+            Text("\(inviter) invited you to a group. Join to see its messages and let its members see your name?")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 12) {
+                if let inviterDid {
+                    Button(role: .destructive) {
+                        Task {
+                            await appState.blockGroupInviter(
+                                inviterDid: inviterDid, groupId: groupId, accountId: conversation.accountId
+                            )
+                            dismiss()
+                        }
+                    } label: {
+                        Text("Block").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button(role: .destructive) {
+                    Task {
+                        await appState.deleteGroupInvite(groupId: groupId, accountId: conversation.accountId)
+                        dismiss()
+                    }
+                } label: {
+                    Text("Delete").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    Task { await appState.acceptGroupInvite(groupId: groupId, accountId: conversation.accountId) }
+                } label: {
+                    Text("Join").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
             }

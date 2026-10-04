@@ -100,8 +100,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   group membership. [timing only; nothing more together] (S-13)
 - *Public PLC log:* signup server forever, every rotation; recovery GET tests which servers
   hold a DID. (S-06, S-07, S-19, S-20)
-- *Stranger with your DID:* can add you to groups; attachment URLs leak your IP. [nothing
-  until accept] (S-04, S-08; S-02, S-03 fixed)
+- *Stranger with your DID:* attachment URLs leak your IP; group invites now wait as
+  requests. [nothing until accept] (S-08; S-02..S-04 fixed)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
   sender membership check; extend expiry. (S-14..S-16)
 - *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
@@ -146,8 +146,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-03 done)
-S-04, S-05, S-08, S-14, S-17, S-30,
+**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-04 done)
+S-05, S-08, S-14, S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
@@ -626,8 +626,7 @@ Store 1.2). **Reports never contain content.**
 - **Profile abuse (Planned):** client name filter, profile reports, forced reset.
 - **Never build:** content reporting/hashes, report button in accepted conversations, global
   ban list, client ML moderation, on-device scanning (legal conflict), "who reported me".
-- Gaps: stranger group
-  invites ungated (S-04); reports don't leave reporter's server. Open: group abuse, Project
+- Stranger group invites are requests (Join / Delete / Block, S-04 fixed). Gaps: reports don't leave reporter's server. Open: group abuse, Project
   abuse, appeals, cross-server aggregation.
 
 ---
@@ -670,8 +669,8 @@ Store 1.2). **Reports never contain content.**
   affordance in it comes only from that server's Projects; nothing crosses accounts.
 - **Known gaps:** no audience enforcement (S-17); tokens in query string; wrong
   identity for Network tab and `conversation/` links (first account); default unhardened
-  WKWebView (S-23); officialness unsettable; self-declared bot bypass; group invites
-  auto-accepted (asserted as fact here; 09 marks it Reported).
+  WKWebView (S-23); officialness unsettable; group invites from strangers are now
+  requests (S-04), so `invites.auto-accept` has no effect yet.
 - **Planned:** mandatory `audience` on verify and mint only for
   installed origins (additive); tokens out of query string (fragment; Proposed, owner review); identity-correct minting/routing; webview hardening (per-Project data
   store, origin lock, per-Project subdomains); checkmark from `project_bots` linkage to an

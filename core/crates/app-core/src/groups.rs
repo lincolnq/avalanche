@@ -2426,6 +2426,64 @@ pub async fn store_inbound_group_context(
     Ok(group_id_b64_s)
 }
 
+/// Hold a group invite from a sender we haven't accepted as a request
+/// (docs/09 S-04) instead of storing it as a group: the master key goes to
+/// `pending_group_invites`, which is local-only, so it neither syncs to our
+/// other devices as a joined group nor lets us join until the user says so.
+/// Returns the group id, or `None` if we already have the group (a sibling
+/// device joined it, or we're already a member).
+pub async fn hold_inbound_group_invite(
+    identity: &store::IdentityStore,
+    master_key: &[u8],
+    hosting_server_url: &str,
+    inviter_did: &str,
+) -> Result<Option<String>, AppError> {
+    if master_key.len() != 32 {
+        return Err(AppError::Protocol("master_key length != 32".into()));
+    }
+    let mut mk = [0u8; 32];
+    mk.copy_from_slice(master_key);
+    let group_id_b64_s = b64(&GroupKey::from_bytes(mk).group_id().0);
+    if identity.load_group(&group_id_b64_s).await?.is_some() {
+        return Ok(None);
+    }
+    identity
+        .save_pending_group_invite(&store::groups::PendingGroupInvite {
+            group_id: group_id_b64_s.clone(),
+            master_key: master_key.to_vec(),
+            hosting_server_url: hosting_server_url.to_string(),
+            inviter_did: inviter_did.to_string(),
+            invited_at: Timestamp::now(),
+        })
+        .await?;
+    Ok(Some(group_id_b64_s))
+}
+
+/// If `group_id` is a pending invite, promote it to a stored group so the
+/// normal join / decline paths (which work from the `groups` row and its
+/// cached state) can run, and drop the pending row. Also fetches the group
+/// state, which a pending invitee may read (docs/03 §3.10). All-or-nothing: if
+/// the fetch fails, the stored group is removed again and the invite stays
+/// pending, so a failed Join never leaves a not-joined group looking joined.
+/// Returns whether it was pending. A no-op for a group that's already stored.
+pub async fn promote_pending_invite(
+    store: &store::DeviceStore,
+    client: &net::Client,
+    did: &str,
+    group_id: &str,
+) -> Result<bool, AppError> {
+    let Some(invite) = store.load_pending_group_invite(group_id).await? else {
+        return Ok(false);
+    };
+    store_inbound_group_context(store, &invite.master_key, &invite.hosting_server_url).await?;
+    if let Err(e) = fetch_group_state(store, client, &invite.hosting_server_url, did, group_id).await {
+        let _ = store.delete_group(group_id).await;
+        return Err(e);
+    }
+    store.delete_pending_group_invite(group_id).await?;
+    Ok(true)
+}
+
 // ── FFI surface ─────────────────────────────────────────────────────────
 //
 // Sync wrappers that block on the global tokio runtime. Each one is a
@@ -2433,6 +2491,32 @@ pub async fn store_inbound_group_context(
 // of this section.
 
 impl AppCore {
+    /// Async `decline_invite` (also used by tests). A held invite request is
+    /// promoted to a stored group just long enough to submit the decline, then
+    /// removed locally; the server decline is best-effort, because the user's
+    /// "Delete" must always clear the request.
+    pub async fn decline_invite_async(&self, group_id: &str) -> Result<(), AppError> {
+        let inner = self.inner.lock().await;
+        let did = inner.did.clone();
+        if inner.store.load_pending_group_invite(group_id).await?.is_none() {
+            return decline_invite(&inner.store, &inner.client, &did, group_id).await;
+        }
+        let server_decline = async {
+            promote_pending_invite(&inner.store, &inner.client, &did, group_id).await?;
+            decline_invite(&inner.store, &inner.client, &did, group_id).await
+        };
+        if let Err(e) = server_decline.await {
+            tracing::warn!("[groups] server decline of invite request {group_id} failed: {e}");
+        }
+        inner.store.delete_group(group_id).await?;
+        inner.store.delete_pending_group_invite(group_id).await?;
+        // Submitting the decline records our own system line ("You declined")
+        // in the group's local history; a deleted request leaves no trace,
+        // like `delete_request` for a DM request.
+        inner.store.delete_conversation(&format!("group-{group_id}")).await?;
+        Ok(())
+    }
+
     /// Surface derived group timeline entries (§3.6) on the event channel so a
     /// foregrounded conversation refreshes live. The rows are already persisted
     /// by the action/apply path; this is the "refresh now" signal.
@@ -2652,10 +2736,15 @@ impl AppCore {
         .map_err(AppErrorFfi::from)
     }
 
+    /// Join a group we were invited to. For a held invite request (docs/09
+    /// S-04) this is the user's "Join": the invite is promoted to a stored
+    /// group first, then joined.
     pub fn accept_invite(&self, group_id: String) -> Result<(), AppErrorFfi> {
         ffi_runtime().block_on(async {
             let ws = self.ws.lock().expect("ws mutex poisoned").clone();
             let mut inner = self.inner.lock().await;
+            let did = inner.did.clone();
+            promote_pending_invite(&inner.store, &inner.client, &did, &group_id).await?;
             // The hosting server is recorded on the group row at invite
             // receipt; pull it back out so we don't need a caller-provided
             // URL here.
@@ -2675,13 +2764,13 @@ impl AppCore {
         .map_err(AppErrorFfi::from)
     }
 
+    /// Decline a group invite. For a held invite request (docs/09 S-04) this
+    /// is the user's "Delete": tell the server we decline (so the inviter
+    /// stops seeing us as pending), then forget the group locally.
     pub fn decline_invite(&self, group_id: String) -> Result<(), AppErrorFfi> {
-        ffi_runtime().block_on(async {
-            let inner = self.inner.lock().await;
-            let did = inner.did.clone();
-            decline_invite(&inner.store, &inner.client, &did, &group_id).await
-        })
-        .map_err(AppErrorFfi::from)
+        ffi_runtime()
+            .block_on(self.decline_invite_async(&group_id))
+            .map_err(AppErrorFfi::from)
     }
 
     /// Join via an invite link. `master_key` must be the 32-byte zkgroup

@@ -133,7 +133,17 @@ struct ConversationRow: View {
                 }
 
                 HStack {
-                    if conversation.isRequest {
+                    if conversation.isRequest, conversation.isGroup {
+                        // Group invite from someone you haven't accepted
+                        // (docs/09 S-04).
+                        Text(conversation.inviterDid.map {
+                            "Invited by \(appState.displayName(for: $0, accountId: conversation.accountId))"
+                        } ?? "Group invitation")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.avBrand)
+                            .lineLimit(1)
+                    } else if conversation.isRequest {
                         // First contact from an un-curated DID (docs/12 §1).
                         Text("Message request")
                             .font(.subheadline)

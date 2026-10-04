@@ -35,9 +35,14 @@ hostile operator who ignores reports about its own users.
 - **Delivery receipts to un-accepted requests carried your profile key (S-02, fixed).**
   They now carry it only to accepted contacts (`messaging.rs` `delivery_receipt`), as
   Signal does. Owned by `52`.
-- **Group invites from strangers aren't gated by app-core.** An inbound
-  `GroupContext` is stored without consulting the sender gate (`messaging.rs:1305`).
-  Whether each UI gates the invite was not verified.
+- **Group invites from strangers were joined automatically (S-04, fixed).** An
+  invite now goes through the same gate as a DM: an accepted contact's or a Project
+  bot's invite joins; a blocked inviter's is dropped; anyone else's is held as a
+  request (`pending_group_invites`, local-only) and shown with Join / Delete / Block
+  (`messaging.rs` `group_invite_disposition`, `groups.rs` `hold_inbound_group_invite`).
+  Remaining: the request row doesn't show the group's title yet (the client can only
+  fetch state for a stored group), and deleting a request on one device doesn't clear
+  it on your other devices.
 - **Reports never leave the reporter's server** (§3), so the reportee's operator
   never hears about them.
 
@@ -167,7 +172,7 @@ profile reset, repeat offenses suspend. None built.
 | Conversation menu (accepted) | Block / Mute / Disappearing messages | Block and timer built; mute not built |
 | Profile view | Block / Report Profile | Block built; report not built |
 | Settings → Blocked | Unblock | See `62` |
-| Group invite from a stranger | Accept / Decline / Report | Not built |
+| Group invite from a stranger | Join / Delete / Block (Block reports and blocks the inviter, and declines) | Built (S-04) |
 
 ## 8. What we explicitly do not build
 
@@ -194,8 +199,8 @@ message content. Abuse handling is account-level, following Signal and WhatsApp.
 ## 10. Open questions
 
 - **Group abuse.** Mass-add-to-group spam, and reporting a sealed-sender group
-  message (needs selective sender-certificate disclosure, `03` §3.11). Probably:
-  stranger group invites land as requests; reporting a group reports the inviter.
+  message (needs selective sender-certificate disclosure, `03` §3.11). Stranger group
+  invites now land as requests, and Block on one reports the inviter (S-04).
 - **Project abuse** (`20`): reports against a Project rather than a user.
 - **Appeals** after coordinated false reporting.
 - **Cross-server report aggregation** without centralizing trust.

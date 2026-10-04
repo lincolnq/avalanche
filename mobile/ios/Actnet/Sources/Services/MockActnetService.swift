@@ -140,7 +140,7 @@ final class MockAppCore: AppCoreProtocol, @unchecked Sendable {
             let preview: LastMessagePreviewFfi? = !last.contacts.isEmpty
                 ? .contact
                 : last.attachments.first.map { $0.contentType.hasPrefix("image/") ? .photo : .file }
-            return ConversationSummaryFfi(conversationId: convId, groupTitle: nil, lastMessage: last, lastMessagePreview: preview, isRequest: false, isBlocked: false, unreadCount: unread)
+            return ConversationSummaryFfi(conversationId: convId, groupTitle: nil, lastMessage: last, lastMessagePreview: preview, isRequest: false, inviterDid: nil, isBlocked: false, unreadCount: unread)
         }
         .sorted { ($0.lastMessage?.sentAtMs ?? 0) > ($1.lastMessage?.sentAtMs ?? 0) }
     }

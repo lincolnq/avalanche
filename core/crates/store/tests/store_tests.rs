@@ -1171,3 +1171,36 @@ async fn contact_nickname_set_and_load() {
     assert!(row.is_curated);
     assert_eq!(row.nickname, None);
 }
+
+#[tokio::test]
+async fn pending_group_invite_round_trip() {
+    use store::groups::PendingGroupInvite;
+    use types::Timestamp;
+    let store = DeviceStore::open_in_memory().await.unwrap();
+    assert!(store.list_pending_group_invites().await.unwrap().is_empty());
+
+    let invite = |gid: &str, at: i64| PendingGroupInvite {
+        group_id: gid.into(),
+        master_key: vec![9u8; 32],
+        hosting_server_url: "https://av.example.org".into(),
+        inviter_did: "did:plc:stranger".into(),
+        invited_at: Timestamp(at),
+    };
+    store.save_pending_group_invite(&invite("g1", 1000)).await.unwrap();
+    store.save_pending_group_invite(&invite("g2", 2000)).await.unwrap();
+
+    assert_eq!(store.load_pending_group_invite("g1").await.unwrap(), Some(invite("g1", 1000)));
+    let listed: Vec<String> = store
+        .list_pending_group_invites()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|i| i.group_id)
+        .collect();
+    assert_eq!(listed, vec!["g2".to_string(), "g1".to_string()], "newest first");
+
+    store.delete_pending_group_invite("g1").await.unwrap();
+    assert!(store.load_pending_group_invite("g1").await.unwrap().is_none());
+    // A pending invite is not a joined group: it never appears in `groups`.
+    assert!(store.load_group("g2").await.unwrap().is_none());
+}

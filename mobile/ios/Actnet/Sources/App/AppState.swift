@@ -1292,6 +1292,36 @@ final class AppState: ObservableObject {
         await loadConversationsFromStore()
     }
 
+    /// Join a group you were invited to by someone you hadn't accepted
+    /// (docs/09 S-04): only now does the group see you as a member.
+    func acceptGroupInvite(groupId: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        do {
+            try await Task.detached { try core.acceptInvite(groupId: groupId) }.value
+        } catch {
+            print("acceptGroupInvite failed: \(error)")
+        }
+        await loadConversationsFromStore()
+        refreshGroupTitle(groupId: groupId, accountId: accountId)
+    }
+
+    /// Delete a group invite request: decline it (the inviter stops seeing you
+    /// as invited) and drop it from the chat list.
+    func deleteGroupInvite(groupId: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.declineInvite(groupId: groupId) }.value
+        await loadConversationsFromStore()
+    }
+
+    /// Block a group invite request's sender: report and block them, as for a
+    /// DM request (docs/12 §3), and decline the invite.
+    func blockGroupInviter(inviterDid: String, groupId: String, accountId: String) async {
+        guard let core = cores[accountId] else { return }
+        try? await Task.detached { try core.reportAndBlock(did: inviterDid, reason: "spam") }.value
+        try? await Task.detached { try core.declineInvite(groupId: groupId) }.value
+        await loadConversationsFromStore()
+    }
+
     /// Block a contact (docs/12 §2). Multi-device synced; outbound messages to
     /// the DID are then refused and inbound ones dropped.
     func blockContact(did: String, accountId: String) async {
@@ -1727,6 +1757,26 @@ final class AppState: ObservableObject {
                 let lastKind = Int(s.lastMessage?.kind ?? 0)
                 let lastMeta = s.lastMessage?.metadata
                 let lastSender = s.lastMessage?.senderDid
+                if let groupId = Self.groupId(from: s.conversationId), s.isRequest {
+                    // A group invite from someone you haven't accepted (docs/09
+                    // S-04): not joined, so there's no group state to fetch.
+                    // Shown as a request row until you Join or Delete it.
+                    newConvs.append(Conversation(
+                        id: s.conversationId,
+                        title: "Group invitation",
+                        accountId: accountId,
+                        serverUrl: serverUrl,
+                        recipientDid: nil,
+                        groupId: groupId,
+                        isGroup: true,
+                        isRequest: true,
+                        inviterDid: s.inviterDid
+                    ))
+                    if let inviter = s.inviterDid {
+                        _ = displayName(for: inviter, accountId: accountId)
+                    }
+                    continue
+                }
                 if let groupId = Self.groupId(from: s.conversationId) {
                     // `group_title` comes resolved from local state in
                     // `loadConversations`; cache it so later rebuilds and
@@ -2413,8 +2463,9 @@ final class AppState: ObservableObject {
                 case .message(let msg): messages.append(msg)
                 case .receiptUpdate(let upd): receiptUpdates.append(upd)
                 case .groupInvite:
-                    // Master key already persisted by app-core; just refresh
-                    // the chat list so the new group becomes visible.
+                    // Either joined (accepted inviter) or held as a request
+                    // (docs/09 S-04); either way app-core has persisted it, so
+                    // refresh the chat list to show the group or the request.
                     needsConversationReload = true
                 case .groupMetadataChanged(let event):
                     // A membership/metadata change was derived from the change

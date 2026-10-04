@@ -181,7 +181,7 @@ Security gaps are also tracked in `09-security-posture.md`; todos in `02`.
 5. **Webview not hardened.** iOS uses a default `WKWebView` (shared default data store, no navigation lock to the Project origin, no content restrictions). Non-deep-link navigations are all allowed.
 6. **Officialness is unsettable**, so the checkmark that `25`'s phishing mitigation and `54`'s impersonation defence rely on is always absent.
 7. **Self-declared bots bypass the message-request gate** (`core/crates/app-core/src/messaging.rs`, `SenderGate::passes`). See `54`.
-8. **Group invites appear to be auto-accepted for everyone** (S-04; the UI path is not yet confirmed). app-core accepts every `GroupContext` it receives (`messaging.rs`, the `GroupContext` branch), including from non-curated senders, so the `invites.auto-accept` scope has nothing to gate today.
+8. **The `invites.auto-accept` scope has no effect yet.** Since S-04, a group invite auto-joins only from an accepted contact or a Project bot on your server; anyone else's is a request. A Project bot's invites therefore already auto-join, so the scope would only matter for a Project that invites through a non-bot account.
 
 ## Planned
 

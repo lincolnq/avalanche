@@ -576,3 +576,105 @@ fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {
 fn _used(policy: &PolicyRow) -> Vec<u8> {
     policy.invite_link_password_or_empty()
 }
+
+/// A group invite from a sender we haven't accepted (docs/09 S-04), held until
+/// the user joins or deletes it. See `pending_group_invites` in the schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingGroupInvite {
+    pub group_id: String,
+    pub master_key: Vec<u8>,
+    pub hosting_server_url: String,
+    pub inviter_did: String,
+    pub invited_at: Timestamp,
+}
+
+impl IdentityStore {
+    /// Record (or refresh) a pending group invite.
+    pub async fn save_pending_group_invite(
+        &self,
+        invite: &PendingGroupInvite,
+    ) -> Result<(), StoreError> {
+        let i = invite.clone();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO pending_group_invites
+                       (group_id, master_key, hosting_server_url, inviter_did, invited_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        i.group_id,
+                        i.master_key,
+                        i.hosting_server_url,
+                        i.inviter_did,
+                        i.invited_at.as_millis()
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Look up a pending group invite by group id.
+    pub async fn load_pending_group_invite(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<PendingGroupInvite>, StoreError> {
+        let gid = group_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at
+                     FROM pending_group_invites WHERE group_id = ?1",
+                    rusqlite::params![gid],
+                    pending_invite_from_row,
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Every pending group invite, newest first.
+    pub async fn list_pending_group_invites(&self) -> Result<Vec<PendingGroupInvite>, StoreError> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT group_id, master_key, hosting_server_url, inviter_did, invited_at
+                     FROM pending_group_invites ORDER BY invited_at DESC",
+                )?;
+                let rows = stmt
+                    .query_map([], pending_invite_from_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+
+    /// Drop a pending group invite (joined, deleted, or superseded).
+    pub async fn delete_pending_group_invite(&self, group_id: &str) -> Result<(), StoreError> {
+        let gid = group_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM pending_group_invites WHERE group_id = ?1",
+                    rusqlite::params![gid],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::Db)
+    }
+}
+
+fn pending_invite_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingGroupInvite> {
+    Ok(PendingGroupInvite {
+        group_id: row.get(0)?,
+        master_key: row.get(1)?,
+        hosting_server_url: row.get(2)?,
+        inviter_did: row.get(3)?,
+        invited_at: Timestamp(row.get(4)?),
+    })
+}

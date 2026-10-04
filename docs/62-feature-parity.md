@@ -74,6 +74,7 @@ received and never sent (docs/04).
 | Contact list, profile fetch + cache | Yes | Yes | Yes | API |
 | Contact avatars: display | Yes | Yes | No (initials only) | n/a |
 | Message-request gate (accept / delete) | Yes | Yes | Yes | n/a |
+| Group invite requests (join / delete / block) | Yes | Yes | Yes | Bots get `isRequest` and decide (adminbot accepts) |
 | Block / unblock, report-and-block | Yes | Yes | Yes | n/a |
 | Show own QR code / invite link | Yes | Yes | Yes | n/a |
 | Scan a QR code | Yes | Yes | No (paste link only) | n/a |

@@ -630,6 +630,10 @@ pub struct GroupInviteJs {
     pub group_id: String,
     pub hosting_server_url: String,
     pub inviter_did: String,
+    /// True when the inviter isn't an accepted contact: the invite is held as
+    /// a request and nothing was joined; call `acceptInvite` to join
+    /// (docs/09 S-04).
+    pub is_request: bool,
 }
 
 /// Adminbot-only push: a new account just registered on the homeserver.
@@ -660,6 +664,7 @@ impl From<IncomingEvent> for IncomingEventJs {
                 group_id,
                 hosting_server_url,
                 inviter_did,
+                is_request,
             } => Self {
                 kind: "groupInvite".into(),
                 message: None,
@@ -668,6 +673,7 @@ impl From<IncomingEvent> for IncomingEventJs {
                     group_id,
                     hosting_server_url,
                     inviter_did,
+                    is_request,
                 }),
                 group_metadata: None,
             },

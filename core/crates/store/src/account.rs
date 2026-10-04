@@ -173,6 +173,7 @@ impl IdentityStore {
                      DELETE FROM message_revisions;
                      DELETE FROM reactions;
                      DELETE FROM account_info_cache;
+                     DELETE FROM pending_group_invites;
                      DELETE FROM storage_key_state;
                      DELETE FROM storage_sync;
                      COMMIT;",

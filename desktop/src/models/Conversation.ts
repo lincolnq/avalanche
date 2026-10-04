@@ -11,7 +11,11 @@ export interface Conversation {
   lastMessageMetadata?: string;
   lastMessageSenderDid?: string;
   isGroup: boolean;
+  // True for a DM message request (docs/12 §1), or for a group invite from
+  // someone you haven't accepted, which you haven't joined (docs/09 S-04).
   isRequest: boolean;
+  // Group invite request only: who invited you.
+  inviterDid?: string;
   isBlocked: boolean;
   // Authoritative unread count seeded from ConversationSummaryFfi.unreadCount at
   // load (core excludes own + expired messages). Backs the chat-list badge for

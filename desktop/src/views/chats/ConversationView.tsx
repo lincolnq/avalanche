@@ -153,11 +153,12 @@ export default function ConversationView(props: Props) {
             (disappearing timer, etc.) for DMs. Mirrors iOS's tap-title pattern. */}
         <button
           class="conv-header-main"
-          onClick={() =>
-            props.conversation.isGroup
-              ? setShowGroupDetail(true)
-              : setShowConvInfo(true)
-          }
+          onClick={() => {
+            // A group invite request isn't joined: no group detail to show.
+            if (props.conversation.isGroup && props.conversation.isRequest) return;
+            if (props.conversation.isGroup) setShowGroupDetail(true);
+            else setShowConvInfo(true);
+          }}
           aria-label="Conversation info"
           title="Conversation info"
         >
@@ -216,7 +217,15 @@ export default function ConversationView(props: Props) {
         <Match when={props.conversation.isRequest}>
           <div class="request-banner">
             <p class="request-text">
-              Let {props.conversation.title} message you and share your name with them?
+              <Show
+                when={props.conversation.isGroup}
+                fallback={<>Let {props.conversation.title} message you and share your name with them?</>}
+              >
+                {props.conversation.inviterDid
+                  ? displayName(props.conversation.inviterDid, props.conversation.accountId)
+                  : "Someone"}{" "}
+                invited you to a group. Join to see its messages and let its members see your name?
+              </Show>
             </p>
             <div class="request-actions">
               <button
@@ -237,7 +246,7 @@ export default function ConversationView(props: Props) {
                 class="request-accept"
                 onClick={() => void acceptRequest(props.conversation)}
               >
-                Accept
+                {props.conversation.isGroup ? "Join" : "Accept"}
               </button>
             </div>
           </div>

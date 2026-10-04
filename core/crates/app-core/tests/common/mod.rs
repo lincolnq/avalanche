@@ -16,3 +16,15 @@ pub fn invite_token() -> Option<String> {
     let payload = serde_json::json!({ "s": "dev", "k": secret });
     Some(BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap()))
 }
+
+/// Have each invitee accept `inviter` as a contact, as people who already know
+/// each other would. Group invites from an accepted contact join automatically;
+/// from anyone else they're held as a request until accepted (docs/09 S-04).
+/// Tests that model an ordinary group among acquaintances call this before
+/// inviting; the request path has its own tests.
+pub async fn introduce(inviter: &app_core::AppCore, invitees: &[&app_core::AppCore]) {
+    let inviter_did = inviter.did_async().await;
+    for invitee in invitees {
+        invitee.accept_request_async(&inviter_did).await.unwrap();
+    }
+}

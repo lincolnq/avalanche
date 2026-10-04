@@ -198,7 +198,9 @@ export function createConversations(deps: ConversationsDeps): Conversations {
         // your own DID is never in the name cache, so special-case it here and
         // at creation below.
         const title = isGroup
-          ? s.groupTitle ?? "Group"
+          ? s.isRequest
+            ? "Group invitation" // not joined: no group state (docs/09 S-04)
+            : s.groupTitle ?? "Group"
           : recipientDid === accountId
             ? "Note to Self"
             : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
@@ -224,6 +226,7 @@ export function createConversations(deps: ConversationsDeps): Conversations {
           lastMessageSenderDid: s.lastMessage?.senderDid ?? undefined,
           isGroup,
           isRequest: s.isRequest,
+          inviterDid: s.inviterDid ?? undefined,
           isBlocked: s.isBlocked,
           // Authoritative unread seed from core (excludes own + expired). (A5)
           unreadCount: s.unreadCount,

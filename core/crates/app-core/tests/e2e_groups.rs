@@ -37,6 +37,7 @@ async fn create_invite_accept_promote_remove_roundtrip() {
     let bob_did = bob.did_async().await;
 
     // 1. Alice creates the group.
+    common::introduce(&alice, &[&bob]).await;
     let created = alice
         .create_group_async("Test", "groups e2e", 0)
         .await
@@ -142,6 +143,7 @@ async fn three_member_fanout_roundtrip() {
     let alice_did = alice.did_async().await;
 
     // Alice creates the group and invites both bob and carol.
+    common::introduce(&alice, &[&bob, &carol]).await;
     let created = alice
         .create_group_async("Trio", "fanout e2e", 0)
         .await
@@ -254,6 +256,7 @@ async fn later_joiner_decrypts_earlier_members_messages() {
     let bob_did = bob.did_async().await;
     let carol_did = carol.did_async().await;
 
+    common::introduce(&alice, &[&bob, &carol]).await;
     let created = alice
         .create_group_async("Trio", "lazy-skdm e2e", 0)
         .await
@@ -350,6 +353,7 @@ async fn group_send_establishes_missing_session() {
     let bob_did = bob.did_async().await;
     let carol_did = carol.did_async().await;
 
+    common::introduce(&alice, &[&bob, &carol]).await;
     let created = alice
         .create_group_async("Trio", "lazy-session e2e", 0)
         .await
@@ -422,6 +426,7 @@ async fn buffered_group_message_recovers_when_skdm_arrives() {
     let bob_did = bob.did_async().await;
 
     // Group with alice + bob; bob accepts (his accept DMs an SKDM to alice).
+    common::introduce(&alice, &[&bob]).await;
     let created = alice
         .create_group_async("Recovery", "buffer+retry e2e", 0)
         .await

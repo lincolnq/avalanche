@@ -67,6 +67,9 @@ fun ConversationRow(
     /** Avatar photo bytes (docs/55): the group avatar for groups, the peer's
      *  for DMs. `null` falls back to the icon placeholder. */
     avatarData: ByteArray? = null,
+    /** For a group invite request (docs/09 S-04): the inviter's resolved
+     *  display name, shown as "Invited by …". `null` elsewhere. */
+    inviterName: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -149,9 +152,14 @@ fun ConversationRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (conversation.isRequest) {
-                    // First contact from an un-curated DID (docs/12 §1).
+                    // First contact from an un-curated DID (docs/12 §1), or a
+                    // group invite from someone you haven't accepted (docs/09 S-04).
                     Text(
-                        text = "Message request",
+                        text = when {
+                            !conversation.isGroup -> "Message request"
+                            inviterName != null -> "Invited by $inviterName"
+                            else -> "Group invitation"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = LocalAvalancheColors.current.brand,

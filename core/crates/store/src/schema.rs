@@ -245,6 +245,19 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at                  INTEGER NOT NULL
 );
 
+-- Group invites from senders we haven't accepted (docs/09 S-04, docs/12 §1),
+-- held as a request until the user joins or deletes it. Deliberately separate
+-- from `groups`: that table is synced by the group-key adapter, and a pending
+-- invite must not reach our other devices as a joined group. Local-only; each
+-- device receives the invite DM itself.
+CREATE TABLE IF NOT EXISTS pending_group_invites (
+    group_id            TEXT    PRIMARY KEY,
+    master_key          BLOB    NOT NULL,
+    hosting_server_url  TEXT    NOT NULL,
+    inviter_did         TEXT    NOT NULL,
+    invited_at          INTEGER NOT NULL
+);
+
 -- Minimal contact table (docs/52-contacts-and-profiles.md). `is_curated` flips
 -- true on any deliberate gesture; `last_interaction_at` drives recency sort.
 -- `is_blocked` (docs/12 §2) suppresses a DID and syncs across the identity's
@@ -453,6 +466,7 @@ pub const IDENTITY_TABLES: &[&str] = &[
     "message_revisions",
     "reactions",
     "account_info_cache",
+    "pending_group_invites",
     "storage_key_state",
     "storage_sync",
 ];

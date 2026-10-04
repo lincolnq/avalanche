@@ -73,6 +73,7 @@ async fn group_send_arrives_via_ws_push() {
     let bob_did = bob.did_async().await;
 
     // 1. Alice creates the group and invites Bob.
+    common::introduce(&alice, &[&*bob]).await;
     let created = alice
         .create_group_async("ws-push", "live delivery", 0)
         .await
@@ -186,6 +187,7 @@ async fn second_group_join_does_not_clobber_first_subscription() {
     let bob_did = bob.did_async().await;
 
     // Group A: create, invite Bob, wait for his auto-accept.
+    common::introduce(&alice, &[&*bob]).await;
     let group_a = alice.create_group_async("grp-a", "", 0).await.unwrap();
     alice
         .invite_member_async(&group_a.group_id, &bob_did, 0)
@@ -261,6 +263,7 @@ async fn group_reaction_arrives_via_ws_push() {
     let alice_did = alice.did_async().await;
     let bob_did = bob.did_async().await;
 
+    common::introduce(&alice, &[&*bob]).await;
     let created = alice.create_group_async("react-grp", "", 0).await.unwrap();
     alice
         .invite_member_async(&created.group_id, &bob_did, 0)

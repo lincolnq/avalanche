@@ -127,6 +127,13 @@ export interface GroupInvite {
   groupId: string;
   hostingServerUrl: string;
   inviterDid: string;
+  /**
+   * True when the inviter isn't an accepted contact (or a Project bot on our
+   * server): the invite is held as a request and nothing was joined. Call
+   * {@link AppCore.acceptInvite} to join or {@link AppCore.declineInvite} to
+   * decline (docs/09 S-04).
+   */
+  isRequest: boolean;
 }
 
 /**
@@ -777,6 +784,7 @@ const incomingEventFromNative = (e: native.IncomingEventJs): IncomingEvent | nul
         groupId: e.groupInvite.groupId,
         hostingServerUrl: e.groupInvite.hostingServerUrl,
         inviterDid: e.groupInvite.inviterDid,
+        isRequest: e.groupInvite.isRequest,
       },
     };
   }

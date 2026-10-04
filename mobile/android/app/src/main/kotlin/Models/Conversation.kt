@@ -42,10 +42,14 @@ data class Conversation(
     var isGroup: Boolean = false,
     /**
      * True for a DM from an un-curated, un-blocked sender — an unaccepted
-     * message request (docs/12 §1). Drives the "Message request" label and
-     * the Accept/Delete/Report gate in ConversationView.
+     * message request (docs/12 §1) — or for a group invite from someone you
+     * haven't accepted, which you haven't joined (docs/09 S-04). Drives the
+     * request label in the chat list and the request gate in ConversationView
+     * (Accept/Delete/Block for a DM, Join/Delete/Block for a group).
      */
     var isRequest: Boolean = false,
+    /** For a group invite request: who invited you. `null` otherwise. */
+    var inviterDid: String? = null,
     /** True for a DM with a blocked contact (docs/12 §2). */
     var isBlocked: Boolean = false,
 ) {

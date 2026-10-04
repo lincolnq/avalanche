@@ -35,6 +35,7 @@ async fn group_with_two_members() -> (AppCore, AppCore, String) {
         .unwrap();
     let bob_did = bob.did_async().await;
 
+    common::introduce(&alice, &[&bob]).await;
     let created = alice.create_group_async("Lifecycle", "leave e2e", 0).await.unwrap();
     alice.invite_member_async(&created.group_id, &bob_did, 0).await.unwrap();
     // Bob receives the GroupContext DM, fetches state (caches it locally), then

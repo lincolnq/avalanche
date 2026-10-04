@@ -155,6 +155,7 @@ class MockAppCore(
                     else -> null
                 },
                 isRequest = false,
+                inviterDid = null,
                 isBlocked = false,
                 unreadCount = unread,
             )

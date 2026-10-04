@@ -113,7 +113,21 @@ export function createGroupsAndSafety(deps: GroupsAndSafetyDeps): GroupsAndSafet
 
   // ── Track D: message requests / blocking / timers ──────────────────────────
 
+  // Each request action handles both kinds of request: a DM message request
+  // (docs/12 §1) and a group invite from someone you haven't accepted (docs/09
+  // S-04), where Accept joins, Delete declines, and Block blocks the inviter.
+  // Mirrors iOS AppState.acceptGroupInvite / deleteGroupInvite /
+  // blockGroupInviter.
   async function acceptRequest(conversation: Conversation) {
+    if (conversation.isGroup && conversation.groupId) {
+      await serviceFor(conversation.accountId)
+        .acceptInvite(conversation.groupId)
+        .catch((e: unknown) => {
+          console.warn("acceptInvite failed:", e);
+        });
+      await reloadConversations();
+      return;
+    }
     if (!conversation.recipientDid) return;
     await serviceFor(conversation.accountId)
       .acceptRequest(conversation.recipientDid)
@@ -124,6 +138,16 @@ export function createGroupsAndSafety(deps: GroupsAndSafetyDeps): GroupsAndSafet
   }
 
   async function deleteRequest(conversation: Conversation) {
+    if (conversation.isGroup && conversation.groupId) {
+      await serviceFor(conversation.accountId)
+        .declineInvite(conversation.groupId)
+        .catch((e: unknown) => {
+          console.warn("declineInvite failed:", e);
+        });
+      if (selectedConversationId() === conversation.id) setSelectedConversationId(null);
+      await reloadConversations();
+      return;
+    }
     if (!conversation.recipientDid) return;
     await serviceFor(conversation.accountId)
       .deleteRequest(conversation.recipientDid)
@@ -135,6 +159,20 @@ export function createGroupsAndSafety(deps: GroupsAndSafetyDeps): GroupsAndSafet
   }
 
   async function reportAndBlock(conversation: Conversation, reason: string) {
+    if (conversation.isGroup && conversation.groupId) {
+      const svc = serviceFor(conversation.accountId);
+      if (conversation.inviterDid) {
+        await svc.reportAndBlock(conversation.inviterDid, reason).catch((e: unknown) => {
+          console.warn("reportAndBlock failed:", e);
+        });
+      }
+      await svc.declineInvite(conversation.groupId).catch((e: unknown) => {
+        console.warn("declineInvite failed:", e);
+      });
+      if (selectedConversationId() === conversation.id) setSelectedConversationId(null);
+      await reloadConversations();
+      return;
+    }
     if (!conversation.recipientDid) return;
     await serviceFor(conversation.accountId)
       .reportAndBlock(conversation.recipientDid, reason)
