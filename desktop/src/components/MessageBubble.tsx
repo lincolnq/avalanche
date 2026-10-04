@@ -10,14 +10,14 @@ import { useApp } from "../state/AppContext";
 import type { Conversation, Message } from "../models";
 import type { AttachmentFfi } from "../bindings";
 import { DeliveryStatus } from "../models/Message";
-import { formatTime, linkify } from "../lib/format";
+import { formatBubbleTime, formatFullTimestamp, linkify } from "../lib/format";
 import AttachmentView from "./AttachmentView";
 import LinkPreviewCard from "./LinkPreviewCard";
 import SharedContactCard from "./SharedContactCard";
 import FloatingMenu from "./FloatingMenu";
 import "./MessageBubble.css";
 
-const DELIVERY_ICON_SIZE = 14;
+const DELIVERY_ICON_SIZE = 13;
 const QUICK_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
 interface Props {
@@ -26,6 +26,11 @@ interface Props {
   mine: boolean;
   isGroup: boolean;
   senderName?: string;
+  // Position in a run of consecutive messages from one sender (see
+  // ConversationView): tightens spacing/corners inside a run and puts the
+  // timestamp + delivery only on the last message, as iOS does.
+  firstInRun: boolean;
+  lastInRun: boolean;
   onEdit: (message: Message) => void;
   onShowHistory: (message: Message) => void;
   // Opens the fullscreen image viewer (docs/35) starting on the clicked image.
@@ -45,6 +50,10 @@ export default function MessageBubble(props: Props) {
   // Omit the empty text bubble for an attachment- or contact-only message (parity).
   const showBubble = () =>
     props.message.body.length > 0 || (attachments().length === 0 && contacts().length === 0);
+  // Metadata (iOS MessageBubble.showMetadata): "Edited" whenever edited; time +
+  // delivery only on the last message of a run.
+  const edited = () => props.message.editCount > 0 && !deleted();
+  const showMeta = () => !deleted() && (props.lastInRun || edited());
 
   // Reaction clusters grouped by emoji, preserving first-appearance order.
   const clusters = () => {
@@ -88,7 +97,11 @@ export default function MessageBubble(props: Props) {
   }
 
   return (
-    <div class={`message-row ${props.mine ? "mine" : "theirs"}`}>
+    <div
+      class={`message-row ${props.mine ? "mine" : "theirs"}`}
+      classList={{ "run-start": props.firstInRun, "run-end": props.lastInRun }}
+      title={formatFullTimestamp(props.message.sentAtMs)}
+    >
       {props.isGroup && !props.mine && props.senderName && (
         <span class="sender-name">{props.senderName}</span>
       )}
@@ -132,6 +145,17 @@ export default function MessageBubble(props: Props) {
                     </Show>
                   )}
                 </For>
+                {/* Signal/iOS-style inline metadata: an invisible copy reserves
+                    room after the last line; the visible copy sits in the
+                    bottom-right corner, so short messages stay one line. */}
+                <Show when={showMeta()}>
+                  <span class="bubble-meta-spacer" aria-hidden="true">
+                    <MetaContent {...metaProps()} />
+                  </span>
+                  <span class="bubble-meta">
+                    <MetaContent {...metaProps()} />
+                  </span>
+                </Show>
               </div>
             </Show>
             <Show when={previews().length > 0}>
@@ -231,21 +255,46 @@ export default function MessageBubble(props: Props) {
           </For>
         </div>
       </Show>
-      {!deleted() && (
+      {/* No text bubble (attachment- or contact-only message): metadata goes
+          under the content instead of inside a bubble. */}
+      <Show when={showMeta() && !showBubble()}>
         <div class="message-meta">
-          <span class="timestamp">
-            {formatTime(props.message.sentAtMs)}
-            {props.message.editCount > 0 && " (edited)"}
-          </span>
-          {props.mine && (
-            <DeliveryIndicator
-              status={props.message.deliveryStatus}
-              onRetry={() => void app.retryMessage(props.conversation, props.message)}
-            />
-          )}
+          <MetaContent {...metaProps()} />
         </div>
-      )}
+      </Show>
     </div>
+  );
+
+  function metaProps(): MetaProps {
+    return {
+      edited: edited(),
+      time: props.lastInRun ? formatBubbleTime(props.message.sentAtMs) : null,
+      delivery: props.lastInRun && props.mine ? props.message.deliveryStatus : null,
+      onRetry: () => void app.retryMessage(props.conversation, props.message),
+    };
+  }
+}
+
+interface MetaProps {
+  edited: boolean;
+  time: string | null;
+  delivery: DeliveryStatus | null;
+  onRetry: () => void;
+}
+
+function MetaContent(props: MetaProps) {
+  return (
+    <>
+      <Show when={props.edited}>
+        <span>Edited</span>
+      </Show>
+      <Show when={props.time}>
+        <span class="timestamp">{props.time}</span>
+      </Show>
+      <Show when={props.delivery !== null}>
+        <DeliveryIndicator status={props.delivery!} onRetry={props.onRetry} />
+      </Show>
+    </>
   );
 }
 
@@ -267,7 +316,7 @@ function DeliveryIndicator(props: { status: DeliveryStatus; onRetry: () => void 
       <Match when={props.status === DeliveryStatus.failed}>
         <button class="delivery failed" onClick={props.onRetry}>
           <TbOutlineAlertTriangle size={DELIVERY_ICON_SIZE} />
-          <span class="retry-hint">Tap to retry</span>
+          <span class="retry-hint">Retry</span>
         </button>
       </Match>
     </Switch>

@@ -2,16 +2,20 @@ import { DeliveryStatus } from "../models/Message";
 import type { LastMessagePreviewFfi } from "../bindings";
 
 /**
- * Returns up to 2 uppercase initials from a display name.
- * Empty or whitespace-only names return "".
+ * Returns up to 2 uppercase initials from a display name: the first letter or
+ * digit of each word, skipping punctuation ("Jamie (Organizer)" → "JO").
+ * Names with no letters or digits fall back to their first character
+ * ("#admins" → "#"); empty or whitespace-only names return "".
  */
 export function initials(name: string): string {
-  return name
+  const letters = name
     .split(/\s+/)
-    .filter((w) => w.length > 0)
+    .map((w) => w.match(/[\p{L}\p{N}]/u)?.[0])
+    .filter((c): c is string => !!c)
     .slice(0, 2)
-    .map((w) => w[0].toUpperCase())
+    .map((c) => c.toUpperCase())
     .join("");
+  return letters || name.trim().slice(0, 1);
 }
 
 /**
@@ -49,6 +53,30 @@ export function displayHost(url: string, fallback: string): string {
  */
 export function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Compact in-bubble timestamp (mirrors iOS MessageBubble.shortTimestamp):
+ * "now" under a minute, "{m}m" within the hour, otherwise the locale short
+ * time ("5:13 PM"). Computed at render; it doesn't live-tick.
+ */
+export function formatBubbleTime(ms: number): string {
+  const secs = (Date.now() - ms) / 1000;
+  if (secs < 60) return "now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Full date + time, for a message's hover tooltip ("Sat, Oct 4, 2026, 3:40 PM"). */
+export function formatFullTimestamp(ms: number): string {
+  return new Date(ms).toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /**

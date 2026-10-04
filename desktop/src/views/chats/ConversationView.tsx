@@ -119,6 +119,15 @@ export default function ConversationView(props: Props) {
   // createMemo ensures the For list re-renders when the async store write lands.
   const messages = createMemo(() => store.messagesByConversation[props.conversation.id] ?? []);
 
+  // Runs of consecutive messages from one sender (mirrors iOS ConversationView
+  // senderName(for:at:) / isLastInRun(at:)): the sender name shows only on the
+  // first message of a run and the timestamp/delivery only on the last. A
+  // system event breaks a run.
+  const sameRun = (a: Message | undefined, b: Message | undefined) =>
+    !!a && !!b && a.kind === 0 && b.kind === 0 && a.senderAccountId === b.senderAccountId;
+  const isFirstInRun = (i: number) => !sameRun(messages()[i - 1], messages()[i]);
+  const isLastInRun = (i: number) => !sameRun(messages()[i], messages()[i + 1]);
+
   // Every image attachment in the conversation, in timeline order (message
   // order, then attachment order) — the set the fullscreen viewer pages through.
   const conversationImages = createMemo(() =>
@@ -179,7 +188,7 @@ export default function ConversationView(props: Props) {
           fallback={<div class="empty-conv">No messages yet.</div>}
         >
           <For each={messages()}>
-            {(msg) => (
+            {(msg, i) => (
               <Show
                 when={msg.kind > 0}
                 fallback={
@@ -188,7 +197,13 @@ export default function ConversationView(props: Props) {
                     message={msg}
                     mine={msg.senderAccountId === props.conversation.accountId}
                     isGroup={props.conversation.isGroup}
-                    senderName={displayName(msg.senderAccountId, props.conversation.accountId)}
+                    senderName={
+                      isFirstInRun(i())
+                        ? displayName(msg.senderAccountId, props.conversation.accountId)
+                        : undefined
+                    }
+                    firstInRun={isFirstInRun(i())}
+                    lastInRun={isLastInRun(i())}
                     onEdit={(m) => setEditingMessage(m)}
                     onShowHistory={(m) => setHistoryMessage(m)}
                     onImageClick={(a) => setImageViewerStartId(a.id)}

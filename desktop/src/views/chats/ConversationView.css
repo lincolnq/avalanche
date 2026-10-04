@@ -62,7 +62,7 @@
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   background: var(--color-paper);
 }
 .empty-conv {
@@ -82,6 +82,7 @@
   font-size: 12px;
   color: var(--color-text-secondary);
   padding: 4px 8px;
+  margin: 8px 0;
 }
 
 /* ── Track D: message-request gate + blocked bar ──────────────────────────── */
