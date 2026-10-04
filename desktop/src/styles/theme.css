@@ -228,11 +228,21 @@ button, input, select, textarea {
 /* Shared settings sub-screen header (Back + title), used by every
    settings/*.tsx sub-view rendered inside the SettingsView hub. */
 .settings-subheader {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 20px 24px 12px;
+  min-height: 61px;              /* same geometry as .page-header */
+  padding: 16px 24px 12px;
   border-bottom: 1px solid var(--color-divider);
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* The sub-screen body after the header keeps a readable column (680px, like
+   .page-column) on a wide window. Padding rather than max-width so the scroll
+   container — and its scrollbar — still span the pane. */
+.settings-subheader + * {
+  padding-right: max(24px, calc(100% - 704px));
 }
 .settings-subheader h1 {
   margin: 0;

@@ -25,7 +25,7 @@ export default function AccountsView(props: Props) {
 
   return (
     <div class="accounts-view">
-      <header class="settings-subheader">
+      <header class="settings-subheader" data-tauri-drag-region>
         <button class="back-btn" onClick={props.onBack}>
           <FiArrowLeft size={14} />Back
         </button>

@@ -81,7 +81,7 @@ export default function LinkDeviceView(props: Props) {
 
   return (
     <div class="link-device-panel">
-      <header class="settings-subheader ld-header">
+      <header class="settings-subheader ld-header" data-tauri-drag-region>
         <button class="back-btn" onClick={props.onBack}>
           <FiArrowLeft size={14} />Back
         </button>

@@ -76,7 +76,7 @@ export default function IdentityDetailView(props: Props) {
 
   return (
     <div class="identity-detail">
-      <header class="settings-subheader">
+      <header class="settings-subheader" data-tauri-drag-region>
         <button class="back-btn" onClick={props.onBack}>
           <FiArrowLeft size={14} />Back
         </button>

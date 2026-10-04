@@ -139,3 +139,8 @@
   gap: 12px;
   justify-content: flex-end;
 }
+
+/* Push the chevron to the row's trailing edge. */
+.identity-row-btn .identity-row-chevron {
+  margin-left: auto;
+}
