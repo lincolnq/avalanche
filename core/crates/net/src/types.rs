@@ -57,7 +57,13 @@ pub struct RegisterResponse {
 pub struct AccountInfoResponse {
     pub did: String,
     pub display_name: Option<String>,
+    /// Self-declared at registration; presentation only (docs/54).
     pub is_bot: bool,
+    /// Linked to an installed Project on the queried server — the only bots
+    /// that skip the message-request gate (docs/09 S-03). Absent from older
+    /// servers, which read as `false`.
+    #[serde(default)]
+    pub project_bot: bool,
 }
 
 /// One of a recipient account's active devices, with the registration id the

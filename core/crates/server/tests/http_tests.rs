@@ -1828,6 +1828,22 @@ async fn bot_signup_key_admits_and_links_bots() {
         "bot must be linked to the key's Project"
     );
 
+    // The linked bot reports `project_bot` (server-vouched); a bot that merely
+    // registered with the shared secret reports only the self-declared
+    // `is_bot` (docs/09 S-03).
+    let (status, body) = register_bot(&app, Some(&bootstrap_token(SECRET, None))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let plain_did = body["did"].as_str().unwrap().to_string();
+    let viewer = body["session_token"].as_str().unwrap().to_string();
+    let (status, info) =
+        admin_req(&app, "GET", &format!("/v1/accounts/{bot_did}"), &viewer, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["project_bot"], true, "a Project-linked bot is server-vouched");
+    let (_, info) =
+        admin_req(&app, "GET", &format!("/v1/accounts/{plain_did}"), &viewer, None).await;
+    assert_eq!(info["is_bot"], true);
+    assert_eq!(info["project_bot"], false, "self-declared is not server-vouched");
+
     // Re-minting rotates: the old key stops working, the new one works.
     let key2 = mint(app.clone(), admin_token.clone(), slug.clone()).await;
     let (status, _) = register_bot(&app, Some(&key1)).await;

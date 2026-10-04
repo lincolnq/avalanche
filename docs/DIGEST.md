@@ -100,8 +100,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   group membership. [timing only; nothing more together] (S-13)
 - *Public PLC log:* signup server forever, every rotation; recovery GET tests which servers
   hold a DID. (S-06, S-07, S-19, S-20)
-- *Stranger with your DID:* can add you to groups; self-declared bots skip requests;
-  attachment URLs leak your IP. [nothing until accept] (S-03, S-04, S-08; S-02 fixed)
+- *Stranger with your DID:* can add you to groups; attachment URLs leak your IP. [nothing
+  until accept] (S-04, S-08; S-02, S-03 fixed)
 - *Malicious member:* squat others' delivery/wakeups; removed members keep Sender Keys; no
   sender membership check; extend expiry. (S-14..S-16)
 - *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
@@ -119,7 +119,7 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   on-box `SUPERUSER_BOOTSTRAP_SECRET`, claim-once; no raw tokens in events (purged). Rotate
   the shared secret where old setup codes were handed out (22, 24, 51).
 - **High:** S-02 (fixed) profile key in delivery receipts to un-accepted requests (52); S-03
-  self-declared `is_bot` bypasses request gate (54); S-04 group invites auto-accepted from
+  (fixed) self-declared `is_bot` bypassed the request gate (54); S-04 group invites auto-accepted from
   non-blocked strangers, Reported/needs UI check (12, 03); S-05 Desktop constant SQLCipher
   key (61); S-06 rotation key on every device and in link bundle, sole rotation key (50
   Proposed, 04); S-07 passkey RP shared with Project hosting (50, 20); S-08 attachment
@@ -146,8 +146,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - **Low:** S-28 Desktop link-preview SSRF; deep links create rows from unvalidated DIDs;
   S-26 mesh tags keyed on public identity key (design only, 14).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01, S-02 done)
-S-03..S-05, S-08, S-14, S-17, S-30,
+**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-03 done)
+S-04, S-05, S-08, S-14, S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
@@ -626,7 +626,7 @@ Store 1.2). **Reports never contain content.**
 - **Profile abuse (Planned):** client name filter, profile reports, forced reset.
 - **Never build:** content reporting/hashes, report button in accepted conversations, global
   ban list, client ML moderation, on-device scanning (legal conflict), "who reported me".
-- Gaps: self-declared bot bypass (S-03); stranger group
+- Gaps: stranger group
   invites ungated (S-04); reports don't leave reporter's server. Open: group abuse, Project
   abuse, appeals, cross-server aggregation.
 
@@ -988,7 +988,7 @@ reactions as feed messages.
   in-memory LRU). Profile GET returns identical 404s (no existence leak). Nickname > profile
   name > truncated DID; nickname never erases the real name.
 - **Gaps:** accepting a request doesn't share your profile (requester learns your name on
-  your first message; S-02 itself fixed); self-declared bot bypass (S-03); no `profile_version` liveness; profile fetch
+  your first message; S-02 itself fixed); no `profile_version` liveness; profile fetch
   under core lock.
 - Planned: `profile_version` envelope field (additive contract); favorites/notes/nickname UI;
   `preferred_identity`; cross-identity contact backup under a recovery-derived key;
@@ -1020,9 +1020,10 @@ matter).
 Two independent properties: **provenance** (official bot my server vouches for — verifiable)
 and **automation** (is it a bot — always self-declared). Client-applied chrome avatar bytes
 can't override: **hexagon avatars and chamfered bubbles** for `is_bot` (Built all
-platforms). Gaps: `is_bot` is self-declared yet bypasses requests (S-03) and is presented as
-if vouched; no verified tier. Planned: exempt only bots linked to an installed Project on
-your server (server-vouched field); checkmark from official installation (same-server only);
+platforms). Only server-vouched `project_bot` accounts (linked to an installed Project on
+your server) skip message requests (Built, S-03 fixed). Gaps: chrome still keys on the
+self-declared `is_bot`, so it looks vouched; no verified tier. Planned: checkmark from
+official installation (same-server only);
 hedged "Automated (not verified)" tier. Target tiers: verified / self-identified / person
 (absence of signal is not a claim of humanity). Speculative: `account_kind` in profile; server
 policy requiring declaration; synthetic default avatars. Rejected: mandatory constrained bot

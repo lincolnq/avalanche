@@ -348,6 +348,7 @@ async fn account_info_cache_round_trip() {
         did: did.into(),
         display_name: "Admin Bot".into(),
         is_bot: true,
+        project_bot: true,
         fetched_at: Timestamp(1000),
     };
     store.upsert_account_info(&info).await.unwrap();
@@ -355,6 +356,7 @@ async fn account_info_cache_round_trip() {
     let loaded = store.load_account_info(did).await.unwrap().unwrap();
     assert_eq!(loaded.display_name, "Admin Bot");
     assert!(loaded.is_bot);
+    assert!(loaded.project_bot);
     assert_eq!(loaded.fetched_at, Timestamp(1000));
 
     // Re-fetch overwrites name + timestamp (server is authoritative).
@@ -362,6 +364,7 @@ async fn account_info_cache_round_trip() {
         did: did.into(),
         display_name: "Admin Bot v2".into(),
         is_bot: true,
+        project_bot: true,
         fetched_at: Timestamp(2000),
     };
     store.upsert_account_info(&info2).await.unwrap();
@@ -371,30 +374,42 @@ async fn account_info_cache_round_trip() {
 }
 
 #[tokio::test]
-async fn list_bot_dids_returns_only_bots() {
+async fn list_project_bot_dids_returns_only_project_bots() {
     use types::Timestamp;
     let store = DeviceStore::open_in_memory().await.unwrap();
 
-    assert!(store.list_bot_dids().await.unwrap().is_empty());
+    assert!(store.list_project_bot_dids().await.unwrap().is_empty());
 
     let bot = store::profiles::AccountInfoCache {
         did: "did:local:adminbot".into(),
         display_name: "Admin Bot".into(),
         is_bot: true,
+        project_bot: true,
         fetched_at: Timestamp(1000),
     };
     let human = store::profiles::AccountInfoCache {
         did: "did:plc:human".into(),
         display_name: String::new(),
         is_bot: false,
+        project_bot: false,
+        fetched_at: Timestamp(1000),
+    };
+    // A self-declared bot not linked to any Project (docs/09 S-03).
+    let self_declared = store::profiles::AccountInfoCache {
+        did: "did:local:claimsbot".into(),
+        display_name: "Totally a bot".into(),
+        is_bot: true,
+        project_bot: false,
         fetched_at: Timestamp(1000),
     };
     store.upsert_account_info(&bot).await.unwrap();
     store.upsert_account_info(&human).await.unwrap();
+    store.upsert_account_info(&self_declared).await.unwrap();
 
-    // Only the bot DID comes back — this is what the conversation-load path
-    // uses to keep an auto-accepted bot DM out of the message-request gate.
-    let bots = store.list_bot_dids().await.unwrap();
+    // Only the Project bot comes back — this is what the conversation-load
+    // path uses to keep a Project bot DM out of the message-request gate. A
+    // merely self-declared bot stays a request.
+    let bots = store.list_project_bot_dids().await.unwrap();
     assert_eq!(bots, vec!["did:local:adminbot".to_string()]);
 }
 

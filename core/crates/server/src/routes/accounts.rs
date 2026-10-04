@@ -32,7 +32,12 @@ pub fn routes() -> Router<AppState> {
 struct AccountInfoResponse {
     did: String,
     display_name: Option<String>,
+    /// Self-declared at registration; drives bot presentation only (docs/54).
     is_bot: bool,
+    /// Server-vouched: the account is linked to an installed Project on this
+    /// server (adminbot included). Only these bots skip the message-request
+    /// gate (docs/09 S-03).
+    project_bot: bool,
 }
 
 async fn get_account_info(
@@ -44,10 +49,12 @@ async fn get_account_info(
     let account = db::accounts::find_by_did(&mut conn, &did)
         .await?
         .ok_or(ServerError::NotFound)?;
+    let project_bot = db::projects::project_for_account(&mut conn, account.id).await?.is_some();
     Ok(Json(AccountInfoResponse {
         did: account.did,
         display_name: account.display_name,
         is_bot: account.is_bot,
+        project_bot,
     }))
 }
 

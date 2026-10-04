@@ -185,15 +185,18 @@ pub(crate) async fn ensure_group_recipient_sessions(
 pub(crate) struct SenderGate {
     pub is_curated: bool,
     pub is_blocked: bool,
-    pub is_bot: bool,
+    /// The sender is a bot linked to an installed Project on our server —
+    /// server-vouched, unlike the self-declared `is_bot` (docs/09 S-03).
+    pub is_project_bot: bool,
 }
 
 impl SenderGate {
     /// True when the message delivers as a normal (non-request) DM: the sender
-    /// is curated, or is a homeserver-known bot (docs/12 §"When is a sender
-    /// known"). Everyone else is gated behind the message-request UI.
+    /// is curated, or is a Project bot on our server (docs/12 §"When is a
+    /// sender known"). Everyone else — including a self-declared bot — is gated
+    /// behind the message-request UI.
     pub(crate) fn passes(&self) -> bool {
-        self.is_curated || self.is_bot
+        self.is_curated || self.is_project_bot
     }
 
     /// True when this DM should surface as a *message request* (the
@@ -1197,22 +1200,23 @@ impl AppCoreInner {
 
     /// Evaluate the message-request gate for an inbound DM sender (docs/12 §1,
     /// docs/52 §"What is_curated drives"). A sender delivers as a normal DM iff
-    /// curated or a homeserver-known bot; an un-curated human is a *request*; a
-    /// blocked DID is dropped after decryption.
+    /// curated or a Project bot on our server (from the cached account record);
+    /// anyone else, self-declared bots included, is a *request*; a blocked DID
+    /// is dropped after decryption.
     pub(crate) async fn sender_gate(&self, did: &str) -> SenderGate {
         let contact = self.store.load_contact(did).await.ok().flatten();
-        let is_bot = self
+        let is_project_bot = self
             .store
             .load_account_info(did)
             .await
             .ok()
             .flatten()
-            .map(|a| a.is_bot)
+            .map(|a| a.project_bot)
             .unwrap_or(false);
         SenderGate {
             is_curated: contact.as_ref().map(|c| c.is_curated).unwrap_or(false),
             is_blocked: contact.as_ref().map(|c| c.is_blocked).unwrap_or(false),
-            is_bot,
+            is_project_bot,
         }
     }
 
@@ -2197,10 +2201,12 @@ mod tests {
     #[test]
     fn sender_gate_passes_for_curated_or_bot_only() {
         use crate::messaging::SenderGate;
-        let g = |is_curated, is_blocked, is_bot| SenderGate { is_curated, is_blocked, is_bot };
+        let g = |is_curated, is_blocked, is_project_bot| SenderGate { is_curated, is_blocked, is_project_bot };
         // Curated human delivers normally.
         assert!(g(true, false, false).passes());
-        // Homeserver-known bot skips the gate even when un-curated (docs/12).
+        // A Project bot on our server skips the gate even when un-curated
+        // (docs/12). A merely self-declared bot is not a Project bot, so it
+        // reaches `g(false, false, false)` below and is a request (S-03).
         assert!(g(false, false, true).passes());
         // Un-curated human is a request, not a pass.
         assert!(!g(false, false, false).passes());
@@ -2212,12 +2218,12 @@ mod tests {
     #[test]
     fn sender_gate_is_request_matches_delivery_and_load_paths() {
         use crate::messaging::SenderGate;
-        let g = |is_curated, is_blocked, is_bot| SenderGate { is_curated, is_blocked, is_bot };
+        let g = |is_curated, is_blocked, is_project_bot| SenderGate { is_curated, is_blocked, is_project_bot };
         // Un-curated human → request.
         assert!(g(false, false, false).is_request());
         // Curated human → not a request.
         assert!(!g(true, false, false).is_request());
-        // Homeserver-known bot (e.g. adminbot's welcome) → never a request, even
+        // Project bot (e.g. adminbot's welcome) → never a request, even
         // un-curated. This is the case that regressed on relaunch.
         assert!(!g(false, false, true).is_request());
         // Blocked is never surfaced as a request (it's dropped / shown blocked).

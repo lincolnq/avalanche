@@ -387,6 +387,7 @@ CREATE TABLE IF NOT EXISTS account_info_cache (
     did           TEXT    PRIMARY KEY,
     display_name  TEXT    NOT NULL,
     is_bot        INTEGER NOT NULL,
+    project_bot   INTEGER NOT NULL DEFAULT 0,
     fetched_at    INTEGER NOT NULL
 );
 

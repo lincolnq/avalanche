@@ -2956,14 +2956,15 @@ impl AppCore {
                 .into_iter()
                 .map(|c| (c.did.clone(), c))
                 .collect();
-            // Homeserver-known bots are never message requests (docs/12). The
-            // inbound gate (`SenderGate::passes`) already exempts them via
-            // `is_bot`, so this load path must too — otherwise an auto-accepted
-            // bot DM (e.g. adminbot's welcome) flips to "message request" on the
-            // next launch, when the conversation is rebuilt from the store.
-            let bot_dids: std::collections::HashSet<String> = inner
+            // Project bots are never message requests (docs/12). The inbound
+            // gate (`SenderGate::passes`) already exempts them via
+            // `is_project_bot`, so this load path must too — otherwise an
+            // auto-accepted bot DM (e.g. adminbot's welcome) flips to "message
+            // request" on the next launch, when the conversation is rebuilt
+            // from the store. Self-declared bots get no exemption (S-03).
+            let project_bot_dids: std::collections::HashSet<String> = inner
                 .store
-                .list_bot_dids()
+                .list_project_bot_dids()
                 .await
                 .map_err(AppError::from)?
                 .into_iter()
@@ -2980,7 +2981,7 @@ impl AppCore {
                     crate::messaging::SenderGate {
                         is_curated: contact.map(|c| c.is_curated).unwrap_or(false),
                         is_blocked,
-                        is_bot: bot_dids.contains(p),
+                        is_project_bot: project_bot_dids.contains(p),
                     }
                     .is_request()
                 });
@@ -3044,7 +3045,18 @@ impl AppCore {
     ///
     /// Call from a background thread — this blocks until complete.
     pub fn get_account_info(&self, did: String) -> Result<AccountInfoFfi, AppErrorFfi> {
-        ffi_runtime().block_on(async {
+        ffi_runtime()
+            .block_on(self.get_account_info_async(&did))
+            .map_err(AppErrorFfi::from)
+    }
+}
+
+impl AppCore {
+    /// Async `get_account_info`, for tests running inside a tokio runtime (and
+    /// the FFI wrapper above).
+    pub async fn get_account_info_async(&self, did: &str) -> Result<AccountInfoFfi, AppError> {
+        let did = did.to_string();
+        {
             // Lock-free: throttle + fetch + cache write-through go through the
             // `store`/`client` handles. Concurrent duplicate fetches just
             // re-hit the server; the cache is last-write-wins.
@@ -3074,15 +3086,16 @@ impl AppCore {
             match inner.client.get_account_info(&did).await {
                 Ok(info) => {
                     inner.record_fetch(&did, crate::messaging::FetchOutcome::Success).await;
-                    // Only cache rows that carry signal — a real name or the
+                    // Only cache rows that carry signal — a real name or a
                     // bot flag. An empty human record becomes a throttle
                     // outcome, not a junk cache row (docs/52 §"Negative-row
                     // hygiene").
-                    if info.is_bot || info.display_name.is_some() {
+                    if info.is_bot || info.project_bot || info.display_name.is_some() {
                         let _ = inner.store.upsert_account_info(&store::profiles::AccountInfoCache {
                             did: info.did.clone(),
                             display_name: info.display_name.clone().unwrap_or_default(),
                             is_bot: info.is_bot,
+                            project_bot: info.project_bot,
                             fetched_at: Timestamp::now(),
                         }).await;
                     }
@@ -3104,9 +3117,12 @@ impl AppCore {
                     }
                 }
             }
-        }).map_err(AppErrorFfi::from)
+        }
     }
+}
 
+#[uniffi::export]
+impl AppCore {
     /// Register / refresh the push registration for this device.
     ///
     /// Always re-uploads the current `(pseudonym, device_token, platform,

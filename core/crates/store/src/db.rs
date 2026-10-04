@@ -409,6 +409,13 @@ impl IdentityStore {
                 add_column_if_missing(conn, "message_history", "shared_contacts", "TEXT")?;
                 // docs/52 local contact nickname ("name as I know them").
                 add_column_if_missing(conn, "contacts", "nickname", "TEXT")?;
+                // docs/09 S-03: server-vouched Project bots (the request gate).
+                add_column_if_missing(
+                    conn,
+                    "account_info_cache",
+                    "project_bot",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )?;
                 Ok(())
             })
             .await

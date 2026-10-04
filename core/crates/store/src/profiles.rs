@@ -47,7 +47,11 @@ pub struct ContactProfile {
 pub struct AccountInfoCache {
     pub did: String,
     pub display_name: String,
+    /// Self-declared at registration; presentation only (docs/54).
     pub is_bot: bool,
+    /// Linked to an installed Project on the account's server — the only bots
+    /// that skip the message-request gate (docs/09 S-03).
+    pub project_bot: bool,
     pub fetched_at: Timestamp,
 }
 
@@ -194,14 +198,15 @@ impl IdentityStore {
         let did = info.did.clone();
         let name = info.display_name.clone();
         let is_bot = info.is_bot;
+        let project_bot = info.project_bot;
         let fetched_at = info.fetched_at.as_millis();
         self.conn
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO account_info_cache
-                       (did, display_name, is_bot, fetched_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![did, name, is_bot, fetched_at],
+                       (did, display_name, is_bot, project_bot, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![did, name, is_bot, project_bot, fetched_at],
                 )?;
                 Ok(())
             })
@@ -271,7 +276,7 @@ impl IdentityStore {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT did, display_name, is_bot, fetched_at
+                    "SELECT did, display_name, is_bot, project_bot, fetched_at
                      FROM account_info_cache WHERE did = ?1",
                     rusqlite::params![did_q],
                     |row| {
@@ -279,7 +284,8 @@ impl IdentityStore {
                             did: row.get::<_, String>(0)?,
                             display_name: row.get::<_, String>(1)?,
                             is_bot: row.get::<_, bool>(2)?,
-                            fetched_at: Timestamp(row.get::<_, i64>(3)?),
+                            project_bot: row.get::<_, bool>(3)?,
+                            fetched_at: Timestamp(row.get::<_, i64>(4)?),
                         })
                     },
                 )
@@ -290,15 +296,15 @@ impl IdentityStore {
             .map_err(StoreError::Db)
     }
 
-    /// DIDs of every cached account flagged as a homeserver-known bot. Used to
-    /// resolve the message-request gate in bulk (mirrors `SenderGate::passes`,
-    /// which treats a bot sender as non-request) without a per-conversation
-    /// query on load.
-    pub async fn list_bot_dids(&self) -> Result<Vec<String>, StoreError> {
+    /// DIDs of every cached account that is a Project bot on its server (not
+    /// merely self-declared as a bot). Used to resolve the message-request gate
+    /// in bulk (mirrors `SenderGate::passes`, which lets a Project bot skip the
+    /// request gate) without a per-conversation query on load.
+    pub async fn list_project_bot_dids(&self) -> Result<Vec<String>, StoreError> {
         self.conn
             .call(move |conn| {
                 let mut stmt =
-                    conn.prepare("SELECT did FROM account_info_cache WHERE is_bot = 1")?;
+                    conn.prepare("SELECT did FROM account_info_cache WHERE project_bot = 1")?;
                 let dids = stmt
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;

@@ -196,7 +196,7 @@ Substrate profiles and Project profiles are separate systems. A Project that nee
 ## Known gaps
 
 1. **Accepting a request doesn't share your profile.** Fixed (S-02): the automatic delivery receipt now carries your profile key only to accepted contacts (`messaging.rs` `delivery_receipt`), so a stranger who DMs you no longer learns your name. Remaining gap: accepting sends nothing, and clients ignore profile keys on receipts anyway, so the person you accept learns your name only when you first message them. Signal shares your profile on accept; doing the same needs a receive-side change (apply a profile key carried on any message from an accepted contact) plus a send on accept.
-2. **Self-declared bots bypass message requests (S-03, High; P0 in `02`).** `SenderGate::passes` admits `is_curated || is_bot`, and `is_bot` comes from the sender's server account record, which the account sets for itself at registration (`server/src/routes/registration.rs`, `req.is_bot`). Any spammer can register as a bot and skip the request gate. Fix: bot exemption only for bots whose `official` flag is server-vouched on the user's own server (`54`), or drop the exemption.
+2. **Self-declared bots bypassed message requests (S-03, fixed).** `SenderGate::passes` now admits `is_curated || is_project_bot`, where `is_project_bot` comes from the server-vouched `project_bot` field on the cached account record (linked to an installed Project on your server), not the self-declared `is_bot` (`54`).
 3. **No profile liveness (P2).** No `profile_version`; see above.
 4. **`fetch_and_cache_profile` holds the core lock across the network** (`lib.rs:fetch_and_cache_profile` takes `inner`). Lift the fetch out of the lock (`core/CLAUDE.md`).
 

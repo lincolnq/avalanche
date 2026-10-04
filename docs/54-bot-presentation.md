@@ -14,6 +14,7 @@ The core idea: "bot status" is two independent properties, **provenance** (is th
 ### What the client knows
 
 - **`is_bot`** on the server's account record, returned by `GET /v1/accounts/{did}` (`core/crates/server/src/routes/accounts.rs`) and cached in `account_info_cache`. It is set from the registration request (`routes/registration.rs`), so it is **self-declared by whoever registers the account**: any registrant may set it, and nothing requires a bot to.
+- **`project_bot`** on the same record (built, S-03): true when the account is linked to an installed Project on that server (`project_bots`, adminbot included). It is **server-vouched**: since S-01 a bot gets that link only by registering with its Project's bot signup key. Cached alongside `is_bot` in `account_info_cache`.
 - **No official flag on accounts.** The only `official` column is on `directory_entries`, and nothing sets it (`20` §Officialness).
 
 ### Chrome
@@ -28,18 +29,16 @@ Every bot currently gets the same chrome with no badge, because the tiers below 
 
 ### Interactions
 
-- **Message requests** — `SenderGate::passes` lets any `is_bot` sender through without a request (`core/crates/app-core/src/messaging.rs`). See *Known gaps*.
+- **Message requests** — `SenderGate::passes` lets a `project_bot` sender through without a request (`core/crates/app-core/src/messaging.rs`); a merely self-declared bot is a request like anyone else (S-03). The conversation-list path uses the same rule (`list_project_bot_dids`).
 - **Editing and deletion (`36`)** — `36` specifies a wider envelope for bots (no edit cap, 30-day window, no retained history). It isn't wired: app-core has no bot-specific edit path.
 
 ## Known gaps
 
-1. **Self-declared bots bypass the message-request gate (S-03, High; P0 in `02`).** Because `is_bot` is self-declared, any account that registers as a bot can DM anyone straight into their inbox, skipping the request screen. On an open server that's anyone. This contradicts this doc's own rule: never treat a self-declared claim as proven.
-2. **No verified tier.** No checkmark exists anywhere, so a human impersonating "the official adminbot" looks the same as the real one, apart from name and avatar.
-3. **`is_bot` from the server is presented as if vouched.** The doc's tiers assume the server's bot flag means "operator-installed". It doesn't; it is whatever the registrant claimed.
+1. **No verified tier.** No checkmark exists anywhere, so a human impersonating "the official adminbot" looks the same as the real one, apart from name and avatar.
+2. **`is_bot` from the server is presented as if vouched.** The chrome uses the self-declared `is_bot`, so a self-declared bot looks the same as a Project bot. `project_bot` now exists to tell them apart; the tiers below aren't drawn yet.
 
 ## Planned
 
-- **Gate on provenance, not `is_bot`.** Exempt a bot from message requests only if it is linked to an installed Project on your own server (`project_bots`), surfaced on the account-info response as a server-vouched field (e.g. `project_slug`). Otherwise a self-declared bot goes through requests like anyone else.
 - **Verified tier from installation.** Operator-marked official Projects' linked bots get the checkmark (`22` §Planned). Same-server only: the checkmark means nothing from a server you have no account on.
 - **Hedged tier for self-declared bots:** bot chrome, no checkmark, and "Automated (not verified)" on the contact card.
 

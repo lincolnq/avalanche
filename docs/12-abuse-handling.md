@@ -28,17 +28,13 @@ hostile operator who ignores reports about its own users.
 
 ## Known gaps
 
-- **Self-declared bots skip the request gate.** `SenderGate::passes` is
-  `is_curated || is_bot` (`app-core/src/messaging.rs:195`), and `is_bot` is whatever
-  the account declared at registration (`server/src/routes/registration.rs:140,177`).
-  §1 intends "a bot trusted by the homeserver"; nothing checks that. A spammer who
-  registers as a bot reaches inboxes directly. This also contradicts `54` (never
-  treat self-declared automation as proven). (Mitigated today only by registration
-  being closed by default — `24`.)
-- **Delivery receipts to un-accepted requests carry your profile key**
-  (`messaging.rs:1276-1291`), so anyone who DMs you can decrypt your name and
-  avatar. Signal withholds the profile key until you accept. Owned by `52`; tracked
-  in `09`.
+- **Self-declared bots skipped the request gate (S-03, fixed).** `SenderGate::passes` is now
+  `is_curated || is_project_bot`: only a bot linked to an installed Project on your server
+  (the server-vouched `project_bot` on its account record) skips requests, matching §1's
+  "a bot trusted by the homeserver" (`54`).
+- **Delivery receipts to un-accepted requests carried your profile key (S-02, fixed).**
+  They now carry it only to accepted contacts (`messaging.rs` `delivery_receipt`), as
+  Signal does. Owned by `52`.
 - **Group invites from strangers aren't gated by app-core.** An inbound
   `GroupContext` is stored without consulting the sender gate (`messaging.rs:1305`).
   Whether each UI gates the invite was not verified.

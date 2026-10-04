@@ -352,3 +352,31 @@ async fn message_request_block_and_report() {
     bob.block_contact_async(&alice_did, false).await.unwrap();
     bob.send_dm_async(&alice_did, b"ok let's talk", now_ms()).await.unwrap();
 }
+
+/// docs/09 S-03: an account that merely *claims* to be a bot (self-declared at
+/// registration, not linked to any Project) still lands as a message request,
+/// even after the recipient has cached its account record. Before the fix the
+/// cached `is_bot` flag let it skip the request gate.
+#[tokio::test]
+async fn self_declared_bot_is_still_a_message_request() {
+    let url = server_url();
+
+    // e2e accounts register as bots (no PLC), so Alice is a self-declared bot
+    // with no Project link.
+    let alice = AppCore::create_account_with_store(&url, test_store().await, Some("Claims To Be A Bot".into()), true, common::invite_token()).await.unwrap();
+    let bob = AppCore::create_account_with_store(&url, test_store().await, None, true, common::invite_token()).await.unwrap();
+    let alice_did = alice.did_async().await;
+    let bob_did = bob.did_async().await;
+
+    // Bob's app has looked Alice up and cached her account record.
+    let info = bob.get_account_info_async(&alice_did).await.unwrap();
+    assert!(info.is_bot, "alice self-declares as a bot");
+
+    alice.send_dm_async(&bob_did, b"click my link", now_ms()).await.unwrap();
+    let msgs = only_from(&bob.receive_messages_async().await.unwrap(), &alice_did);
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        msgs[0].is_request,
+        "a self-declared bot must not skip the message-request gate"
+    );
+}

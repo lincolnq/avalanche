@@ -32,7 +32,7 @@ for design and rationale.
 |---|---|---|
 | `registration` | `POST /v1/accounts` (open or closed registration, invite/bootstrap tokens) | 50, 24 |
 | `auth` | `POST /v1/auth/challenge`, `POST /v1/auth/token` | below |
-| `accounts` | `/v1/accounts/{did}`, `/v1/accounts/{did}/devices` | 52 |
+| `accounts` | `/v1/accounts/{did}` (display name, self-declared `is_bot`, server-vouched `project_bot`), `/v1/accounts/{did}/devices` | 52, 54 |
 | `devices` | `POST /v1/devices/link`, `POST /v1/devices/replace` | 04, 50 |
 | `provisioning` | `/v1/provisioning/sessions`, `/v1/provisioning/{id}/{slot}` (device-linking mailbox) | 04 §4 |
 | `prekeys` | `PUT /v1/prekeys`, `GET /v1/prekeys/{did}/{device_id}`, `GET /v1/prekeys/status` | — |

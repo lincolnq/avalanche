@@ -20,8 +20,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - **Operator action after the S-01 fix deploys:** rotate `REGISTRATION_SHARED_SECRET` on servers
   where old setup codes were handed out (at least `av.theavalanche.net`), and re-issue each
   Project's bot signup key with `/install-project` (S-01, `22`).
-- Exempt from the message-request gate only bots linked to an installed Project, not
-  self-declared `is_bot` (S-03, `54`).
 - Route group invites from non-curated senders through the request gate; confirm current UI
   behavior first (S-04, `12`, `03`).
 - Desktop: replace the constant SQLCipher key with an OS-keychain-backed key, with migration
