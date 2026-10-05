@@ -125,6 +125,18 @@ DMG="$(ls "$BUNDLE"/dmg/*.dmg | head -1)"
 [ -f "$APP_TGZ" ] && [ -f "$APP_TGZ.sig" ] && [ -f "$DMG" ] || {
   echo "error: expected build outputs missing under $BUNDLE" >&2; exit 1; }
 
+# --- Notarize + staple the .dmg ------------------------------------------------------
+# Tauri notarizes the .app inside but not the disk image around it, and Gatekeeper
+# checks a downloaded (quarantined) .dmg itself ("Unnotarized Developer ID"). The
+# app's ticket is already stapled; give the .dmg its own.
+if [ "$LOCAL_TEST" = 0 ]; then
+  xcrun notarytool submit "$DMG" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" \
+    --issuer "$APPLE_API_ISSUER" --wait
+  xcrun stapler staple "$DMG"
+  spctl -a -t open --context context:primary-signature "$DMG" || {
+    echo "error: the .dmg still doesn't pass Gatekeeper after notarization" >&2; exit 1; }
+fi
+
 # --- Stage assets with stable names ----------------------------------------------
 OUT="../dist/desktop-$VERSION"
 rm -rf "$OUT" && mkdir -p "$OUT"
