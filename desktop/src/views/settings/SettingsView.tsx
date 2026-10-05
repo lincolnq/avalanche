@@ -9,6 +9,7 @@ import BlockedContactsView from "./BlockedContactsView";
 import DevSettingsView from "./DevSettingsView";
 import LinkDeviceView from "./LinkDeviceView";
 import type { Account, ServerInfo } from "../../models";
+import { onEscape } from "../../lib/onEscape";
 import "./SettingsView.css";
 
 type Screen =
@@ -36,6 +37,13 @@ export default function SettingsView() {
   const pop = () => setStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
 
   const accounts = () => store.accounts as Account[];
+
+  // Esc backs out of a sub-screen (the same as its header Back); at the hub
+  // root there's nowhere to go, so decline and let Esc pass through.
+  onEscape(() => {
+    if (stack().length <= 1) return false;
+    pop();
+  });
 
   const identityScreen = () =>
     current().name === "identity" ? (current() as Extract<Screen, { name: "identity" }>) : null;

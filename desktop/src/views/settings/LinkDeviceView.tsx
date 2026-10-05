@@ -2,6 +2,7 @@ import { createSignal, Match, onCleanup, Switch } from "solid-js";
 import { FiArrowLeft, FiCheckCircle, FiCopy } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import QRCode from "../../components/QRCode";
+import { onEscape } from "../../lib/onEscape";
 import "./LinkDeviceView.css";
 
 interface Props {
@@ -79,19 +80,20 @@ export default function LinkDeviceView(props: Props) {
     setPhase({ name: "choose" });
   }
 
+  // Header Back (and Esc) step out of the show/enter steps first, then leave.
+  function back() {
+    const n = phase().name;
+    if (n === "showing" || n === "entering" || n === "failed") reset();
+    else props.onBack();
+  }
+  onEscape(() => back());
+
   return (
     <div class="link-device-panel">
       <header class="settings-subheader ld-header" data-tauri-drag-region>
         {/* The header Back steps out of the show/enter steps first (it used
             to be separate Back/Cancel buttons under each step). */}
-        <button
-          class="back-btn"
-          onClick={() => {
-            const n = phase().name;
-            if (n === "showing" || n === "entering" || n === "failed") reset();
-            else props.onBack();
-          }}
-        >
+        <button class="back-btn" onClick={back}>
           <FiArrowLeft size={14} />
           {phase().name === "showing" ? "Cancel" : "Back"}
         </button>

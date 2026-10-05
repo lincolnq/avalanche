@@ -8,6 +8,7 @@ import NetworkView from "./views/network/NetworkView";
 import SettingsView from "./views/settings/SettingsView";
 import OnboardingFlow from "./views/onboarding/OnboardingFlow";
 import LaunchView from "./views/onboarding/LaunchView";
+import { onEscape } from "./lib/onEscape";
 import "./App.css";
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
           On success, enterApp clears isAddingAccount and this unmounts, leaving
           the new account merged into the shared inbox. */}
       <Show when={store.isAddingAccount}>
+        <AddAccountEscape onCancel={cancelAddAccount} />
         <div class="add-account-overlay">
           <div class="add-account-overlay-bar">
             <button class="back-btn" onClick={() => cancelAddAccount()} aria-label="Cancel">
@@ -52,4 +54,12 @@ export default function App() {
       </Show>
     </Show>
   );
+}
+
+// Esc cancels "Sign in to another account". Registered when the overlay
+// mounts, below the onboarding screen's own Back, so inside the flow Esc steps
+// back first and only cancels from the overlay's first screen.
+function AddAccountEscape(props: { onCancel: () => void }) {
+  onEscape(() => props.onCancel());
+  return null;
 }
