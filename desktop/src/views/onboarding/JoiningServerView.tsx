@@ -1,10 +1,10 @@
 import { createSignal } from "solid-js";
-import { FiArrowLeft } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import type { Account } from "../../models/Account";
 import { initials } from "../../lib/format";
 import "./JoiningServerView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   inviteInfo: InviteInfo;
@@ -48,9 +48,7 @@ export default function JoiningServerView(props: Props) {
           {isJoining() && <span class="spinner" />}
           {isJoining() ? "Joining…" : "Join"}
         </button>
-        {props.onBack && !isJoining() && (
-          <button class="back-btn js-back" onClick={props.onBack}><FiArrowLeft size={14} />Back</button>
-        )}
+        {props.onBack && !isJoining() && <BackButton onClick={props.onBack} />}
     </div>
   );
 }

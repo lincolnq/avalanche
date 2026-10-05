@@ -82,8 +82,18 @@ export default function LinkDeviceView(props: Props) {
   return (
     <div class="link-device-panel">
       <header class="settings-subheader ld-header" data-tauri-drag-region>
-        <button class="back-btn" onClick={props.onBack}>
-          <FiArrowLeft size={14} />Back
+        {/* The header Back steps out of the show/enter steps first (it used
+            to be separate Back/Cancel buttons under each step). */}
+        <button
+          class="back-btn"
+          onClick={() => {
+            const n = phase().name;
+            if (n === "showing" || n === "entering" || n === "failed") reset();
+            else props.onBack();
+          }}
+        >
+          <FiArrowLeft size={14} />
+          {phase().name === "showing" ? "Cancel" : "Back"}
         </button>
         <h1>Link a device</h1>
       </header>
@@ -118,9 +128,6 @@ export default function LinkDeviceView(props: Props) {
                   <FiCopy size={14} />Copy code
                 </button>
                 <div class="ld-status"><span class="spinner" />Waiting for the new device…</div>
-                <button class="back-btn ld-back" onClick={reset}>
-                  <FiArrowLeft size={14} />Cancel
-                </button>
               </>
             )}
           </Match>
@@ -141,9 +148,6 @@ export default function LinkDeviceView(props: Props) {
             />
             <button class="btn-primary ld-btn" disabled={!code().trim()} onClick={() => void submitCode()}>
               Link device
-            </button>
-            <button class="back-btn ld-back" onClick={reset}>
-              <FiArrowLeft size={14} />Back
             </button>
           </Match>
 

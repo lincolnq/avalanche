@@ -1,9 +1,9 @@
 import { createSignal } from "solid-js";
-import { FiArrowLeft } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import { useInviteValidation } from "../../lib/useInviteValidation";
 import "./InviteLinkEntryView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   onValidated: (info: InviteInfo, token: string) => void;
@@ -41,9 +41,7 @@ export default function InviteLinkEntryView(props: Props) {
       >
         {isValidating() ? "Validating…" : "Continue"}
       </button>
-      {props.onBack && (
-        <button class="back-btn ie-back" onClick={props.onBack}><FiArrowLeft size={14} />Back</button>
-      )}
+      {props.onBack && <BackButton onClick={props.onBack} />}
     </div>
   );
 }

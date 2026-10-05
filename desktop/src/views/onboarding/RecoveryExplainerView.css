@@ -1,19 +1,9 @@
 .recovery-explainer {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 100vh;
   background: var(--color-bg);
   color: var(--color-text);
-}
-
-.recovery-explainer-back {
-  margin: 20px 24px 0;
-  align-self: flex-start;
-}
-/* macOS: no native title bar; the traffic lights overlay the top-left where this
-   back button sits. Drop it below them. */
-.is-macos .recovery-explainer-back {
-  margin-top: 44px;
 }
 
 .recovery-explainer-body {
@@ -21,7 +11,7 @@
   max-width: 440px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px;
+  padding: 80px 24px 24px;   /* clears the pinned top-left BackButton */
   display: flex;
   flex-direction: column;
   gap: 16px;

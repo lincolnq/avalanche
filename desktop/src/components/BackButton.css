@@ -1,0 +1,17 @@
+/* Positioned against .onboarding-screen (OnboardingFlow). The top inset clears
+   the macOS traffic lights (the window has no title bar); elsewhere it hugs the
+   top edge. */
+.screen-back {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  z-index: 5;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.is-macos .screen-back {
+  top: 40px;
+}
+.screen-back:hover {
+  background: var(--color-row-hover);
+}

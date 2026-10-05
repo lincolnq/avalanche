@@ -11,6 +11,7 @@ import RecoveryPhraseSetupView from "./RecoveryPhraseSetupView";
 import RecoveryExplainerView from "./RecoveryExplainerView";
 import RecoveryConsoleView from "./RecoveryConsoleView";
 import LinkNewDeviceView from "./LinkNewDeviceView";
+import "./OnboardingFlow.css";
 
 type Screen =
   | { name: "splash" }
@@ -84,6 +85,8 @@ export default function OnboardingFlow() {
       : null;
 
   return (
+    // Positioning context for each screen's top-left BackButton.
+    <div class="onboarding-screen">
     <Switch>
       <Match when={current().name === "splash"}>
         <SplashView
@@ -167,5 +170,6 @@ export default function OnboardingFlow() {
         <LinkNewDeviceView onBack={goBack} />
       </Match>
     </Switch>
+    </div>
   );
 }

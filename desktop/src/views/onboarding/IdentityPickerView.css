@@ -79,6 +79,3 @@
 }
 .ip-action-row:hover { background: var(--color-accent-soft); border-color: var(--color-accent-text); }
 .ip-action-new { color: var(--color-accent-text); }
-.ip-back {
-  margin-top: 8px;
-}

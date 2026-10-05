@@ -1,7 +1,8 @@
-import { createSignal, Match, onCleanup, Switch } from "solid-js";
-import { FiArrowLeft, FiCopy } from "solid-icons/fi";
+import { Show, createSignal, Match, onCleanup, Switch } from "solid-js";
+import { FiCopy } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import QRCode from "../../components/QRCode";
+import BackButton from "../../components/BackButton";
 import "./LinkNewDeviceView.css";
 
 interface Props {
@@ -81,8 +82,20 @@ export default function LinkNewDeviceView(props: Props) {
     setPhase({ name: "choose" });
   }
 
+  // One Back for the whole screen (top-left, like every flow): it steps out of
+  // the enter/show steps first, and leaves the screen from choose/failed. No
+  // Back mid-handshake (preparing/waiting), same as before.
+  const back = () => {
+    const n = phase().name;
+    if (n === "entering" || n === "showing") reset();
+    else props.onBack();
+  };
+
   return (
     <div class="link-device" data-tauri-drag-region>
+      <Show when={phase().name !== "preparing" && phase().name !== "waiting"}>
+        <BackButton onClick={back} label={phase().name === "showing" ? "Cancel" : "Back"} />
+      </Show>
       <div class="ld-title">Link this device</div>
       <Switch>
         <Match when={phase().name === "choose"}>
@@ -97,9 +110,6 @@ export default function LinkNewDeviceView(props: Props) {
               Show a code on this device
             </button>
           </div>
-          <button class="back-btn ld-back" onClick={props.onBack}>
-            <FiArrowLeft size={14} />Back
-          </button>
         </Match>
 
         <Match when={phase().name === "entering"}>
@@ -118,9 +128,6 @@ export default function LinkNewDeviceView(props: Props) {
           />
           <button class="btn-primary ld-btn" disabled={!code().trim()} onClick={() => void submitCode()}>
             Link device
-          </button>
-          <button class="back-btn ld-back" onClick={reset}>
-            <FiArrowLeft size={14} />Back
           </button>
         </Match>
 
@@ -142,9 +149,6 @@ export default function LinkNewDeviceView(props: Props) {
                 <FiCopy size={14} />Copy code
               </button>
               <div class="ld-status"><span class="spinner" />Waiting for the other device…</div>
-              <button class="back-btn ld-back" onClick={reset}>
-                <FiArrowLeft size={14} />Cancel
-              </button>
             </>
           )}
         </Match>
@@ -158,9 +162,6 @@ export default function LinkNewDeviceView(props: Props) {
             <>
               <div class="ld-error">{p().message}</div>
               <button class="btn-primary ld-btn" onClick={reset}>Try again</button>
-              <button class="back-btn ld-back" onClick={props.onBack}>
-                <FiArrowLeft size={14} />Back
-              </button>
             </>
           )}
         </Match>

@@ -6,22 +6,13 @@
   color: var(--color-text);
 }
 
-.phrase-setup-back {
-  margin: 20px 24px 0;
-  align-self: flex-start;
-}
-/* macOS: clear the traffic lights that overlay this top-left back button. */
-.is-macos .phrase-setup-back {
-  margin-top: 44px;
-}
-
 .phrase-setup-body {
   flex: 1;
   overflow-y: auto;
   max-width: 480px;
   width: 100%;
   margin: 0 auto;
-  padding: 16px 24px 32px;
+  padding: 80px 24px 32px;   /* clears the pinned top-left BackButton */
   display: flex;
   flex-direction: column;
   gap: 16px;

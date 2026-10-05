@@ -1,10 +1,11 @@
 import { For, Show } from "solid-js";
-import { FiArrowLeft, FiPlus, FiChevronRight } from "solid-icons/fi";
+import { FiPlus, FiChevronRight } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import type { Account } from "../../models/Account";
 import { initials } from "../../lib/format";
 import "./IdentityPickerView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   inviteInfo: InviteInfo;
@@ -53,9 +54,7 @@ export default function IdentityPickerView(props: Props) {
           </div>
         </div>
 
-        {props.onBack && (
-          <button class="back-btn ip-back" onClick={props.onBack}><FiArrowLeft size={14} />Back</button>
-        )}
+        {props.onBack && <BackButton onClick={props.onBack} />}
     </div>
   );
 }

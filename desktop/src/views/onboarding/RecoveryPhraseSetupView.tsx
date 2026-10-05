@@ -1,8 +1,8 @@
 import { createSignal, For, Show, onMount } from "solid-js";
-import { FiArrowLeft } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import type { InviteInfo } from "../../models/InviteToken";
 import "./RecoveryPhraseSetupView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   inviteInfo: InviteInfo;
@@ -86,9 +86,7 @@ export default function RecoveryPhraseSetupView(props: Props) {
 
   return (
     <div class="phrase-setup" data-tauri-drag-region>
-      <button class="back-btn phrase-setup-back" onClick={props.onBack}>
-        <FiArrowLeft size={14} />Back
-      </button>
+      <BackButton onClick={props.onBack} />
 
       <div class="phrase-setup-body scrollbar-thin">
         <Show when={stage() === "loading"}>

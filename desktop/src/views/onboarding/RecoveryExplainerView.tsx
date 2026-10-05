@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { FiArrowLeft } from "solid-icons/fi";
 import "./RecoveryExplainerView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   onBack: () => void;
@@ -24,9 +24,7 @@ export default function RecoveryExplainerView(props: Props) {
 
   return (
     <div class="recovery-explainer" data-tauri-drag-region>
-      <button class="back-btn recovery-explainer-back" onClick={props.onBack}>
-        <FiArrowLeft size={14} />Back
-      </button>
+      <BackButton onClick={props.onBack} />
 
       <div class="recovery-explainer-body">
         <h1>Recover an identity</h1>

@@ -1,7 +1,8 @@
 import { createSignal } from "solid-js";
-import { FiArrowLeft, FiUser } from "solid-icons/fi";
+import { FiUser } from "solid-icons/fi";
 import type { InviteInfo } from "../../models/InviteToken";
 import "./NewAccountView.css";
+import BackButton from "../../components/BackButton";
 
 interface Props {
   inviteInfo: InviteInfo;
@@ -48,9 +49,7 @@ export default function NewAccountView(props: Props) {
             Recover an existing identity
           </button>
         )}
-        {props.onBack && (
-          <button class="back-btn na-back" onClick={props.onBack}><FiArrowLeft size={14} />Back</button>
-        )}
+        {props.onBack && <BackButton onClick={props.onBack} />}
     </div>
   );
 }
