@@ -9,10 +9,13 @@ import SettingsView from "./views/settings/SettingsView";
 import OnboardingFlow from "./views/onboarding/OnboardingFlow";
 import LaunchView from "./views/onboarding/LaunchView";
 import { onEscape } from "./lib/onEscape";
+import { startAutoUpdates } from "./state/updater";
 import "./App.css";
 
 export default function App() {
   const { store, cancelAddAccount } = useApp();
+  // Background update checks (docs/63); a no-op in dev builds.
+  startAutoUpdates();
 
   return (
     <Show

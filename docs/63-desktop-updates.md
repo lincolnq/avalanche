@@ -1,7 +1,7 @@
 # 63 — Desktop auto-update
 
-> **Status:** Proposed — needs project-owner review. Nothing is built: Desktop has no
-> release pipeline, no bundling, and no updater (`61`).
+> **Status:** Planned — owner-approved 2026-10-04 (endpoint on our domain; signing key in
+> 1Password, used on the maintainer's machine like the Android release key). Being built.
 > **Last verified against code:** 2026-10-04
 
 ## Summary
@@ -20,10 +20,22 @@ updates, which key it trusts, and how a release becomes visible to clients.
 - **Plugin.** `tauri-plugin-updater` (Tauri 2). The app fetches a small JSON manifest,
   compares its version with the running one, downloads the platform's update package,
   verifies its signature against a public key compiled into the app, and installs it.
+- **Platforms.** macOS Apple Silicon, Windows x64, Linux x64. Intel Macs come later
+  (a universal build); Windows and Linux mattered more.
+- **Who builds what.** Tauri needs a native machine per OS. The release workflow's
+  `desktop-build` job builds the Windows NSIS installer and the Linux AppImage + `.deb`
+  on tag push, with no update signature, and attaches them to the draft release. The
+  macOS app is built, Developer ID signed, and notarized on the maintainer's Mac by
+  `make desktop-release`, which also downloads the Windows/Linux installers from the
+  draft and signs them with the updater key. Building unsigned packages in CI doesn't
+  weaken anything: a package is only an update once that local step signs it.
 - **Manifest.** One `latest.json` per release, in Tauri's static format:
-  `{ version, notes, pub_date, platforms: { "darwin-aarch64": { url, signature }, … } }`.
-  The release workflow generates it and attaches it to the GitHub Release along with the
-  update packages (`.app.tar.gz` on macOS; `.msi`/AppImage when those platforms ship).
+  `{ version, notes, pub_date, platforms: { "darwin-aarch64" | "windows-x86_64" |
+  "linux-x86_64": { url, signature } } }`. `make desktop-release` writes it, listing every
+  platform whose package it signed (a platform whose CI build failed is left out, so the
+  others still ship), and uploads it with the signatures.
+- **What updates on Linux.** The updater can replace an AppImage. The `.deb` is offered
+  for people who prefer a system package and is updated by reinstalling a newer `.deb`.
 - **Version.** The app's version is the git tag (`v0.6.0` → `0.6.0`), stamped at build
   time like iOS and Android (`Makefile` `MARKETING_VERSION`). Server and Desktop share the
   tag, so every release produces a Desktop build even when Desktop didn't change; the
@@ -55,18 +67,18 @@ copies will keep asking that URL for as long as they run.
   public key is compiled into the app; the private key signs update packages at release
   time. It is separate from the Apple Developer ID certificate: notarization proves Apple
   vetted the binary, the updater key proves *we* released it.
-- **Where the private key lives** is the main security decision:
-  - **Option A (recommended to start): a GitHub Actions secret in a protected
-    `release` environment** that requires your approval before the job can read it.
-    Releases stay one-step (tag, approve), and a stolen GitHub session alone can't sign
-    without that approval. Weakness: someone with full control of the repo settings could
-    change the protection.
-  - **Option B: sign on your machine.** CI builds unsigned packages; you run one command
-    that downloads them, signs them with a key in 1Password, and uploads the signatures
-    and manifest. The key never touches GitHub. Weakness: a manual step on every
-    release, and releases stall when you're away.
-- **Backup.** Keep the private key (and its password) in 1Password. Losing it means no
-  installed copy can ever be updated again; users would have to re-download.
+- **Where the private key lives: 1Password, used only on the maintainer's machine**
+  (decided), the same way the Android release keystore works
+  (`mobile/android/release-sign.sh`). `make desktop-release` reads the key and its
+  password from 1Password into environment variables for the length of the build, so it
+  never lands on disk and never reaches GitHub. Consequently the Desktop release is built
+  and signed locally, like `make android-release` and the iOS `make archive`, and its
+  artifacts are uploaded to the tag's GitHub Release; CI builds the server side only.
+  (Rejected: a GitHub Actions secret behind a protected environment. One-step releases,
+  but the key would sit with GitHub, where anyone with full control of the repo settings
+  could reach it.)
+- **Backup.** 1Password is the only copy, so it must stay backed up there. Losing it means
+  no installed copy can ever be updated again; users would have to re-download.
 - **Rotation.** To change keys, ship one release signed with the *old* key whose binary
   contains the *new* public key. After that, sign with the new key. A key that leaks
   must be rotated this way immediately; there is no other revocation.
@@ -108,19 +120,21 @@ contacts. It should be listed in `09` as a third-party metadata exposure.
 
 ### Out of scope here
 
-- Signing and notarizing the macOS app (needed before any of this ships, and covered by
-  the Desktop release plan) and Windows code signing.
+- Windows code signing. Unsigned installers work, but Windows SmartScreen warns
+  ("Windows protected your PC") until the app has reputation. Fine for testers; sign
+  before a wider launch (Azure Trusted Signing is the cheapest current route).
 - Forced or minimum-version updates. If a server ever needs to refuse very old clients,
   that is a protocol-level change, not an updater feature.
 - Delta updates; the full package is a few tens of MB.
 
 ### Build order
 
-1. Generate the updater keypair; store it in 1Password; add the public key to
-   `tauri.conf.json` and the private key per the chosen option (A or B).
-2. Enable bundling and version stamping; add the macOS build (signed, notarized) to
-   `release.yml`, emitting the update package, its signature, and `latest.json`.
-3. Add the Cloudflare redirect for the endpoint.
+1. Generate the updater keypair straight into 1Password (`desktop/updater-keygen.sh`);
+   add the public key to `tauri.conf.json`.
+2. Enable bundling and version stamping; `make desktop-release` builds the macOS app
+   (Developer ID signed, notarized), signs the update package with the 1Password key, and
+   uploads it, its signature, and `latest.json` to the tag's GitHub Release.
+3. Add the redirect for the endpoint (`web/static/_redirects`).
 4. Add the plugin and the in-app UI (sidebar "Restart to update", Settings → About).
 5. Test end to end with two pre-release tags: install the first, publish the second,
    watch it update; then tamper with a signature and confirm it's rejected.

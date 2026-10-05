@@ -3,6 +3,7 @@
 // `src-tauri/src/debug_bridge.rs`). Installed on `window.__av` only when
 // `import.meta.env.DEV`, so production builds don't include them.
 import type { AppContextValue } from "../state/types";
+import { setUpdateStatusForDev, type UpdateStatus } from "../state/updater";
 
 type Summary = {
   id: string;
@@ -77,6 +78,8 @@ export function installDebugHelpers(ctx: AppContextValue): void {
       await settle();
       return target.tagName.toLowerCase();
     },
+    /** Force the auto-update status, to see its UI (e.g. {kind:"ready",version:"0.7.0"}). */
+    setUpdateStatus: (status: UpdateStatus) => setUpdateStatusForDev(status),
     /** Visible text of the page, or of the first element matching `selector`. */
     text: (selector?: string) => {
       const el = selector ? document.querySelector<HTMLElement>(selector) : document.body;

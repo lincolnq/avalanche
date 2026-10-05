@@ -30,3 +30,6 @@ script.
   points at a GitHub release asset and must be bumped to the new version each
   release (e.g. `releases/download/vX.Y.Z/app-release.apk`).
 - No emoji in site content or docs — plain text.
+- `static/_redirects` holds the Desktop auto-update endpoint
+  (`/desktop/update/latest.json` → the latest GitHub Release's `latest.json`, docs/63).
+  Installed apps have that URL compiled in: retarget it if hosting moves, never delete it.

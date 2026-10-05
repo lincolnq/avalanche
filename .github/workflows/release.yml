@@ -171,10 +171,102 @@ jobs:
           name: release-deploy
           path: av-deploy-*.tar.gz
 
+  # ── Desktop: Windows + Linux installers (docs/63) ──────────────────────────
+  # Tauri needs a native machine per OS, so CI builds these; the macOS build and
+  # ALL update signing happen on the maintainer's Mac (`make desktop-release`),
+  # which downloads these from the draft release, signs them with the
+  # 1Password-held updater key, and writes latest.json. Nothing here is
+  # updater-signed (createUpdaterArtifacts is off), so CI never needs the key.
+  # Also runs on manual dispatch, as a compile check without a release.
+  desktop-build:
+    name: Desktop (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          key: desktop-${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install protobuf compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Vendored OpenSSL (SQLCipher on MSVC, core/crates/store/Cargo.toml) needs NASM.
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libdbus-1-dev
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        working-directory: desktop
+        run: |
+          npm ci
+          npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
+            --config '{"version":"${{ steps.ver.outputs.version }}","bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Stage installers
+        shell: bash
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          b="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p out
+          case "${{ matrix.name }}" in
+            windows-x64)
+              cp "$(ls "$b"/nsis/*-setup.exe | head -1)" "out/Avalanche-$v-windows-x64-setup.exe" ;;
+            linux-x86_64)
+              cp "$(ls "$b"/appimage/*.AppImage | head -1)" "out/Avalanche-$v-linux-x86_64.AppImage"
+              cp "$(ls "$b"/deb/*.deb | head -1)" "out/Avalanche-$v-linux-amd64.deb" ;;
+          esac
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-${{ matrix.name }}
+          path: out/*
+
   publish:
     name: Publish GitHub Release
-    needs: [build, bundle]
-    if: github.event_name == 'push'
+    needs: [build, bundle, desktop-build]
+    # A Desktop build failure must not hold up the server release: require only
+    # the server-side jobs; Desktop installers are attached when they succeeded.
+    if: ${{ github.event_name == 'push' && !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -188,7 +280,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: av-*.tar.gz
+          files: |
+            av-*.tar.gz
+            Avalanche-*
 
   # ── npm: build the native addon for every published triple ─────────────────
   # Separate from the `build` job above because that one is Linux-only (server

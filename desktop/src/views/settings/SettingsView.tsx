@@ -1,6 +1,8 @@
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { FiUser, FiUsers, FiSlash, FiTool, FiChevronRight } from "solid-icons/fi";
+import { getVersion } from "@tauri-apps/api/app";
 import { useApp } from "../../state/AppContext";
+import { updateStatus, checkForUpdates, installAndRestart, updatesEnabled } from "../../state/updater";
 import AccountAvatar from "../../components/AccountAvatar";
 import AccountsView from "./AccountsView";
 import ServerDetailView from "./ServerDetailView";
@@ -37,6 +39,24 @@ export default function SettingsView() {
   const pop = () => setStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
 
   const accounts = () => store.accounts as Account[];
+
+  // About (docs/63): the running version and the update state.
+  const [version, setVersion] = createSignal<string | null>(null);
+  onMount(() => {
+    getVersion().then(setVersion).catch(() => setVersion(null));
+  });
+  const updateText = () => {
+    const s = updateStatus();
+    switch (s.kind) {
+      case "checking": return "Checking for updates…";
+      case "upToDate": return "Up to date";
+      case "downloading": return `Downloading ${s.version}${s.percent != null ? ` (${s.percent}%)` : ""}…`;
+      case "ready": return `Version ${s.version} is ready`;
+      case "installing": return `Installing ${s.version}…`;
+      case "error": return s.message;
+      default: return updatesEnabled ? "Updates install automatically" : "Updates are off in development builds";
+    }
+  };
 
   // Esc backs out of a sub-screen (the same as its header Back); at the hub
   // root there's nowhere to go, so decline and let Esc pass through.
@@ -90,6 +110,33 @@ export default function SettingsView() {
               <button class="settings-row" onClick={() => push({ name: "dev" })}>
                 <FiTool size={18} /><span>Developer</span><FiChevronRight size={16} class="settings-row-chevron" />
               </button>
+            </div>
+
+            <div class="settings-group settings-about">
+              <div class="settings-about-row">
+                <div class="settings-about-info">
+                  <span class="settings-about-title">
+                    Avalanche Desktop{version() ? ` ${version()}` : ""}
+                  </span>
+                  <span class="settings-about-sub">{updateText()}</span>
+                </div>
+                <Show
+                  when={updateStatus().kind === "ready"}
+                  fallback={
+                    <button
+                      class="btn-secondary settings-about-btn"
+                      disabled={!updatesEnabled || ["checking", "downloading", "installing"].includes(updateStatus().kind)}
+                      onClick={() => void checkForUpdates()}
+                    >
+                      Check for updates
+                    </button>
+                  }
+                >
+                  <button class="btn-primary settings-about-btn" onClick={() => void installAndRestart()}>
+                    Restart to update
+                  </button>
+                </Show>
+              </div>
             </div>
 
             <Show when={accounts().length === 0}>

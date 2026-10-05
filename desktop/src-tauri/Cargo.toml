@@ -21,6 +21,10 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-store = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
+# Auto-update (docs/63): signed update manifests from the GitHub Release, and
+# relaunch after installing ("Restart to update").
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 # Forwards a second instance's launch to the running one. We extract the
 # avalanche:// URL from the second instance's argv ourselves (see lib.rs) rather
 # than relying on the `deep-link` feature's auto-forward, which doesn't fire

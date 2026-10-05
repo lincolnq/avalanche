@@ -97,7 +97,7 @@ APP_CORE_TS_SOURCES := $(shell find node/packages/app-core/src -name '*.ts' 2>/d
 APP_CORE_NATIVE := node/packages/app-core/native/index.d.ts
 APP_CORE_DIST := node/packages/app-core/dist/index.js
 
-.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-bundle android-minify-test android-bindings dev relay relay-release server-release dev-all dev-desktop node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build desktop
+.PHONY: test test-server test-core test-e2e check clippy fmt ci db-up db-down db-reset migrate ios xcode archive ipa bindings android android-release android-bundle android-minify-test android-bindings dev relay relay-release server-release dev-all dev-desktop node node-debug node-app-core node-adminbot node-adminbot-build node-testbot node-testbot-build desktop desktop-release
 
 # ----------------------------------------------------------------------------
 # Node bindings (napi-rs)
@@ -450,6 +450,12 @@ android-release: android-bindings
 	@mkdir -p dist
 	@cp $(ANDROID_RELEASE_APK) dist/avalanche-release.apk
 	@ls -lh dist/avalanche-release.apk
+
+# Desktop (macOS) release: build, Developer ID sign, notarize, sign the update
+# package with the 1Password updater key, and upload the .dmg, update package,
+# and latest.json to the tag's GitHub Release (docs/63). Run on the release tag.
+desktop-release:
+	desktop/release.sh
 
 # Play Store app bundle (.aab): same in-memory 1Password signing flow as
 # android-release, but Gradle's bundleRelease. Upload the output in the Play

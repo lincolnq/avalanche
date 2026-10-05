@@ -31,3 +31,9 @@ uuid               = { workspace = true }
 # crypto DB and TLS on Android. Other targets are unaffected.
 [target.'cfg(target_os = "android")'.dependencies]
 libsqlite3-sys = { version = "0.28", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# Windows (Desktop): same story as Android — no system OpenSSL for SQLCipher to
+# link against on MSVC, so build the vendored one (needs Perl + NASM on the
+# builder; the release workflow installs NASM).
+[target.'cfg(windows)'.dependencies]
+libsqlite3-sys = { version = "0.28", features = ["bundled-sqlcipher-vendored-openssl"] }

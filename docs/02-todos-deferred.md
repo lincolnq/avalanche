@@ -88,10 +88,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 
 ## Awaiting owner review: Proposed contract changes
 
-- Desktop auto-update: endpoint on our domain redirecting to GitHub Releases, a dedicated
-  updater signing key (GitHub protected environment vs. local signing), draft-publish as
-  the ship gate, "Restart to update" UX (`63`).
-
 - **Identity root** — random root key wrapped under each unlock method (passkey, backup-domain
   passkey, recovery phrase); priority-ordered PLC rotation keys with the top key never stored
   (S-06) (`50` Proposed).

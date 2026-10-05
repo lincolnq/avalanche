@@ -21,7 +21,7 @@ Start here, then `09-security-posture.md` for anything security-relevant, and
 | Messaging UX | [`30`](30-mobile-ux.md) mobile UX · [`31`](31-read-tracking.md) read tracking · [`32`](32-threading.md) replies & threading · [`33`](33-reactions.md) reactions · [`34`](34-connection-state.md) connection state · [`35`](35-attachments.md) attachments & link previews · [`36`](36-message-editing-deletion.md) editing & deletion · [`37`](37-chat-organization.md) chat organization |
 | Deploy & infra | [`41`](41-relay-deployment.md) push relay deployment · [`42`](42-server-upgrades.md) server deployment & upgrades |
 | Identity & accounts | [`50`](50-identity-auth-recovery.md) identity, auth, recovery · [`51`](51-invite-tokens.md) invite tokens · [`52`](52-contacts-and-profiles.md) contacts & profiles · [`53`](53-multi-account-ux.md) multi-account UX · [`54`](54-bot-presentation.md) bot presentation · [`55`](55-avatars.md) avatars · [`56`](56-desktop-passkey-external-browser.md) desktop passkeys |
-| Platforms | [`60`](60-android-implementation.md) Android · [`61`](61-desktop-implementation.md) Desktop · [`62`](62-feature-parity.md) feature parity matrix · [`63`](63-desktop-updates.md) Desktop auto-update (Proposed) |
+| Platforms | [`60`](60-android-implementation.md) Android · [`61`](61-desktop-implementation.md) Desktop · [`62`](62-feature-parity.md) feature parity matrix · [`63`](63-desktop-updates.md) Desktop auto-update |
 
 ## Premise
 

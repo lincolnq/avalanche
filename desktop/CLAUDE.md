@@ -63,6 +63,27 @@ cd desktop && npm run tauri dev    # dev mode with hot reload (or: make dev-desk
 cd desktop && npm run tauri build  # package for current platform
 ```
 
+### Releasing (macOS) and auto-update
+
+Desktop releases are built on the maintainer's Mac, not in CI, because the update-signing
+key lives only in 1Password (docs/63, same model as `make android-release`):
+
+```bash
+git checkout vX.Y.Z && make desktop-release   # build, sign, notarize, upload to the tag's Release
+desktop/release.sh --local-test               # unsigned build with a throwaway key; no upload
+desktop/updater-keygen.sh                     # ONE-TIME: create the updater key in 1Password
+```
+
+- The app updates itself from `latest.json` on the newest *published* GitHub Release, via
+  `theavalanche.net/desktop/update/latest.json` (`web/static/_redirects`). Publishing the
+  draft release is what ships an update.
+- `src/state/updater.ts` checks 10 s after launch and every 4 h, downloads in the
+  background, and shows "Restart to update" (sidebar + Settings → About). It never
+  restarts on its own. Release builds only: dev builds don't register the updater plugin.
+- Never regenerate the updater key: installed copies trust only the public key in
+  `tauri.conf.json`. Rotation is a deliberate two-release process (docs/63).
+- `__av.setUpdateStatus({kind: "ready", version: "x"})` shows the update UI in dev.
+
 The Tauri CLI is the npm-local `@tauri-apps/cli` (a devDependency), invoked via
 the `tauri` package script. `cargo tauri ...` only works if you've separately
 `cargo install tauri-cli`, which this repo does not assume.

@@ -33,12 +33,21 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["avalanche"]
+        "schemes": [
+          "avalanche"
+        ]
       }
+    },
+    "updater": {
+      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
+      "endpoints": [
+        "https://theavalanche.net/desktop/update/latest.json",
+        "https://github.com/lincolnq/avalanche/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -46,6 +55,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
   }
 }

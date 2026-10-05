@@ -1,11 +1,12 @@
 import { useLocation, useNavigate, A } from "@solidjs/router";
 import type { RouteSectionProps } from "@solidjs/router";
 import type { JSX } from "solid-js";
-import { createEffect, on } from "solid-js";
+import { createEffect, on, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { TbOutlineSettings } from "solid-icons/tb";
+import { TbOutlineSettings, TbOutlineRefresh } from "solid-icons/tb";
 import { ChatsBubbleIcon, NetworkGlobeIcon } from "../../components/icons/BrandIcons";
 import { useApp } from "../../state/AppContext";
+import { updateStatus, installAndRestart } from "../../state/updater";
 import "./MainLayout.css";
 
 type NavItem = { path: string; label: string; icon: typeof ChatsBubbleIcon };
@@ -72,6 +73,20 @@ export default function MainLayout(props: RouteSectionProps): JSX.Element {
           <NavLink item={item} />
         ))}
         <div class="sidebar-spacer" data-tauri-drag-region />
+        {/* A downloaded update waits for the user (docs/63): never auto-restart. */}
+        <Show when={updateStatus().kind === "ready" || updateStatus().kind === "installing"}>
+          <button
+            class="sidebar-update"
+            onClick={() => void installAndRestart()}
+            disabled={updateStatus().kind === "installing"}
+            title="Restart to install the update"
+          >
+            <TbOutlineRefresh size={18} aria-hidden="true" />
+            <span class="sidebar-update-label">
+              {updateStatus().kind === "installing" ? "Updating…" : "Restart to update"}
+            </span>
+          </button>
+        </Show>
         <A href="/settings" class="sidebar-settings-link" aria-label="Settings" title="Settings">
           {/* Outlined gear standing in for iOS's SF Symbol `gearshape` (SF
               Symbols are licensed for Apple platforms only). currentColor, so

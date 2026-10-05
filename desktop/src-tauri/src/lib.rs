@@ -4,7 +4,8 @@
 // All FFI types are now derived directly on app-core via the "specta" feature —
 // no more manual ffi_types.rs mirror.
 
-#[cfg(debug_assertions)]
+// Dev-only, and Unix-only (it uses /tmp and /dev/urandom).
+#[cfg(all(debug_assertions, unix))]
 mod debug_bridge;
 mod db_key;
 use std::collections::HashMap;
@@ -279,14 +280,21 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             use tauri_plugin_deep_link::DeepLinkExt;
 
             // Dev-only control endpoint for driving the running app from the
             // command line (`desktop/scripts/devctl`). Not compiled into release.
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, unix))]
             debug_bridge::start(app.handle().clone());
+
+            // Auto-update (docs/63): release builds only. Dev builds never check
+            // for updates (the frontend doesn't call it in dev either), and leaving
+            // the plugin out keeps them independent of the updater config.
+            #[cfg(not(debug_assertions))]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
 
             // Route the Rust core's `tracing` output to stderr so app-core /
             // net / store / crypto diagnostics are visible in the dev console.

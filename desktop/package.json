@@ -14,7 +14,9 @@
     "@tauri-apps/api": "2.2.0",
     "@tauri-apps/plugin-deep-link": "2.2.0",
     "@tauri-apps/plugin-notification": "2.2.0",
+    "@tauri-apps/plugin-process": "2.2.1",
     "@tauri-apps/plugin-store": "2.2.0",
+    "@tauri-apps/plugin-updater": "2.8.0",
     "qrcode-generator": "^2.0.4",
     "solid-icons": "1.2.0",
     "solid-js": "^1.9.13"

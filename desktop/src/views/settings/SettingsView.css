@@ -82,3 +82,33 @@
   font-size: 14px;
   color: var(--color-text-secondary);
 }
+
+/* About: version + update state (docs/63). */
+.settings-about-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.settings-about-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about-title {
+  font-size: 15px;
+  color: var(--color-text);
+}
+.settings-about-sub {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.btn-secondary.settings-about-btn,
+.btn-primary.settings-about-btn {
+  flex-shrink: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+}

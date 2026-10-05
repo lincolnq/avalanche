@@ -1,0 +1,9 @@
+# Cloudflare static-assets redirects (copied verbatim into public/ by Hugo).
+#
+# Desktop auto-update endpoint (docs/63). This URL is compiled into every
+# installed copy of Avalanche Desktop, so it must keep working for as long as
+# old copies run: change where it points, never remove it. It points at the
+# newest *published* GitHub Release; drafts and prereleases are skipped, so
+# publishing a draft is what ships an update. Trust comes from the update
+# signature the app verifies, not from this host.
+/desktop/update/latest.json https://github.com/lincolnq/avalanche/releases/latest/download/latest.json 302
