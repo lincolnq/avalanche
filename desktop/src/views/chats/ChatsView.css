@@ -104,7 +104,7 @@
   background: var(--color-divider);
 }
 .chats-unread-badge {
-  background: var(--color-error);
+  background: var(--color-notification);
   color: #fff;
   font-size: 12px;
   font-weight: 600;

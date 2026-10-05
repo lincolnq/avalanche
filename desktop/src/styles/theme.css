@@ -54,6 +54,8 @@ button, input, select, textarea {
   --color-primary: #5A2E42;       /* alias of accent for fills (NetworkView) */
   --color-surface: #FFFFFF;       /* inset cards / list-item backings */
   --color-error: #C0392B;
+  --color-notification: #C76870;  /* unread badges, white text — iOS avNotification
+                                     (rose500); reads in both modes, so not overridden */
   --color-offline: #F0A030;       /* offline/connecting banner — amber (fixed) */
   --color-warning-soft: rgba(240, 160, 48, 0.16); /* soft warning fill (recovery banner) */
 

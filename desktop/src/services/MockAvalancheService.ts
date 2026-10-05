@@ -106,7 +106,7 @@ export function seedConversations(
         contacts: [],
       },
       lastMessagePreview: null,
-      unreadCount: 0,
+      unreadCount: 3,
       isRequest: false,
       inviterDid: null,
       invitedAtMs: null,
