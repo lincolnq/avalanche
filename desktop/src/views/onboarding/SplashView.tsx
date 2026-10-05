@@ -1,6 +1,4 @@
-import { onMount } from "solid-js";
 import { FiLink } from "solid-icons/fi";
-import { useApp } from "../../state/AppContext";
 import wordmarkUrl from "../../assets/wordmark.svg";
 import "./SplashView.css";
 
@@ -18,11 +16,9 @@ interface SplashViewProps {
  * "Already have an account?" divider is Desktop's own.
  */
 export default function SplashView(props: SplashViewProps) {
-  const { restoreAccounts } = useApp();
-
-  // Accounts are restored at launch (createAccounts); this is a no-op then,
-  // but re-checks if the welcome screen is reached some other way.
-  onMount(() => void restoreAccounts());
+  // No restore here: saved accounts are opened once at launch (createAccounts).
+  // Re-running it on every mount retried a failing open — a ~200 ms key
+  // derivation — each time this screen appeared.
 
   return (
     // The whole splash is a drag region (no title bar; traffic lights overlay

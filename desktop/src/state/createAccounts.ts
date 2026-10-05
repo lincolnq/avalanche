@@ -181,9 +181,9 @@ export function createAccounts(deps: AccountsDeps): Accounts {
   let restored = false;
 
   async function restoreAccounts() {
-    // Never re-restore once any account is signed in — SplashView.onMount fires
-    // restoreAccounts, and that splash is also shown by the "Sign in to another
-    // account" overlay over a live session. Without the accounts-present guard,
+    // Never re-restore once any account is signed in — restoreAccounts is part of
+    // the context API (it used to run from SplashView.onMount, and the splash is
+    // also shown by the "Sign in to another account" overlay over a live session). Without the accounts-present guard,
     // re-mounting it would re-login (re-open the DB of) accounts that are already
     // running. The create/recover paths handle adding accounts additively.
     if (restoring) return; // the in-flight restore clears isLaunching when it settles

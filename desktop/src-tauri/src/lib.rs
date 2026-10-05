@@ -391,10 +391,26 @@ fn ping() -> String {
 }
 
 // ── Account factory ──────────────────────────────────────────────────────────
+//
+// These open (or create) an account database: a SQLCipher key derivation
+// (~200 ms) plus the credential-store read, and for create/recover network I/O.
+// So they're async + spawn_blocking — a sync command runs on the main thread
+// and would freeze the window for that long.
+
+fn install_core(state: &AppState, app: std::sync::Arc<AppCore>) -> Result<AccountResult, String> {
+    let did = app.did();
+    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
+    state
+        .cores
+        .lock()
+        .map_err(|e| format!("lock poisoned: {}", e))?
+        .insert(did.clone(), app);
+    Ok(AccountResult { did, display_name })
+}
 
 #[tauri::command]
 #[specta::specta]
-fn create_account(
+async fn create_account(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
@@ -403,44 +419,43 @@ fn create_account(
     display_name: String,
     invite_token: Option<String>,
 ) -> Result<AccountResult, String> {
-    let db_key = db_key::db_key(&app_handle)?;
-    let db_path = db_key::db_path(&app_handle, &db_path)?;
-    let app =
+    let app = tauri::async_runtime::spawn_blocking(move || {
+        let db_key = db_key::db_key(&app_handle)?;
+        let db_path = db_key::db_path(&app_handle, &db_path)?;
         AppCore::create_account(server_url, db_path, db_key, prf_output, display_name, invite_token)
-            .map_err(|e| e.to_string())?;
-    let did = app.did();
-    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    state
-        .cores
-        .lock()
-        .map_err(|e| format!("lock poisoned: {}", e))?
-        .insert(did.clone(), app);
-    Ok(AccountResult { did, display_name })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    install_core(&state, app)
 }
 
+/// Open an existing account database. Refuses a path with no file: opening
+/// would otherwise create an empty database there and fail later for want of
+/// an identity, leaving a blank file behind.
 #[tauri::command]
 #[specta::specta]
-fn login(
+async fn login(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     db_path: String,
 ) -> Result<AccountResult, String> {
-    let db_key = db_key::db_key(&app_handle)?;
-    let db_path = db_key::db_path(&app_handle, &db_path)?;
-    let app = AppCore::login(db_path, db_key).map_err(|e| e.to_string())?;
-    let did = app.did();
-    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    state
-        .cores
-        .lock()
-        .map_err(|e| format!("lock poisoned: {}", e))?
-        .insert(did.clone(), app);
-    Ok(AccountResult { did, display_name })
+    let app = tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_key::db_path(&app_handle, &db_path)?;
+        if !std::path::Path::new(&db_path).exists() {
+            return Err("account database not found".to_string());
+        }
+        let db_key = db_key::db_key(&app_handle)?;
+        AppCore::login(db_path, db_key).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    install_core(&state, app)
 }
 
 #[tauri::command]
 #[specta::specta]
-fn recover_from_blob(
+async fn recover_from_blob(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
@@ -449,18 +464,15 @@ fn recover_from_blob(
     db_path: String,
     display_name: String,
 ) -> Result<AccountResult, String> {
-    let db_key = db_key::db_key(&app_handle)?;
-    let db_path = db_key::db_path(&app_handle, &db_path)?;
-    let app = AppCore::recover_from_blob(server_url, did, prf_output, db_path, db_key, display_name)
-        .map_err(|e| e.to_string())?;
-    let did = app.did();
-    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    state
-        .cores
-        .lock()
-        .map_err(|e| format!("lock poisoned: {}", e))?
-        .insert(did.clone(), app);
-    Ok(AccountResult { did, display_name })
+    let app = tauri::async_runtime::spawn_blocking(move || {
+        let db_key = db_key::db_key(&app_handle)?;
+        let db_path = db_key::db_path(&app_handle, &db_path)?;
+        AppCore::recover_from_blob(server_url, did, prf_output, db_path, db_key, display_name)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    install_core(&state, app)
 }
 
 /// Recover an account from a BIP39 recovery phrase. Mirrors `recover_from_blob`
@@ -470,7 +482,7 @@ fn recover_from_blob(
 /// `prf_output` in the blob recovery path.
 #[tauri::command]
 #[specta::specta]
-fn recover_from_phrase(
+async fn recover_from_phrase(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     phrase: String,
@@ -479,19 +491,16 @@ fn recover_from_phrase(
     db_path: String,
     display_name: String,
 ) -> Result<AccountResult, String> {
-    let db_key = db_key::db_key(&app_handle)?;
-    let db_path = db_key::db_path(&app_handle, &db_path)?;
-    let seed = app_core::recovery_phrase_to_seed(phrase).map_err(|e| e.to_string())?;
-    let app = AppCore::recover_from_blob(server_url, did, seed, db_path, db_key, display_name)
-        .map_err(|e| e.to_string())?;
-    let did = app.did();
-    let display_name = app.own_display_name().map_err(|e| e.to_string())?;
-    state
-        .cores
-        .lock()
-        .map_err(|e| format!("lock poisoned: {}", e))?
-        .insert(did.clone(), app);
-    Ok(AccountResult { did, display_name })
+    let app = tauri::async_runtime::spawn_blocking(move || {
+        let db_key = db_key::db_key(&app_handle)?;
+        let db_path = db_key::db_path(&app_handle, &db_path)?;
+        let seed = app_core::recovery_phrase_to_seed(phrase).map_err(|e| e.to_string())?;
+        AppCore::recover_from_blob(server_url, did, seed, db_path, db_key, display_name)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    install_core(&state, app)
 }
 
 // ── Device linking (T71) ──────────────────────────────────────────────────────
