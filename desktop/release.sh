@@ -18,9 +18,9 @@
 #   latest.json                                     update manifest, all platforms (docs/63)
 #
 # Prerequisites (release mode):
-#   - 1Password CLI `op` signed in, with:
+#   - 1Password CLI `op` (all secrets come from ONE `op run`: one approval), with:
 #       "Avalanche Desktop updater signing key"   (desktop/updater-keygen.sh)
-#       "Avalanche App Store Connect API key"     document: the AuthKey_XXXX.p8
+#       "Avalanche App Store Connect API key"     document holding AuthKey_XXXX.p8 (OP_ASC_KEY_FILE)
 #       "Avalanche notarization"                  fields: key id, issuer id
 #   - a "Developer ID Application" certificate in the login Keychain
 #   - `gh` signed in; the tag's GitHub Release exists (the release workflow
@@ -36,8 +36,28 @@ OP_VAULT="${OP_VAULT:-Private}"
 OP_UPDATER_ITEM="${OP_UPDATER_ITEM:-Avalanche Desktop updater signing key}"
 OP_ASC_KEY_DOC="${OP_ASC_KEY_DOC:-Avalanche App Store Connect API key}"
 OP_NOTARY_ITEM="${OP_NOTARY_ITEM:-Avalanche notarization}"
+OP_ASC_KEY_FILE="${OP_ASC_KEY_FILE:-AuthKey_7U6GFQU793.p8}"   # the file inside that document
 REPO="${REPO:-lincolnq/avalanche}"
 TARGET="aarch64-apple-darwin"     # macOS: Apple Silicon only for now (docs/63)
+
+# --- One 1Password round-trip --------------------------------------------------
+# Every `op` invocation is its own macOS "iTerm2 would like to access data from
+# other apps" prompt (op talks to the 1Password app), plus a 1Password approval.
+# So resolve ALL secrets in one `op run`: re-launch this script under it with an
+# env file of op:// REFERENCES (no secret values), and the child gets the values
+# in its environment only.
+if [ "$LOCAL_TEST" = 0 ] && [ -z "${AV_OP_RESOLVED:-}" ]; then
+  command -v op >/dev/null || { echo "error: 1Password CLI (op) not found" >&2; exit 1; }
+  REFS="$(mktemp -t avrelease-refs)"
+  cat > "$REFS" <<EOF
+AV_UPDATER_KEY="op://$OP_VAULT/$OP_UPDATER_ITEM/private key"
+AV_ASC_P8="op://$OP_VAULT/$OP_ASC_KEY_DOC/$OP_ASC_KEY_FILE"
+AV_ASC_KEY_ID="op://$OP_VAULT/$OP_NOTARY_ITEM/key id"
+AV_ASC_ISSUER="op://$OP_VAULT/$OP_NOTARY_ITEM/issuer id"
+EOF
+  exec op run --env-file "$REFS" -- env AV_OP_RESOLVED=1 AV_REFS_FILE="$REFS" "$0" "$@"
+fi
+[ -n "${AV_REFS_FILE:-}" ] && rm -f "$AV_REFS_FILE"
 
 cd "$(dirname "$0")"   # desktop/
 CONF="src-tauri/tauri.conf.json"
@@ -76,22 +96,24 @@ if [ "$LOCAL_TEST" = 1 ]; then
 else
   grep -q "REPLACE_WITH_UPDATER_PUBLIC_KEY" "$CONF" && {
     echo "error: set plugins.updater.pubkey in $CONF (run desktop/updater-keygen.sh)" >&2; exit 1; }
-  command -v op >/dev/null && op account list >/dev/null 2>&1 || {
-    echo "error: 1Password CLI not signed in — run: op signin" >&2; exit 1; }
   command -v gh >/dev/null && gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 || {
     echo "error: no GitHub Release for $TAG (push the tag; the release workflow creates it)" >&2; exit 1; }
   IDENTITY="$(security find-identity -v -p codesigning | grep -o '"Developer ID Application:[^"]*"' | head -1 | tr -d '"')"
   [ -n "$IDENTITY" ] || { echo "error: no 'Developer ID Application' certificate in the Keychain" >&2; exit 1; }
 
-  export TAURI_SIGNING_PRIVATE_KEY="$(op read "op://$OP_VAULT/$OP_UPDATER_ITEM/private key")"
+  # Values resolved by the single `op run` above (AV_*).
+  [ -n "${AV_UPDATER_KEY:-}" ] && [ -n "${AV_ASC_P8:-}" ] || {
+    echo "error: secrets didn't resolve from 1Password (check the item names above)" >&2; exit 1; }
+  export TAURI_SIGNING_PRIVATE_KEY="$AV_UPDATER_KEY"
   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
   # Tauri signs with APPLE_SIGNING_IDENTITY and notarizes with the App Store
   # Connect API key (APPLE_API_KEY / APPLE_API_ISSUER / APPLE_API_KEY_PATH).
   export APPLE_SIGNING_IDENTITY="$IDENTITY"
-  op document get "$OP_ASC_KEY_DOC" --vault "$OP_VAULT" --out-file "$SECRETS/AuthKey.p8"
+  printf '%s\n' "$AV_ASC_P8" > "$SECRETS/AuthKey.p8"
   export APPLE_API_KEY_PATH="$SECRETS/AuthKey.p8"
-  export APPLE_API_KEY="$(op read "op://$OP_VAULT/$OP_NOTARY_ITEM/key id")"
-  export APPLE_API_ISSUER="$(op read "op://$OP_VAULT/$OP_NOTARY_ITEM/issuer id")"
+  export APPLE_API_KEY="$AV_ASC_KEY_ID"
+  export APPLE_API_ISSUER="$AV_ASC_ISSUER"
+  unset AV_UPDATER_KEY AV_ASC_P8
 fi
 
 # --- Build ----------------------------------------------------------------------
