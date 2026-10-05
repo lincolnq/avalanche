@@ -117,8 +117,11 @@ LINUX="Avalanche-$VERSION-linux-x86_64.AppImage"
 if [ "$LOCAL_TEST" = 0 ]; then
   for f in "$WIN" "$LINUX"; do
     if gh release download "$TAG" -R "$REPO" -p "$f" -D "$OUT" --clobber 2>/dev/null; then
-      # Key and (empty) password come from the environment, never argv.
-      npx --no-install tauri signer sign "$OUT/$f" >/dev/null
+      # Key and (empty) password come from the environment, never argv. Note
+      # `tauri signer sign` reads the older TAURI_PRIVATE_KEY* names, unlike
+      # `tauri build` (TAURI_SIGNING_PRIVATE_KEY*).
+      TAURI_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" TAURI_PRIVATE_KEY_PASSWORD="" \
+        npx --no-install tauri signer sign "$OUT/$f" >/dev/null
       echo "signed $f"
     else
       echo "warning: $f isn't on the $TAG release (did CI's desktop-build fail?); leaving that platform out of latest.json" >&2
