@@ -47,10 +47,13 @@
   flex: 1;
   overflow-y: auto;
   padding: 16px 20px;
+  background: var(--color-paper);
+}
+.messages-content {
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: var(--color-paper);
 }
 .empty-conv {
   flex: 1;

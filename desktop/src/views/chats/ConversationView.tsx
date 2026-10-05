@@ -3,6 +3,8 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
+  onMount,
   Show,
   Switch,
   Match,
@@ -36,7 +38,6 @@ export default function ConversationView(props: Props) {
     reportAndBlock,
     unblockContact,
   } = app;
-  let messagesEnd: HTMLDivElement | undefined;
 
   const [editingMessage, setEditingMessage] = createSignal<Message | null>(null);
   const [historyMessage, setHistoryMessage] = createSignal<Message | null>(null);
@@ -135,20 +136,37 @@ export default function ConversationView(props: Props) {
       .filter((a) => a.contentType.startsWith("image/")),
   );
 
-  // Scroll the timeline to the bottom when messages change. On first paint and
-  // when switching into a different conversation we jump instantly (no scroll
-  // animation) to the target position; once a conversation is already open, new
-  // messages arriving/sent animate smoothly into view. Tracking both the
-  // conversation id and the message count means the effect re-runs on switch
-  // and on the async initial load, and the id comparison tells the two apart.
+  // Bottom-pinned timeline. Opening a conversation jumps to the newest
+  // message; while the view is at (or near) the bottom it stays there as
+  // content grows — new messages, but also rows that grow after first paint
+  // (sender names resolving, images and previews loading). Scrolling up
+  // unpins, so reading history isn't yanked away.
+  let listEl: HTMLDivElement | undefined;
+  let contentEl: HTMLDivElement | undefined;
+  let pinned = true;
   let scrolledConvId: string | undefined;
+  const toBottom = (smooth: boolean) =>
+    listEl?.scrollTo({ top: listEl.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  function onScroll() {
+    if (!listEl) return;
+    pinned = listEl.scrollHeight - listEl.clientHeight - listEl.scrollTop < 48;
+  }
   createEffect(() => {
     const convId = props.conversation.id;
     const count = messages().length; // track — re-run when messages load/arrive
     if (count === 0) return; // nothing to anchor to yet
-    const jump = scrolledConvId !== convId;
+    const switched = scrolledConvId !== convId;
     scrolledConvId = convId;
-    messagesEnd?.scrollIntoView({ behavior: jump ? "auto" : "smooth" });
+    if (switched) pinned = true;
+    // A conversation switch jumps; a new message in an open one animates.
+    if (pinned) queueMicrotask(() => toBottom(!switched));
+  });
+  onMount(() => {
+    const ro = new ResizeObserver(() => {
+      if (pinned) toBottom(false);
+    });
+    if (contentEl) ro.observe(contentEl);
+    onCleanup(() => ro.disconnect());
   });
 
   return (
@@ -183,7 +201,8 @@ export default function ConversationView(props: Props) {
           {props.conversation.title}
         </button>
       </div>
-      <div class="messages-list scrollbar-thin">
+      <div class="messages-list scrollbar-thin" ref={listEl} onScroll={onScroll}>
+        <div class="messages-content" ref={contentEl}>
         <Show
           when={messages().length > 0}
           fallback={<div class="empty-conv">No messages yet.</div>}
@@ -225,7 +244,7 @@ export default function ConversationView(props: Props) {
             )}
           </For>
         </Show>
-        <div ref={messagesEnd} />
+        </div>
       </div>
 
       <Switch
