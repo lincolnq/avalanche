@@ -1,5 +1,5 @@
 import { onMount } from "solid-js";
-import { FiLink, FiSmartphone, FiKey } from "solid-icons/fi";
+import { FiLink } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import wordmarkUrl from "../../assets/wordmark.svg";
 import "./SplashView.css";
@@ -12,9 +12,10 @@ interface SplashViewProps {
 
 /**
  * Welcome screen. Mirrors iOS SplashView: the wordmark, the "Encrypted
- * organizing" tagline, the invite entry as the primary action, and account
- * recovery / device linking as secondary ones. Desktop has no QR scanner (by
- * design, docs/62), so the invite link is the way in.
+ * organizing" tagline, invite entry as the primary action, and "Recover
+ * account" / "Link to an existing device" as plain links. Desktop has no QR
+ * scanner (by design, docs/62), so the invite link is the way in; the
+ * "Already have an account?" divider is Desktop's own.
  */
 export default function SplashView(props: SplashViewProps) {
   const { restoreAccounts } = useApp();
@@ -38,29 +39,18 @@ export default function SplashView(props: SplashViewProps) {
       <div class="splash-actions">
         <button class="btn-primary splash-primary" onClick={props.onEnterLink}>
           <FiLink size={16} aria-hidden="true" />
-          Join with an invite link
+          Enter Invite Link
         </button>
-        <p class="splash-hint" data-tauri-drag-region>
-          Paste the invite link an organizer sent you.
-        </p>
 
         <div class="splash-divider" data-tauri-drag-region>
           <span>Already have an account?</span>
         </div>
 
-        <button class="splash-secondary" onClick={props.onLinkDevice}>
-          <FiSmartphone size={16} aria-hidden="true" />
-          <span class="splash-secondary-text">
-            <span class="splash-secondary-title">Link to an existing device</span>
-            <span class="splash-secondary-sub">Use your phone to sign in on this computer</span>
-          </span>
+        <button class="splash-link" onClick={props.onRecover}>
+          Recover account
         </button>
-        <button class="splash-secondary" onClick={props.onRecover}>
-          <FiKey size={16} aria-hidden="true" />
-          <span class="splash-secondary-text">
-            <span class="splash-secondary-title">Recover account</span>
-            <span class="splash-secondary-sub">Restore it with your 12-word recovery phrase</span>
-          </span>
+        <button class="splash-link" onClick={props.onLinkDevice}>
+          Link to an existing device
         </button>
       </div>
     </div>

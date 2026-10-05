@@ -26,38 +26,31 @@
 }
 .splash-tagline {
   margin: 0;
-  font-size: 19px;
-  font-weight: 500;
+  font-size: 20px;
+  font-weight: 400;   /* regular, like iOS's .title3 */
   color: var(--color-text-secondary);
 }
 
 .splash-actions {
   display: flex;
   flex-direction: column;
-  width: 340px;
+  width: 320px;
 }
-.splash-primary {
+.btn-primary.splash-primary {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 13px 20px;
-  border-radius: 12px;
+  border-radius: 999px;   /* pill, like iOS's large bordered-prominent button */
+  font-weight: 500;
 }
-.splash-hint {
-  margin: 10px 0 0;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--color-text-secondary);
-}
-
 /* "Already have an account?" with a hairline on each side. */
 .splash-divider {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 32px 0 12px;
+  margin: 28px 0 8px;
   font-size: 12px;
   color: var(--color-text-secondary);
 }
@@ -69,37 +62,16 @@
   background: var(--color-divider);
 }
 
-.splash-secondary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 11px 14px;
-  margin-bottom: 8px;
-  border: 1px solid var(--color-divider);
-  border-radius: 12px;
-  background: var(--color-surface);
+/* Plain plum text links, like iOS's secondary actions. */
+.splash-link {
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
   color: var(--color-accent-text);
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.splash-secondary:hover {
-  background: var(--color-row-hover);
-  border-color: var(--color-input-border);
-}
-.splash-secondary-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.splash-secondary-title {
   font-size: 14px;
-  font-weight: 600;
-  color: var(--color-text);
+  cursor: pointer;
 }
-.splash-secondary-sub {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+.splash-link:hover {
+  background: var(--color-row-hover);
 }
