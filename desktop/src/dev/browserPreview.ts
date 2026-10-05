@@ -11,16 +11,17 @@ const KEY = "avalanche-preview-store";
 
 // Stand-in for the plugin-store file (avalanche.json) in browser preview.
 // Starts with one mock account so the app opens straight into Chats.
+// `?accounts=N` seeds N mock accounts (multi-account UI, e.g. account tabs).
 export function previewStoreGet<T>(key: string): T | undefined {
+  const n = Number(new URLSearchParams(location.search).get("accounts") ?? "1") || 1;
+  const names = ["Preview User", "Second Identity", "Third Identity"];
   const all = JSON.parse(localStorage.getItem(KEY) ?? "null") ?? {
-    accounts: [
-      {
-        did: "",
-        displayName: "Preview User",
-        dbPath: "preview.db",
-        servers: [{ id: "https://mock.avalancheapp.net", name: "Mock Server", url: "https://mock.avalancheapp.net" }],
-      },
-    ],
+    accounts: names.slice(0, n).map((displayName, i) => ({
+      did: "",
+      displayName,
+      dbPath: `preview-${i}.db`,
+      servers: [{ id: "https://mock.avalancheapp.net", name: "Mock Server", url: "https://mock.avalancheapp.net" }],
+    })),
   };
   return all[key] as T | undefined;
 }

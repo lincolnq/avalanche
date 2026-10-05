@@ -331,7 +331,8 @@ export class MockAvalancheService implements AvalancheService {
 
   async login(_dbPath: string, _dbKey: string): Promise<AccountResult> {
     this.mockDid = this.mockDid || makeMockDid();
-    return { did: this.mockDid, displayName: "Me" };
+    // No stored name: the caller falls back to the persisted display name.
+    return { did: this.mockDid, displayName: "" };
   }
 
   async recoverFromBlob(

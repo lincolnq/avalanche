@@ -25,7 +25,7 @@ Desktop (`desktop/`, Tauri) · Bots (`node/packages/`, napi `@theavalanche/app-c
 | Recover account (passkey or phrase → blob) | Yes | Yes | Yes (phrase) | n/a |
 | Link a new device (pairing code / QR) | Yes | Yes | Yes | n/a |
 | Several accounts at once, one merged inbox | Yes | Yes | Yes | n/a |
-| Per-account tabs in the chat list (docs/37) | Yes | Yes | No | n/a |
+| Per-account tabs in the chat list (docs/37) | Yes | Yes | Yes | n/a |
 | Set own avatar | Yes | No | No | No |
 | Set display name | Yes | Yes | Yes | Yes |
 | Recovery-key reminder banner | Partial (inert stub) | Partial (hardcoded off) | Partial (inert stub) | n/a |

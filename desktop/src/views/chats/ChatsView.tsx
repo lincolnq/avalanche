@@ -1,7 +1,9 @@
-import { createSignal, createMemo, For, Show, onCleanup, onMount } from "solid-js";
+import { createSignal, createMemo, createEffect, on, For, Show, onCleanup, onMount } from "solid-js";
 import { FiEdit, FiSearch, FiX } from "solid-icons/fi";
 import { useApp } from "../../state/AppContext";
 import ConversationRow from "../../components/ConversationRow";
+import AccountAvatar from "../../components/AccountAvatar";
+import type { Account } from "../../models";
 import RecoveryKeyBanner from "../../components/RecoveryKeyBanner";
 import OfflineBanner from "../../components/OfflineBanner";
 import NewConversationView from "../../components/NewConversationView";
@@ -11,8 +13,15 @@ import "./ChatsView.css";
 const isMac = navigator.platform.toUpperCase().includes("MAC");
 
 export default function ChatsView() {
-  const { store, loadMessagesFromStore, unreadCount, selectedConversationId, selectConversation } =
-    useApp();
+  const {
+    store,
+    loadMessagesFromStore,
+    unreadCount,
+    selectedConversationId,
+    selectConversation,
+    selectedChatsAccountTab,
+    setSelectedChatsAccountTab,
+  } = useApp();
   const [showNew, setShowNew] = createSignal(false);
   // Conversation search (iOS ConversationSearchView, docs/37): client-side, by
   // title, across all accounts. On Desktop it's a field atop the chat list.
@@ -34,11 +43,41 @@ export default function ChatsView() {
       (a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
     )
   );
+  // Account tabs (docs/37, iOS ChatsView.accountTabStrip): only with more
+  // than one identity. The effective tab is derived at read time (explicit
+  // choice if it names a live account, else the first) so the first render is
+  // already filtered.
+  const showsAccountTabs = () => store.accounts.length > 1;
+  const selectedAccountTab = (): string | null => {
+    if (!showsAccountTabs()) return null;
+    const sel = selectedChatsAccountTab();
+    return sel && store.accounts.some((a) => a.id === sel) ? sel : store.accounts[0]?.id ?? null;
+  };
+  const accountLabel = (a: Account) => a.displayName || a.servers[0]?.displayHost || "Account";
+  const unreadFor = (accountId: string) =>
+    store.conversations
+      .filter((c) => c.accountId === accountId)
+      .reduce((sum, c) => sum + unreadCount(c), 0);
+
+  // Search spans every account (iOS's Search tab ignores the account tabs);
+  // otherwise the list is the selected tab's conversations.
   const visibleConversations = createMemo(() => {
     const q = query().trim().toLocaleLowerCase();
     const all = sortedConversations();
-    return q ? all.filter((c) => c.title.toLocaleLowerCase().includes(q)) : all;
+    if (q) return all.filter((c) => c.title.toLocaleLowerCase().includes(q));
+    const tab = selectedAccountTab();
+    return tab ? all.filter((c) => c.accountId === tab) : all;
   });
+
+  // A conversation opened from elsewhere (deep link, notification, search
+  // across accounts) switches to its account's tab so the selection is visible.
+  createEffect(
+    on(selectedConversationId, (id) => {
+      if (!id || !showsAccountTabs()) return;
+      const conv = store.conversations.find((c) => c.id === id);
+      if (conv && conv.accountId !== selectedAccountTab()) setSelectedChatsAccountTab(conv.accountId);
+    }),
+  );
 
   function open(id: string, focusComposer: boolean) {
     const conv = store.conversations.find((c) => c.id === id);
@@ -122,6 +161,30 @@ export default function ChatsView() {
             <FiEdit size={18} />
           </button>
         </div>
+        <Show when={showsAccountTabs()}>
+          <div class="account-tabs scrollbar-thin" role="tablist" aria-label="Accounts">
+            <For each={store.accounts}>
+              {(account) => (
+                <button
+                  class="account-tab"
+                  classList={{ selected: selectedAccountTab() === account.id }}
+                  role="tab"
+                  aria-selected={selectedAccountTab() === account.id}
+                  title={accountLabel(account)}
+                  onClick={() => setSelectedChatsAccountTab(account.id)}
+                >
+                  <span class="account-tab-icon">
+                    <AccountAvatar name={accountLabel(account)} did={account.id} />
+                    <Show when={unreadFor(account.id) > 0}>
+                      <span class="account-tab-badge">{unreadFor(account.id)}</span>
+                    </Show>
+                  </span>
+                  <span class="account-tab-label">{accountLabel(account)}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <div class="chats-search">
           <FiSearch size={14} class="chats-search-icon" aria-hidden="true" />
           <input

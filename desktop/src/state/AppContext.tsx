@@ -48,6 +48,7 @@ export function AppProvider(props: { children: JSX.Element }) {
   // Selected conversation — lifted into context so compose/group/join flows
   // can programmatically open a conversation. ChatsView mirrors this signal.
   const [selectedConversationId, setSelectedConversationId] = createSignal<string | null>(null);
+  const [selectedChatsAccountTab, setSelectedChatsAccountTab] = createSignal<string | null>(null);
 
   // Bumps each time a group's metadata changes (incoming GroupMetadataChanged),
   // carrying the affected groupId. ConversationView tracks this to re-check
@@ -280,6 +281,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     setPendingInviteToken: (token) => setStore("pendingInviteToken", token),
     validateInvite,
     selectedConversationId,
+    selectedChatsAccountTab,
+    setSelectedChatsAccountTab,
     selectConversation: (id) => setSelectedConversationId(id),
     reloadConversations,
     groupMetaChange,

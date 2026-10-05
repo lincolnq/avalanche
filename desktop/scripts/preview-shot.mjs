@@ -4,7 +4,7 @@
 // and desktop/CLAUDE.md "Debugging the running app").
 //
 //   node scripts/preview-shot.mjs out.png [--dark] [--size 1200x800]
-//        [--eval '<js function body>']...
+//        [--query 'accounts=2'] [--eval '<js function body>']...
 //
 // Needs the Vite dev server on http://localhost:1420 (`make desktop` or
 // `npm run dev`). `--eval` snippets run in order before the screenshot and may
@@ -15,18 +15,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const URL = process.env.AV_PREVIEW_URL ?? "http://localhost:1420/";
+const BASE_URL = process.env.AV_PREVIEW_URL ?? "http://localhost:1420/";
 
 const args = process.argv.slice(2);
 let out = null;
 let dark = false;
 let size = "1200x800";
+let query = "";
 const evals = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--dark") dark = true;
   else if (a === "--size") size = args[++i];
   else if (a === "--eval") evals.push(args[++i]);
+  else if (a === "--query") query = args[++i];
   else out = a;
 }
 if (!out) {
@@ -93,7 +95,7 @@ async function main() {
     features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }],
   });
   await send("Page.enable");
-  await send("Page.navigate", { url: URL });
+  await send("Page.navigate", { url: query ? `${BASE_URL}?${query}` : BASE_URL });
   // Wait for the app to restore the preview account and render Chats.
   for (let i = 0; i < 100; i++) {
     const ready = await evaluate("return !!(window.__av && __av.state().conversations.length)").catch(() => false);

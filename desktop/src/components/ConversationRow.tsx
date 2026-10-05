@@ -10,15 +10,16 @@ interface Props {
   conversation: Conversation;
   selected: boolean;
   onSelect: (id: string) => void;
+  showAccountBadge?: boolean;
 }
 
 export default function ConversationRow(props: Props) {
   const { store, unreadCount, displayName } = useApp();
-  // Multi-account: show a small badge with the owning identity's initial so the
-  // merged inbox makes clear which account each chat belongs to. Only when more
-  // than one account is signed in (mirrors iOS ConversationRow.showAccountIndicator).
+  // Per-row owning-identity badge. Off by default, as on iOS
+  // (ConversationRow.showsAccountBadge): the account tabs disambiguate which
+  // identity a chat belongs to, and docs/37 rejects per-row marking.
   const owner = () => store.accounts.find((a) => a.id === props.conversation.accountId);
-  const showAccountIndicator = () => store.accounts.length > 1;
+  const showAccountIndicator = () => !!props.showAccountBadge && store.accounts.length > 1;
   const ownerInitial = () => (owner()?.displayName?.trim()?.[0] ?? "?").toUpperCase();
   // Reactive accessor (not a captured value): re-reads on every
   // messagesByConversation change, so the unread badge clears the instant a

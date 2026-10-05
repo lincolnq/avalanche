@@ -1,17 +1,17 @@
 # 37 — Chat organization (tabs, multi-account, threads entry)
 
-> **Status:** Partial — account tabs are built on iOS and Android: with more than one identity, the Chats screen shows one avatar tab per identity with an unread badge, filtering the inbox. Not built: the tab organizer, custom or topic tabs, the on-device classifier, the Threads catch-up entry, per-conversation mute. Desktop has no account tabs.
-> **Last verified against code:** 2026-10-03
+> **Status:** Partial — account tabs are built on iOS, Android, and Desktop: with more than one identity, the Chats screen shows one avatar tab per identity with an unread badge, filtering the inbox. Not built: the tab organizer, custom or topic tabs, the on-device classifier, the Threads catch-up entry, per-conversation mute.
+> **Last verified against code:** 2026-10-04
 
 ## Summary
 
 The default inbox is plain and Signal-like: one row per conversation, sorted by recency, **no tab row**. Tabs appear only once they earn their place. The first trigger, and the only one built, is having **more than one identity**. Over time, tabs can be filled either by deterministic rules ("everything from my pseudonymous identity") or by an on-device classifier proposing topic tabs: the same surface, fed by two sources.
 
-Code: iOS `Views/Chats/ChatsView.swift` (`accountTabStrip`, `AppState.selectedChatsAccountTab`); Android `Views/Chats/ChatsView.kt`. Motivated by the "conversation intelligence" post (theavalanche.net/blog/2026-07-intelligence) and real multi-account confusion in testing.
+Code: iOS `Views/Chats/ChatsView.swift` (`accountTabStrip`, `AppState.selectedChatsAccountTab`); Android `Views/Chats/ChatsView.kt`; Desktop `desktop/src/views/chats/ChatsView.tsx` (`selectedAccountTab`, tab strip as a row under the header). Motivated by the "conversation intelligence" post (theavalanche.net/blog/2026-07-intelligence) and real multi-account confusion in testing.
 
 ## Current design: account tabs
 
-*Built (iOS, Android).*
+*Built (iOS, Android, Desktop).*
 
 - **Shown only with more than one identity** (`appState.accounts.count > 1`). A single-identity user sees a plain unified inbox.
 - **One tab per identity** (avatar, unread badge summing that identity's conversations). Selecting a tab filters the inbox to that identity's conversations. The selection lives in app state and survives navigation. The effective tab is computed on the first render, so cold launch never flashes an unfiltered list.
@@ -82,7 +82,6 @@ This is the canonical threads entry; `32`'s earlier "shelf" is superseded.
 ## Known gaps
 
 1. No per-conversation mute (above). P1.
-2. Desktop has no account tabs (parity, `62`).
 
 ## Rationale and rejected alternatives
 

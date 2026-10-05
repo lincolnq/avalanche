@@ -154,6 +154,11 @@ export interface AppContextValue {
 
   // Conversation selection (lifted so compose/group flows can open a chat)
   selectedConversationId: () => string | null;
+  // Chats account tab (docs/37): the identity whose conversations the list
+  // shows when there is more than one. Survives navigation; a stale id falls
+  // back to the first account at read time (iOS selectedChatsAccountTab).
+  selectedChatsAccountTab: () => string | null;
+  setSelectedChatsAccountTab: (accountId: string | null) => void;
   selectConversation: (id: string | null) => void;
   reloadConversations: () => Promise<void>;
   // Reactive: latest group whose metadata changed (T74 membership re-check).
