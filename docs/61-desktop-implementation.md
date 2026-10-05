@@ -3,7 +3,7 @@
 > **Status:** Partial — the Tauri desktop app covers messaging, groups, contacts, device
 > linking, and multi-account. It has no passkeys (by design), no Project login, and **its
 > SQLCipher databases use a constant placeholder key**. Feature parity is tracked in docs/62.
-> **Last verified against code:** 2026-10-03
+> **Last verified against code:** 2026-10-04
 
 ## Summary
 
@@ -73,8 +73,9 @@ DID, and restores the account later. Details and load-bearing invariants are in
   Windows Credential Manager/DPAPI, Linux Secret Service). See docs/09.
 - **No Project login** ("Sign in with Avalanche", docs/25): desktop can't act as the
   authorizer, though desktop *users* can authorize from their phone.
-- **No avatar setting, account tabs, or conversation search** (iOS and Android have them).
-- **No QR scanning** — invite entry is paste-a-link only. (QR *display* exists.)
+- **No avatar setting** (own or group; iOS has both, Android neither).
+- **No QR scanning, by design for now** — invite entry is paste-a-link, which suits a
+  computer. (QR *display* exists.)
 - **Metadata in a plain JSON store.** `tauri-plugin-store` keeps the identity list (own DIDs,
   display names, server URLs, DB filenames) unencrypted in the OS app-data directory, readable
   by any process running as the user. Lower priority than the DB key; same fix (a keychain-

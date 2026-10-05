@@ -77,7 +77,7 @@ received and never sent (docs/04).
 | Group invite requests (join / delete / block) | Yes | Yes | Yes | Bots get `isRequest` and decide (adminbot accepts) |
 | Block / unblock, report-and-block | Yes | Yes | Yes | n/a |
 | Show own QR code / invite link | Yes | Yes | Yes | n/a |
-| Scan a QR code | Yes | Yes | No (paste link only) | n/a |
+| Scan a QR code | Yes | Yes | No (by design for now: paste the link instead) | n/a |
 
 ## Projects and Network tab
 
