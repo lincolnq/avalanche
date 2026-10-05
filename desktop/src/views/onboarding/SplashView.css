@@ -62,17 +62,17 @@
   background: var(--color-divider);
 }
 
-/* Plain plum text links, like iOS's secondary actions. */
+/* Plain plum text links, like iOS's secondary actions; underline on hover. */
 .splash-link {
   align-self: center;
-  padding: 8px 18px;
+  padding: 6px 4px;
   border: none;
-  border-radius: 999px;   /* pill hover highlight, matching the primary button */
   background: none;
   color: var(--color-accent-text);
   font-size: 14px;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 .splash-link:hover {
-  background: var(--color-row-hover);
+  text-decoration: underline;
 }
