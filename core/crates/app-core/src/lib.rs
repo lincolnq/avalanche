@@ -17,6 +17,12 @@
 //! runtime. Mobile callers should invoke them from a background
 //! thread/dispatch queue, never from the main/UI thread.
 
+// `#[async_trait]` expands each trait method into a fn with `#[must_use]` that
+// returns a boxed future (already must-use); clippy::double_must_use flags that
+// generated code on newer toolchains (CI's stable). The lint is about the
+// macro output, not our code.
+#![allow(clippy::double_must_use)]
+
 pub mod connection;
 pub mod error;
 pub mod groups;
