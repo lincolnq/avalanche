@@ -20,8 +20,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - **Operator action after the S-01 fix deploys:** rotate `REGISTRATION_SHARED_SECRET` on servers
   where old setup codes were handed out (at least `av.theavalanche.net`), and re-issue each
   Project's bot signup key with `/install-project` (S-01, `22`).
-- Desktop: replace the constant SQLCipher key with an OS-keychain-backed key, with migration
-  for existing databases (S-05, `61`).
 - Attachments: restrict download hosts to known homeservers, cap reads at the pointer's size,
   don't auto-download for un-accepted senders, and fetch off the core lock (S-08, `35`).
 - Project tokens: mandatory audience on `verify`; mint only for installed Project origins

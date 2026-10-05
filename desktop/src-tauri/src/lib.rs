@@ -6,6 +6,7 @@
 
 #[cfg(debug_assertions)]
 mod debug_bridge;
+mod db_key;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -394,14 +395,16 @@ fn ping() -> String {
 #[tauri::command]
 #[specta::specta]
 fn create_account(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
     db_path: String,
-    db_key: String,
     prf_output: Vec<u8>,
     display_name: String,
     invite_token: Option<String>,
 ) -> Result<AccountResult, String> {
+    let db_key = db_key::db_key(&app_handle)?;
+    let db_path = db_key::db_path(&app_handle, &db_path)?;
     let app =
         AppCore::create_account(server_url, db_path, db_key, prf_output, display_name, invite_token)
             .map_err(|e| e.to_string())?;
@@ -418,10 +421,12 @@ fn create_account(
 #[tauri::command]
 #[specta::specta]
 fn login(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     db_path: String,
-    db_key: String,
 ) -> Result<AccountResult, String> {
+    let db_key = db_key::db_key(&app_handle)?;
+    let db_path = db_key::db_path(&app_handle, &db_path)?;
     let app = AppCore::login(db_path, db_key).map_err(|e| e.to_string())?;
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
@@ -436,14 +441,16 @@ fn login(
 #[tauri::command]
 #[specta::specta]
 fn recover_from_blob(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_url: String,
     did: String,
     prf_output: Vec<u8>,
     db_path: String,
-    db_key: String,
     display_name: String,
 ) -> Result<AccountResult, String> {
+    let db_key = db_key::db_key(&app_handle)?;
+    let db_path = db_key::db_path(&app_handle, &db_path)?;
     let app = AppCore::recover_from_blob(server_url, did, prf_output, db_path, db_key, display_name)
         .map_err(|e| e.to_string())?;
     let did = app.did();
@@ -464,14 +471,16 @@ fn recover_from_blob(
 #[tauri::command]
 #[specta::specta]
 fn recover_from_phrase(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     phrase: String,
     server_url: String,
     did: String,
     db_path: String,
-    db_key: String,
     display_name: String,
 ) -> Result<AccountResult, String> {
+    let db_key = db_key::db_key(&app_handle)?;
+    let db_path = db_key::db_path(&app_handle, &db_path)?;
     let seed = app_core::recovery_phrase_to_seed(phrase).map_err(|e| e.to_string())?;
     let app = AppCore::recover_from_blob(server_url, did, seed, db_path, db_key, display_name)
         .map_err(|e| e.to_string())?;
@@ -542,11 +551,13 @@ async fn device_link_accept_pairing(
 #[tauri::command]
 #[specta::specta]
 async fn device_link_await_step(
+    app_handle: tauri::AppHandle,
     link_state: tauri::State<'_, DeviceLinkState>,
     app_state: tauri::State<'_, AppState>,
     db_path: String,
-    db_key: String,
 ) -> Result<Option<AccountResult>, String> {
+    let db_key = db_key::db_key(&app_handle)?;
+    let db_path = db_key::db_path(&app_handle, &db_path)?;
     let link = link_state
         .link
         .lock()

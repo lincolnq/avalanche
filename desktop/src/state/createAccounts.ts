@@ -194,7 +194,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
         try {
           // login is account-less (returns the DID); register the per-account
           // service under that DID so every later call routes to its core.
-          const result = await onboardingService().login(p.dbPath, "dev-placeholder-key");
+          const result = await onboardingService().login(p.dbPath);
           registerAccountService(result.did);
           const account: Account = {
             id: result.did,
@@ -237,10 +237,6 @@ export function createAccounts(deps: AccountsDeps): Accounts {
     const result = await onboardingService().createAccount(
       serverUrl,
       dbPath,
-      // DB key: a placeholder until OS-keychain integration. Mirrors mobile's
-      // "dev-placeholder-key" (iOS uses the Secure Enclave; desktop has no
-      // equivalent wired yet).
-      "dev-placeholder-key",
       // Desktop has no WebAuthn passkey, so signup derives the recovery seed
       // from a BIP39 phrase the user writes down (RecoveryPhraseSetupView) and
       // passes it here as the PRF output — exactly iOS's phrase-account mode.
@@ -447,7 +443,6 @@ export function createAccounts(deps: AccountsDeps): Accounts {
       serverUrl,
       did,
       dbPath,
-      "dev-placeholder-key",
       displayName
     );
     // Bind the restored account's service before per-account calls route to it.

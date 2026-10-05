@@ -28,16 +28,15 @@ export class DevServerAvalancheService implements AvalancheService {
   async createAccount(
     serverUrl: string,
     dbPath: string,
-    dbKey: string,
     prfOutput: number[],
     displayName: string,
     inviteToken: string | null,
   ): Promise<AccountResult> {
-    return ok(commands.createAccount(serverUrl, dbPath, dbKey, prfOutput, displayName, inviteToken));
+    return ok(commands.createAccount(serverUrl, dbPath, prfOutput, displayName, inviteToken));
   }
 
-  async login(dbPath: string, dbKey: string): Promise<AccountResult> {
-    return ok(commands.login(dbPath, dbKey));
+  async login(dbPath: string): Promise<AccountResult> {
+    return ok(commands.login(dbPath));
   }
 
   async recoverFromBlob(
@@ -45,10 +44,9 @@ export class DevServerAvalancheService implements AvalancheService {
     did: string,
     prfOutput: number[],
     dbPath: string,
-    dbKey: string,
     displayName: string,
   ): Promise<AccountResult> {
-    return ok(commands.recoverFromBlob(serverUrl, did, prfOutput, dbPath, dbKey, displayName));
+    return ok(commands.recoverFromBlob(serverUrl, did, prfOutput, dbPath, displayName));
   }
 
   async recoverFromPhrase(
@@ -56,10 +54,9 @@ export class DevServerAvalancheService implements AvalancheService {
     serverUrl: string,
     did: string,
     dbPath: string,
-    dbKey: string,
     displayName: string,
   ): Promise<AccountResult> {
-    return ok(commands.recoverFromPhrase(phrase, serverUrl, did, dbPath, dbKey, displayName));
+    return ok(commands.recoverFromPhrase(phrase, serverUrl, did, dbPath, displayName));
   }
 
   // ── Device linking (T71) ───────────────────────────────────────────
@@ -72,8 +69,8 @@ export class DevServerAvalancheService implements AvalancheService {
     await ok(commands.deviceLinkAcceptPairing(code));
   }
 
-  async deviceLinkAwaitStep(dbPath: string, dbKey: string): Promise<AccountResult | null> {
-    return ok(commands.deviceLinkAwaitStep(dbPath, dbKey));
+  async deviceLinkAwaitStep(dbPath: string): Promise<AccountResult | null> {
+    return ok(commands.deviceLinkAwaitStep(dbPath));
   }
 
   async deviceLinkReset(): Promise<void> {

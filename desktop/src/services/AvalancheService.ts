@@ -42,22 +42,21 @@ export type {
 // ── Service interface ─────────────────────────────────────────────────────────
 
 export interface AvalancheService {
-  // Account factory
+  // Account factory. No DB key parameter: the backend fetches the SQLCipher key
+  // from the OS credential store itself, so it never enters the webview (S-05).
   createAccount(
     serverUrl: string,
     dbPath: string,
-    dbKey: string,
     prfOutput: number[],
     displayName: string,
     inviteToken: string | null
   ): Promise<import("../bindings").AccountResult>;
-  login(dbPath: string, dbKey: string): Promise<import("../bindings").AccountResult>;
+  login(dbPath: string): Promise<import("../bindings").AccountResult>;
   recoverFromBlob(
     serverUrl: string,
     did: string,
     prfOutput: number[],
     dbPath: string,
-    dbKey: string,
     displayName: string
   ): Promise<import("../bindings").AccountResult>;
   recoverFromPhrase(
@@ -65,7 +64,6 @@ export interface AvalancheService {
     serverUrl: string,
     did: string,
     dbPath: string,
-    dbKey: string,
     displayName: string
   ): Promise<import("../bindings").AccountResult>;
 
@@ -75,8 +73,7 @@ export interface AvalancheService {
   deviceLinkCreatePairing(mailboxServer: string | null): Promise<string>;
   deviceLinkAcceptPairing(code: string): Promise<void>;
   deviceLinkAwaitStep(
-    dbPath: string,
-    dbKey: string
+    dbPath: string
   ): Promise<import("../bindings").AccountResult | null>;
   deviceLinkReset(): Promise<void>;
   linkCreatePairing(mailboxServer: string | null): Promise<string>;

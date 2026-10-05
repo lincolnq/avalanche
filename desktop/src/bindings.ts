@@ -5,9 +5,9 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	ping: () => __TAURI_INVOKE<string>("ping"),
-	createAccount: (serverUrl: string, dbPath: string, dbKey: string, prfOutput: number[], displayName: string, inviteToken: string | null) => typedError<AccountResult, string>(__TAURI_INVOKE("create_account", { serverUrl, dbPath, dbKey, prfOutput, displayName, inviteToken })),
-	login: (dbPath: string, dbKey: string) => typedError<AccountResult, string>(__TAURI_INVOKE("login", { dbPath, dbKey })),
-	recoverFromBlob: (serverUrl: string, did: string, prfOutput: number[], dbPath: string, dbKey: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_blob", { serverUrl, did, prfOutput, dbPath, dbKey, displayName })),
+	createAccount: (serverUrl: string, dbPath: string, prfOutput: number[], displayName: string, inviteToken: string | null) => typedError<AccountResult, string>(__TAURI_INVOKE("create_account", { serverUrl, dbPath, prfOutput, displayName, inviteToken })),
+	login: (dbPath: string) => typedError<AccountResult, string>(__TAURI_INVOKE("login", { dbPath })),
+	recoverFromBlob: (serverUrl: string, did: string, prfOutput: number[], dbPath: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_blob", { serverUrl, did, prfOutput, dbPath, displayName })),
 	sendDm: (accountId: string, recipientDid: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_dm", { accountId, recipientDid, plaintext, sentAtMs })),
 	sendGroupMessage: (accountId: string, groupId: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_group_message", { accountId, groupId, plaintext, sentAtMs })),
 	/**
@@ -155,7 +155,7 @@ export const commands = {
 	 *  `recover_from_blob`'s `len() == 32` check). The seed plays the role of
 	 *  `prf_output` in the blob recovery path.
 	 */
-	recoverFromPhrase: (phrase: string, serverUrl: string, did: string, dbPath: string, dbKey: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_phrase", { phrase, serverUrl, did, dbPath, dbKey, displayName })),
+	recoverFromPhrase: (phrase: string, serverUrl: string, did: string, dbPath: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_phrase", { phrase, serverUrl, did, dbPath, displayName })),
 	sendReadReceipt: (accountId: string, recipientDid: string, timestamps: number[]) => typedError<null, string>(__TAURI_INVOKE("send_read_receipt", { accountId, recipientDid, timestamps })),
 	joinViaLink: (accountId: string, masterKey: number[], hostingServerUrl: string, password: number[]) => typedError<JoinResultFfi, string>(__TAURI_INVOKE("join_via_link", { accountId, masterKey, hostingServerUrl, password })),
 	acceptRequest: (accountId: string, did: string) => typedError<null, string>(__TAURI_INVOKE("accept_request", { accountId, did })),
@@ -231,10 +231,10 @@ export const commands = {
 	 *  bundle has arrived; `None` while still waiting. Requires a prior
 	 *  `device_link_create_pairing` / `device_link_accept_pairing`.
 	 */
-	deviceLinkAwaitStep: (dbPath: string, dbKey: string) => typedError<{
+	deviceLinkAwaitStep: (dbPath: string) => typedError<{
 	did: string,
 	displayName: string,
-} | null, string>(__TAURI_INVOKE("device_link_await_step", { dbPath, dbKey })),
+} | null, string>(__TAURI_INVOKE("device_link_await_step", { dbPath })),
 	/**  New device: abandon an in-progress pairing (cancel / view teardown). */
 	deviceLinkReset: () => typedError<null, string>(__TAURI_INVOKE("device_link_reset")),
 	/**

@@ -42,6 +42,10 @@ open = "5"
 # OpenSSL build dependency on Windows.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 scraper = "0.20"
+# SQLCipher key storage (S-05): one random key per install in the OS credential
+# store — macOS Keychain, Windows Credential Manager, Linux Secret Service.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+getrandom = "0.2"
 
 # zkgroup depends on a Signal fork of curve25519-dalek (it has private fields
 # zkgroup needs to reach into for Ristretto-based proofs). The fork is API-

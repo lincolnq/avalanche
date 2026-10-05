@@ -66,7 +66,7 @@ export function createDeviceLink(deps: DeviceLinkDeps): DeviceLink {
     const dbPath = `account-${Math.random().toString(36).slice(2, 10)}.db`;
     const deadline = Date.now() + LINK_TIMEOUT_MS;
     for (;;) {
-      const result = await onboardingService().deviceLinkAwaitStep(dbPath, "dev-placeholder-key");
+      const result = await onboardingService().deviceLinkAwaitStep(dbPath);
       if (result) {
         // The backend has installed the linked core keyed by this DID; bind its
         // service so homeServer() (per-account) and the loops route correctly.

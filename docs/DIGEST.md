@@ -86,8 +86,8 @@ traffic/mixnets; use Tor/VPN), traffic analysis beyond TLS, compromised OS, coer
 group tables name no members (encrypted blob; routing keyed by encrypted member IDs;
 non-members get 404); anonymous group send (zkgroup group-send token, no session
 credential); encrypted profiles; homeservers never see push tokens; bots always visible (no
-out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed keys
-(Desktop is not, S-05).
+out-of-band read path); SQLCipher at rest on every platform: hardware-backed keys on
+iOS/Android, OS credential store on Desktop (S-05 fixed).
 
 **What each adversary learns today (intended in brackets):**
 - *Seized DB:* registered DIDs; encrypted blobs; up to 30 days of undelivered DM rows with
@@ -107,8 +107,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
 - *Project operator:* its own bot signup key only (setup-code escalation S-01 fixed, not yet deployed);
   audience-free tokens replay across Projects. (By design, every member of a server running
   adminbot is an admin, S-29.) (S-17)
-- *Stolen device:* rotation key = permanent DID takeover; no revocation; Desktop constant key;
-  plaintext caches of deleted media. (S-05, S-06, S-18, S-25)
+- *Stolen device:* rotation key = permanent DID takeover; no revocation;
+  plaintext caches of deleted media. (S-06, S-18, S-25)
 - *Page on `*.theavalanche.net`:* can request the root PRF secret (shared RP with Project
   hosting). (S-07)
 
@@ -120,8 +120,8 @@ out-of-band read path); SQLCipher at rest on iOS/Android with hardware-backed ke
   the shared secret where old setup codes were handed out (22, 24, 51).
 - **High:** S-02 (fixed) profile key in delivery receipts to un-accepted requests (52); S-03
   (fixed) self-declared `is_bot` bypassed the request gate (54); S-04 group invites auto-accepted from
-  non-blocked strangers, Reported/needs UI check (12, 03); S-05 Desktop constant SQLCipher
-  key (61); S-06 rotation key on every device and in link bundle, sole rotation key (50
+  non-blocked strangers, Reported/needs UI check (12, 03); S-05 (fixed) Desktop constant SQLCipher
+  key, now in the OS credential store (61); S-06 rotation key on every device and in link bundle, sole rotation key (50
   Proposed, 04); S-07 passkey RP shared with Project hosting (50, 20); S-08 attachment
   pointers fetched from any host, no size cap, under core lock (35); S-09 identified DM plane
   (SKDMs, invites, `sender_account_id`) undercuts group opacity -> sealed sender (03, 13);
@@ -151,8 +151,8 @@ requirement. Not hidden from the live operator: every group send lists recipient
 (unsalted DID hashes), as in Signal; accepted because the operator is your org (03 §3.9,
 §3.11). Send-path logging is forbidden and test-enforced (03 §3.9 rule 6).
 
-**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-04, S-16 done)
-S-05, S-08, S-14 (Proposed design), S-17, S-30,
+**Hardening order:** (1) critical and stranger-facing fixes (S-01..S-05, S-16 done)
+S-08, S-14 (Proposed design), S-17, S-30,
 then S-25 (small, no design); (2) move identity root off devices (S-06, S-07, S-19, S-21;
 parts Proposed); (3) sealed sender for 1:1 + SKDM with delivery keys (S-09; biggest privacy
 win, foundation of federation); (4) server metadata hygiene (S-10..S-12, S-16) and relay
@@ -182,7 +182,7 @@ this is a todo per 08).
 
 **Clients.** Rust core + native UI: iOS (UniFFI), Android (UniFFI + JNA), Desktop (hand-written
 Tauri commands), bots (hand-written napi). DB keys: Secure Enclave, Keystore, operator env,
-**Desktop constant placeholder** (S-05).
+Desktop OS credential store (S-05).
 
 **Server (Built, 10).** Axum/Tokio/sqlx (compile-time checked, `.sqlx/` checked in),
 Postgres only, no Redis, no libsignal session code (relays opaque bytes so a server bug
@@ -1100,9 +1100,9 @@ dev/prod, authenticated registration.
   sources over AAR.
 - **Desktop (61) — Partial.** Tauri 2 + Solid; Rust commands over `app-core`; TS owns the event
   loops; left sidebar instead of tabs; Project pages in IPC-isolated `WebviewWindow`. **Phrase
-  is the credential (sanctioned divergence)**; 56 is the passkey path. Gaps: **constant DB key
-  (S-05)**; no Project login, avatars, account tabs, search, QR
-  scanning; plain JSON metadata. **Rationale:** Tauri over Electron (OS-patched webview vs
+  is the credential (sanctioned divergence)**; 56 is the passkey path. DB key in the OS credential
+  store, fetched in Rust (S-05). Gaps: no Project login, avatar setting; QR scanning by
+  design for now; plain JSON metadata. **Rationale:** Tauri over Electron (OS-patched webview vs
   bundled Chromium; Rust links app-core like mobile; small footprint on cheap, replaceable
   hardware). Solid for the only privileged webview (small dependency tree); rejected
   Dioxus/Leptos (immature WASM integration), React/Vue (huge dep trees), Svelte, others.

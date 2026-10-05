@@ -1,8 +1,8 @@
 # 61 — Desktop implementation notes
 
 > **Status:** Partial — the Tauri desktop app covers messaging, groups, contacts, device
-> linking, and multi-account. It has no passkeys (by design), no Project login, and **its
-> SQLCipher databases use a constant placeholder key**. Feature parity is tracked in docs/62.
+> linking, and multi-account. It has no passkeys (by design) and no Project login. Feature
+> parity is tracked in docs/62.
 > **Last verified against code:** 2026-10-04
 
 ## Summary
@@ -63,14 +63,20 @@ DID, and restores the account later. Details and load-bearing invariants are in
 `desktop/CLAUDE.md` ("Passkey / recovery divergence"). The external-browser passkey design
 (docs/56) is the proposed way to add passkeys.
 
+### Database key (S-05)
+
+Every account database is SQLCipher-encrypted with one random 256-bit key per install (64
+hex chars, the mobile format), kept in the OS credential store: macOS Keychain, Windows
+Credential Manager, Linux Secret Service (`src-tauri/src/db_key.rs`, `keyring` crate). The
+account-opening commands fetch it in Rust, so the key never enters the webview, and they take
+a bare database file name that resolves into the app-data directory. On macOS the Keychain
+item is bound to the app's code signature: release builds read it silently, while each dev
+rebuild prompts once. Linux without a Secret Service falls back to a 0600 key file in the
+app-data dir, with a logged warning; macOS and Windows never fall back (a silently minted new
+key would orphan the existing databases).
+
 ## Known gaps
 
-- **Placeholder database key (security).** Desktop opens SQLCipher with the constant string
-  `"dev-placeholder-key"` (`state/createAccounts.ts`, `state/createDeviceLink.ts`). The
-  identity DB — including the identity key and the persisted DID rotation key — is
-  effectively unencrypted at rest against anyone who can read the app-data directory. Fix:
-  generate a random key per install and store it in the OS credential store (macOS Keychain,
-  Windows Credential Manager/DPAPI, Linux Secret Service). See docs/09.
 - **No Project login** ("Sign in with Avalanche", docs/25): desktop can't act as the
   authorizer, though desktop *users* can authorize from their phone.
 - **No avatar setting** (own or group; iOS has both, Android neither).
@@ -78,8 +84,8 @@ DID, and restores the account later. Details and load-bearing invariants are in
   computer. (QR *display* exists.)
 - **Metadata in a plain JSON store.** `tauri-plugin-store` keeps the identity list (own DIDs,
   display names, server URLs, DB filenames) unencrypted in the OS app-data directory, readable
-  by any process running as the user. Lower priority than the DB key; same fix (a keychain-
-  backed key for a small `manifest.db`).
+  by any process running as the user. Fix: move it into a small `manifest.db` under the
+  same credential-store key (S-05).
 - `src-tauri/src/lib.rs` (~1,900 lines) is one file; split by domain when it next grows.
 
 ## Rationale and rejected alternatives

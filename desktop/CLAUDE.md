@@ -191,11 +191,11 @@ If a desktop WebAuthn/PRF path is ever added, revisit all of the above.
 
 ## Security constraints
 
-**Known gap:** Desktop currently opens SQLCipher with the constant key
-`"dev-placeholder-key"` (`state/createAccounts.ts`, `state/createDeviceLink.ts`), so local
-databases are effectively unencrypted at rest. The fix (a random per-install key in the OS
-credential store) is tracked in docs/61 and docs/09. Don't copy the placeholder into new
-code paths.
+**Database key (S-05):** the SQLCipher key lives in the OS credential store and is fetched in
+Rust (`src-tauri/src/db_key.rs`); commands that open an account database take only a bare
+file name, resolved into the app-data dir. Never pass a key or a path through the webview.
+On macOS each dev rebuild prompts once for Keychain access (the item is bound to the code
+signature); click Always Allow.
 
 The shell is the only WebView with Tauri command access. Keep these invariants:
 

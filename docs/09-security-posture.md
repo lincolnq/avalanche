@@ -3,7 +3,7 @@
 > **Status:** Living document. It describes what each adversary actually learns **today**,
 > including where the code falls short of the design, and is the security register for known
 > gaps.
-> **Last verified against code:** 2026-10-03
+> **Last verified against code:** 2026-10-04
 
 ## Summary
 
@@ -58,8 +58,10 @@ These properties are implemented and are what the rest of the system relies on:
   server doesn't hold (`52`, `55`).
 - **Homeservers never see push tokens.** They wake pseudonyms; the relay holds tokens (`15`).
 - **Bots are always visible.** There is no out-of-band read path for Projects (`20`).
-- **Data at rest on iOS and Android** is in SQLCipher, keyed from the Secure Enclave or
-  Keychain on iOS and the Keystore on Android (`06`). **Desktop is not:** see S-05.
+- **Data at rest** is in SQLCipher on every platform, keyed from the Secure Enclave or
+  Keychain on iOS, the Keystore on Android (`06`), and the OS credential store on Desktop
+  (macOS Keychain, Windows Credential Manager, Linux Secret Service; S-05). The Desktop
+  account list (`avalanche.json`) is still plaintext (`61`).
 
 ## What each adversary learns today
 
@@ -73,7 +75,7 @@ These properties are implemented and are what the rest of the system relies on:
 | **Stranger who knows your DID** | That their message was delivered (the automatic delivery receipt, without your profile key since S-02 was fixed). Can invite you to groups, but the invite waits as a request until you Join (S-04 fixed). Attachment pointers that point at the stranger's own server make your device fetch from it automatically (IP leak, unbounded download). | Nothing until you accept. | S-08 |
 | **Malicious group member** | Can hijack another member's group delivery (pseudonym squatting) and redirect their push wakeups. Removed members keep current Sender Keys (no rotation on removal), and clients don't check that a sender is a member. Can set a group message expiry beyond the server's backstop. | Ordinary member view. | S-14, S-15, S-16 |
 | **Project operator** | Its own Project's bot signup key, which admits bots linked to that Project only (S-01, fixed). Project tokens have no audience, so a token issued for one Project can be replayed to another. Join events no longer carry raw tokens. Any human user on a server running adminbot can install Projects (S-29). | Its own granted capabilities only. | S-17, S-29 |
-| **Stolen or compromised device** | The PLC **rotation key** (stored on every device, sent to linked devices): permanent, unrevocable DID takeover. No device list or revocation. On Desktop, the database key is a constant. Attachments of deleted or expired messages survive in plaintext caches. | That device's sessions and unexpired history. | S-05, S-06, S-18, S-25 |
+| **Stolen or compromised device** | The PLC **rotation key** (stored on every device, sent to linked devices): permanent, unrevocable DID takeover. No device list or revocation. Attachments of deleted or expired messages survive in plaintext caches. | That device's sessions and unexpired history. | S-05, S-06, S-18, S-25 |
 | **A page on `*.theavalanche.net`** | The passkey RP is `theavalanche.net` with a fixed PRF salt, and the demo server serves Projects at `av.theavalanche.net/p/<slug>/`. A malicious or compromised page there can request the root PRF secret in a browser. | Only first-party apps. | S-07 |
 | **Network observer** | IP-to-server connections, timing (out of scope). | Same. | — |
 
@@ -89,7 +91,7 @@ code on 2026-10-03; "Reported" means found in review but not independently confi
 | S-02 | High | Automatic delivery receipt to an un-accepted message request carried your profile key, so any stranger who DMs you could decrypt your name and avatar. | `app-core/src/messaging.rs` `delivery_receipt` | Fixed in code (not yet deployed) | Receipts carry the key only to accepted (curated) contacts; unit-tested (`52`, `12`) |
 | S-03 | High | A self-declared bot (`is_bot` at open registration) bypassed the message-request gate. | `messaging.rs` `SenderGate`, `routes/accounts.rs` | Fixed in code (not yet deployed) | Only bots linked to an installed Project on your server (`project_bot` on the account record) skip requests; e2e-tested (`54`) |
 | S-04 | High | Group invites were joined automatically from anyone, blocked senders included, publishing your membership and profile to a stranger's group. | `messaging.rs` `group_invite_disposition`, `groups.rs` `hold_inbound_group_invite` | Fixed in code (not yet deployed) | Only an accepted contact's or a Project bot's invite auto-joins; a blocked inviter's is dropped; anyone else's is a request (Join / Delete / Block) on all three platforms; e2e-tested (`12`, `03`) |
-| S-05 | High | Desktop's SQLCipher key is the constant `"dev-placeholder-key"`; the database holds the identity and rotation keys. | `desktop/src/state/createAccounts.ts:179,225,432`, `createDeviceLink.ts:69` | Verified | OS keychain-backed key (`61`) |
+| S-05 | High | Desktop's SQLCipher key was the constant `"dev-placeholder-key"`; the database holds the identity and rotation keys. | `desktop/src-tauri/src/db_key.rs` | Fixed in code | One random 256-bit key per install in the OS credential store, fetched in Rust so it never enters the webview; databases resolve into the app-data dir by bare file name. Linux without a Secret Service falls back to a 0600 key file. No migration path (Desktop wasn't distributed) (`61`) |
 | S-06 | High | The PLC rotation key is persisted on every device and included in the device-link bundle; it is the only rotation key, so any device compromise is permanent DID takeover. | `store/src/account.rs:109`, `provisioning.proto:27`, `plc.rs:186` | Verified | Priority-ordered rotation keys; the passkey key stays top-priority and is never stored; linking authorized by an existing device's signature (`50` Proposed, `04`) |
 | S-07 | High | Passkey RP `theavalanche.net` with a fixed salt, while Project content is served under `av.theavalanche.net`. A page on any subdomain can run the ceremony and obtain the root PRF. | `PasskeyManager.swift:21,26`, `infra/deploy/bundle/lib/common.sh:209` | Verified (config); exploit path reported | Dedicated passkey domain with nothing else on it; per-Project origins outside it (`50`, `20`) |
 | S-08 | High | Attachment pointers carry a full URL that recipients fetch automatically, with no host restriction and no size cap: a sender, including a stranger, can harvest recipients' IP addresses, or exhaust their memory. | `net/src/lib.rs:1259-1273`, `messaging.rs` ~1118 (fetch runs under the core lock, `app-core/src/lib.rs:2273-2277`) | Verified | Constrain the host to known homeservers; cap reads at the pointer's size; don't auto-fetch from un-accepted senders; fetch off-lock (`35`) |
@@ -121,8 +123,8 @@ code on 2026-10-03; "Reported" means found in review but not independently confi
 
 The order matters more than the list. Roughly:
 
-1. **Close the critical and stranger-facing gaps** (S-01..S-04 fixed;
-   S-05, S-08, S-14, S-17, S-30), then the at-rest cleanup gap (S-25). These are small, contained fixes and don't need design work.
+1. **Close the critical and stranger-facing gaps** (S-01..S-05 fixed;
+   S-08, S-14, S-17, S-30), then the at-rest cleanup gap (S-25). These are small, contained fixes and don't need design work.
 2. **Move the identity root off devices** (S-06, S-07, S-19, S-21): passkey domain isolation,
    priority rotation keys, link confirmation. Parts are contract changes; see `50` Proposed.
 3. **Sealed sender for 1:1 and SKDM traffic, with delivery keys** (S-09). This is the biggest

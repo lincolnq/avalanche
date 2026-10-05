@@ -97,7 +97,7 @@ received and never sent (docs/04).
 | Deep links (`go.theavalanche.net/…`) | Yes | Yes | Yes | n/a |
 | Connection state / offline banner | Yes | Yes | Yes | n/a |
 | Recovery blob upload / refresh | Yes | Yes | Yes | n/a |
-| Hardware-backed DB key | Yes (Secure Enclave) | Yes (Keystore) | **No — constant placeholder key** (docs/61) | Operator-supplied |
+| Hardware-backed DB key | Yes (Secure Enclave) | Yes (Keystore) | Yes (OS credential store; Linux falls back to a key file without a Secret Service) | Operator-supplied |
 | System tray / close to background | n/a | n/a | Yes | n/a |
 | Dark mode | Yes | Yes | Yes | n/a |
 | Calls | No | No | No | n/a |

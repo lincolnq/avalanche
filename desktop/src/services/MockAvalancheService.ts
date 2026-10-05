@@ -319,7 +319,6 @@ export class MockAvalancheService implements AvalancheService {
   async createAccount(
     _serverUrl: string,
     _dbPath: string,
-    _dbKey: string,
     _prfOutput: number[],
     displayName: string,
     _inviteToken: string | null
@@ -329,7 +328,7 @@ export class MockAvalancheService implements AvalancheService {
     return { did: this.mockDid, displayName };
   }
 
-  async login(_dbPath: string, _dbKey: string): Promise<AccountResult> {
+  async login(_dbPath: string): Promise<AccountResult> {
     this.mockDid = this.mockDid || makeMockDid();
     // No stored name: the caller falls back to the persisted display name.
     return { did: this.mockDid, displayName: "" };
@@ -340,7 +339,6 @@ export class MockAvalancheService implements AvalancheService {
     did: string,
     _prfOutput: number[],
     _dbPath: string,
-    _dbKey: string,
     displayName: string
   ): Promise<AccountResult> {
     await new Promise((r) => setTimeout(r, 500));
@@ -353,7 +351,6 @@ export class MockAvalancheService implements AvalancheService {
     _serverUrl: string,
     did: string,
     _dbPath: string,
-    _dbKey: string,
     displayName: string
   ): Promise<AccountResult> {
     await new Promise((r) => setTimeout(r, 500));
@@ -374,7 +371,7 @@ export class MockAvalancheService implements AvalancheService {
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  async deviceLinkAwaitStep(_dbPath: string, _dbKey: string): Promise<AccountResult | null> {
+  async deviceLinkAwaitStep(_dbPath: string): Promise<AccountResult | null> {
     await new Promise((r) => setTimeout(r, 800));
     this.mockDid = makeMockDid();
     return { did: this.mockDid, displayName: "Linked Device" };
