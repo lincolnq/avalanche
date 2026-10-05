@@ -6,6 +6,11 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	ping: () => __TAURI_INVOKE<string>("ping"),
 	createAccount: (serverUrl: string, dbPath: string, prfOutput: number[], displayName: string, inviteToken: string | null) => typedError<AccountResult, string>(__TAURI_INVOKE("create_account", { serverUrl, dbPath, prfOutput, displayName, inviteToken })),
+	/**
+	 *  Open an existing account database. Refuses a path with no file: opening
+	 *  would otherwise create an empty database there and fail later for want of
+	 *  an identity, leaving a blank file behind.
+	 */
 	login: (dbPath: string) => typedError<AccountResult, string>(__TAURI_INVOKE("login", { dbPath })),
 	recoverFromBlob: (serverUrl: string, did: string, prfOutput: number[], dbPath: string, displayName: string) => typedError<AccountResult, string>(__TAURI_INVOKE("recover_from_blob", { serverUrl, did, prfOutput, dbPath, displayName })),
 	sendDm: (accountId: string, recipientDid: string, plaintext: number[], sentAtMs: number) => typedError<null, string>(__TAURI_INVOKE("send_dm", { accountId, recipientDid, plaintext, sentAtMs })),
