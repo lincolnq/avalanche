@@ -43,19 +43,6 @@
 .conv-header-main:hover {
   background: var(--color-divider);
 }
-.conv-header-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--color-accent-soft);
-  color: var(--color-accent-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 500;
-  flex-shrink: 0;
-}
 .messages-list {
   flex: 1;
   overflow-y: auto;

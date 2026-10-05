@@ -43,6 +43,7 @@ export interface EventLoopsDeps {
   ) => void;
   selectedConversationId: () => string | null;
   setGroupMetaChange: Setter<{ groupId: string; n: number }>;
+  invalidateGroupAvatar: (groupId: string) => void;
 }
 
 // The TS-owned per-account event + connection loops, the inbound-event
@@ -75,6 +76,7 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
     clearReactionsForMessage,
     selectedConversationId,
     setGroupMetaChange,
+    invalidateGroupAvatar,
   } = deps;
 
   // Event + connection loop lifecycle, one of each per account (mirrors iOS
@@ -238,6 +240,8 @@ export function createEventLoops(deps: EventLoopsDeps): EventLoops {
           // Notify any open ConversationView for this group to re-check
           // membership (e.g. you were removed by another admin while viewing).
           setGroupMetaChange((p) => ({ groupId: gm.event.groupId, n: p.n + 1 }));
+          // The change may be a new or removed group photo.
+          invalidateGroupAvatar(gm.event.groupId);
           needsConversationReload = true;
           break;
         }

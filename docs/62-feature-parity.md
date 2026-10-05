@@ -2,7 +2,7 @@
 
 > **Status:** Built — the single source of truth for which user-facing features exist on
 > which client. Re-baselined against the code on the verified date.
-> **Last verified against code:** 2026-10-03
+> **Last verified against code:** 2026-10-04
 
 This is the **only** parity tracker; docs/60 (Android) and docs/61 (Desktop) hold platform
 implementation notes, not tables. Update this file in the same change that adds, removes, or
@@ -44,9 +44,9 @@ DMs and groups share one send path in app-core; rows apply to both unless noted.
 | Link previews (sender-generated) | Yes | Yes | Yes | No |
 | Shared contact cards | Yes | Yes | Yes | No |
 | Disappearing-message timers | Yes | Yes | Yes | Yes (group expiry) |
-| Paste image from clipboard | Yes | Yes | No | n/a |
+| Paste image from clipboard | Yes | Yes | Yes (also drag-and-drop) | n/a |
 | Share an image in from another app | Yes (share extension) | Yes (`ACTION_SEND`) | n/a | n/a |
-| Conversation search | Yes | Yes | No | n/a |
+| Conversation search | Yes | Yes | Yes (search field + Cmd/Ctrl+K) | n/a |
 | Own-device sync of sent messages and read state (docs/04) | Partial | Partial | Partial | n/a |
 | Quote-reply / threads (docs/32) | No | No | No | No |
 | Per-conversation mute | No | No | No | n/a |
@@ -64,7 +64,7 @@ received and never sent (docs/04).
 | Roles: promote, remove member | Yes | Yes | Yes | API |
 | Leave group | Yes | Yes | Yes | API |
 | Group system messages in the timeline | Yes | Yes | Yes | n/a |
-| Group avatar: display | Yes | Yes | No | n/a |
+| Group avatar: display | Yes | Yes | Yes | n/a |
 | Group avatar: set / remove | Yes | No | No | No |
 
 ## Contacts and safety
@@ -72,7 +72,7 @@ received and never sent (docs/04).
 | Feature | iOS | Android | Desktop | Bots |
 |---|---|---|---|---|
 | Contact list, profile fetch + cache | Yes | Yes | Yes | API |
-| Contact avatars: display | Yes | Yes | No (initials only) | n/a |
+| Contact avatars: display | Yes | Yes | Yes | n/a |
 | Message-request gate (accept / delete) | Yes | Yes | Yes | n/a |
 | Group invite requests (join / delete / block) | Yes | Yes | Yes | Bots get `isRequest` and decide (adminbot accepts) |
 | Block / unblock, report-and-block | Yes | Yes | Yes | n/a |

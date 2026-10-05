@@ -1,4 +1,3 @@
-import { FiUsers } from "solid-icons/fi";
 import {
   createEffect,
   createMemo,
@@ -10,9 +9,9 @@ import {
 } from "solid-js";
 import { useApp } from "../../state/AppContext";
 import type { Conversation, Message } from "../../models";
-import { initials } from "../../lib/format";
 import { groupEventText } from "../../lib/groupEvents";
 import MessageBubble from "../../components/MessageBubble";
+import ContactAvatar from "../../components/ContactAvatar";
 import ComposeMessageView from "../../components/ComposeMessageView";
 import EditHistorySheet from "../../components/EditHistorySheet";
 import ImageViewerModal from "../../components/ImageViewerModal";
@@ -172,13 +171,15 @@ export default function ConversationView(props: Props) {
           aria-label="Conversation info"
           title="Conversation info"
         >
-          <div class="conv-header-avatar">
-            {props.conversation.isGroup && props.conversation.isRequest ? (
-              <FiUsers aria-hidden="true" />
-            ) : (
-              initials(props.conversation.title)
-            )}
-          </div>
+          <ContactAvatar
+            name={props.conversation.title}
+            did={props.conversation.recipientDid ?? props.conversation.groupId ?? props.conversation.id}
+            accountId={props.conversation.accountId}
+            isBot={props.conversation.isGroup ? false : undefined}
+            groupGlyph={props.conversation.isGroup && props.conversation.isRequest}
+            groupId={props.conversation.isGroup ? props.conversation.groupId : undefined}
+            size="sm"
+          />
           {props.conversation.title}
         </button>
       </div>

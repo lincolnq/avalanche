@@ -30,6 +30,24 @@ function makeMockDid(): string {
   return `did:plc:mock${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// A small generated JPEG standing in for a real avatar, so the mock (and the
+// dev browser preview) exercises the image path.
+async function mockAvatarBytes(color: string): Promise<number[]> {
+  const c = new OffscreenCanvas(96, 96);
+  const g = c.getContext("2d")!;
+  g.fillStyle = color;
+  g.fillRect(0, 0, 96, 96);
+  g.fillStyle = "rgba(255,255,255,0.85)";
+  g.beginPath();
+  g.arc(48, 38, 16, 0, Math.PI * 2);
+  g.fill();
+  g.beginPath();
+  g.ellipse(48, 92, 30, 26, 0, 0, Math.PI * 2);
+  g.fill();
+  const blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
+}
+
 // Seed conversations that appear after mock login/create.
 export function seedConversations(
   accountId: string
@@ -473,6 +491,18 @@ export class MockAvalancheService implements AvalancheService {
     if (did === "did:plc:organizer") return "Jamie (Organizer)";
     if (did === "did:plc:sam") return "Sam Rivera";
     return "";
+  }
+  async ownAvatar(): Promise<number[] | null> {
+    return null;
+  }
+  async contactAvatar(did: string): Promise<number[] | null> {
+    return did === "did:plc:sam" ? await mockAvatarBytes("#3E7C6B") : null;
+  }
+  async groupAvatar(groupId: string): Promise<number[] | null> {
+    return groupId === "mockgroup2" ? await mockAvatarBytes("#C2683A") : null;
+  }
+  async fetchGroupAvatar(_groupId: string): Promise<boolean> {
+    return false;
   }
   async cachedDisplayNames(dids: string[]): Promise<Record<string, string>> {
     const out: Record<string, string> = {};

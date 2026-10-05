@@ -180,6 +180,22 @@ export class DevServerAvalancheService implements AvalancheService {
     return ok(commands.contactDisplayName(this.accountId, did));
   }
 
+  async ownAvatar(): Promise<number[] | null> {
+    return ok(commands.ownAvatar(this.accountId));
+  }
+
+  async contactAvatar(did: string): Promise<number[] | null> {
+    return ok(commands.contactAvatar(this.accountId, did));
+  }
+
+  async groupAvatar(groupId: string): Promise<number[] | null> {
+    return ok(commands.groupAvatar(this.accountId, groupId));
+  }
+
+  async fetchGroupAvatar(groupId: string): Promise<boolean> {
+    return ok(commands.fetchGroupAvatar(this.accountId, groupId));
+  }
+
   async cachedDisplayNames(dids: string[]): Promise<Record<string, string>> {
     return ok(commands.cachedDisplayNames(this.accountId, dids));
   }

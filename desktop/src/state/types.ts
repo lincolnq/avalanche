@@ -146,6 +146,9 @@ export interface AppContextValue {
   unreadCount: (conversation: Conversation) => number;
   displayName: (did: string, accountId: string) => string;
   isBot: (did: string, accountId: string) => boolean;
+  // Avatar blob URLs (docs/55), resolved lazily and reactively; null if none.
+  avatarUrl: (did: string, accountId: string) => string | null;
+  groupAvatarUrl: (groupId: string, accountId: string) => string | null;
   setPendingInviteToken: (token: string | null) => void;
   validateInvite: (token: string) => Promise<InviteInfo>;
 

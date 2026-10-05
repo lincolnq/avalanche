@@ -162,6 +162,10 @@ pub fn run() {
             derive_did_from_passkey,
             contact_display_name,
             cached_display_names,
+            own_avatar,
+            contact_avatar,
+            group_avatar,
+            fetch_group_avatar,
             get_account_info,
             refresh_contact_profile,
             list_contacts,
@@ -892,6 +896,60 @@ fn get_account_info(
     get_app(&state, &account_id)?
         .get_account_info(did)
         .map_err(|e| e.to_string())
+}
+
+/// The account's own avatar JPEG from the local store, or None (docs/55).
+#[tauri::command]
+#[specta::specta]
+async fn own_avatar(state: tauri::State<'_, AppState>, account_id: String) -> Result<Option<Vec<u8>>, String> {
+    let app = get_app(&state, &account_id)?;
+    tauri::async_runtime::spawn_blocking(move || app.own_avatar().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A contact's cached avatar JPEG, or None. Local read only; the fetch happens
+/// in the profile-sync paths (docs/55).
+#[tauri::command]
+#[specta::specta]
+async fn contact_avatar(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    did: String,
+) -> Result<Option<Vec<u8>>, String> {
+    let app = get_app(&state, &account_id)?;
+    tauri::async_runtime::spawn_blocking(move || app.contact_avatar(did).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A group's cached avatar JPEG, or None (docs/55).
+#[tauri::command]
+#[specta::specta]
+async fn group_avatar(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    group_id: String,
+) -> Result<Option<Vec<u8>>, String> {
+    let app = get_app(&state, &account_id)?;
+    tauri::async_runtime::spawn_blocking(move || app.group_avatar(group_id).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Fetch + cache a group's avatar when the cache is behind the group state's
+/// version (network). Returns true if the cache changed.
+#[tauri::command]
+#[specta::specta]
+async fn fetch_group_avatar(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    group_id: String,
+) -> Result<bool, String> {
+    let app = get_app(&state, &account_id)?;
+    tauri::async_runtime::spawn_blocking(move || app.fetch_group_avatar(group_id).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

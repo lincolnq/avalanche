@@ -1,3 +1,4 @@
+import { Show } from "solid-js";
 import { FiUsers } from "solid-icons/fi";
 import { initials, avatarColorIndex } from "../lib/format";
 import { useApp } from "../state/AppContext";
@@ -14,6 +15,10 @@ interface Props {
   // Show a group glyph instead of initials (a group invite request, which has
   // no real name or photo yet).
   groupGlyph?: boolean;
+  // A group's id: show the group photo (docs/55) instead of a person's.
+  groupId?: string;
+  // Rendered diameter; default 40.
+  size?: "sm" | "md" | "lg";
 }
 
 /**
@@ -25,10 +30,26 @@ interface Props {
 export default function ContactAvatar(props: Props) {
   const app = useApp();
   const bot = () => props.isBot ?? app.isBot(props.did, props.accountId);
+  // Photo if one is set (a group invite request has none to show yet);
+  // otherwise initials on the per-DID tint.
+  const photo = () => {
+    if (props.groupGlyph) return null;
+    return props.groupId
+      ? app.groupAvatarUrl(props.groupId, props.accountId)
+      : app.avatarUrl(props.did, props.accountId);
+  };
 
   return (
-    <div class={`contact-avatar avatar-c${avatarColorIndex(props.did)}${bot() ? " bot" : ""}`}>
-      {props.groupGlyph ? <FiUsers aria-hidden="true" /> : initials(props.name) || "?"}
+    <div
+      class={`contact-avatar avatar-c${avatarColorIndex(props.did)} size-${props.size ?? "md"}`}
+      classList={{ bot: bot(), "has-photo": !!photo() }}
+    >
+      <Show
+        when={photo()}
+        fallback={props.groupGlyph ? <FiUsers aria-hidden="true" /> : initials(props.name) || "?"}
+      >
+        {(url) => <img class="contact-avatar-img" src={url()} alt="" draggable={false} />}
+      </Show>
     </div>
   );
 }

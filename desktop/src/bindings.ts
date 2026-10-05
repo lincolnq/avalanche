@@ -63,6 +63,20 @@ export const commands = {
 	 *  only DIDs with a non-empty cached name.
 	 */
 	cachedDisplayNames: (accountId: string, dids: string[]) => typedError<{ [key in string]: string }, string>(__TAURI_INVOKE("cached_display_names", { accountId, dids })),
+	/**  The account's own avatar JPEG from the local store, or None (docs/55). */
+	ownAvatar: (accountId: string) => typedError<number[] | null, string>(__TAURI_INVOKE("own_avatar", { accountId })),
+	/**
+	 *  A contact's cached avatar JPEG, or None. Local read only; the fetch happens
+	 *  in the profile-sync paths (docs/55).
+	 */
+	contactAvatar: (accountId: string, did: string) => typedError<number[] | null, string>(__TAURI_INVOKE("contact_avatar", { accountId, did })),
+	/**  A group's cached avatar JPEG, or None (docs/55). */
+	groupAvatar: (accountId: string, groupId: string) => typedError<number[] | null, string>(__TAURI_INVOKE("group_avatar", { accountId, groupId })),
+	/**
+	 *  Fetch + cache a group's avatar when the cache is behind the group state's
+	 *  version (network). Returns true if the cache changed.
+	 */
+	fetchGroupAvatar: (accountId: string, groupId: string) => typedError<boolean, string>(__TAURI_INVOKE("fetch_group_avatar", { accountId, groupId })),
 	getAccountInfo: (accountId: string, did: string) => typedError<AccountInfoFfi, string>(__TAURI_INVOKE("get_account_info", { accountId, did })),
 	refreshContactProfile: (accountId: string, did: string) => typedError<boolean, string>(__TAURI_INVOKE("refresh_contact_profile", { accountId, did })),
 	listContacts: (accountId: string) => typedError<ContactRowFfi[], string>(__TAURI_INVOKE("list_contacts", { accountId })),

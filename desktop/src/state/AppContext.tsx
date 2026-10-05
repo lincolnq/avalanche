@@ -81,6 +81,9 @@ export function AppProvider(props: { children: JSX.Element }) {
     findOrCreateDMConversation,
     displayName,
     isBot,
+    avatarUrl,
+    groupAvatarUrl,
+    invalidateGroupAvatar,
     isDeepLink,
     handleDeepLink,
     accountIdForConversation,
@@ -166,6 +169,7 @@ export function AppProvider(props: { children: JSX.Element }) {
     clearReactionsForMessage,
     selectedConversationId,
     setGroupMetaChange,
+    invalidateGroupAvatar,
   });
   const {
     startPollingFor,
@@ -271,6 +275,8 @@ export function AppProvider(props: { children: JSX.Element }) {
     unreadCount,
     displayName,
     isBot,
+    avatarUrl,
+    groupAvatarUrl,
     setPendingInviteToken: (token) => setStore("pendingInviteToken", token),
     validateInvite,
     selectedConversationId,

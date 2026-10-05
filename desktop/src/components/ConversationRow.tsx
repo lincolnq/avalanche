@@ -61,6 +61,7 @@ export default function ConversationRow(props: Props) {
         accountId={props.conversation.accountId}
         isBot={props.conversation.isGroup ? false : undefined}
         groupGlyph={props.conversation.isGroup && props.conversation.isRequest}
+        groupId={props.conversation.isGroup ? props.conversation.groupId : undefined}
       />
 
       <div class="conv-info">

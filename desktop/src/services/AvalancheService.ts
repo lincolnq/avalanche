@@ -115,6 +115,12 @@ export interface AvalancheService {
   recoveryPhraseToSeed(phrase: string): Promise<number[]>;
   deriveDidFromPasskey(prfOutput: number[], signupServerUrl: string): Promise<string>;
   contactDisplayName(did: string): Promise<string>;
+  // Avatars (docs/55): JPEG bytes from the local store, or null.
+  ownAvatar(): Promise<number[] | null>;
+  contactAvatar(did: string): Promise<number[] | null>;
+  groupAvatar(groupId: string): Promise<number[] | null>;
+  // Pull a group's avatar when the cache is behind the group state (network).
+  fetchGroupAvatar(groupId: string): Promise<boolean>;
   // Batch local-only name resolution to warm the cache on load (T78).
   cachedDisplayNames(dids: string[]): Promise<Record<string, string>>;
   getAccountInfo(did: string): Promise<import("../bindings").AccountInfoFfi>;

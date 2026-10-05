@@ -35,6 +35,8 @@ export type Conversations = Pick<
   | "findOrCreateDMConversation"
   | "displayName"
   | "isBot"
+  | "avatarUrl"
+  | "groupAvatarUrl"
   | "isDeepLink"
   | "handleDeepLink"
   | "listContacts"
@@ -55,6 +57,7 @@ export type Conversations = Pick<
     profileKey: number[] | null
   ) => Promise<void>;
   resetCaches: () => void;
+  invalidateGroupAvatar: (groupId: string) => void;
 };
 
 export function createConversations(deps: ConversationsDeps): Conversations {
@@ -71,6 +74,13 @@ export function createConversations(deps: ConversationsDeps): Conversations {
   // returns. A plain Set guards against duplicate in-flight fetches per DID.
   const [isBotCache, setIsBotCache] = createStore<Record<string, boolean>>({});
   const isBotPending: Set<string> = new Set();
+
+  // Reactive avatar cache (docs/55): key ("a:<did>" / "g:<groupId>") -> blob
+  // URL of the JPEG, or null for "no avatar". Same shape as the name cache:
+  // tracked reads, a plain Set dedupes in-flight fetches. Mirrors Android
+  // AppViewModel.avatar / groupAvatar.
+  const [avatarCache, setAvatarCache] = createStore<Record<string, string | null>>({});
+  const avatarPending: Set<string> = new Set();
 
   // Coalesces forced conversation reloads (the inbound-event handlers plus
   // safety/group actions) so their store reconciles don't interleave. A reload
@@ -442,6 +452,57 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     return false;
   }
 
+  function cacheAvatar(key: string, bytes: number[] | null) {
+    const url = bytes && bytes.length > 0
+      ? URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }))
+      : null;
+    const prev = avatarCache[key];
+    if (prev) URL.revokeObjectURL(prev);
+    setAvatarCache(key, url);
+  }
+
+  function resolveAvatar(key: string, load: () => Promise<number[] | null>): string | null {
+    const cached = avatarCache[key];
+    if (cached !== undefined) return cached;
+    if (!avatarPending.has(key)) {
+      avatarPending.add(key);
+      void load()
+        .then((bytes) => cacheAvatar(key, bytes))
+        .catch(() => setAvatarCache(key, null))
+        .finally(() => avatarPending.delete(key));
+    }
+    return null;
+  }
+
+  // Blob URL of a person's avatar (own account or contact), or null while it
+  // resolves / if none. Contact avatars are a local read; the profile-sync
+  // paths fetch them.
+  function avatarUrl(did: string, accountId: string): string | null {
+    const own = store.accounts.some((a) => a.id === did);
+    return resolveAvatar(`a:${did}`, () =>
+      own ? serviceFor(did).ownAvatar() : serviceFor(accountId).contactAvatar(did)
+    );
+  }
+
+  // Blob URL of a group's avatar, or null. Resolution first pulls a fresh copy
+  // if the cache is behind the group state (Android resolveGroupAvatar).
+  function groupAvatarUrl(groupId: string, accountId: string): string | null {
+    return resolveAvatar(`g:${groupId}`, async () => {
+      const svc = serviceFor(accountId);
+      await svc.fetchGroupAvatar(groupId).catch(() => false);
+      return svc.groupAvatar(groupId);
+    });
+  }
+
+  // Drop a group's cached avatar so the next read re-resolves (after a
+  // GroupMetadataChanged, which covers photo changes/removals).
+  function invalidateGroupAvatar(groupId: string) {
+    const key = `g:${groupId}`;
+    const prev = avatarCache[key];
+    if (prev) URL.revokeObjectURL(prev);
+    setAvatarCache(key, undefined!);
+  }
+
   // Non-fetching cache read (notification titles) — returns undefined on a miss
   // instead of firing the async resolve like `displayName` does.
   function cachedDisplayName(did: string): string | undefined {
@@ -455,6 +516,9 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     displayNamePending.clear();
     setIsBotCache(reconcile({}));
     isBotPending.clear();
+    for (const url of Object.values(avatarCache)) if (url) URL.revokeObjectURL(url);
+    setAvatarCache(reconcile({}));
+    avatarPending.clear();
   }
 
   // ── Deep links (T61) ────────────────────────────────────────────────────────
@@ -530,6 +594,9 @@ export function createConversations(deps: ConversationsDeps): Conversations {
     findOrCreateDMConversation,
     displayName,
     isBot,
+    avatarUrl,
+    groupAvatarUrl,
+    invalidateGroupAvatar,
     isDeepLink,
     handleDeepLink,
     accountIdForConversation,

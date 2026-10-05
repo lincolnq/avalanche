@@ -10,6 +10,25 @@
   font-size: 16px;
   font-weight: 500;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.contact-avatar.size-sm {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+}
+.contact-avatar.size-lg {
+  width: 72px;
+  height: 72px;
+  font-size: 26px;
+}
+.contact-avatar.has-photo {
+  background: var(--color-surface);
+}
+.contact-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* Bots render in a pointy-top hexagon instead of a circle (docs/54). The shape
