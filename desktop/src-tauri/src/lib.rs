@@ -397,15 +397,26 @@ fn ping() -> String {
 // So they're async + spawn_blocking — a sync command runs on the main thread
 // and would freeze the window for that long.
 
-fn install_core(state: &AppState, app: std::sync::Arc<AppCore>) -> Result<AccountResult, String> {
+/// A freshly opened core plus the two values the frontend needs back.
+type Opened = (std::sync::Arc<AppCore>, AccountResult);
+
+// Read what install_core needs while still on the blocking thread. Both
+// `did()` (a `blocking_lock` on the core) and `own_display_name()` (blocks on
+// app-core's runtime) panic if called from an async task — the command then
+// never replies and the page waits forever.
+fn opened(app: std::sync::Arc<AppCore>) -> Result<Opened, String> {
     let did = app.did();
     let display_name = app.own_display_name().map_err(|e| e.to_string())?;
+    Ok((app, AccountResult { did, display_name }))
+}
+
+fn install_core(state: &AppState, (app, result): Opened) -> Result<AccountResult, String> {
     state
         .cores
         .lock()
         .map_err(|e| format!("lock poisoned: {}", e))?
-        .insert(did.clone(), app);
-    Ok(AccountResult { did, display_name })
+        .insert(result.did.clone(), app);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -424,6 +435,7 @@ async fn create_account(
         let db_path = db_key::db_path(&app_handle, &db_path)?;
         AppCore::create_account(server_url, db_path, db_key, prf_output, display_name, invite_token)
             .map_err(|e| e.to_string())
+            .and_then(opened)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -446,7 +458,7 @@ async fn login(
             return Err("account database not found".to_string());
         }
         let db_key = db_key::db_key(&app_handle)?;
-        AppCore::login(db_path, db_key).map_err(|e| e.to_string())
+        AppCore::login(db_path, db_key).map_err(|e| e.to_string()).and_then(opened)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -469,6 +481,7 @@ async fn recover_from_blob(
         let db_path = db_key::db_path(&app_handle, &db_path)?;
         AppCore::recover_from_blob(server_url, did, prf_output, db_path, db_key, display_name)
             .map_err(|e| e.to_string())
+            .and_then(opened)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -497,6 +510,7 @@ async fn recover_from_phrase(
         let seed = app_core::recovery_phrase_to_seed(phrase).map_err(|e| e.to_string())?;
         AppCore::recover_from_blob(server_url, did, seed, db_path, db_key, display_name)
             .map_err(|e| e.to_string())
+            .and_then(opened)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -573,22 +587,24 @@ async fn device_link_await_step(
         .map_err(|e| format!("lock poisoned: {}", e))?
         .clone()
         .ok_or_else(|| "no pairing in progress".to_string())?;
+    // did/own_display_name are read on the blocking thread too (see `opened`).
     let linked = tauri::async_runtime::spawn_blocking(move || {
-        link.await_link_step(db_path, db_key).map_err(|e| e.to_string())
+        match link.await_link_step(db_path, db_key).map_err(|e| e.to_string())? {
+            Some(app) => opened(app).map(Some),
+            None => Ok(None),
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
     match linked {
-        Some(app) => {
-            let did = app.did();
-            let display_name = app.own_display_name().map_err(|e| e.to_string())?;
+        Some((app, result)) => {
             app_state
                 .cores
                 .lock()
                 .map_err(|e| format!("lock poisoned: {}", e))?
-                .insert(did.clone(), app);
+                .insert(result.did.clone(), app);
             *link_state.link.lock().map_err(|e| format!("lock poisoned: {}", e))? = None;
-            Ok(Some(AccountResult { did, display_name }))
+            Ok(Some(result))
         }
         None => Ok(None),
     }
