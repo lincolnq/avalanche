@@ -3,15 +3,17 @@ import type { RouteSectionProps } from "@solidjs/router";
 import type { JSX } from "solid-js";
 import { createEffect, on } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { FiSettings, FiMessageSquare, FiGlobe } from "solid-icons/fi";
+import { TbOutlineSettings } from "solid-icons/tb";
+import { ChatsBubbleIcon, NetworkGlobeIcon } from "../../components/icons/BrandIcons";
 import { useApp } from "../../state/AppContext";
 import "./MainLayout.css";
 
-type NavItem = { path: string; label: string; icon: typeof FiMessageSquare };
+type NavItem = { path: string; label: string; icon: typeof ChatsBubbleIcon };
 
 const NAV_ITEMS: NavItem[] = [
-  { path: "/chats", label: "Chats", icon: FiMessageSquare },
-  { path: "/network", label: "Network", icon: FiGlobe },
+  // Same glyphs as the iOS tab bar (MainTabView: TabChats / TabNetwork).
+  { path: "/chats", label: "Chats", icon: ChatsBubbleIcon },
+  { path: "/network", label: "Network", icon: NetworkGlobeIcon },
 ];
 
 interface NavLinkProps {
@@ -32,7 +34,7 @@ function NavLink(props: NavLinkProps) {
       class={`sidebar-link${isActive() ? " active" : ""}`}
       aria-label={props.item.label}
     >
-      <Dynamic component={props.item.icon} size={22} />
+      <Dynamic component={props.item.icon} size={24} />
       <span class="sidebar-label">{props.item.label}</span>
     </A>
   );
@@ -71,10 +73,10 @@ export default function MainLayout(props: RouteSectionProps): JSX.Element {
         ))}
         <div class="sidebar-spacer" data-tauri-drag-region />
         <A href="/settings" class="sidebar-settings-link" aria-label="Settings" title="Settings">
-          {/* Feather "settings" outlined gear, matching iOS SF Symbol
-              `gearshape` and Android's Material settings icon. Renders with
-              stroke="currentColor", so it inherits the link color + hover. */}
-          <FiSettings size={22} aria-hidden="true" />
+          {/* Outlined gear standing in for iOS's SF Symbol `gearshape` (SF
+              Symbols are licensed for Apple platforms only). currentColor, so
+              it takes the link color + hover. */}
+          <TbOutlineSettings size={24} aria-hidden="true" />
         </A>
         {/* No Sign out here: it forgets every signed-in account, so it lives in
             Settings > Developer (iOS has no user-facing sign-out at all). */}
