@@ -1,4 +1,4 @@
-import { FiLink } from "solid-icons/fi";
+import { FiSmartphone } from "solid-icons/fi";
 import wordmarkUrl from "../../assets/wordmark.svg";
 import "./SplashView.css";
 
@@ -9,11 +9,12 @@ interface SplashViewProps {
 }
 
 /**
- * Welcome screen. Mirrors iOS SplashView: the wordmark, the "Encrypted
- * organizing" tagline, invite entry as the primary action, and "Recover
- * account" / "Link to an existing device" as plain links. Desktop has no QR
- * scanner (by design, docs/62), so the invite link is the way in; the
- * "Already have an account?" divider is Desktop's own.
+ * Welcome screen. The wordmark and "Encrypted organizing" tagline mirror iOS
+ * SplashView, but the emphasis differs: Desktop is a companion to the mobile
+ * app, so linking to your phone is the primary action, and joining by invite
+ * link or restoring from a recovery phrase sit under "Using Desktop on its
+ * own?". (Desktop recovery is phrase-only; phone accounts usually use a
+ * passkey, so the label names the phrase.)
  */
 export default function SplashView(props: SplashViewProps) {
   // No restore here: saved accounts are opened once at launch (createAccounts).
@@ -33,20 +34,23 @@ export default function SplashView(props: SplashViewProps) {
       </div>
 
       <div class="splash-actions">
-        <button class="btn-primary splash-primary" onClick={props.onEnterLink}>
-          <FiLink size={16} aria-hidden="true" />
-          Enter Invite Link
+        <button class="btn-primary splash-primary" onClick={props.onLinkDevice}>
+          <FiSmartphone size={16} aria-hidden="true" />
+          Link to your phone
         </button>
+        <p class="splash-note" data-tauri-drag-region>
+          Avalanche Desktop works alongside the mobile app.
+        </p>
 
         <div class="splash-divider" data-tauri-drag-region>
-          <span>Already have an account?</span>
+          <span>Using Desktop on its own?</span>
         </div>
 
-        <button class="splash-link" onClick={props.onRecover}>
-          Recover account
+        <button class="splash-link" onClick={props.onEnterLink}>
+          Join with an invite link
         </button>
-        <button class="splash-link" onClick={props.onLinkDevice}>
-          Link to an existing device
+        <button class="splash-link" onClick={props.onRecover}>
+          Restore from a recovery phrase
         </button>
       </div>
     </div>

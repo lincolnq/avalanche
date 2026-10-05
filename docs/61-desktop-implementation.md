@@ -63,6 +63,15 @@ DID, and restores the account later. Details and load-bearing invariants are in
 `desktop/CLAUDE.md` ("Passkey / recovery divergence"). The external-browser passkey design
 (docs/56) is the proposed way to add passkeys.
 
+### Welcome screen: a companion first (sanctioned divergence)
+
+Desktop's welcome screen leads with **Link to your phone**, over the line "Avalanche Desktop
+works alongside the mobile app." Joining with an invite link and restoring from a recovery
+phrase sit below a "Using Desktop on its own?" divider. The restore label names the phrase
+because Desktop recovery is phrase-only (phone accounts usually use a passkey). iOS leads with invites (QR, then link),
+because a phone is where most people start; Desktop is usually a second device
+(`desktop/src/views/onboarding/SplashView.tsx`).
+
 ### Database key (S-05)
 
 Every account database is SQLCipher-encrypted with one random 256-bit key per install (64
