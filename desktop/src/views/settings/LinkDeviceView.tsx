@@ -108,8 +108,9 @@ export default function LinkDeviceView(props: Props) {
             {(p) => (
               <>
                 <div class="ld-subtitle">
-                  On the new phone: Link a device → Scan, and point it at this code. On another
-                  device, choose “Enter a code from my other device” and type the code below.
+                  On the new phone, tap “Link to an existing device” on the welcome screen and point
+                  it at this code. On a new computer, choose “Link to an existing device”, then
+                  “Enter a code from my other device”, and type the code below.
                 </div>
                 <QRCode text={p().code} />
                 <div class="ld-code">{p().code}</div>
@@ -126,7 +127,8 @@ export default function LinkDeviceView(props: Props) {
 
           <Match when={phase().name === "entering"}>
             <div class="ld-subtitle">
-              On the new device: choose “Show a code on this device”, then type that code here.
+              On the new device, choose “Link to an existing device”, then “Show a code instead”
+              (on a phone) or “Show a code on this device” (on a computer). Type that code here.
             </div>
             <input
               class="text-input ld-input"
