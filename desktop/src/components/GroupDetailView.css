@@ -147,6 +147,10 @@
   position: relative;
 }
 .groupdetail-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
   width: 100%;
   border: none;
   background: transparent;

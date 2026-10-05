@@ -13,6 +13,7 @@ import DisappearingMessagesPicker, {
 } from "./DisappearingMessagesPicker";
 import "./GroupDetailView.css";
 import { onEscape } from "../lib/onEscape";
+import ContactAvatar from "./ContactAvatar";
 
 interface Props {
   conversation: Conversation;
@@ -301,6 +302,12 @@ export default function GroupDetailView(props: Props) {
                               setMenuMemberId(member.encryptedMemberId)
                             }
                           >
+                            <ContactAvatar
+                              name={app.displayName(member.did, accountId())}
+                              did={member.did}
+                              accountId={accountId()}
+                              size="sm"
+                            />
                             <span class="groupdetail-member-name">
                               {memberName(member)}
                             </span>

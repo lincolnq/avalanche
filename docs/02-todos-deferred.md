@@ -130,6 +130,9 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
 - Disappearing messages: keep an empty conversation when all messages expire; system message
   on DM timer change; Android expiry handling (reaper refresh, persist timer on send).
 - Scroll to the first unread message on open (capture the index before marking read).
+- Day dividers in the timeline ("Today", "Yesterday", "Sat, Oct 4") on all three platforms:
+  messages older than today show only a time, so a thread spanning days is ambiguous. Desktop
+  already shows the full date on hover.
 - Block and report from an accepted conversation; view another user's profile.
 - Coalesce `fetchGroupState` and push group-state changes over the WebSocket instead of
   polling on every open (`03`).
