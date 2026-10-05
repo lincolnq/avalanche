@@ -3,47 +3,103 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
+  gap: 56px;
+  min-height: 100vh;
+  padding: 48px 24px;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
-  /* Window drag strip — don't let a drag select the wordmark/tagline text. */
+  /* Window drag strip — don't let a drag select the text. */
   -webkit-user-select: none;
   user-select: none;
 }
+
+.splash-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
 .splash-wordmark {
-  font-size: 48px;
-  font-weight: 700;
-  letter-spacing: -1px;
-  margin-bottom: 12px;
-  /* --color-sidebar is a fixed deep plum: on the dark background it's darker than
-     the surface, so the wordmark all but vanished in dark mode. Use the primary
-     text token, which adapts per mode and stays high-contrast on both. */
-  color: var(--color-text);
+  width: 280px;
+  pointer-events: none;
 }
 .splash-tagline {
-  font-size: 15px;
+  margin: 0;
+  font-size: 19px;
+  font-weight: 500;
   color: var(--color-text-secondary);
-  margin-bottom: 48px;
 }
+
 .splash-actions {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  width: 280px;
+  width: 340px;
 }
-.splash-btn {
-  padding: 14px 24px;
+.splash-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 20px;
   border-radius: 12px;
 }
-.splash-recover-link {
-  background: none;
-  border: none;
+.splash-hint {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--color-text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  padding: 4px;
 }
-.splash-recover-link:hover {
+
+/* "Already have an account?" with a hairline on each side. */
+.splash-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 32px 0 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.splash-divider::before,
+.splash-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-divider);
+}
+
+.splash-secondary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--color-divider);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-accent-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.splash-secondary:hover {
+  background: var(--color-row-hover);
+  border-color: var(--color-input-border);
+}
+.splash-secondary-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.splash-secondary-title {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--color-text);
+}
+.splash-secondary-sub {
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }

@@ -134,7 +134,10 @@ export function createAccounts(deps: AccountsDeps): Accounts {
     void persistCloseToTray(on);
   }
 
-  // ── Init: read persisted mode on mount ───────────────────────────────────
+  // ── Init: read persisted settings, and open saved accounts at launch ─────
+  // Restoring here (not from the welcome screen's mount) is what lets App hold
+  // a launch screen until we know whether there's an account to open.
+  queueMicrotask(() => void restoreAccounts());
 
   void (async () => {
     try {
@@ -183,7 +186,11 @@ export function createAccounts(deps: AccountsDeps): Accounts {
     // account" overlay over a live session. Without the accounts-present guard,
     // re-mounting it would re-login (re-open the DB of) accounts that are already
     // running. The create/recover paths handle adding accounts additively.
-    if (restoring || restored || store.accounts.length > 0) return;
+    if (restoring) return; // the in-flight restore clears isLaunching when it settles
+    if (restored || store.accounts.length > 0) {
+      setStore("isLaunching", false);
+      return;
+    }
     restoring = true;
 
     try {
@@ -223,6 +230,7 @@ export function createAccounts(deps: AccountsDeps): Accounts {
       }
     } finally {
       restoring = false;
+      setStore("isLaunching", false);
     }
   }
 

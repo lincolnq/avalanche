@@ -4,7 +4,8 @@
 // and desktop/CLAUDE.md "Debugging the running app").
 //
 //   node scripts/preview-shot.mjs out.png [--dark] [--size 1200x800]
-//        [--query 'accounts=2'] [--eval '<js function body>']...
+//        [--query 'accounts=2'] [--init '<js run before page scripts>']
+//        [--eval '<js function body>']...
 //
 // Needs the Vite dev server on http://localhost:1420 (`make desktop` or
 // `npm run dev`). `--eval` snippets run in order before the screenshot and may
@@ -22,6 +23,7 @@ let out = null;
 let dark = false;
 let size = "1200x800";
 let query = "";
+const inits = [];
 const evals = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -29,6 +31,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--size") size = args[++i];
   else if (a === "--eval") evals.push(args[++i]);
   else if (a === "--query") query = args[++i];
+  else if (a === "--init") inits.push(args[++i]);
   else out = a;
 }
 if (!out) {
@@ -95,10 +98,13 @@ async function main() {
     features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }],
   });
   await send("Page.enable");
+  for (const source of inits) await send("Page.addScriptToEvaluateOnNewDocument", { source });
   await send("Page.navigate", { url: query ? `${BASE_URL}?${query}` : BASE_URL });
   // Wait for the app to restore the preview account and render Chats.
   for (let i = 0; i < 100; i++) {
-    const ready = await evaluate("return !!(window.__av && __av.state().conversations.length)").catch(() => false);
+    const ready = await evaluate(
+      "return !!(window.__av && (__av.state().conversations.length || document.querySelector('.splash')))",
+    ).catch(() => false);
     if (ready) break;
     await sleep(100);
   }

@@ -28,6 +28,10 @@ export interface PersistedAccount {
 export interface AppStore {
   accounts: Account[];
   isOnboarding: boolean;
+  // True from launch until the first restore attempt settles. While set, App
+  // shows a quiet launch screen instead of the welcome screen, so a returning
+  // user never sees onboarding flash before their accounts open.
+  isLaunching: boolean;
   // True while the onboarding flow is being run to ADD an account to an already
   // signed-in session ("Sign in to another account"). Distinct from
   // isOnboarding (first-run / signed-out): the main UI stays mounted underneath

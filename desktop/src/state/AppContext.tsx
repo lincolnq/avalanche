@@ -26,6 +26,7 @@ export function AppProvider(props: { children: JSX.Element }) {
   const [store, setStore] = createStore<AppStore>({
     accounts: [],
     isOnboarding: true,
+    isLaunching: true,
     isAddingAccount: false,
     serviceMode: isBrowserPreview ? ServiceMode.Mock : ServiceMode.DevServer,
     selectedTab: "chats",

@@ -7,13 +7,23 @@ import ChatsView from "./views/chats/ChatsView";
 import NetworkView from "./views/network/NetworkView";
 import SettingsView from "./views/settings/SettingsView";
 import OnboardingFlow from "./views/onboarding/OnboardingFlow";
+import LaunchView from "./views/onboarding/LaunchView";
 import "./App.css";
 
 export default function App() {
   const { store, cancelAddAccount } = useApp();
 
   return (
-    <Show when={!store.isOnboarding} fallback={<OnboardingFlow />}>
+    <Show
+      when={!store.isOnboarding}
+      fallback={
+        // Hold a quiet launch screen while saved accounts open, so a returning
+        // user never sees the welcome screen flash first.
+        <Show when={!store.isLaunching} fallback={<LaunchView />}>
+          <OnboardingFlow />
+        </Show>
+      }
+    >
       <Router>
         <Route path="/" component={MainLayout}>
           <Route path="/" component={ChatsView} />

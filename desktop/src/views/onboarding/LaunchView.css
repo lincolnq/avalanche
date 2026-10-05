@@ -1,0 +1,20 @@
+.launch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--color-bg);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.launch-wordmark {
+  width: 200px;
+  opacity: 0;
+  animation: launch-fade-in 0.4s ease-out 0.35s forwards;
+  pointer-events: none;
+}
+@keyframes launch-fade-in {
+  to {
+    opacity: 1;
+  }
+}
