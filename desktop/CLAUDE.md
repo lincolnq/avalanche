@@ -105,6 +105,26 @@ desktop/scripts/devctl shot /tmp/x.png          # screenshot just the app window
 - Never ship any of this in release builds; keep the `cfg(debug_assertions)` /
   `import.meta.env.DEV` guards.
 
+### Browser preview (`scripts/preview-shot.mjs`)
+
+When the real window can't be captured (screen locked, window hidden; WebKit stops
+painting a webview that isn't visible), render the UI in headless Chrome instead:
+
+```bash
+node scripts/preview-shot.mjs /tmp/p.png --eval "await __av.open('General')"
+node scripts/preview-shot.mjs /tmp/p.png --dark --query accounts=2
+```
+
+- Opened outside Tauri, the dev frontend (Vite on `localhost:1420`, running whenever
+  `make desktop` is) runs on `MockAvalancheService` with canned signed-in account(s)
+  (`src/dev/browserPreview.ts`; `?accounts=N` for multi-account). No server, no app.
+- `--dark` emulates `prefers-color-scheme: dark`, so both themes can be checked.
+- `--eval` steps can use the `__av` helpers; transitions are disabled before capture.
+- The mock's seed data (`MockAvalancheService.ts`) is meant for UI work: message runs,
+  long and edited messages, unread counts, a group photo. Extend it when a screen needs it.
+- It is the mock, not the real app: verify behavior against the real app with `devctl`
+  before calling something done.
+
 ---
 
 ## UX Adaptation: Tabs → Sidebar
