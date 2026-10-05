@@ -27,7 +27,7 @@
 .splash-tagline {
   margin: 0;
   font-size: 20px;
-  font-weight: 400;   /* regular, like iOS's .title3 */
+  font-weight: 300;   /* light: SF renders iOS's secondary .title3 this thin */
   color: var(--color-text-secondary);
 }
 
@@ -64,9 +64,10 @@
 
 /* Plain plum text links, like iOS's secondary actions. */
 .splash-link {
-  padding: 8px;
+  align-self: center;
+  padding: 8px 18px;
   border: none;
-  border-radius: 8px;
+  border-radius: 999px;   /* pill hover highlight, matching the primary button */
   background: none;
   color: var(--color-accent-text);
   font-size: 14px;
