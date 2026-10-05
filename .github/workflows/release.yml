@@ -236,6 +236,11 @@ jobs:
       - name: Build
         shell: bash
         working-directory: desktop
+        env:
+          # Vendored OpenSSL must be configured by a native Windows Perl. Under
+          # this bash shell, plain `perl` is Git's MSYS Perl, which can't
+          # configure an MSVC build; point openssl-src at Strawberry Perl.
+          OPENSSL_SRC_PERL: ${{ runner.os == 'Windows' && 'C:\Strawberry\perl\bin\perl.exe' || '' }}
         run: |
           npm ci
           npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
