@@ -960,7 +960,7 @@ reactions as feed messages.
 ### Chat organization (37) — Partial
 
 - Default inbox: plain, one row per conversation, no tab row. **Account tabs Built (iOS,
-  Android; not Desktop)** only with >1 identity: avatar + unread badge, filter.
+  Android, Desktop)** only with >1 identity: avatar + unread badge, filter.
 - **Decided: no per-row identity/server marking**; the conversation is the context; if you
   want separation, make it a tab. Supersedes 30's per-row indicator and switcher.
 - Per-conversation mute Planned (synced via conversation settings; muted excluded from badge;
@@ -1011,7 +1011,7 @@ profile key; group state with key derived from master key). Whoever can read the
 read the picture; no new key distribution. Digest verified before decrypt (server can blank,
 not spoof). Group avatar object id derived from master key (no server group link). Limits:
 512 px, <=48 KiB encoded, 60 KiB plaintext, 64 KiB ciphertext, 60 uploads/hour. Device-local
-`avatar_cache`. iOS sets/displays both; Android displays only; Desktop initials only.
+`avatar_cache`. iOS sets/displays both; Android and Desktop display only.
 Gaps: **shared blob namespace** lets any account delete/overwrite attachments and enumerate
 profile-avatar ids from sequential account ids (S-27); group blob replaceable by any
 old-key holder (fix: per-version object id); linked device doesn't fetch own avatar; upload
