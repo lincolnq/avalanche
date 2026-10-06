@@ -31,6 +31,7 @@ pub mod plc;
 pub mod prekeys;
 pub mod profile;
 pub mod provisioning;
+pub(crate) mod read_sync;
 pub mod recovery;
 pub mod storage_sync;
 
@@ -1293,6 +1294,15 @@ pub struct AppCore {
     /// Handle to the background reaper task. Held so it isn't detached; the
     /// task self-exits when the last `Arc<AppCore>` drops.
     pub(crate) expire_reaper_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Read marks waiting to sync to my other devices (docs/04 §5.4):
+    /// conversation id → highest `up_to` sent_at marked read. Filled by
+    /// `mark_messages_read`, drained by `read_sync::read_sync_loop`.
+    pub(crate) pending_read_marks: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Poke source for the read-sync task, pulsed when a mark is queued.
+    pub(crate) read_sync_notify: Arc<tokio::sync::Notify>,
+    /// Handle to the background read-sync task. Held so it isn't detached; the
+    /// task self-exits when the last `Arc<AppCore>` drops.
+    pub(crate) read_sync_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Opportunistic-reconnect signal (`reconnect_now`). Serves two mutually
     /// exclusive waiters: the reconnect loop's backoff sleep (woken to retry
     /// immediately) and `net`'s WS reader (foreground liveness probe of a live
@@ -1420,6 +1430,9 @@ impl AppCore {
             sync_task: std::sync::Mutex::new(None),
             expire_notify: Arc::new(tokio::sync::Notify::new()),
             expire_reaper_task: std::sync::Mutex::new(None),
+            pending_read_marks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            read_sync_notify: Arc::new(tokio::sync::Notify::new()),
+            read_sync_task: std::sync::Mutex::new(None),
             reconnect_notify: Arc::new(tokio::sync::Notify::new()),
             groups_changed: Arc::new(tokio::sync::Notify::new()),
             app_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -1499,6 +1512,43 @@ impl AppCore {
             rt.block_on(expire_reaper_loop(weak));
         });
         *slot = Some(handle);
+    }
+
+    /// Spawn the background read-sync sender (docs/04 §5.4). Idempotent. Same
+    /// `spawn_blocking` + dedicated current-thread runtime as the other
+    /// background loops: the send path drives libsignal futures, which aren't
+    /// `Send`. A `did:local:` account can't have linked devices, so it never
+    /// queues marks and the task just idles. The FFI constructors call this
+    /// automatically; the task self-exits when the last `Arc<AppCore>` drops.
+    pub fn start_read_sync_task(self: &Arc<Self>) {
+        let mut slot = self.read_sync_task.lock().unwrap();
+        if slot.is_some() {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let handle = ffi_runtime().spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("read-sync runtime build");
+            rt.block_on(read_sync::read_sync_loop(weak));
+        });
+        *slot = Some(handle);
+    }
+
+    /// Queue a read mark for my other devices and wake the read-sync task
+    /// (docs/04 §5.4). No network here — the task sends. Skipped for
+    /// `did:local:` accounts, which can't link devices (bots).
+    pub(crate) fn queue_read_sync(&self, conversation_id: &str, up_to_sent_at_ms: i64) {
+        if self.did.starts_with("did:local:") || up_to_sent_at_ms < 0 {
+            return;
+        }
+        read_sync::merge_mark(
+            &mut self.pending_read_marks.lock().unwrap(),
+            conversation_id,
+            up_to_sent_at_ms as u64,
+        );
+        self.read_sync_notify.notify_one();
     }
 
     /// Publish a connection-state change. Uses `send_if_modified` so duplicate
@@ -1602,6 +1652,7 @@ impl AppCore {
             core.start_reconnect_task();
             core.start_storage_sync_task();
             core.start_expire_reaper();
+            core.start_read_sync_task();
             Ok(core)
         }
     }
@@ -1641,6 +1692,7 @@ impl AppCore {
         let core = Arc::new(Self::build(inner));
         core.start_reconnect_task();
         core.start_expire_reaper();
+        core.start_read_sync_task();
         Ok(core)
     }
 
@@ -1684,6 +1736,7 @@ impl AppCore {
             core.start_reconnect_task();
             core.start_storage_sync_task();
             core.start_expire_reaper();
+            core.start_read_sync_task();
             Ok(core)
         }
     }
@@ -1984,6 +2037,7 @@ impl AppCore {
             core.start_reconnect_task();
             core.start_storage_sync_task();
             core.start_expire_reaper();
+            core.start_read_sync_task();
 
             // Restore group memberships carried in the blob (v3+).
             // For each group:
@@ -2046,6 +2100,7 @@ impl AppCore {
             core.start_reconnect_task();
             core.start_storage_sync_task();
             core.start_expire_reaper();
+            core.start_read_sync_task();
             Ok(core)
         }
     }
@@ -2099,6 +2154,7 @@ impl AppCore {
         let core = Arc::new(Self::build(inner));
         core.start_reconnect_task();
         core.start_expire_reaper();
+        core.start_read_sync_task();
         Ok(core)
     }
 
@@ -3091,6 +3147,7 @@ impl AppCore {
         // (docs/03 §5); wake the reaper to (re)schedule its deadline.
         if count > 0 {
             self.expire_notify.notify_one();
+            self.queue_read_sync(&conversation_id, up_to_sent_at_ms);
         }
         Ok(count)
     }
@@ -4413,6 +4470,7 @@ async fn provision_linked_device(
     core.start_reconnect_task();
     core.start_storage_sync_task();
     core.start_expire_reaper();
+    core.start_read_sync_task();
 
     // Pull durable state (groups, contacts, settings, profiles) so the linked
     // device is operational (docs/05 §11). Best-effort: a failure leaves the

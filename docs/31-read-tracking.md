@@ -1,7 +1,7 @@
 # 31 — Read tracking and read receipts
 
-> **Status:** Built, with gaps — per-message `read_at`, derived unread counts, scroll-position read marking, delivery and read receipts, and Signal-style delivery checkmarks. Diverges from this doc's earlier plan: there's no read-receipt setting (receipts are always sent to curated contacts), no debounce, and no read-state sync between your own devices.
-> **Last verified against code:** 2026-10-03
+> **Status:** Built, with gaps — per-message `read_at`, derived unread counts, scroll-position read marking, delivery and read receipts, and Signal-style delivery checkmarks. Diverges from this doc's earlier plan: there's no read-receipt setting (receipts are always sent to curated contacts) and no receipt debounce. Read state syncs between your own devices via `SyncRead` (`04` §5.4).
+> **Last verified against code:** 2026-10-05
 
 ## Summary
 
@@ -39,12 +39,11 @@ Code: store `messages.rs` (`mark_messages_read`, `unread_count`, `update_deliver
 1. **No read-receipt setting.** Receipts are always on for curated contacts. This doc used to specify opt-in, default off; Signal defaults them on with a toggle. **Decision needed:** recommend Signal's default (on, with a per-identity toggle in Settings).
 2. **No debounce.** Each scroll-visibility change that newly reads messages sends one receipt per sender, with an FFI call and network send each. Batch with a short debounce (~3 s) per sender.
 3. **Group read receipts are mostly not sent.** Group co-members aren't curated (`52`), so the curation gate suppresses receipts to them. Also, a group read receipt is a pairwise DM per author. Decide whether groups get read receipts at all (Signal sends them); if so, gate on group membership rather than curation.
-4. **Read state doesn't sync to your other devices.** `SyncRead` is defined and applied on receive (`04`), but `mark_messages_read` never sends it. Reading on your phone leaves the desktop unread. P1 for multi-device. Owned by `04`.
-5. **`send_read_receipt` holds the core lock across the network send** (it's on the crypto send path, the documented exception in `core/CLAUDE.md`).
+4. **`send_read_receipt` holds the core lock across the network send** (it's on the crypto send path, the documented exception in `core/CLAUDE.md`).
 
 ## Planned
 
-- Fix gaps 1–4.
+- Fix gaps 1–3.
 - A `VIEWED` receipt type for view-once media and `PLAYED` for voice notes (reserved in the proto).
 
 ## Rationale and rejected alternatives
