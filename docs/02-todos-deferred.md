@@ -78,7 +78,6 @@ Small, contained fixes; no design work needed. Each is a bug fix, so per the roo
   hammering reconnect (`34`).
 - Build the no-blob recovery path, or stop promising it (`50`).
 - "Add a server" with an existing identity must actually register on that server (`53`, `30`).
-- Send `SyncRead` to your own devices (`31`, `04`).
 - Per-conversation mute (`37`).
 - CI: add `cargo audit`/`cargo deny`, app-core end-to-end tests, and iOS, Android, relay, and
   bot builds (`01`).
