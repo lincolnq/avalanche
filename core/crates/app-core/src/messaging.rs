@@ -2059,6 +2059,11 @@ pub(crate) async fn process_decrypted(core: &AppCore, decrypted: DecryptedMessag
             if decrypted.sender_did == inner.did {
                 let changed = apply_sync_read(&inner.store, &inner.did, sync).await;
                 drop(inner);
+                // Marking read may have started disappearing-message countdowns
+                // (docs/03 §5); wake the reaper so they expire on time here too.
+                if !changed.is_empty() {
+                    core.expire_notify.notify_one();
+                }
                 for conversation_id in changed {
                     let _ = core
                         .event_tx

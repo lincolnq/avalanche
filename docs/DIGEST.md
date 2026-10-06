@@ -319,7 +319,7 @@ Phase 0 spike gates everything.
 ## 5. Multi-device (04)
 
 **Status: Partial.** Built: per-device crypto, linking on all three platforms, group
-fan-out, sent-transcript sync, storage service. Not built: sending `SyncRead`, device list
+fan-out, sent-transcript sync, read-state sync (`SyncRead`), storage service. Not built: device list
 UI/revocation, whole-identity recovery reset, link confirmation.
 
 - **Central distinction (load-bearing):** the identity key is a static credential and is
@@ -342,8 +342,9 @@ UI/revocation, whole-identity recovery reset, link confirmation.
   ContentMessage; only my devices, current value -> storage record; action -> thin event.
   Rejected: one SyncMessage per feature (Signal accreted ~20). Sync messages are pairwise DMs
   to yourself, no sealed sender. Live `SyncSent`/`SyncRead` emit scoped
-  `ConversationUpdated`. Gaps: `SyncRead` receive-only; `SyncViewed`/`SyncLocalDelete`
-  undefined.
+  `ConversationUpdated`. `SyncRead` is queued by `mark_messages_read` and sent by a debounced
+  background task (high-water marks, retried; skipped for `did:local:`). Gaps: pending marks
+  in memory only; `SyncViewed`/`SyncLocalDelete` undefined.
 - **Group fan-out (§6, Built):** sealed-sender keys derive from the shared identity key so any
   device decrypts; per-device pseudonyms; linked devices reconcile groups after storage pull.
   Accepted: server learns device count.
@@ -848,8 +849,8 @@ requesters, but carrying the profile key only to accepted contacts, S-02); read 
 to curated contacts.
 Gaps: no setting (recommend Signal default on with per-identity toggle — **decision
 needed**); no debounce; group read receipts mostly suppressed (co-members uncurated; decide
-whether groups get them, gate on membership); `SyncRead` never sent; receipt send under core
-lock. Planned: VIEWED/PLAYED. Rejected: stored counter; watermark (`lastReadAt`); timer
+whether groups get them, gate on membership); receipt send under core lock. Read state
+syncs across own devices (04). Planned: VIEWED/PLAYED. Rejected: stored counter; watermark (`lastReadAt`); timer
 polling; read receipts to un-accepted senders.
 
 ### Replies and threads (32) — quote-reply Proposed; full model Speculative

@@ -1,7 +1,7 @@
 # 04 — Multi-device
 
-> **Status:** Partial — per-device crypto, device linking (iOS, Android, Desktop), group fan-out, sent-transcript sync, and the storage service are built. Read-state sync is receive-only, and there is no device list, revocation, or whole-identity recovery reset.
-> **Last verified against code:** 2026-10-03
+> **Status:** Partial — per-device crypto, device linking (iOS, Android, Desktop), group fan-out, sent-transcript sync, read-state sync, and the storage service are built. There is no device list, revocation, or whole-identity recovery reset.
+> **Last verified against code:** 2026-10-05
 
 ## Summary
 
@@ -21,7 +21,7 @@ Section numbers below are cited from code (`§4`, `§4.2`, `§5.4`, `§5.5`, ...
   arrives. Still open: there is no "please re-send" request, so a message sent while the
   recipient's key was *lost* (not merely late) is never recovered; Signal re-sends recent
   content from a short send log.
-- **Read state does not sync between your own devices.** `SyncRead` is applied on receive (`app-core/src/messaging.rs` `apply_sync_read`) but never sent: `mark_messages_read` (`app-core/src/lib.rs`) only writes the local store. Reading on the phone does not clear the tablet's badge.
+- **Pending read marks are in memory only.** A read mark not yet sent when the app exits (or while offline, then quit) never syncs; Signal persists these in a job queue. A `SyncRead` that arrives before the message it covers (e.g. a group message held for its sender key) also leaves that message unread.
 - **`SyncViewed` and `SyncLocalDelete` do not exist** in `core/proto/content.proto`. Only `SyncSent` (field 10) and `SyncRead` (field 11) are defined.
 - **No device list, no revocation.** The server exposes `GET /v1/accounts/{did}/devices` (`server/src/routes/accounts.rs`) but there is no client UI to see your devices and no endpoint or FFI to revoke one. A lost device keeps working until someone does a recovery that happens to replace its slot.
 - **Every device holds the DID's rotation key.** Linking ships the rotation private key in the bundle (`core/proto/provisioning.proto` field 2) and it is persisted (`store/src/account.rs` `save_rotation_key`). Stealing any device's unlocked database gives permanent control of the DID. See `50` §Proposed and `09`.
@@ -99,7 +99,7 @@ Notes:
 
 ## 5. Cross-device sync: what roams, and how
 
-**Partial.** The model is decided. The Sent transcript is built and sent; `SyncRead` is receive-only (see Known gaps); the Durable channel is the storage service (`05`).
+**Partial.** The model is decided. The Sent transcript and `SyncRead` are built and sent; `SyncViewed` and `SyncLocalDelete` are not defined; the Durable channel is the storage service (`05`).
 
 Without sync, multi-device is cryptographically correct but feels broken: Alice sends from her phone and her tablet never sees it. The trap to avoid is "one new `SyncMessage` variant per UX feature" (Signal accreted ~20 before moving durable state into a Storage Service). We cap the sync-message-type count up front.
 
@@ -123,7 +123,7 @@ The residue is a near-closed set of **local events** (read marks, viewed, delete
 | What | Category | Mechanism | Status |
 |---|---|---|---|
 | Text / media / reactions / edits / delete-for-everyone / timer | Conversation | Sent transcript | Built |
-| Read marks | event | `SyncRead` | Partial (receive-only) |
+| Read marks | event | `SyncRead` | Built |
 | Viewed / view-once opened | event | `SyncViewed` | Not defined |
 | Delete-for-me | event | `SyncLocalDelete` | Not defined |
 | Disappearing-message timer per conversation | Durable | storage record (`ConvSettingsAdapter`) | Built |
@@ -160,7 +160,7 @@ message ReadMark {
 
 On a live-WS `SyncSent`/`SyncRead`, the receiving device applies it to its store and emits a **scoped** `ConversationUpdated { conversation_id }` event so the UI re-reads just that conversation (deliberately not the coarse `StorageSynced` signal). The explicit poll path applies transcripts silently.
 
-Senders: `sync_sent_to_own_devices` (`app-core/src/messaging.rs`) is called from the DM and group send paths. No sender exists for `SyncRead`.
+Senders: `sync_sent_to_own_devices` (`app-core/src/messaging.rs`) is called from the DM and group send paths. `SyncRead` is sent by `app-core/src/read_sync.rs`: `mark_messages_read` queues a per-conversation high-water mark (only when it newly marked something, so applying a received mark can't echo back), and a background task coalesces a burst over ~1 s into one `SyncRead`, sends it as a self-DM, and retries with backoff on failure. `did:local:` accounts skip it, since they can't link devices.
 
 ### 5.5 Transport
 
@@ -226,12 +226,11 @@ Revoking a device does not rotate the shared identity key, and with today's desi
 
 ## 11. Implementation order (remaining)
 
-1. Send `SyncRead` from `mark_messages_read` (and the read-receipt path) to own devices.
-2. Link confirmation code + new-device notice (§4.3).
-3. Device list and revocation (§9).
-4. Stop shipping the rotation key in the link bundle; authorize `/v1/devices/link` with an existing device's signature (`50` §Proposed).
-5. Whole-identity recovery reset across all servers (§7).
-6. Peer device-set-change notice (§8).
+1. Link confirmation code + new-device notice (§4.3).
+2. Device list and revocation (§9).
+3. Stop shipping the rotation key in the link bundle; authorize `/v1/devices/link` with an existing device's signature (`50` §Proposed).
+4. Whole-identity recovery reset across all servers (§7).
+5. Peer device-set-change notice (§8).
 
 ## Rationale and rejected alternatives
 
