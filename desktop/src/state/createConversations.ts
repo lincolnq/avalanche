@@ -86,6 +86,10 @@ export function createConversations(deps: ConversationsDeps): Conversations {
   // safety/group actions) so their store reconciles don't interleave. A reload
   // requested while one is in flight queues exactly one follow-up rather than
   // launching a second interleaving load.
+  // Groups with a refreshGroupTitle fetch in flight, so repeated reloads don't
+  // stack duplicate fetches for the same group.
+  const groupTitlePending: Set<string> = new Set();
+
   let reloadInFlight: Promise<void> | null = null;
   let reloadQueued = false;
 
@@ -189,6 +193,7 @@ export function createConversations(deps: ConversationsDeps): Conversations {
 
     const all: Conversation[] = [];
     const groupSeen = new Set<string>();
+    const groupsNeedingRefresh: { groupId: string; accountId: string }[] = [];
     for (const { account, summaries } of perAccount) {
       const accountId = account.id;
       const serverUrl = getServerUrl(accountId);
@@ -210,10 +215,16 @@ export function createConversations(deps: ConversationsDeps): Conversations {
         const title = isGroup
           ? s.isRequest
             ? s.groupTitle || "Group invitation" // read as a pending invitee (docs/09 S-04)
-            : s.groupTitle ?? "Group"
+            : s.groupTitle || "Group"
           : recipientDid === accountId
             ? "Note to Self"
             : displayNameCache[recipientDid ?? ""] ?? recipientDid ?? s.conversationId;
+        // No locally-cached state yet (e.g. a freshly linked device, or a group
+        // first seen via an incoming message) — pull it from the server in the
+        // background. Mirrors iOS groupsNeedingRefresh (AppState.swift).
+        if (isGroup && !s.isRequest && !s.groupTitle && groupId) {
+          groupsNeedingRefresh.push({ groupId, accountId });
+        }
 
         // Compose the content decoration (📷/📎/👤) with the body (docs/35): a
         // caption shows "📷 caption", a caption-less content message shows "📷
@@ -259,6 +270,29 @@ export function createConversations(deps: ConversationsDeps): Conversations {
       (a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
     );
     setStore("conversations", merged);
+    for (const g of groupsNeedingRefresh) refreshGroupTitle(g.groupId, g.accountId);
+  }
+
+  // Fetch a group's state from the server and fill in its row title. Applies
+  // pending membership/metadata changes first (docs/03 §3.6), which persists
+  // their system rows and fast-forwards the cached state. fetchGroupState also
+  // persists the state, so later loads resolve the title locally. Mirrors iOS
+  // AppState.refreshGroupTitle.
+  async function refreshGroupTitle(groupId: string, accountId: string) {
+    if (groupTitlePending.has(groupId)) return;
+    groupTitlePending.add(groupId);
+    try {
+      const svc = serviceFor(accountId);
+      await svc.applyPendingGroupChanges(groupId).catch(() => 0);
+      const summary = await svc.fetchGroupState(groupId);
+      if (!summary.title) return;
+      const idx = store.conversations.findIndex((c) => c.id === `group-${groupId}`);
+      if (idx >= 0) setStore("conversations", idx, "title", summary.title);
+    } catch (e: unknown) {
+      console.warn("refreshGroupTitle failed:", groupId, e);
+    } finally {
+      groupTitlePending.delete(groupId);
+    }
   }
 
   // Force a fresh conversation reload, bypassing the load-once guard. Used by
