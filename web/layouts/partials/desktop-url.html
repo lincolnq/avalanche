@@ -1,0 +1,10 @@
+{{- /* Download URL for one Desktop build of site.Params.desktopVersion.
+       Context is the platform key: "mac", "win", "linux" (AppImage), "deb".
+       Asset names come from desktop/release.sh and .github/workflows/release.yml. */ -}}
+{{- $v := site.Params.desktopVersion -}}
+{{- $files := dict
+      "mac" "macos-arm64.dmg"
+      "win" "windows-x64-setup.exe"
+      "linux" "linux-x86_64.AppImage"
+      "deb" "linux-amd64.deb" -}}
+{{- return printf "%s/releases/download/v%s/Avalanche-%s-%s" site.Params.github $v $v (index $files .) -}}

@@ -29,6 +29,9 @@ script.
 - The Android APK download link on `web/content/getting-started/sideload-android.md`
   points at a GitHub release asset and must be bumped to the new version each
   release (e.g. `releases/download/vX.Y.Z/app-release.apk`).
+- The Desktop download links (homepage button, `/getting-started/desktop/`) are
+  built from `desktopVersion` in `hugo.toml`. Bump it to each release once that
+  GitHub Release is published; a draft's assets aren't downloadable.
 - No emoji in site content or docs — plain text.
 - `static/_redirects` holds the Desktop auto-update endpoint
   (`/desktop/update/latest.json` → the latest GitHub Release's `latest.json`, docs/63).

@@ -9,7 +9,32 @@
     <a class="btn btn-primary" href="{{ site.Params.github }}" rel="noopener">GitHub</a>
     <a class="btn" href="{{ "/getting-started/sideload-android/" | relURL }}">Side-load Android app</a>
     <a class="btn" href="https://apps.apple.com/us/app/avalanche-messenger/id6772672507" rel="noopener">Install iOS app</a>
+    <a class="btn" id="desktop-download" href="{{ "/getting-started/desktop/" | relURL }}"
+       data-mac="{{ partial "desktop-url.html" "mac" }}"
+       data-win="{{ partial "desktop-url.html" "win" }}"
+       data-linux="{{ partial "desktop-url.html" "linux" }}">Desktop app</a>
   </div>
+  <p class="hero-note" id="desktop-other" hidden><a href="{{ "/getting-started/desktop/" | relURL }}">Other Desktop platforms</a></p>
+  <script>
+    // Point the Desktop button straight at this visitor's installer. Phones,
+    // tablets, and unrecognized platforms keep the link to the downloads page.
+    (function () {
+      var a = document.getElementById("desktop-download");
+      var ua = navigator.userAgent.toLowerCase();
+      var p = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
+      // iPadOS reports a Mac platform; touch support gives it away.
+      var touchMac = /mac/.test(p) && navigator.maxTouchPoints > 1;
+      var os = null;
+      if (/android|iphone|ipad/.test(ua) || touchMac) os = null;
+      else if (/mac/.test(p)) os = ["mac", "macOS"];
+      else if (/win/.test(p)) os = ["win", "Windows"];
+      else if (/linux/.test(p)) os = ["linux", "Linux"];
+      if (!os) return;
+      a.href = a.dataset[os[0]];
+      a.textContent = "Download for " + os[1];
+      document.getElementById("desktop-other").hidden = false;
+    })();
+  </script>
 </section>
 
 {{ $blog := site.GetPage "/blog" }}

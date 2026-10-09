@@ -10,6 +10,9 @@ disableKinds = ["taxonomy", "term"]
   tagline = "Comms-first organizing."
   description = "Encrypted organizing for collective action. Standing on the shoulders of Signal to build the best organizing platform for conferences, rallies, and actions."
   github = "https://github.com/lincolnq/avalanche"
+  # Desktop release the download buttons point at. Bump to each new release
+  # once its GitHub Release is published (layouts/partials/desktop-url.html).
+  desktopVersion = "0.6.1"
 
 [markup.goldmark.renderer]
   unsafe = true  # allow raw HTML in markdown (needed for the README-style content)

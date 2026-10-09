@@ -88,6 +88,7 @@ a:hover { text-decoration: underline; }
 .hero-body { color: var(--ink-soft); font-size: 1.1rem; text-align: left; }
 .hero-body p { margin-bottom: 1rem; }
 .hero-actions { margin-top: 2rem; display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center; }
+.hero-note { margin-top: 0.75rem; font-size: 0.9rem; color: var(--ink-faint); text-align: center; }
 
 .btn {
   display: inline-block;
