@@ -57,10 +57,9 @@ pub(crate) fn read_mark_for_conversation(
             return None;
         }
         read_mark::Conversation::PeerDid(peer.to_string())
-    } else if let Some(gid) = conversation_id.strip_prefix("group-") {
-        read_mark::Conversation::GroupId(groups::b64d(gid).ok()?)
     } else {
-        return None;
+        let gid = conversation_id.strip_prefix("group-")?;
+        read_mark::Conversation::GroupId(groups::b64d(gid).ok()?)
     };
     Some(ReadMark {
         conversation: Some(conversation),
