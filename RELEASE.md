@@ -20,7 +20,8 @@ git push --tags          # push the tag, which triggers the release
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds every
 first-party server binary for both Linux arches (`x86_64` and `aarch64`) and attaches
-them to a **draft** GitHub Release:
+them to a **draft** GitHub Release. The same run builds the Windows and Linux
+Desktop installers (section 3):
 
 | Asset (per arch)                  | Contents                                  |
 | --------------------------------- | ----------------------------------------- |
@@ -32,14 +33,44 @@ them to a **draft** GitHub Release:
 Then:
 
 1. Watch the run: `gh run watch` (or the Actions tab on GitHub).
-2. When it finishes, open the **draft release** on GitHub, add release notes.
-3. **Publish** the draft: 
+2. When it finishes, run the Desktop release (section 3) before publishing.
+3. Open the **draft release** on GitHub, add release notes.
+4. **Publish** the draft as a full release (not a pre-release):
 ```bash
-gh release edit v0.2.0 --prerelease --draft=false
+gh release edit v0.2.0 --draft=false
 ```
 
+Publishing is what ships the release. Installed Desktop apps check
+`releases/latest`, which skips drafts **and pre-releases**, so a release
+published with `--prerelease` never reaches them as an update.
 
-## 3. iOS app (manual, from your Mac)
+
+## 3. Desktop app (CI + your Mac)
+
+CI builds the Windows installer and the Linux AppImage + `.deb` and attaches
+them to the draft, without update signatures. The macOS build and all update
+signing happen on your Mac, because the updater key lives only in 1Password
+(docs/63). After the tag's release workflow has finished:
+
+```bash
+git checkout v0.2.0
+make desktop-release
+```
+
+This builds the macOS app, signs it with the Developer ID, notarizes and
+staples it, then downloads the Windows/Linux installers from the draft, signs
+all three with the updater key, writes `latest.json`, and uploads everything to
+the draft. Expect 1Password prompts and an Apple notarization wait. If a
+platform's CI build failed, it's left out of `latest.json` and the others still
+ship.
+
+Run it only after CI finishes, or the Windows/Linux installers won't be on the
+draft yet. Test the pipeline without uploading: `desktop/release.sh --local-test`.
+
+Once the release is published, bump `desktopVersion` in `web/hugo.toml` so the
+website's Desktop download links point at it (section 6).
+
+## 4. iOS app (manual, from your Mac)
 
 The iOS app version is derived from git tags (`project.yml` has the logic).
 
@@ -63,7 +94,7 @@ You must be signed into Xcode with an Apple ID that has access to our Xcode team
 
 After upload and a few minutes of processing, the build appears in App Store Connect. (https://appstoreconnect.apple.com) You'll want to sign in and add 'What to Test' and submit the build for testing.
 
-## 4. Android app (manual)
+## 5. Android app (manual)
 
 The Android app version is also derived from Git, as above.
 
@@ -79,6 +110,12 @@ gh release upload v0.2.0 mobile/android/app/build/outputs/apk/release/app-releas
 
 Currently the only way Android users can see a new release is by seeing it on the website, so you'll also want to update the website to point to the new release. (content/getting-started/sideload-android.md)
 
-## 5. Web
+## 6. Web
 
-The website is hosted at theavalanche.net and is in the `web/` folder. To build, run `hugo build` and then `wrangler deploy` to deploy it to Cloudflare.
+The website is hosted at theavalanche.net and is in the `web/` folder. To build
+and deploy it to Cloudflare, run `npm run deploy` in `web/` (it rebuilds with
+Hugo first; a bare `wrangler deploy` ships whatever stale build is on disk).
+
+Each release, bump the download links once the release is published: the
+Android APK link in `content/getting-started/sideload-android.md` and
+`desktopVersion` in `hugo.toml` (Desktop).
