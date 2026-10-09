@@ -1,11 +1,11 @@
-import { createSignal, createEffect, on, onMount, onCleanup, For, Show } from "solid-js";
+import { createSignal, createEffect, on, onMount, onCleanup, For, Show, type Accessor } from "solid-js";
 import { FiChevronUp, FiChevronDown, FiArrowUp, FiX } from "solid-icons/fi";
 import { TbOutlinePaperclip, TbOutlineFile, TbOutlineUserPlus } from "solid-icons/tb";
 import { useApp } from "../state/AppContext";
 import type { Conversation, Message } from "../models";
 import type { AttachmentFfi, LinkPreviewFfi, SharedContactFfi } from "../bindings";
 import { firstUrl } from "../lib/format";
-import { makeImageThumbnail } from "../lib/image";
+import { prepareImageForSending } from "../lib/image";
 import { copiedContact } from "../lib/contactClipboard";
 import LinkPreviewCard from "./LinkPreviewCard";
 import SharedContactCard from "./SharedContactCard";
@@ -24,6 +24,52 @@ const EXPANDED_MAX = 212;
 /** Link-preview fetch debounce (matches iOS 600ms). */
 const PREVIEW_DEBOUNCE_MS = 600;
 
+/**
+ * A staged image. The chip shows as soon as the image is decoded; the upload
+ * runs in the background and `ready` flips when it lands. Send awaits any
+ * still-pending `upload`.
+ */
+interface StagedImage {
+  key: number;
+  contentType: string;
+  fileName: string | null;
+  /** Local JPEG thumbnail for the chip (and the optimistic bubble). */
+  thumbnail: number[];
+  ready: Accessor<boolean>;
+  /** Resolves to the uploaded pointer, or null if the upload failed. */
+  upload: Promise<AttachmentFfi | null>;
+}
+
+/** Image files on a clipboard/drop, from `files` or (WebKit fallback) `items`. */
+function imageFiles(data: DataTransfer | null | undefined): File[] {
+  if (!data) return [];
+  let files = Array.from(data.files);
+  if (files.length === 0) {
+    files = Array.from(data.items)
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+  }
+  return files.filter((f) => f.type.startsWith("image/"));
+}
+
+/** Swap a re-encoded image's extension to match its new type ("a.png" -> "a.jpg"). */
+function renameForType(name: string, contentType: string): string {
+  if (contentType !== "image/jpeg") return name;
+  const dot = name.lastIndexOf(".");
+  return (dot > 0 ? name.slice(0, dot) : name || "image") + ".jpg";
+}
+
+/** True for a text field other than the composer, where paste should stay put. */
+function isOtherEditable(target: EventTarget | null, composer: HTMLElement | undefined): boolean {
+  if (!(target instanceof HTMLElement) || target === composer) return false;
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement
+  );
+}
+
 export default function ComposeMessageView(props: Props) {
   const {
     sendMessage,
@@ -35,13 +81,12 @@ export default function ComposeMessageView(props: Props) {
   } = useApp();
   const [draft, setDraft] = createSignal("");
   const [sending, setSending] = createSignal(false);
-  const [uploading, setUploading] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const [mounted, setMounted] = createSignal(false);
 
-  // Staged attachments (uploaded pointers awaiting send) and their preview blob
-  // URLs (for the chip thumbnails), kept in lockstep by index.
-  const [stagedAttachments, setStagedAttachments] = createSignal<AttachmentFfi[]>([]);
+  // Staged images awaiting send (uploading or uploaded).
+  const [stagedAttachments, setStagedAttachments] = createSignal<StagedImage[]>([]);
+  let nextStagedKey = 0;
   const [stagedPreview, setStagedPreview] = createSignal<LinkPreviewFfi | null>(null);
   // A staged shared contact card (docs/35), pasted from a "Copy contact" action,
   // shown as a chip until you send or remove it.
@@ -176,7 +221,7 @@ export default function ComposeMessageView(props: Props) {
     const file = e.currentTarget.files?.[0];
     e.currentTarget.value = ""; // allow re-picking the same file
     if (!file) return;
-    await stageFile(file);
+    await stageImages([file]);
   }
 
   // Pasted or dropped images stage exactly like a picked file. Only images, to
@@ -187,12 +232,17 @@ export default function ComposeMessageView(props: Props) {
     }
   }
 
+  // Paste anywhere in the window while a conversation is open (not just with the
+  // composer focused) stages clipboard images. Pastes into other text fields are
+  // left alone, and plain-text pastes fall through to the textarea.
   function onPaste(e: ClipboardEvent) {
-    if (props.editingMessage) return;
-    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
-    if (files.length === 0) return; // plain text paste: let the textarea handle it
+    if (e.defaultPrevented || props.editingMessage) return;
+    if (isOtherEditable(e.target, inputRef)) return;
+    const files = imageFiles(e.clipboardData);
+    if (files.length === 0) return;
     e.preventDefault();
     void stageImages(files);
+    inputRef?.focus();
   }
 
   // Drag-and-drop anywhere over the window while a conversation's composer is
@@ -221,63 +271,64 @@ export default function ComposeMessageView(props: Props) {
     setDragging(false);
     if (!hasFiles(e) || props.editingMessage) return;
     e.preventDefault();
-    void stageImages(Array.from(e.dataTransfer?.files ?? []));
+    void stageImages(imageFiles(e.dataTransfer));
     inputRef?.focus();
   }
   onMount(() => {
+    window.addEventListener("paste", onPaste);
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragleave", onDragLeave);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
   });
   onCleanup(() => {
+    window.removeEventListener("paste", onPaste);
     window.removeEventListener("dragenter", onDragEnter);
     window.removeEventListener("dragleave", onDragLeave);
     window.removeEventListener("dragover", onDragOver);
     window.removeEventListener("drop", onDrop);
   });
 
+  // Prepare the image (downscale + JPEG, docs/35), show its chip right away, and
+  // upload in the background. Clearing staging (send, conversation switch) or
+  // removing the chip drops the entry, so a late upload result is ignored.
   async function stageFile(file: File) {
-    setUploading(true);
+    let prepared;
     try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      const contentType = file.type || "application/octet-stream";
-      let thumbnail: number[] = [];
-      let width = 0;
-      let height = 0;
-      if (contentType.startsWith("image/")) {
-        try {
-          const t = await makeImageThumbnail(file);
-          thumbnail = t.thumbnail;
-          width = t.width;
-          height = t.height;
-        } catch (err) {
-          console.warn("thumbnail generation failed:", err);
-        }
-      }
-      const pointer = await uploadAttachment(
-        props.conversation.accountId,
-        Array.from(buf),
-        contentType,
-        file.name,
-        width,
-        height,
-        0,
-        thumbnail,
-        0
-      );
-      // Keep the locally-computed thumbnail on the staged pointer so the chip
-      // and the optimistic bubble render instantly without a round-trip.
-      setStagedAttachments((prev) => [...prev, { ...pointer, thumbnail }]);
+      prepared = await prepareImageForSending(file);
     } catch (err) {
-      console.warn("attachment upload failed:", err);
-    } finally {
-      setUploading(false);
+      console.warn("image decode failed:", err);
+      return;
     }
+    const key = nextStagedKey++;
+    const { thumbnail, contentType, width, height } = prepared;
+    const fileName = renameForType(file.name, contentType);
+    const upload = uploadAttachment(
+      props.conversation.accountId,
+      Array.from(prepared.bytes),
+      contentType,
+      fileName,
+      width,
+      height,
+      0,
+      thumbnail,
+      0
+    )
+      // Keep the locally-computed thumbnail on the pointer so the optimistic
+      // bubble renders instantly without a round-trip.
+      .then((pointer): AttachmentFfi => ({ ...pointer, thumbnail }))
+      .catch((err) => {
+        console.warn("attachment upload failed:", err);
+        return null;
+      });
+    const [ready, setReady] = createSignal(false);
+    setStagedAttachments((prev) => [...prev, { key, contentType, fileName, thumbnail, ready, upload }]);
+    if (await upload) setReady(true);
+    else removeStagedAttachment(key);
   }
 
-  function removeStagedAttachment(index: number) {
-    setStagedAttachments((prev) => prev.filter((_, i) => i !== index));
+  function removeStagedAttachment(key: number) {
+    setStagedAttachments((prev) => prev.filter((s) => s.key !== key));
   }
 
   function resizeTextarea() {
@@ -311,7 +362,7 @@ export default function ComposeMessageView(props: Props) {
   }
 
   async function handleSend() {
-    if (sending() || uploading()) return;
+    if (sending()) return;
     const text = draft().trim();
 
     // Edit mode: apply the edit (optimistic + async FFI) and exit. Edits never
@@ -327,11 +378,10 @@ export default function ComposeMessageView(props: Props) {
       return;
     }
 
-    const attachments = stagedAttachments();
+    const staged = stagedAttachments();
     const preview = stagedPreview();
     const contact = stagedContact();
-    const hasExtras = attachments.length > 0 || preview !== null || contact !== null;
-    if (!text && !hasExtras) return;
+    if (!text && staged.length === 0 && !preview && !contact) return;
     if (!props.conversation.isGroup && !props.conversation.recipientDid) return;
 
     setDraft("");
@@ -342,6 +392,12 @@ export default function ComposeMessageView(props: Props) {
     setExpanded(false);
     setTimeout(() => resizeTextarea(), 0);
     try {
+      // Wait out any upload still in flight; drop ones that failed.
+      const attachments = (await Promise.all(staged.map((s) => s.upload))).filter(
+        (p): p is AttachmentFfi => p !== null
+      );
+      const hasExtras = attachments.length > 0 || previews.length > 0 || contacts.length > 0;
+      if (!text && !hasExtras) return;
       if (hasExtras) {
         await sendMessageWithAttachments(props.conversation, text, attachments, previews, contacts);
       } else if (props.conversation.isGroup) {
@@ -395,7 +451,7 @@ export default function ComposeMessageView(props: Props) {
       <Show when={stagedAttachments().length > 0 || stagedPreview() || stagedContact()}>
         <div class="compose-staging">
           <For each={stagedAttachments()}>
-            {(att, i) => <StagedAttachmentChip attachment={att} onRemove={() => removeStagedAttachment(i())} />}
+            {(img) => <StagedAttachmentChip image={img} onRemove={() => removeStagedAttachment(img.key)} />}
           </For>
           <Show when={stagedPreview()}>
             {(p) => (
@@ -425,7 +481,7 @@ export default function ComposeMessageView(props: Props) {
           <button
             class="compose-attach-btn"
             aria-label="Attach a file"
-            disabled={sending() || uploading()}
+            disabled={sending()}
             onClick={() => fileInputRef?.click()}
           >
             <TbOutlinePaperclip size={24} />
@@ -444,7 +500,7 @@ export default function ComposeMessageView(props: Props) {
               class="compose-attach-btn"
               aria-label="Paste contact"
               title="Paste contact"
-              disabled={sending() || uploading()}
+              disabled={sending()}
               onClick={() => setStagedContact(copiedContact())}
             >
               <TbOutlineUserPlus size={24} />
@@ -464,7 +520,6 @@ export default function ComposeMessageView(props: Props) {
               resizeTextarea();
             }}
             onKeyDown={handleKeyDown}
-            onPaste={onPaste}
             disabled={sending()}
           />
           {!sending() && (
@@ -477,7 +532,7 @@ export default function ComposeMessageView(props: Props) {
             </button>
           )}
         </div>
-        <button class="send-btn" disabled={!canSend() || sending() || uploading()} onClick={handleSend}>
+        <button class="send-btn" disabled={!canSend() || sending()} onClick={handleSend}>
           <FiArrowUp size={24} />
         </button>
       </div>
@@ -485,13 +540,16 @@ export default function ComposeMessageView(props: Props) {
   );
 }
 
-/** A staged (not-yet-sent) attachment: image thumbnail or file name, with a ×. */
-function StagedAttachmentChip(props: { attachment: AttachmentFfi; onRemove: () => void }) {
-  const isImage = () => props.attachment.contentType.startsWith("image/");
+/**
+ * A staged (not-yet-sent) image: its thumbnail (or file name), with a spinner
+ * while the upload is in flight, and a ×.
+ */
+function StagedAttachmentChip(props: { image: StagedImage; onRemove: () => void }) {
+  const isImage = () => props.image.contentType.startsWith("image/");
   const [url, setUrl] = createSignal<string | null>(null);
 
   onMount(() => {
-    const thumb = props.attachment.thumbnail;
+    const thumb = props.image.thumbnail;
     if (isImage() && thumb.length > 0) {
       setUrl(URL.createObjectURL(new Blob([new Uint8Array(thumb)], { type: "image/jpeg" })));
     }
@@ -502,17 +560,22 @@ function StagedAttachmentChip(props: { attachment: AttachmentFfi; onRemove: () =
   });
 
   return (
-    <div class="staged-chip">
+    <div class="staged-chip" classList={{ uploading: !props.image.ready() }}>
       <Show
         when={isImage() && url()}
         fallback={
           <span class="staged-chip-file">
             <TbOutlineFile size={16} />
-            <span class="staged-chip-name">{props.attachment.fileName ?? "Attachment"}</span>
+            <span class="staged-chip-name">{props.image.fileName ?? "Attachment"}</span>
           </span>
         }
       >
         <img class="staged-chip-image" src={url()!} alt="" />
+      </Show>
+      <Show when={!props.image.ready()}>
+        <div class="staged-chip-progress" aria-label="Uploading">
+          <div class="spinner" />
+        </div>
       </Show>
       <button class="staged-chip-remove" aria-label="Remove attachment" onClick={props.onRemove}>
         ×

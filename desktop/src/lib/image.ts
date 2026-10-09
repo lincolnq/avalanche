@@ -1,40 +1,69 @@
-export interface ThumbnailResult {
-  /** Downscaled JPEG bytes for the inline preview. */
-  thumbnail: number[];
-  /** Original image width/height (matches iOS `makeAttachmentThumbnail`). */
+/** Outgoing-image caps, matching iOS `OutgoingImage` (docs/35). */
+const OUTGOING_MAX_DIMENSION = 2048;
+const OUTGOING_JPEG_QUALITY = 0.9;
+
+export interface PreparedImage {
+  /** Bytes to upload: downscaled, re-encoded JPEG (or the original GIF). */
+  bytes: Uint8Array;
+  contentType: string;
+  /** Dimensions of `bytes`. */
   width: number;
   height: number;
+  /** Small JPEG for the chip and the inline bubble preview. */
+  thumbnail: number[];
 }
 
 /**
- * Downscales an image file to a JPEG thumbnail via a `<canvas>`, mirroring iOS
- * `makeAttachmentThumbnail` (maxDimension 320, JPEG quality 0.6). Returns the
- * thumbnail bytes plus the *original* dimensions (the pointer carries the source
- * size, not the thumbnail size). Throws if the image can't be decoded.
+ * Prepare a picked/pasted/dropped image for sending, mirroring iOS
+ * `UIImage.preparedForSending`: decode upright, cap the longest side at 2048px,
+ * and re-encode as JPEG (which also drops EXIF/GPS metadata). GIFs pass through
+ * untouched so animation survives. Decodes once for both the payload and the
+ * thumbnail. Throws if the image can't be decoded.
  */
-export async function makeImageThumbnail(
-  file: Blob,
-  maxDimension = 320,
-  quality = 0.6
-): Promise<ThumbnailResult> {
+export async function prepareImageForSending(file: Blob): Promise<PreparedImage> {
   const bitmap = await createImageBitmap(file);
-  const width = bitmap.width;
-  const height = bitmap.height;
-  const scale = Math.min(1, maxDimension / Math.max(width, height));
-  const tw = Math.max(1, Math.round(width * scale));
-  const th = Math.max(1, Math.round(height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = tw;
-  canvas.height = th;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
+  try {
+    const thumb = await encodeJpeg(bitmap, 320, 0.6);
+    if (file.type === "image/gif") {
+      return {
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        contentType: file.type,
+        width: bitmap.width,
+        height: bitmap.height,
+        thumbnail: Array.from(thumb.bytes),
+      };
+    }
+    const full = await encodeJpeg(bitmap, OUTGOING_MAX_DIMENSION, OUTGOING_JPEG_QUALITY);
+    return {
+      bytes: full.bytes,
+      contentType: "image/jpeg",
+      width: full.width,
+      height: full.height,
+      thumbnail: Array.from(thumb.bytes),
+    };
+  } finally {
     bitmap.close();
-    throw new Error("no 2d canvas context");
   }
-  ctx.drawImage(bitmap, 0, 0, tw, th);
-  bitmap.close();
+}
 
+async function encodeJpeg(
+  bitmap: ImageBitmap,
+  maxDimension: number,
+  quality: number
+): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no 2d canvas context");
+  // JPEG has no alpha: paint transparent regions (e.g. PNG screenshots of
+  // windows) white rather than letting them encode as black.
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(bitmap, 0, 0, width, height);
   const blob = await new Promise<Blob>((resolve, reject) =>
     canvas.toBlob(
       (b) => (b ? resolve(b) : reject(new Error("canvas.toBlob returned null"))),
@@ -42,6 +71,5 @@ export async function makeImageThumbnail(
       quality
     )
   );
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { thumbnail: Array.from(bytes), width, height };
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), width, height };
 }

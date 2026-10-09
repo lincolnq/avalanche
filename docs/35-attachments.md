@@ -1,7 +1,7 @@
 # 35 — Attachments, link previews, and shared contact cards
 
 > **Status:** Partial — encrypted attachments (LocalFs backend), link previews, the fullscreen viewer, outgoing image processing, and shared contact cards are built on iOS, Android, and Desktop. The download path has open security gaps (see *Known gaps*). Not built: S3 backend, blurhash, auto-download settings, storage-management controls, background upload throttling.
-> **Last verified against code:** 2026-10-03
+> **Last verified against code:** 2026-10-09
 
 How a user sends a photo, video, audio clip, PDF, or arbitrary file end-to-end encrypted, with the homeserver holding only ciphertext it cannot read. This follows Signal's model closely; divergences are called out.
 
@@ -138,13 +138,13 @@ Lives at the shared rendering layer (`AttachmentView` → `MessageBubble` → `C
 
 ## Outgoing image processing (client-side, Signal-aligned)
 
-*Status: Built (iOS, Android).* The client re-encodes every outgoing image rather than shipping original bytes. One pass:
+*Status: Built (iOS, Android, Desktop).* The client re-encodes every outgoing image rather than shipping original bytes. One pass:
 
 - **Bakes in EXIF orientation** (Android's `BitmapFactory` ignores the EXIF rotation tag, so un-normalized photos arrive sideways).
 - **Strips EXIF/metadata** — GPS, device model, timestamps. A **privacy requirement**, and the main reason the re-encode is unconditional.
 - **Caps resolution** — longest edge 2048 px, JPEG quality ~0.9. One tier for now.
 
-App-core does no image processing. Constants: `mobile/ios/Shared/OutgoingImage.swift` (`OutgoingImage.maxDimension`/`jpegQuality`, `UIImage.preparedForSending`) and Android `Views/Chats/AttachmentViews.kt` (`OUTGOING_MAX_DIMENSION`/`OUTGOING_JPEG_QUALITY`, `processOutgoingImage`), applied at the photo picker, clipboard paste, and share-in.
+App-core does no image processing. Constants: `mobile/ios/Shared/OutgoingImage.swift` (`OutgoingImage.maxDimension`/`jpegQuality`, `UIImage.preparedForSending`) and Android `Views/Chats/AttachmentViews.kt` (`OUTGOING_MAX_DIMENSION`/`OUTGOING_JPEG_QUALITY`, `processOutgoingImage`), applied at the photo picker, clipboard paste, and share-in. Desktop does the same in a `<canvas>` (`desktop/src/lib/image.ts` `prepareImageForSending`, at file pick, paste, and drop), except that GIFs pass through unchanged to keep animation.
 
 The **iOS share extension does not decode or re-encode** — decoding a 24–48 MP photo blows its ~120 MB memory ceiling. It copies the encoded bytes to the App Group and the main app runs the resize/strip when it stages the image into the composer.
 
